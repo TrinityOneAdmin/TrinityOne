@@ -27,6 +27,18 @@
   const bookAbbr = n => BOOK_ABBR[n - 1] || ("B" + n);
   const bookGroup = n => (n <= 39 ? "ot" : "nt");
 
+  // name → book number, and "John 5" / "1 John 2:3" / "Psalms 23" → {book, chap, verse}
+  const NAME_TO_NUM = {};
+  BOOK_NAMES.forEach((nm, i) => { NAME_TO_NUM[nm.toLowerCase()] = i + 1; });
+  NAME_TO_NUM["psalm"] = 19; NAME_TO_NUM["song of songs"] = 22;
+  const bookNum = name => NAME_TO_NUM[String(name || "").trim().toLowerCase().replace(/\s+/g, " ")] || 0;
+  function parseRef(str){
+    const m = String(str || "").match(/^\s*([1-3]?\s?[A-Za-z][A-Za-z ]*?)\s+(\d+)(?::(\d+))?/);
+    if(!m) return null;
+    const book = bookNum(m[1]); if(!book) return null;
+    return { book, chap: parseInt(m[2], 10), verse: m[3] ? parseInt(m[3], 10) : undefined };
+  }
+
   const USFM_BOOK = {
     GEN:1,EXO:2,LEV:3,NUM:4,DEU:5,JOS:6,JDG:7,RUT:8,
     "1SA":9,"2SA":10,"1KI":11,"2KI":12,"1CH":13,"2CH":14,EZR:15,NEH:16,
@@ -424,7 +436,7 @@
   }
 
   window.Bible = {
-    BOOK_NAMES, bookName, bookAbbr, bookGroup,
+    BOOK_NAMES, bookName, bookAbbr, bookGroup, bookNum, parseRef,
     parseVerse, lex,
     loadModuleBytes, fetchAndCacheModule, pickFile,
     cacheKeys, getCatalog, getMirror, getVideos, installModule, isInstalled, isInstalling,

@@ -173,10 +173,12 @@ function App() {
   // reading location + active version (lifted so Today/Search can navigate)
   const [loc, setLoc] = useA(null);
   useAE(() => { if (Bible.loaded && !loc) setLoc(Bible.defaultLoc()); }, [Bible.loaded]);
-  // deep-link: ?group=<id> auto-opens a chat room (handy for sharing / screenshots)
+  // deep-links: ?group=<id> opens a chat room, ?plan=<id> opens a plan
   useAE(() => {
-    const gid = new URLSearchParams(location.search).get('group');
-    if (gid && Bible.loaded) { const g = window.TrinityData.GROUPS.find(x => x.id === gid); if (g) setGroup(g); }
+    const sp = new URLSearchParams(location.search);
+    if (!Bible.loaded) return;
+    const gid = sp.get('group'); if (gid) { const g = window.TrinityData.GROUPS.find(x => x.id === gid); if (g) setGroup(g); }
+    const pid = sp.get('plan'); if (pid) { const p = window.TrinityData.PLANS.find(x => x.id === pid); if (p) setPlan(p); }
   }, [Bible.loaded]);
   const version = Bible.activeVersion;
 
@@ -184,6 +186,7 @@ function App() {
   const [highlights, setHighlights] = useA(() => lsGet('trinityone.highlights', {}));
   const [notes, setNotes] = useA(() => lsGet('trinityone.notes', {}));
   const [bookmarks, setBookmarks] = useA(() => lsGet('trinityone.bookmarks', []));
+  const [planProgress, setPlanProgress] = useA(() => lsGet('trinityone.plans', {})); // planId -> [done day numbers]
 
   // overlays
   const [share, setShare] = useA(null);
@@ -231,6 +234,11 @@ function App() {
     openShare: (v) => setShare(v),
     openDevotional: () => setDevo(true),
     openPlan: (p) => setPlan(p),
+    openPlanDay: (plan, day) => {
+      const loc = Bible.parseRef(day.ref);
+      if (!loc || !Bible.books().includes(loc.book)) { toast(day.ref + ' isn’t in this translation'); return; }
+      setLoc({ book: loc.book, chap: loc.chap, verse: loc.verse }); setTab('read');
+    },
     openJournal: (j) => setJournal(j),
     openVideo: (v) => setVideo(v),
     openWord: (id) => setWordOv(id),
@@ -238,6 +246,11 @@ function App() {
     highlights, setHighlight: (k, c) => setHighlights(h => { const n = { ...h }; if (c) n[k] = c; else delete n[k]; lsSet('trinityone.highlights', n); return n; }),
     notes, setNote: (k, txt) => setNotes(n => { const o = { ...n }; if (txt) o[k] = txt; else delete o[k]; lsSet('trinityone.notes', o); return o; }),
     bookmarks, toggleBookmark: (k) => setBookmarks(b => { const n = b.includes(k) ? b.filter(x => x !== k) : [...b, k]; lsSet('trinityone.bookmarks', n); return n; }),
+    planProgress,
+    togglePlanDay: (pid, day) => setPlanProgress(prev => {
+      const set = new Set(prev[pid] || []); set.has(day) ? set.delete(day) : set.add(day);
+      const n = { ...prev, [pid]: [...set].sort((a, b) => a - b) }; lsSet('trinityone.plans', n); return n;
+    }),
   };
 
   // apply accent vars

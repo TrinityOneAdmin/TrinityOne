@@ -149,33 +149,34 @@ const VOTD = {
   version: 'WEB',
 };
 
-const PLANS = [
-  { id: 'john21', title: 'The Gospel of John', sub: '21 days', len: 21, done: 4,
-    accent: 'var(--clay)', tag: 'Gospels', blurb: 'Walk slowly through John, one passage a morning.' },
-  { id: 'psalms', title: 'Psalms of Comfort', sub: '7 days', len: 7, done: 0,
-    accent: 'var(--sage)', tag: 'Devotional', blurb: 'A week in the Psalms for anxious seasons.' },
-  { id: 'proverbs', title: 'A Proverb a Day', sub: '31 days', len: 31, done: 12,
-    accent: 'var(--gold)', tag: 'Wisdom', blurb: 'Daily wisdom, one chapter of Proverbs at a time.' },
-  { id: 'nt-year', title: 'New Testament in a Year', sub: '365 days', len: 365, done: 96,
-    accent: 'var(--clay)', tag: 'Whole Bible', blurb: 'The steady, achievable path through the NT.' },
-];
+// ── reading plans (real day-by-day passages, parsed + opened in the reader) ──
+const _johnLabels = ['The Word made flesh', 'Water into wine', 'Born again', 'The woman at the well', 'The healing pool',
+  'Bread of life', 'Rivers of living water', 'The light of the world', 'The man born blind', 'The good shepherd',
+  'The raising of Lazarus', 'The hour has come', 'The foot-washing', 'The way, the truth, the life', 'The true vine',
+  'The Counselor promised', 'The high-priestly prayer', 'Betrayal and arrest', 'The crucifixion', 'The empty tomb', 'Breakfast by the sea'];
+const _psalms = [[23, 'The LORD my shepherd'], [27, 'The LORD my light'], [34, 'Taste and see'], [42, 'As the deer'],
+  [46, 'A very present help'], [91, 'Under his wings'], [121, 'My help comes from the LORD']];
+const _ntChapters = [['Matthew', 28], ['Mark', 16], ['Luke', 24], ['John', 21], ['Acts', 28], ['Romans', 16],
+  ['1 Corinthians', 16], ['2 Corinthians', 13], ['Galatians', 6], ['Ephesians', 6], ['Philippians', 4], ['Colossians', 4],
+  ['1 Thessalonians', 5], ['2 Thessalonians', 3], ['1 Timothy', 6], ['2 Timothy', 4], ['Titus', 3], ['Philemon', 1],
+  ['Hebrews', 13], ['James', 5], ['1 Peter', 5], ['2 Peter', 3], ['1 John', 5], ['2 John', 1], ['3 John', 1], ['Jude', 1], ['Revelation', 22]];
+function _ntDays() { const out = []; let d = 0; for (const [bk, n] of _ntChapters) for (let c = 1; c <= n; c++) out.push({ d: ++d, ref: `${bk} ${c}`, label: `${bk} ${c}` }); return out; }
 
-const PLAN_DETAIL = {
-  id: 'john21',
-  title: 'The Gospel of John',
-  sub: '21 days · one passage each morning',
-  done: 4,
-  len: 21,
-  days: [
-    { d: 1, ref: 'John 1:1–18', label: 'The Word', status: 'done' },
-    { d: 2, ref: 'John 1:19–34', label: 'A voice in the wilderness', status: 'done' },
-    { d: 3, ref: 'John 1:35–51', label: 'Come and see', status: 'done' },
-    { d: 4, ref: 'John 2:1–12', label: 'Water into wine', status: 'today' },
-    { d: 5, ref: 'John 3:1–21', label: 'Born again', status: 'todo' },
-    { d: 6, ref: 'John 4:1–26', label: 'The well', status: 'todo' },
-    { d: 7, ref: 'John 5:1–18', label: 'Rise and walk', status: 'todo' },
-  ],
-};
+const PLANS = [
+  { id: 'john21', title: 'The Gospel of John', sub: '21 days · a chapter a morning', tag: 'Gospels', accent: 'var(--clay)',
+    blurb: 'Walk slowly through John, one chapter a day.',
+    days: _johnLabels.map((label, i) => ({ d: i + 1, ref: `John ${i + 1}`, label })) },
+  { id: 'psalms', title: 'Psalms of Comfort', sub: '7 days', tag: 'Devotional', accent: 'var(--sage)',
+    blurb: 'A week in the Psalms for anxious seasons.',
+    days: _psalms.map(([n, label], i) => ({ d: i + 1, ref: `Psalms ${n}`, label })) },
+  { id: 'proverbs', title: 'A Proverb a Day', sub: '31 days', tag: 'Wisdom', accent: 'var(--gold)',
+    blurb: 'Daily wisdom, one chapter of Proverbs at a time.',
+    days: Array.from({ length: 31 }, (_, i) => ({ d: i + 1, ref: `Proverbs ${i + 1}`, label: `Chapter ${i + 1}` })) },
+  { id: 'nt-year', title: 'The New Testament', sub: '260 days · a chapter a day', tag: 'Whole NT', accent: 'var(--clay)',
+    blurb: 'The steady, achievable path through the New Testament.',
+    days: _ntDays() },
+];
+PLANS.forEach(p => { p.len = p.days.length; });
 
 const MODULES = [
   { id: 'bibles', name: 'Bibles', count: '12 versions', icon: 'book', accent: 'var(--clay)' },
@@ -330,7 +331,7 @@ const GIVING_HISTORY = [
 
 window.TrinityData = {
   BOOKS, LEXICON, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD,
-  PLANS, PLAN_DETAIL, MODULES, COLLECTIONS, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
+  PLANS, MODULES, COLLECTIONS, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
   VIDEO_CATS, CHANNELS, VIDEOS,
   HANDLE_POOL, CHAT_IDENTITY, RELAYS, GROUPS, GROUP_MESSAGES,
   SATS_PER_USD, WALLET, FUNDS, STRIKE_PRESETS, GIVING_HISTORY,
