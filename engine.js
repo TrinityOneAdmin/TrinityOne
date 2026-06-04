@@ -149,7 +149,15 @@
     return {
       abbr: det.abbr, name: det.name, kind: "mysword", category: "bibles", books, maxChap,
       getVerses: (b, c) => db.q("SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? ORDER BY Verse", [b, c]).map(r => ({ v: r.Verse, html: parseVerse(r.Scripture), text: stripTags(r.Scripture) })),
-      plain: (b, c) => db.q("SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? ORDER BY Verse", [b, c]).map(r => ({ v: r.Verse, text: stripTags(r.Scripture) }))
+      plain: (b, c) => db.q("SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? ORDER BY Verse", [b, c]).map(r => ({ v: r.Verse, text: stripTags(r.Scripture) })),
+      // fast search: coarse SQL LIKE to narrow candidates, then refine on stripped text
+      search: (re, term, cap) => {
+        const like = "%" + term.replace(/[%_\\]/g, "\\$&") + "%";
+        const rows = db.q("SELECT Book, Chapter, Verse, Scripture FROM Bible WHERE Scripture LIKE ? ESCAPE '\\' ORDER BY Book, Chapter, Verse LIMIT ?", [like, cap * 4]);
+        const out = [];
+        for(const r of rows){ const text = stripTags(r.Scripture); if(re.test(text)){ out.push({ book: r.Book, chap: r.Chapter, verse: r.Verse, text }); if(out.length >= cap) break; } }
+        return out;
+      }
     };
   }
   // MySword dictionary/lexicon → { TOPIC: {gloss, short} }
@@ -381,23 +389,26 @@
   function refKey(loc, v){ return loc.book + "." + loc.chap + "." + v; }
 
   // ── full-text search over the active module ──
-  function search(term, cap){
-    const s = src(); if(!s || !term) return [];
+  function search(term, cap, version){
+    const s = src(version); if(!s || !term) return [];
+    cap = cap || 250;
     const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-    const out = []; cap = cap || 250;
-    for(const b of s.books){
-      const mc = s.maxChap[b];
-      for(let c = 1; c <= mc; c++){
-        const vs = s.plain ? s.plain(b, c) : s.getVerses(b, c);
-        for(const row of vs){
-          if(re.test(row.text)){
-            out.push({ book: b, chap: c, verse: row.v, ref: bookName(b) + " " + c + ":" + row.v, text: row.text });
-            if(out.length >= cap) return out;
+    let rows;
+    if(s.search){
+      rows = s.search(re, term, cap);                 // fast path (SQLite LIKE + refine)
+    }else{
+      rows = [];                                       // generic scan (USFM, in-memory)
+      outer: for(const b of s.books){
+        const mc = s.maxChap[b];
+        for(let c = 1; c <= mc; c++){
+          const vs = s.plain ? s.plain(b, c) : s.getVerses(b, c);
+          for(const row of vs){
+            if(re.test(row.text)){ rows.push({ book: b, chap: c, verse: row.v, text: row.text }); if(rows.length >= cap) break outer; }
           }
         }
       }
     }
-    return out;
+    return rows.map(r => ({ book: r.book, chap: r.chap, verse: r.verse, ref: bookName(r.book) + " " + r.chap + ":" + r.verse, text: r.text }));
   }
 
   // ── boot: restore installed modules, then optional ?module=<url> autoload ──

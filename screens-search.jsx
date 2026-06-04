@@ -3,13 +3,16 @@ const { useState: useSrch } = React;
 
 function SearchScreen({ ctx }) {
   const Bible = window.Bible;
-  const [q, setQ] = useSrch('');
-  const [active, setActive] = useSrch('');
+  const qParam = new URLSearchParams(location.search).get('q') || '';
+  const [q, setQ] = useSrch(qParam);
+  const [active, setActive] = useSrch(qParam.trim());
+  const versions = Bible.versions();
+  const [ver, setVer] = useSrch(Bible.activeVersion);
   const run = (term) => { const t = term.trim(); setQ(t); setActive(t); };
 
   const isStrong = /^[GH]\d+$/i.test(active);
   const lexEntry = isStrong ? Bible.lex(active) : null;
-  const hits = active && !isStrong ? Bible.search(active, 250) : [];
+  const hits = active && !isStrong ? Bible.search(active, 250, ver) : [];
   const seeds = ['light', 'love', 'God', 'beginning', 'life'];
 
   const hl = (text) => {
@@ -35,6 +38,12 @@ function SearchScreen({ ctx }) {
         {q ? <button onClick={() => { setQ(''); setActive(''); }} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={18} /></button> : null}
       </div>
 
+      {versions.length > 1 ? (
+        <div className="no-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', margin: '-6px -18px 16px', padding: '0 18px' }}>
+          {versions.map(v => <Chip key={v.abbr} active={v.abbr === ver} onClick={() => setVer(v.abbr)}>{v.abbr}</Chip>)}
+        </div>
+      ) : null}
+
       {!active ? (
         <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 11 }}>TRY SEARCHING</div>
@@ -46,8 +55,8 @@ function SearchScreen({ ctx }) {
             background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <Icon name="read" size={20} color="var(--clay)" />
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{(Bible.versions().find(v => v.abbr === Bible.activeVersion) || {}).name || 'Current translation'}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{Bible.books().length} books · type a word or a Strong's number (e.g. G3056)</div>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{(versions.find(v => v.abbr === ver) || {}).name || 'Current translation'}</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{Bible.books(ver).length} books · type a word or a Strong's number (e.g. G3056)</div>
             </div>
           </div>
         </div>
