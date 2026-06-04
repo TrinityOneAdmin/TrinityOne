@@ -229,6 +229,8 @@ function ChatScreen({ ctx }) {
   const relayCount = live ? window.Fellowship.relays.length : D.RELAYS.filter(r => r.status === 'on').length;
   const [activity, setActivity] = useC({});   // gid -> { text, ts }
   const [unread, setUnread] = useC({});        // gid -> count
+  const [q, setQ] = useC('');                  // chat search query
+  const msgBuf = useCR([]);                     // recent messages buffer (for search)
 
   // watch every group for last-message previews + unread badges
   useCE(() => {
@@ -236,10 +238,14 @@ function ChatScreen({ ctx }) {
     const ids = D.GROUPS.map(g => g.id);
     const seen = lsGet('trinityone.chatSeen', {});
     const unsub = window.Fellowship.subscribeGroups(ids, (gid, e) => {
+      msgBuf.current.unshift({ gid, e });        // buffer for search
+      if (msgBuf.current.length > 400) msgBuf.current.length = 400;
       setActivity(prev => {
         if (prev[gid] && prev[gid].ts >= e.created_at) return prev;
-        const isVerse = (e.tags.find(t => t[0] === 'k') || [])[1] === 'verse';
-        return { ...prev, [gid]: { text: isVerse ? '📖 Shared a verse' : e.content, ts: e.created_at } };
+        const k = (e.tags.find(t => t[0] === 'k') || [])[1];
+        const preview = k === 'verse' ? '📖 Shared a verse' : k === 'devotional' ? '🌅 Shared a devotional'
+          : k === 'note' ? '📝 Shared a note' : k === 'prayer' ? '🙏 ' + e.content : e.content;
+        return { ...prev, [gid]: { text: preview, ts: e.created_at } };
       });
       if (e.created_at > (seen[gid] || 0) && e.pubkey !== window.Fellowship.myPubkey)
         setUnread(prev => ({ ...prev, [gid]: (prev[gid] || 0) + 1 }));
@@ -252,6 +258,19 @@ function ChatScreen({ ctx }) {
     seen[g.id] = Math.floor(Date.now() / 1000); lsSet('trinityone.chatSeen', seen);
     setUnread(prev => ({ ...prev, [g.id]: 0 }));
     ctx.openGroup(g);
+  };
+
+  const ql = q.trim().toLowerCase();
+  const groupHits = ql ? D.GROUPS.filter(g => g.name.toLowerCase().includes(ql) || g.kind.toLowerCase().includes(ql)) : [];
+  const msgHits = ql ? msgBuf.current
+    .filter(({ e }) => searchableText(e).toLowerCase().includes(ql))
+    .slice(0, 40)
+    .map(({ gid, e }) => ({ e, group: D.GROUPS.find(g => g.id === gid) }))
+    .filter(x => x.group) : [];
+  const hi = (txt) => {
+    const i = (txt || '').toLowerCase().indexOf(ql);
+    if (i < 0 || !ql) return txt;
+    return (<React.Fragment>{txt.slice(0, i)}<mark style={{ background: 'var(--hl-yellow)', color: 'inherit', borderRadius: 3, padding: '0 2px' }}>{txt.slice(i, i + ql.length)}</mark>{txt.slice(i + ql.length)}</React.Fragment>);
   };
 
   return (
@@ -278,6 +297,54 @@ function ChatScreen({ ctx }) {
 
       {view === 'giving' ? (
         <GivingView ctx={ctx} balance={ctx.walletSats} setBalance={ctx.setWalletSats} history={ctx.giving} setHistory={ctx.setGiving} />
+      ) : (
+      <React.Fragment>
+      {/* search */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 46, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
+        <Icon name="study" size={19} color="var(--ink-3)" />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search messages & groups…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
+        {q ? <button onClick={() => setQ('')} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={17} /></button> : null}
+      </div>
+
+      {ql ? (
+      <div style={{ animation: 'trinityFade .3s ease both' }}>
+        {groupHits.length === 0 && msgHits.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--ink-3)' }}>
+            <Icon name="study" size={34} color="var(--ink-3)" />
+            <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, marginTop: 10 }}>No matches for “{q}”</p>
+          </div>
+        ) : null}
+        {groupHits.length ? <SectionLabel>Groups</SectionLabel> : null}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: groupHits.length ? 22 : 0 }}>
+          {groupHits.map(g => (
+            <div key={g.id} onClick={() => openGroup(g)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
+              <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${g.accent} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: g.accent, flexShrink: 0 }}><Icon name={g.prayer ? 'pray' : 'chat'} size={22} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{hi(g.name)}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{g.kind} · {g.members} members</div>
+              </div>
+              <Icon name="chevR" size={17} color="var(--ink-3)" />
+            </div>
+          ))}
+        </div>
+        {msgHits.length ? <SectionLabel>Messages</SectionLabel> : null}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+          {msgHits.map(({ e, group }, i) => {
+            const d = window.Fellowship.displayFor(e.pubkey);
+            const me = e.pubkey === window.Fellowship.myPubkey;
+            return (
+              <div key={i} onClick={() => openGroup(group)} style={{ padding: 13, borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                  <Avatar handle={d.handle} color={d.color} size={20} src={d.picture} />
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{me ? 'You' : d.handle}</span>
+                  <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>· {group.name}</span>
+                </div>
+                <p style={{ margin: 0, fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.45, color: 'var(--ink)' }}>{hi(searchableText(e))}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
       ) : (
       <React.Fragment>
       {/* anonymous identity banner */}
@@ -331,6 +398,8 @@ function ChatScreen({ ctx }) {
           </div>
         ))}
       </div>
+      </React.Fragment>
+      )}
       </React.Fragment>
       )}
 
@@ -480,6 +549,14 @@ function relTime(ts) {
   const d = new Date(ts * 1000), now = new Date();
   if (d.toDateString() === now.toDateString()) return fmtClock(ts);
   return Math.round((now - d) / 864e5) === 1 ? 'Yesterday' : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+// plain text of a message event (text, or the words inside a shared card) for search
+function searchableText(e) {
+  const k = (e.tags.find(t => t[0] === 'k') || [])[1];
+  if (k === 'verse' || k === 'note' || k === 'devotional') {
+    try { const c = JSON.parse(e.content); return [c.text, c.note, c.title, c.excerpt, c.ref].filter(Boolean).join(' '); } catch { return e.content; }
+  }
+  return e.content;
 }
 function evtToMsg(e) {
   const me = e.pubkey === window.Fellowship.myPubkey;

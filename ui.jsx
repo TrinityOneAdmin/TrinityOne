@@ -49,10 +49,10 @@ function PhoneFrame({ children }) {
 
 // ── Floating tab bar ──
 const TABS = [
-  { id: 'today', label: 'Today', icon: 'today' },
-  { id: 'read', label: 'Read', icon: 'read' },
-  { id: 'plans', label: 'Plans', icon: 'plans' },
   { id: 'chat', label: 'Chat', icon: 'chat' },
+  { id: 'plans', label: 'Plans', icon: 'plans' },
+  { id: 'read', label: 'Read', icon: 'read' },
+  { id: 'today', label: 'Today', icon: 'today' },
   { id: 'library', label: 'Library', icon: 'library' },
   { id: 'search', label: 'Search', icon: 'study' },
 ];

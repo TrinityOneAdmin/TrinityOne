@@ -167,6 +167,23 @@ function EmptyState({ loading, error, onBrowse }) {
   );
 }
 
+// ── "Halo" boot splash: logo reveal, auto-dismiss (tap to skip) ──
+function Splash({ onDone }) {
+  useAE(() => { const t = setTimeout(onDone, 2350); return () => clearTimeout(t); }, []);
+  return (
+    <div className="to-splash" onClick={onDone}>
+      <svg className="sp-mark" viewBox="0 0 100 100" aria-label="TrinityOne">
+        <path className="sp-arc a1" d="M81.2 67.9 A36 36 0 0 1 31.3 80.7" />
+        <path className="sp-arc a2" d="M18.8 68.0 A36 36 0 0 1 32.7 18.4" />
+        <path className="sp-arc a3" d="M49.9 14.0 A36 36 0 0 1 86.0 50.8" />
+        <circle className="sp-spark" cx="50" cy="50" r="6.5" />
+      </svg>
+      <div className="sp-wm">Trinity<span className="one">One</span></div>
+      <div className="sp-tag">Read · Gather · Share</div>
+    </div>
+  );
+}
+
 function App() {
   const [t, setTweak] = useSettings();
   const Bible = useBible();
@@ -204,6 +221,7 @@ function App() {
   const [video, setVideo] = useA(null);
   const storeParam = new URLSearchParams(location.search).get('store'); // 'featured' | 'language'
   const [store, setStore] = useA(!!storeParam);
+  const [showSplash, setShowSplash] = useA(!storeParam && !tabParam);   // skip splash on deep-links
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
   const [walletSats, setWalletSats] = useA(window.TrinityData.WALLET.sats);
@@ -305,6 +323,8 @@ function App() {
         {/* module store — available in both the loaded and first-run states */}
         <ModuleStore open={store} onClose={() => setStore(false)} ctx={ctx}
           initialView={storeParam === 'language' ? 'language' : 'featured'} />
+
+        {showSplash ? <Splash onDone={() => setShowSplash(false)} /> : null}
       </PhoneFrame>
     </div>
   );

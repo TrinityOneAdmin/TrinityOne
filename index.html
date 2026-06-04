@@ -92,6 +92,35 @@
   @keyframes trinityRise { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: none; } }
   @keyframes trinityScale { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
   @keyframes trinitySpin { to { transform: rotate(360deg); } }
+
+  /* ── TrinityOne "Halo" boot splash ── */
+  .to-splash {
+    position: absolute; inset: 0; z-index: 60; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    background: radial-gradient(120% 90% at 50% 38%, #F3E4C4, var(--paper) 60%);
+    animation: spOut .45s ease 1.9s forwards;
+  }
+  .to-splash .sp-mark { width: 126px; height: 126px; }
+  .to-splash .sp-arc { fill: none; stroke: var(--ink); stroke-width: 7; stroke-linecap: round; stroke-dasharray: 58; stroke-dashoffset: 0; }
+  .to-splash .sp-spark { fill: var(--gold); transform-box: fill-box; transform-origin: center; transform: scale(1); }
+  .to-splash .sp-wm { font-family: var(--font-display); font-weight: 800; font-size: 26px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink); }
+  .to-splash .sp-wm .one { color: var(--clay); }
+  .to-splash .sp-tag { font-family: var(--font-ui); font-weight: 600; font-size: 10.5px; letter-spacing: 3px; text-transform: uppercase; color: var(--ink-2); margin-top: -8px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .to-splash .sp-mark { animation: spSpin .82s cubic-bezier(.32,.72,0,1) both; }
+    .to-splash .sp-arc  { stroke-dashoffset: 58; animation: spDraw .62s cubic-bezier(.4,0,.2,1) both; }
+    .to-splash .sp-arc.a1 { animation-delay: .12s; }
+    .to-splash .sp-arc.a2 { animation-delay: .22s; }
+    .to-splash .sp-arc.a3 { animation-delay: .32s; }
+    .to-splash .sp-spark { transform: scale(0); animation: spPop .5s cubic-bezier(.34,1.56,.64,1) .7s both; }
+    .to-splash .sp-wm  { transform: translateY(10px); opacity: 0; animation: spRise .6s cubic-bezier(.32,.72,0,1) .98s both; }
+    .to-splash .sp-tag { transform: translateY(8px); opacity: 0; animation: spRise .6s cubic-bezier(.32,.72,0,1) 1.12s both; }
+  }
+  @keyframes spDraw { to { stroke-dashoffset: 0; } }
+  @keyframes spSpin { from { transform: rotate(-16deg) scale(.86); opacity: .4; } to { transform: none; opacity: 1; } }
+  @keyframes spPop  { from { transform: scale(0); } to { transform: scale(1); } }
+  @keyframes spRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  @keyframes spOut  { to { opacity: 0; visibility: hidden; } }
 </style>
 </head>
 <body>
