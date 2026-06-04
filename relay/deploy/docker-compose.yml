@@ -1,0 +1,31 @@
+# TrinityOne hosted relay — nostr-rs-relay (mature NIP-01) behind Caddy (automatic wss:// TLS).
+# This matches the app's current tag-based transport (spec §5.2 "Plan B"); a NIP-29 relay
+# (frith) is a later upgrade. See DEPLOY.md.
+services:
+  nostr-relay:
+    image: scsibug/nostr-rs-relay:latest   # pin a digest in production
+    restart: unless-stopped
+    user: "1000:1000"
+    volumes:
+      - ./config.toml:/usr/src/app/config.toml:ro
+      - relay-data:/usr/src/app/db
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - nostr-relay
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:
