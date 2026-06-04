@@ -15,7 +15,9 @@
     "@capacitor/android": "^6.2.1",
     "@capacitor/cli": "^6.2.1",
     "@capacitor/core": "^6.2.1",
-    "nostr-tools": "^2.23.5"
+    "@scure/bip39": "^2.2.0",
+    "nostr-tools": "^2.23.5",
+    "qrcode-generator": "^1.5.2"
   },
   "devDependencies": {
     "esbuild": "^0.28.0"

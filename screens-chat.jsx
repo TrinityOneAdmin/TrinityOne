@@ -28,65 +28,146 @@ function Avatar({ handle, color, size = 38 }) {
   );
 }
 
-// ── Nostr explainer sheet ──
-function NostrSheet({ open, onClose, ctx }) {
+// ── Identity manager sheet (anonymous Nostr key: recovery / restore / steward invite) ──
+function NostrSheet({ open, onClose, ctx, initialPane }) {
   const id = useIdentity();
   const relays = window.LumenData.RELAYS;
-  const copyNpub = () => {
-    if (window.LumenIdentity && window.LumenIdentity.copyNpub) window.LumenIdentity.copyNpub();
-    else if (navigator.clipboard) navigator.clipboard.writeText(id.npub).catch(() => {});
-    ctx.toast('Public key copied');
-  };
-  const regen = async () => {
-    if (window.LumenIdentity && window.LumenIdentity.regenerate) { await window.LumenIdentity.regenerate(); ctx.toast('New anonymous identity created'); }
-    else ctx.toast('Identity layer not ready');
-  };
-  return (
-    <BottomSheet open={open} onClose={onClose} maxHeight="84%">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 12, background: 'var(--clay-soft)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={21} /></div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>You’re anonymous</div>
-        </div>
-        <IconBtn name="x" onClick={onClose} />
-      </div>
-      <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.55, color: 'var(--ink-2)', margin: '8px 0 18px', textWrap: 'pretty' }}>
-        Chat runs on <b style={{ color: 'var(--ink)' }}>Nostr</b>, an open protocol. There’s no email, no phone number, no account — just a key that lives on your device. Your church sees a friendly handle, never you.
-      </p>
+  const [pane, setPane] = useC('main');      // main | recovery | restore | invite
+  const [words, setWords] = useC(null);      // revealed recovery phrase
+  const [restoreText, setRestoreText] = useC('');
+  const [invite, setInvite] = useC(null);    // {mnemonic, profile}
+  const ID = window.LumenIdentity;
 
-      {/* identity card */}
-      <div style={{ borderRadius: 18, padding: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Avatar handle={id.handle} color={id.color} size={48} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{id.handle}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)' }}>
-              <Icon name="key" size={13} /><span style={{ fontFamily: 'monospace', letterSpacing: '-.3px' }}>{id.npub.slice(0, 20)}…</span>
+  useCE(() => {
+    if (!open) return;
+    setPane(initialPane || 'main'); setWords(null); setRestoreText('');
+    setInvite(initialPane === 'invite' && ID && ID.makeInvite ? ID.makeInvite() : null);
+  }, [open]);
+
+  const copyNpub = () => { if (ID && ID.copyNpub) ID.copyNpub(); else if (navigator.clipboard) navigator.clipboard.writeText(id.npub).catch(() => {}); ctx.toast('Public key copied'); };
+  const regen = async () => { if (ID && ID.regenerate) { await ID.regenerate(); ctx.toast('New anonymous identity created'); } };
+  const reveal = async () => { if (ID && ID.exportMnemonic) { const m = await ID.exportMnemonic(); setWords(m ? m.split(' ') : []); } };
+  const doRestore = async () => {
+    try { await ID.importMnemonic(restoreText); ctx.toast('Identity restored'); setPane('main'); }
+    catch (e) { ctx.toast(e.message || 'Invalid recovery phrase'); }
+  };
+  const startInvite = () => { if (ID && ID.makeInvite) setInvite(ID.makeInvite()); setPane('invite'); };
+  const copyText = (t, msg) => { if (navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {}); ctx.toast(msg); };
+
+  const Header = ({ title, back }) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        {back ? <button onClick={() => setPane('main')} style={{ width: 34, height: 34, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={19} /></button>
+          : <div style={{ width: 38, height: 38, borderRadius: 12, background: 'var(--clay-soft)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={21} /></div>}
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>{title}</div>
+      </div>
+      <IconBtn name="x" onClick={onClose} />
+    </div>
+  );
+  const rowBtn = (icon, label, sub, onClick, tone) => (
+    <button onClick={onClick} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
+      border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: tone || 'var(--ink)', textAlign: 'left' }}>
+      <Icon name={icon} size={20} color={tone || 'var(--ink-2)'} />
+      <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{sub}</div></div>
+      <Icon name="chevR" size={17} color="var(--ink-3)" />
+    </button>
+  );
+
+  return (
+    <BottomSheet open={open} onClose={onClose} maxHeight="90%">
+      {pane === 'main' && <React.Fragment>
+        <Header title="You’re anonymous" />
+        <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '4px 0 16px', textWrap: 'pretty' }}>
+          Chat runs on <b style={{ color: 'var(--ink)' }}>Nostr</b> — no email, no phone, no account. Just a key on your device. Your church sees a friendly handle, never you.
+        </p>
+        <div style={{ borderRadius: 18, padding: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Avatar handle={id.handle} color={id.color} size={48} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{id.handle}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--ink-3)', fontSize: 12 }}>
+                <Icon name="key" size={13} /><span style={{ fontFamily: 'monospace', letterSpacing: '-.3px' }}>{id.npub.slice(0, 20)}…</span>
+              </div>
             </div>
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
-          <button onClick={copyNpub} style={miniBtn()}><Icon name="copy" size={15} /> Copy npub</button>
-          <button onClick={regen} style={miniBtn()}><Icon name="refresh" size={15} /> New identity</button>
-        </div>
-      </div>
-
-      {/* relays */}
-      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 9px' }}>RELAYS</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
-        {relays.map(r => (
-          <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-            <Icon name="globe" size={17} color={r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)'} />
-            <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)' }}>{r.url}</span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
-              <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />
-              {r.status === 'on' ? 'Connected' : 'Off'}
-            </span>
+          <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
+            <button onClick={copyNpub} style={miniBtn()}><Icon name="copy" size={15} /> Copy npub</button>
+            <button onClick={regen} style={miniBtn()}><Icon name="refresh" size={15} /> New identity</button>
           </div>
-        ))}
-      </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 16 }}>
+          {rowBtn('key', 'Recovery phrase', 'Back up your 12 words — your only way to restore', () => setPane('recovery'))}
+          {rowBtn('refresh', 'Restore an identity', 'Paste a 12-word phrase from another device', () => setPane('restore'))}
+          {rowBtn('qr', 'Invite a member', 'Hand someone a ready-made anonymous identity', startInvite, 'var(--clay)')}
+        </div>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 9px' }}>RELAYS</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
+          {relays.map(r => (
+            <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <Icon name="globe" size={17} color={r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)'} />
+              <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)' }}>{r.url}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />{r.status === 'on' ? 'Connected' : 'Off'}</span>
+            </div>
+          ))}
+        </div>
+      </React.Fragment>}
+
+      {pane === 'recovery' && <React.Fragment>
+        <Header title="Recovery phrase" back />
+        <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)', borderRadius: 14, padding: '12px 14px', marginBottom: 14 }}>
+          <Icon name="lock" size={18} color="var(--clay-ink)" />
+          <div style={{ fontSize: 13, color: 'var(--clay-ink)', lineHeight: 1.45, fontWeight: 600 }}>These 12 words <b>are</b> your identity & wallet. Anyone with them controls it. Write them down offline — never share or screenshot them.</div>
+        </div>
+        {!words ? (
+          <button onClick={reveal} style={primaryBtn()}><Icon name="key" size={18} color="#fff" /> Reveal my 12 words</button>
+        ) : words.length === 0 ? (
+          <div style={{ textAlign: 'center', color: 'var(--ink-3)', fontSize: 13.5, padding: 20 }}>No phrase stored on this device (web preview uses a temporary key).</div>
+        ) : (
+          <React.Fragment>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
+              {words.map((w, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', width: 16 }}>{i + 1}</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: 14, color: 'var(--ink)' }}>{w}</span>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => copyText(words.join(' '), 'Phrase copied — store it safely')} style={miniBtn()}><Icon name="copy" size={15} /> Copy phrase</button>
+            <button onClick={() => setPane('main')} style={{ ...primaryBtn(), marginTop: 10 }}><Icon name="check" size={18} stroke={2.4} color="#fff" /> I’ve saved it</button>
+          </React.Fragment>
+        )}
+      </React.Fragment>}
+
+      {pane === 'restore' && <React.Fragment>
+        <Header title="Restore an identity" back />
+        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '2px 0 12px' }}>Paste the 12-word recovery phrase. This replaces the identity on this device.</p>
+        <textarea value={restoreText} onChange={e => setRestoreText(e.target.value)} rows={3} placeholder="word1 word2 word3 …"
+          style={{ width: '100%', boxSizing: 'border-box', resize: 'none', padding: '12px 14px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontFamily: 'monospace', fontSize: 14, color: 'var(--ink)', lineHeight: 1.5, marginBottom: 12 }} />
+        <button disabled={!restoreText.trim()} onClick={doRestore} style={{ ...primaryBtn(), opacity: restoreText.trim() ? 1 : .5 }}><Icon name="refresh" size={18} color="#fff" /> Restore identity</button>
+      </React.Fragment>}
+
+      {pane === 'invite' && invite && <React.Fragment>
+        <Header title="Invite a member" back />
+        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '2px 0 14px' }}>A fresh anonymous identity for someone to import. They scan this (or paste the phrase) under <b style={{ color: 'var(--ink)' }}>Restore an identity</b>. This is <b>not</b> your own key.</p>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+          <div style={{ background: '#fff', padding: 12, borderRadius: 18, boxShadow: 'var(--shadow)', width: 196, height: 196 }}
+            dangerouslySetInnerHTML={{ __html: ID.qrSVG(invite.mnemonic) }} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, justifyContent: 'center', marginBottom: 14 }}>
+          <Avatar handle={invite.profile.handle} color={invite.profile.color} size={28} />
+          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{invite.profile.handle}</span>
+        </div>
+        <button onClick={() => copyText(invite.mnemonic, 'Invite phrase copied')} style={miniBtn()}><Icon name="copy" size={15} /> Copy phrase to share</button>
+        <button onClick={startInvite} style={{ ...miniBtn(), marginTop: 9 }}><Icon name="refresh" size={15} /> Generate another</button>
+      </React.Fragment>}
     </BottomSheet>
   );
+}
+function primaryBtn() {
+  return { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 15,
+    borderRadius: 15, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15, fontFamily: 'var(--font-ui)' };
 }
 function miniBtn() {
   return { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '11px',
@@ -97,7 +178,8 @@ function miniBtn() {
 // ── group list (the Chat tab body) ──
 function ChatScreen({ ctx }) {
   const D = window.LumenData;
-  const [nostr, setNostr] = useC(false);
+  const idParam = new URLSearchParams(location.search).get('identity'); // main|recovery|restore|invite
+  const [nostr, setNostr] = useC(!!idParam);
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
   const [view, setView] = useC(chatParam === 'giving' ? 'giving' : 'groups');
   const id = useIdentity();
@@ -183,7 +265,7 @@ function ChatScreen({ ctx }) {
       </React.Fragment>
       )}
 
-      <NostrSheet open={nostr} onClose={() => setNostr(false)} ctx={ctx} />
+      <NostrSheet open={nostr} onClose={() => setNostr(false)} ctx={ctx} initialPane={idParam} />
     </ScreenScroll>
   );
 }

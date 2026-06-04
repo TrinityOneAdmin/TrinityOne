@@ -9,6 +9,9 @@
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { validateMnemonic } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
+import qrcode from 'qrcode-generator';
 
 const STORE_KEY = 'lumen.nostr.mnemonic';
 const HANDLE_POOL = ['Cedar', 'River', 'Sparrow', 'Olive', 'Wren', 'Maple', 'Reed', 'Dove', 'Ash', 'Linden', 'Heron', 'Bramble'];
@@ -84,8 +87,29 @@ window.LumenIdentity = {
     if (np && navigator.clipboard) navigator.clipboard.writeText(np).catch(() => {});
     return np;
   },
-  // for a future recovery screen (show-once 12 words); native only, ephemeral on web
+  // the current identity's 12-word recovery phrase (native: secure store; web: ephemeral)
   async exportMnemonic() { return secureGet(); },
+
+  // restore an identity from a pasted 12-word BIP-39 phrase
+  async importMnemonic(words) {
+    const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
+    await secureSet(m);
+    apply(deriveProfile(m), { ephemeral: !isNative() });
+    return window.LumenIdentity.current;
+  },
+
+  // steward onboarding: mint a NEW identity to hand to a member (does NOT touch yours)
+  makeInvite() {
+    const mnemonic = generateSeedWords();
+    return { mnemonic, profile: deriveProfile(mnemonic) };
+  },
+
+  // render any string as a QR (SVG markup) — used for the steward invite
+  qrSVG(text) {
+    const qr = qrcode(0, 'M'); qr.addData(String(text || '')); qr.make();
+    return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  },
 };
 
 window.LumenIdentity.ready = init().catch(e => console.error('[identity] init failed', e));

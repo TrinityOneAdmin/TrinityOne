@@ -1,20 +1,20 @@
-# Lumen — Fellowship & Giving Module: Build Specification
+# TrinityOne — Fellowship & Giving Module: Build Specification
 
 **Working name for the network layer:** Koinonia (Acts 2:44–45 — "all the believers were together and had everything in common… they gave to anyone who had need").
 
-**Audience:** Claude Code (CC), building onto the existing Lumen app.
+**Audience:** Claude Code (CC), building onto the existing TrinityOne app.
 **Status:** Architecture agreed; this document is the build brief. Not greenfield — it bolts onto what already exists.
 
 ---
 
 ## 0. Context — what already exists (do not rebuild)
 
-Lumen is a **Capacitor** app:
+TrinityOne is a **Capacitor** app:
 
 ```json
 {
-  "appId": "com.lumenbible.app",
-  "appName": "Lumen",
+  "appId": "com.trinityone.app",
+  "appName": "TrinityOne",
   "webDir": "www",
   "plugins": { "CapacitorHttp": { "enabled": true } }
 }
@@ -60,7 +60,7 @@ These are not decoration — when a design fork appears, resolve it toward these
      └────────┬─────────┘   └──────────────────┘   └──────────────────┘
               │  local writes, offline-first
      ┌────────┴─────────┐
-     │ Lumen clients     │  NDK · identity in secure store · NIP-57 giving
+     │ TrinityOne clients     │  NDK · identity in secure store · NIP-57 giving
      │ (Capacitor app)   │
      └───────────────────┘
 ```
@@ -235,7 +235,7 @@ Per-channel E2E (NIP-17 → Marmot/MLS), including the deferred encrypted cross-
 
 | Layer | Choice | Notes |
 |---|---|---|
-| App shell | Capacitor (`com.lumenbible.app`) | iOS via `cap add ios`, same `www/` |
+| App shell | Capacitor (`com.trinityone.app`) | iOS via `cap add ios`, same `www/` |
 | Bible | Open.Bible modules | Existing; out of scope |
 | Nostr client | NDK (`@nostr-dev-kit/ndk`) | Chat UI already designed; wire it |
 | Wallet | `@nostr-dev-kit/ndk-wallet` | NIP-57 + NIP-47 (+ NIP-60) |
@@ -248,7 +248,7 @@ Per-channel E2E (NIP-17 → Marmot/MLS), including the deferred encrypted cross-
 
 ## 12. Relevant NIPs
 
-| NIP | Purpose in Lumen |
+| NIP | Purpose in TrinityOne |
 |---|---|
 | NIP-06 | Derive Nostr key from BIP-39 mnemonic (recovery) |
 | NIP-29 | Relay-based groups → federation/church/ministry + roles + membership |
