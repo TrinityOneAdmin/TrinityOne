@@ -21,6 +21,18 @@ function profile(pub) {
 const pool = new SimplePool();
 let sk = null, pub = null;
 
+// kind-0 profile metadata cache (pubkey -> {name, picture, about})
+const profiles = {};
+const pendingProfiles = new Set();
+const PROFILE_KEY = 'trinityone.profile';   // own display name (public; ok in localStorage)
+
+// resolved display = kind-0 name if known, else the deterministic anonymous handle
+function displayFor(pubkey) {
+  const base = profile(pubkey);
+  const p = profiles[pubkey];
+  return { pubkey, handle: (p && p.name) || base.handle, color: base.color, picture: p && p.picture };
+}
+
 async function deriveFromIdentity() {
   const mnemonic = window.TrinityIdentity ? await window.TrinityIdentity.exportMnemonic() : null;
   if (!mnemonic) throw new Error('no identity available to sign with');
@@ -31,6 +43,10 @@ async function deriveFromIdentity() {
 async function init() {
   if (window.TrinityIdentity && window.TrinityIdentity.ready) await window.TrinityIdentity.ready;
   await deriveFromIdentity();
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    if (raw) { const p = JSON.parse(raw); profiles[pub] = p; window.Fellowship.myProfile = p; }
+  } catch {}
 }
 // keep the signing key in step with identity regeneration / restore
 window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch(() => {}); });
@@ -38,8 +54,39 @@ window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch((
 window.Fellowship = {
   relays: RELAYS,
   myPubkey: null,
+  myProfile: null,
   ready: null,
   profile,
+  displayFor,
+
+  // publish this user's kind-0 profile (display name etc.) and cache it
+  async setProfile(meta) {
+    if (!sk) await window.Fellowship.ready;
+    const p = { name: (meta.name || '').trim(), about: (meta.about || '').trim(), picture: (meta.picture || '').trim() };
+    const evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify(p) }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] profile publish failed', e); }
+    profiles[pub] = p; window.Fellowship.myProfile = p;
+    try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch {}
+    window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } }));
+    return evt;
+  },
+
+  // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
+  requestProfiles(pubkeys) {
+    const need = [...new Set(pubkeys)].filter(pk => pk && !(pk in profiles) && !pendingProfiles.has(pk));
+    if (!need.length) return;
+    need.forEach(pk => pendingProfiles.add(pk));
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: need }], {
+      onevent(e) {
+        try {
+          const m = JSON.parse(e.content);
+          profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '' };
+          window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } }));
+        } catch {}
+      },
+      oneose() { need.forEach(pk => pendingProfiles.delete(pk)); try { sub.close(); } catch {} },
+    });
+  },
 
   // publish a message to a group (kind 1, tagged with the network + group ids)
   async publishMessage(groupId, content, extraTags = []) {

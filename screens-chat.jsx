@@ -5,18 +5,25 @@ const { useState: useC, useEffect: useCE, useRef: useCR } = React;
 
 // reflect the live (real-or-mock) anonymous identity; re-render on regeneration
 function useIdentity() {
-  const read = () => (window.TrinityIdentity && window.TrinityIdentity.current) || window.TrinityData.CHAT_IDENTITY;
-  const [id, setId] = useC(read);
+  const [, force] = useC(0);
   useCE(() => {
-    const h = () => setId(read());
-    window.addEventListener('trinity-identity', h); h();
-    return () => window.removeEventListener('trinity-identity', h);
+    const h = () => force(x => x + 1);
+    window.addEventListener('trinity-identity', h);
+    window.addEventListener('trinity-profiles', h);
+    return () => { window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-profiles', h); };
   }, []);
-  return id;
+  return (window.TrinityIdentity && window.TrinityIdentity.current) || window.TrinityData.CHAT_IDENTITY;
 }
+// the current user's chosen display name (kind-0) or the anonymous handle
+function myName(id) { return (window.Fellowship && window.Fellowship.myProfile && window.Fellowship.myProfile.name) || id.handle; }
 
-// avatar = colored circle with the descriptive word's initial
-function Avatar({ handle, color, size = 38 }) {
+// avatar = profile picture if set, else a colored circle with the name's initial
+function Avatar({ handle, color, size = 38, src }) {
+  const [err, setErr] = useC(false);
+  if (src && !err) {
+    return <img src={src} alt="" onError={() => setErr(true)}
+      style={{ width: size, height: size, borderRadius: 999, objectFit: 'cover', flexShrink: 0 }} />;
+  }
   const word = (handle || 'Anonymous').split(' ').slice(-1)[0];
   return (
     <div style={{
@@ -24,7 +31,7 @@ function Avatar({ handle, color, size = 38 }) {
       background: `linear-gradient(150deg, ${color}, color-mix(in oklab, ${color} 60%, #16120c))`,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       color: '#fff', fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: size * 0.4,
-    }}>{word[0]}</div>
+    }}>{(word[0] || '?').toUpperCase()}</div>
   );
 }
 
@@ -36,13 +43,22 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   const [words, setWords] = useC(null);      // revealed recovery phrase
   const [restoreText, setRestoreText] = useC('');
   const [invite, setInvite] = useC(null);    // {mnemonic, profile}
+  const [nameInput, setNameInput] = useC('');
   const ID = window.TrinityIdentity;
+  const FS = window.Fellowship;
 
   useCE(() => {
     if (!open) return;
     setPane(initialPane || 'main'); setWords(null); setRestoreText('');
     setInvite(initialPane === 'invite' && ID && ID.makeInvite ? ID.makeInvite() : null);
+    setNameInput((FS && FS.myProfile && FS.myProfile.name) || '');
   }, [open]);
+
+  const saveProfile = async () => {
+    if (!(FS && FS.setProfile)) { ctx.toast('Chat transport not ready'); return; }
+    await FS.setProfile({ name: nameInput });
+    ctx.toast(nameInput.trim() ? 'Display name saved' : 'Name cleared'); setPane('main');
+  };
 
   // poll real relay connection status while the sheet is open
   useCE(() => {
@@ -93,9 +109,9 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
         </p>
         <div style={{ borderRadius: 18, padding: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Avatar handle={id.handle} color={id.color} size={48} />
+            <Avatar handle={myName(id)} color={id.color} size={48} src={window.Fellowship && window.Fellowship.myProfile && window.Fellowship.myProfile.picture} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{id.handle}</div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{myName(id)}</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--ink-3)', fontSize: 12 }}>
                 <Icon name="key" size={13} /><span style={{ fontFamily: 'monospace', letterSpacing: '-.3px' }}>{id.npub.slice(0, 20)}…</span>
               </div>
@@ -107,6 +123,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 16 }}>
+          {rowBtn('pen', 'Display name', myName(id) === id.handle ? 'Choose a name your church sees' : myName(id), () => setPane('profile'))}
           {rowBtn('key', 'Recovery phrase', 'Back up your 12 words — your only way to restore', () => setPane('recovery'))}
           {rowBtn('refresh', 'Restore an identity', 'Paste a 12-word phrase from another device', () => setPane('restore'))}
           {rowBtn('qr', 'Invite a member', 'Hand someone a ready-made anonymous identity', startInvite, 'var(--clay)')}
@@ -123,6 +140,20 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
             </div>
           ))}
         </div>
+      </React.Fragment>}
+
+      {pane === 'profile' && <React.Fragment>
+        <Header title="Display name" back />
+        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '2px 0 14px' }}>
+          Pick a name your church sees instead of an anonymous handle. You stay anonymous — no email or phone, just a name on your key. Leave it blank to go back to <b style={{ color: 'var(--ink)' }}>{id.handle}</b>.
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+          <Avatar handle={nameInput || id.handle} color={id.color} size={48} />
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{nameInput || id.handle}</div>
+        </div>
+        <input value={nameInput} onChange={e => setNameInput(e.target.value)} maxLength={40} placeholder="e.g. Maria from Tuesday group"
+          style={{ width: '100%', boxSizing: 'border-box', height: 48, padding: '0 14px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)', marginBottom: 12 }} />
+        <button onClick={saveProfile} style={primaryBtn()}><Icon name="check" size={18} stroke={2.4} color="#fff" /> Save name</button>
       </React.Fragment>}
 
       {pane === 'recovery' && <React.Fragment>
@@ -255,10 +286,10 @@ function ChatScreen({ ctx }) {
         background: 'var(--surface)', borderRadius: 20, padding: 14, marginBottom: 22, boxShadow: 'var(--shadow)',
         display: 'flex', alignItems: 'center', gap: 13, animation: 'trinityFade .5s ease .05s both',
       }}>
-        <Avatar handle={id.handle} color={id.color} size={44} />
+        <Avatar handle={myName(id)} color={id.color} size={44} src={window.Fellowship && window.Fellowship.myProfile && window.Fellowship.myProfile.picture} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{id.handle}</span>
+            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{myName(id)}</span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--clay-soft)', color: 'var(--clay-ink)', padding: '2px 8px', borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: '.3px' }}>
               <Icon name="shield" size={11} /> ANON</span>
           </div>
@@ -363,11 +394,12 @@ function Bubble({ m, onAmen, ctx }) {
 }
 
 function Row({ me, m, children }) {
+  const d = (m.pubkey && window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(m.pubkey) : { handle: m.handle, color: m.color };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both' }}>
       {!me ? <div style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px' }}>
-        <Avatar handle={m.handle} color={m.color} size={22} />
-        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>{m.handle}</span>
+        <Avatar handle={d.handle} color={d.color} size={22} src={d.picture} />
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>{d.handle}</span>
         <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{m.when}</span>
       </div> : null}
       {children}
@@ -384,10 +416,9 @@ function relTime(ts) {
   return Math.round((now - d) / 864e5) === 1 ? 'Yesterday' : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 function evtToMsg(e) {
-  const p = window.Fellowship.profile(e.pubkey);
   const me = e.pubkey === window.Fellowship.myPubkey;
   const kTag = (e.tags.find(t => t[0] === 'k') || [])[1];
-  const base = { id: e.id, me, handle: p.handle, color: p.color, when: fmtClock(e.created_at), _ts: e.created_at };
+  const base = { id: e.id, me, pubkey: e.pubkey, when: fmtClock(e.created_at), _ts: e.created_at };
   if (kTag === 'verse') { try { return { ...base, kind: 'verse', verse: JSON.parse(e.content) }; } catch {} }
   return { ...base, text: e.content };
 }
@@ -404,10 +435,13 @@ function ChatRoom({ group, open, onClose, ctx }) {
     if (window.Fellowship) {                       // live: subscribe to the group over Nostr
       setMsgs([]);
       const seen = new Set();
-      const add = (e) => setMsgs(prev => {
-        if (seen.has(e.id)) return prev; seen.add(e.id);
-        return [...prev, evtToMsg(e)].sort((a, b) => (a._ts || 0) - (b._ts || 0));
-      });
+      const add = (e) => {
+        if (window.Fellowship.requestProfiles) window.Fellowship.requestProfiles([e.pubkey]);
+        setMsgs(prev => {
+          if (seen.has(e.id)) return prev; seen.add(e.id);
+          return [...prev, evtToMsg(e)].sort((a, b) => (a._ts || 0) - (b._ts || 0));
+        });
+      };
       const unsub = window.Fellowship.subscribeGroup(group.id, add);
       return () => unsub();
     }
