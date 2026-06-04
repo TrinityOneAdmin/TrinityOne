@@ -149,6 +149,25 @@ const VOTD = {
   version: 'WEB',
 };
 
+// rotated daily by day-of-year; text below is a fallback when the active
+// translation lacks the verse (otherwise the live module text is used).
+const VOTD_POOL = [
+  { ref: 'John 1:5', text: 'The light shines in the darkness, and the darkness has not overcome it.' },
+  { ref: 'Psalms 23:1', text: 'The LORD is my shepherd; I shall not want.' },
+  { ref: 'Proverbs 3:5', text: 'Trust in the LORD with all thine heart; and lean not unto thine own understanding.' },
+  { ref: 'Isaiah 41:10', text: 'Fear thou not; for I am with thee: be not dismayed; for I am thy God.' },
+  { ref: 'Philippians 4:6', text: 'Be careful for nothing; but in every thing by prayer and supplication with thanksgiving let your requests be made known unto God.' },
+  { ref: 'Romans 8:28', text: 'And we know that all things work together for good to them that love God.' },
+  { ref: 'Matthew 11:28', text: 'Come unto me, all ye that labour and are heavy laden, and I will give you rest.' },
+  { ref: 'Psalms 46:1', text: 'God is our refuge and strength, a very present help in trouble.' },
+  { ref: 'Joshua 1:9', text: 'Be strong and of a good courage; be not afraid, neither be thou dismayed: for the LORD thy God is with thee.' },
+  { ref: 'Lamentations 3:22', text: 'It is of the LORD’s mercies that we are not consumed, because his compassions fail not.' },
+  { ref: 'John 14:27', text: 'Peace I leave with you, my peace I give unto you.' },
+  { ref: '2 Corinthians 5:17', text: 'Therefore if any man be in Christ, he is a new creature.' },
+  { ref: 'Psalms 119:105', text: 'Thy word is a lamp unto my feet, and a light unto my path.' },
+  { ref: 'Hebrews 13:8', text: 'Jesus Christ the same yesterday, and to day, and for ever.' },
+];
+
 // ── reading plans (real day-by-day passages, parsed + opened in the reader) ──
 const _johnLabels = ['The Word made flesh', 'Water into wine', 'Born again', 'The woman at the well', 'The healing pool',
   'Bread of life', 'Rivers of living water', 'The light of the world', 'The man born blind', 'The good shepherd',
@@ -330,7 +349,7 @@ const GIVING_HISTORY = [
 ];
 
 window.TrinityData = {
-  BOOKS, LEXICON, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD,
+  BOOKS, LEXICON, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,
   PLANS, MODULES, COLLECTIONS, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
   VIDEO_CATS, CHANNELS, VIDEOS,
   HANDLE_POOL, CHAT_IDENTITY, RELAYS, GROUPS, GROUP_MESSAGES,

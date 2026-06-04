@@ -209,7 +209,19 @@
       getVerses: get, plain: (b, c) => get(b, c).map(x => ({ v: x.v, text: x.text }))
     };
   }
-  function stripTags(s){ return (s || "").replace(/<X?W[GH]\d+>/g, "").replace(/<[^>]+>/g, "").replace(/\\\+?[a-z]+\d?\*?/gi, "").replace(/[ \t]{2,}/g, " ").trim(); }
+  // clean display/search text: drop note CONTENT (not just tags), Strong's, markup
+  function stripTags(s){
+    return (s || "")
+      .replace(/<RF[^>]*>[\s\S]*?<Rf>/g, "")      // MySword footnotes (remove content)
+      .replace(/<RX[^>]*>[\s\S]*?<Rx>/g, "")      // MySword cross-references
+      .replace(/\\f\b[\s\S]*?\\f\*/g, "")          // USFM footnotes
+      .replace(/\\x\b[\s\S]*?\\x\*/g, "")          // USFM cross-references
+      .replace(/<X?W[GH]\d+>/g, "")                // Strong's tags
+      .replace(/<(?:CM|CL|PF|PI|PG|TS\d?|Q\d?)[^>]*>|¶/gi, " ") // block breaks → space
+      .replace(/<[^>]+>/g, "")                     // any remaining markup tags
+      .replace(/\\\+?[a-z]+\d?\*?/gi, "")          // remaining USFM codes
+      .replace(/\s{2,}/g, " ").trim();
+  }
 
   // ── module store + pub/sub ──
   const modules = {};   // abbr -> source
