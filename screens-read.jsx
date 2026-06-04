@@ -397,7 +397,7 @@ function ReadScreen({ ctx }) {
     toast: ctx.toast,
     _bm: () => { const k = keyOf(sel); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(labelOf(sel) + ' — ' + (selRow ? selRow.text : '')); } catch (e) {} close(); ctx.toast('Copied to clipboard'); },
-    _share: () => { close(); ctx.openShare({ ref: labelOf(sel), text: selRow ? selRow.text : '', version }); },
+    _share: () => { close(); ctx.openShareSheet({ ref: labelOf(sel), text: selRow ? selRow.text : '', version }); },
   };
 
   const prev = Bible.step(loc, -1), next = Bible.step(loc, 1);

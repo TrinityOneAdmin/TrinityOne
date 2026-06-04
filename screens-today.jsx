@@ -92,7 +92,7 @@ function TodayScreen({ ctx }) {
       </div>
 
       {/* Verse of the day — hero */}
-      <div onClick={() => ctx.openShare(votd)} style={{
+      <div onClick={() => ctx.openShareSheet(votd)} style={{
         position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
         background: 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
         padding: '22px 22px 18px', color: '#fff', marginBottom: 22, boxShadow: 'var(--shadow-lg)',

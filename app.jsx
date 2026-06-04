@@ -179,6 +179,7 @@ function App() {
     if (!Bible.loaded) return;
     const gid = sp.get('group'); if (gid) { const g = window.TrinityData.GROUPS.find(x => x.id === gid); if (g) setGroup(g); }
     const pid = sp.get('plan'); if (pid) { const p = window.TrinityData.PLANS.find(x => x.id === pid); if (p) setPlan(p); }
+    if (sp.get('share')) setShareSheet(window.TrinityData.VOTD);
   }, [Bible.loaded]);
   const version = Bible.activeVersion;
 
@@ -190,6 +191,7 @@ function App() {
 
   // overlays
   const [share, setShare] = useA(null);
+  const [shareSheet, setShareSheet] = useA(null);   // verse share chooser (image / send to group)
   const [devo, setDevo] = useA(false);
   const [plan, setPlan] = useA(null);
   const [journal, setJournal] = useA(null);
@@ -232,6 +234,7 @@ function App() {
     walletSats, setWalletSats, giving, setGiving,
     openReader: () => setTab('read'),
     openShare: (v) => setShare(v),
+    openShareSheet: (v) => setShareSheet(v),
     openDevotional: () => setDevo(true),
     openPlan: (p) => setPlan(p),
     openPlanDay: (plan, day) => {
@@ -280,6 +283,7 @@ function App() {
 
             {/* overlays */}
             <ShareCard verse={share} open={!!share} onClose={() => setShare(null)} ctx={ctx} />
+            <VerseShareSheet verse={shareSheet} open={!!shareSheet} onClose={() => setShareSheet(null)} ctx={ctx} />
             <DevotionalView open={devo} onClose={() => setDevo(false)} ctx={ctx} />
             <PlanDetail plan={plan} open={!!plan} onClose={() => setPlan(null)} ctx={ctx} />
             <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} />

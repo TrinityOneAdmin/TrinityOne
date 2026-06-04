@@ -366,17 +366,14 @@ function Bubble({ m, onAmen, ctx }) {
   if (m.kind === 'prayer') {
     return (
       <Row me={me} m={m}>
-        <div style={{ maxWidth: 280, borderRadius: 18, padding: '13px 15px', background: 'var(--surface)',
-          border: '1.5px solid color-mix(in oklab, var(--gold) 45%, var(--line))', boxShadow: 'var(--shadow)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', marginBottom: 6 }}>
-            <Icon name="pray" size={14} color="var(--gold)" /> PRAYER REQUEST</div>
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.5, margin: '0 0 11px', color: 'var(--ink)', textWrap: 'pretty' }}>{m.text}</p>
-          <button onClick={() => onAmen(m.id)} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid var(--line)',
-            background: m._amened ? 'var(--clay-soft)' : 'var(--surface-2)', color: m._amened ? 'var(--clay-ink)' : 'var(--ink-2)',
-            padding: '6px 12px', borderRadius: 999, cursor: 'pointer', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)',
-          }}>
-            <Icon name="pray" size={15} fill={m._amened} /> Amen · {m.amens}</button>
+        <div style={{ maxWidth: 280 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', margin: '0 0 4px 2px' }}>
+            <Icon name="pray" size={12} color="var(--gold)" /> PRAYER REQUEST</div>
+          <div style={{ borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
+            border: me ? 'none' : '1.5px solid color-mix(in oklab, var(--gold) 38%, var(--line))', boxShadow: 'var(--shadow)',
+            borderBottomRightRadius: me ? 5 : 18, borderBottomLeftRadius: me ? 18 : 5 }}>
+            <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty' }}>{m.text}</p>
+          </div>
         </div>
       </Row>
     );
@@ -420,6 +417,7 @@ function evtToMsg(e) {
   const kTag = (e.tags.find(t => t[0] === 'k') || [])[1];
   const base = { id: e.id, me, pubkey: e.pubkey, when: fmtClock(e.created_at), _ts: e.created_at };
   if (kTag === 'verse') { try { return { ...base, kind: 'verse', verse: JSON.parse(e.content) }; } catch {} }
+  if (kTag === 'prayer') return { ...base, kind: 'prayer', text: e.content };
   return { ...base, text: e.content };
 }
 
@@ -427,6 +425,7 @@ function evtToMsg(e) {
 function ChatRoom({ group, open, onClose, ctx }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
+  const [prayerOn, setPrayerOn] = useC(false);   // attach a "prayer request" flag to this message
   const id = useIdentity();
   const scRef = useCR();
   useCE(() => {
@@ -456,13 +455,14 @@ function ChatRoom({ group, open, onClose, ctx }) {
   const send = (extra) => {
     if (window.Fellowship) {                        // publish over Nostr; relay echoes it back to our sub
       if (extra.kind === 'verse') window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse']]);
+      else if (extra.kind === 'prayer') window.Fellowship.publishMessage(group.id, extra.text, [['k', 'prayer']]);
       else window.Fellowship.publishMessage(group.id, extra.text);
       return;
     }
     const base = { id: 'me-' + Date.now(), me: true, handle: id.handle, color: id.color, when: 'now' };
     setMsgs(prev => [...prev, { ...base, ...extra }]);
   };
-  const sendText = () => { if (!draft.trim()) return; send({ text: draft.trim() }); setDraft(''); };
+  const sendText = () => { if (!draft.trim()) return; send(prayerOn ? { text: draft.trim(), kind: 'prayer' } : { text: draft.trim() }); setDraft(''); setPrayerOn(false); };
   const shareVerse = () => { send({ kind: 'verse', verse: { ...window.TrinityData.VOTD } }); ctx.toast('Verse shared'); };
   const amen = (mid) => setMsgs(prev => prev.map(m => m.id === mid ? { ...m, _amened: !m._amened, amens: m.amens + (m._amened ? -1 : 1) } : m));
 
@@ -492,12 +492,25 @@ function ChatRoom({ group, open, onClose, ctx }) {
       </div>
 
       <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 9 }}>
+        {prayerOn ? (
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'color-mix(in oklab, var(--gold) 15%, var(--surface))', color: 'var(--gold)', border: '1px solid color-mix(in oklab, var(--gold) 35%, transparent)', padding: '5px 8px 5px 11px', borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+              <Icon name="pray" size={13} color="var(--gold)" /> Prayer request
+              <button onClick={() => setPrayerOn(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--gold)', display: 'flex', padding: 0 }}><Icon name="x" size={14} /></button>
+            </span>
+          </div>
+        ) : null}
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
           <button onClick={shareVerse} title="Share a verse" style={{ width: 44, height: 44, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <Icon name="sparkle" size={20} /></button>
+          <button onClick={() => setPrayerOn(v => !v)} title="Mark as a prayer request" style={{ width: 44, height: 44, borderRadius: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            border: prayerOn ? '1px solid var(--gold)' : '1px solid var(--line)',
+            background: prayerOn ? 'color-mix(in oklab, var(--gold) 18%, var(--surface))' : 'var(--surface-2)',
+            color: 'var(--gold)' }}>
+            <Icon name="pray" size={20} fill={prayerOn} /></button>
           <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={1}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); } }}
-            placeholder="Message anonymously…" style={{
+            placeholder={prayerOn ? 'Share a prayer request…' : 'Message anonymously…'} style={{
               flex: 1, resize: 'none', minHeight: 44, maxHeight: 96, padding: '12px 15px', borderRadius: 16,
               border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14.5,
               fontFamily: 'var(--font-ui)', color: 'var(--ink)', lineHeight: 1.35 }} />
@@ -511,4 +524,55 @@ function ChatRoom({ group, open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { ChatScreen, ChatRoom });
+// ── share a verse: as an image card, or send it into a chat group ──
+function VerseShareSheet({ verse, open, onClose, ctx }) {
+  if (!verse) return null;
+  const D = window.TrinityData;
+  const live = !!(window.Fellowship && window.Fellowship.publishMessage);
+  const sendToGroup = (g) => {
+    if (!live) { ctx.toast('Chat isn’t available'); return; }
+    window.Fellowship.publishMessage(g.id, JSON.stringify(verse), [['k', 'verse']]);
+    ctx.toast('Shared to ' + g.name); onClose();
+  };
+  return (
+    <BottomSheet open={open} onClose={onClose} maxHeight="86%">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>Share verse</div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+
+      {/* verse preview */}
+      <div style={{ borderRadius: 18, padding: '16px 18px', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
+        <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.45, margin: '0 0 8px', fontWeight: 500, textWrap: 'pretty' }}>“{verse.text}”</p>
+        <div style={{ fontWeight: 700, fontSize: 13 }}>{verse.ref}{verse.version ? ' · ' + verse.version : ''}</div>
+      </div>
+
+      <button onClick={() => { onClose(); ctx.openShare(verse); }} style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
+        border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
+        <Icon name="share" size={20} color="var(--clay)" />
+        <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>Share as image</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>A card for your camera roll or socials</div></div>
+        <Icon name="chevR" size={17} color="var(--ink-3)" />
+      </button>
+
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 10px' }}>SEND TO A GROUP</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        {D.GROUPS.map(g => (
+          <button key={g.id} onClick={() => sendToGroup(g)} style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 14,
+            border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' }}>
+            <div style={{ width: 38, height: 38, borderRadius: 12, background: `color-mix(in oklab, ${g.accent} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: g.accent, flexShrink: 0 }}>
+              <Icon name={g.prayer ? 'pray' : 'chat'} size={20} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.name}</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.kind}</div></div>
+            <Icon name="send" size={17} color="var(--clay)" />
+          </button>
+        ))}
+      </div>
+    </BottomSheet>
+  );
+}
+
+Object.assign(window, { ChatScreen, ChatRoom, VerseShareSheet });
