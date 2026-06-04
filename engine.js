@@ -3,7 +3,7 @@
 // entirely in-browser, parses Scripture markup, and exposes window.Bible.
 "use strict";
 (function () {
-  const SQLJS_BASE = "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/";
+  const SQLJS_BASE = "vendor/sqljs/";   // vendored locally (offline); was cdnjs
 
   // ── 66-book Protestant canon ──
   const BOOK_NAMES = [

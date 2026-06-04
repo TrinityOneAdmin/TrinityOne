@@ -11,8 +11,8 @@ mkdir -p "$WWW/modules" "$WWW/vendor"
 
 # app shell + code + bundled catalogs/snapshots
 cp index.html engine.js *.jsx catalog.json ebible-catalog.json trinity-videos.json "$WWW/"
-# bundled vendor libs (Nostr identity)
-cp vendor/identity.js "$WWW/vendor/"
+# vendored libs (React/Babel/sql.js/fflate/fonts/identity) — fully offline
+cp -r vendor/. "$WWW/vendor/"
 
 # local Featured modules (so the app is useful offline on first launch)
 cp modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
