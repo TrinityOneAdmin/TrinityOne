@@ -126,6 +126,29 @@ window.Fellowship = {
     return () => { try { sub.close(); } catch {} };
   },
 
+  // react to a message (NIP-25 kind 7). content = emoji, or '-' to retract.
+  async react(groupId, targetId, targetPubkey, content) {
+    if (!sk) await window.Fellowship.ready;
+    const evt = finalizeEvent({
+      kind: 7, created_at: Math.floor(Date.now() / 1000),
+      tags: [['e', targetId], ['p', targetPubkey || ''], ['t', NET], ['t', groupId]], content,
+    }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] react failed', e); }
+    return evt;
+  },
+
+  // live reactions in a group; onReaction({ targetId, pubkey, content, ts })
+  subscribeReactions(groupId, onReaction) {
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [7], '#t': [groupId], limit: 1000 }], {
+      onevent(e) {
+        const targetId = (e.tags.find(t => t[0] === 'e') || [])[1];
+        if (targetId) { try { onReaction({ targetId, pubkey: e.pubkey, content: e.content, ts: e.created_at }); } catch (err) { console.error(err); } }
+      },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+
   // live subscription to a group's messages; returns an unsubscribe fn
   subscribeGroup(groupId, onEvent) {
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#t': [groupId], limit: 200 }], {

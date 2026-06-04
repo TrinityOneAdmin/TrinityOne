@@ -340,10 +340,42 @@ function ChatScreen({ ctx }) {
 }
 
 // ── message bubble ──
-function Bubble({ m, onAmen, ctx }) {
+const REACT_EMOJIS = ['🙏', '❤️', '🔥', '🙌', '✨'];
+
+// reaction pills + a small react button (with emoji picker), shown under each bubble
+function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live }) {
+  if (!live) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap' }}>
+      {summary.map(r => (
+        <button key={r.emoji} onClick={() => onReact(r.emoji)} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
+          border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)',
+          background: r.mine ? 'var(--clay-soft)' : 'var(--surface-2)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>
+          <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
+        </button>
+      ))}
+      <div style={{ position: 'relative' }}>
+        <button onClick={onOpenPicker} title="React" style={{
+          width: 28, height: 22, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)',
+          cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: .8 }}>
+          <Icon name="heart" size={13} /></button>
+        {pickerOpen ? (
+          <div style={{ position: 'absolute', bottom: 28, left: 0, zIndex: 5, display: 'flex', gap: 2, padding: '6px 8px', borderRadius: 14,
+            background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+            {REACT_EMOJIS.map(e => <button key={e} onClick={() => onReact(e)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, padding: '2px 4px', lineHeight: 1 }}>{e}</button>)}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
+  const react = <ReactionsRow summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
 
   if (m.kind === 'verse') {
     return (
@@ -359,6 +391,7 @@ function Bubble({ m, onAmen, ctx }) {
             <div style={{ fontWeight: 700, fontSize: 12.5 }}>{m.verse.ref} · {m.verse.version}</div>
           </div>
         </div>
+        {react}
       </Row>
     );
   }
@@ -375,6 +408,7 @@ function Bubble({ m, onAmen, ctx }) {
             <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty' }}>{m.text}</p>
           </div>
         </div>
+        {react}
       </Row>
     );
   }
@@ -386,6 +420,7 @@ function Bubble({ m, onAmen, ctx }) {
         borderBottomRightRadius: me ? 5 : 18, borderBottomLeftRadius: me ? 18 : 5 }}>
         <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty' }}>{m.text}</p>
       </div>
+      {react}
     </Row>
   );
 }
@@ -426,13 +461,15 @@ function ChatRoom({ group, open, onClose, ctx }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
   const [prayerOn, setPrayerOn] = useC(false);   // attach a "prayer request" flag to this message
+  const [reactions, setReactions] = useC({});    // targetId -> { reactorPubkey: {content, ts} }
+  const [pickerFor, setPickerFor] = useC(null);  // message id whose emoji picker is open
   const id = useIdentity();
   const scRef = useCR();
   useCE(() => {
     setDraft('');
     if (!group) return;
     if (window.Fellowship) {                       // live: subscribe to the group over Nostr
-      setMsgs([]);
+      setMsgs([]); setReactions({}); setPickerFor(null);
       const seen = new Set();
       const add = (e) => {
         if (window.Fellowship.requestProfiles) window.Fellowship.requestProfiles([e.pubkey]);
@@ -442,7 +479,15 @@ function ChatRoom({ group, open, onClose, ctx }) {
         });
       };
       const unsub = window.Fellowship.subscribeGroup(group.id, add);
-      return () => unsub();
+      const unsubR = window.Fellowship.subscribeReactions(group.id, (r) => {
+        setReactions(prev => {
+          const t = prev[r.targetId] ? { ...prev[r.targetId] } : {};
+          if (t[r.pubkey] && t[r.pubkey].ts >= r.ts) return prev;
+          t[r.pubkey] = { content: r.content, ts: r.ts };
+          return { ...prev, [r.targetId]: t };
+        });
+      });
+      return () => { unsub(); unsubR(); };
     }
     setMsgs((window.TrinityData.GROUP_MESSAGES[group.id] || []).map(m => ({ ...m }))); // fallback: mock seed
   }, [group]);
@@ -464,7 +509,18 @@ function ChatRoom({ group, open, onClose, ctx }) {
   };
   const sendText = () => { if (!draft.trim()) return; send(prayerOn ? { text: draft.trim(), kind: 'prayer' } : { text: draft.trim() }); setDraft(''); setPrayerOn(false); };
   const shareVerse = () => { send({ kind: 'verse', verse: { ...window.TrinityData.VOTD } }); ctx.toast('Verse shared'); };
-  const amen = (mid) => setMsgs(prev => prev.map(m => m.id === mid ? { ...m, _amened: !m._amened, amens: m.amens + (m._amened ? -1 : 1) } : m));
+  const myPub = window.Fellowship && window.Fellowship.myPubkey;
+  const summaryFor = (tid) => {
+    const reactors = reactions[tid]; if (!reactors) return [];
+    const counts = {}; let myEmoji = null;
+    for (const pk in reactors) { const c = reactors[pk].content; if (!c || c === '-') continue; counts[c] = (counts[c] || 0) + 1; if (pk === myPub) myEmoji = c; }
+    return Object.keys(counts).map(emoji => ({ emoji, count: counts[emoji], mine: emoji === myEmoji }));
+  };
+  const toggleReact = (tid, pubkey, emoji) => {
+    const reactors = reactions[tid] || {}; const cur = reactors[myPub] && reactors[myPub].content;
+    if (window.Fellowship) window.Fellowship.react(group.id, tid, pubkey, cur === emoji ? '-' : emoji);
+    setPickerFor(null);
+  };
 
   return (
     <Overlay open={open} onClose={onClose}>
@@ -488,7 +544,10 @@ function ChatRoom({ group, open, onClose, ctx }) {
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
             <Icon name="lock" size={13} /> Messages are anonymous & relayed over Nostr</span>
         </div>
-        {msgs.map(m => <Bubble key={m.id} m={m} onAmen={amen} ctx={ctx} />)}
+        {msgs.map(m => <Bubble key={m.id} m={m} ctx={ctx}
+          summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
+          pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}
+          live={!!window.Fellowship} />)}
       </div>
 
       <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
