@@ -1,0 +1,286 @@
+// app.jsx — Lumen root: nav, theme, shared state, overlays, tweaks
+const { useState: useA, useEffect: useAE, useRef: useAR } = React;
+
+const ACCENTS = {
+  clay:   { light: { c: '#C25A38', i: '#A8462A', s: '#F3DECF', d: '#9C4327' }, dark: { c: '#E68A66', i: '#EE9E7E', s: '#43271B', d: '#C2613B' } },
+  indigo: { light: { c: '#5360D6', i: '#3E49B8', s: '#E2E3F7', d: '#3A43A0' }, dark: { c: '#8E97EE', i: '#A6ADF2', s: '#262A52', d: '#5A63C0' } },
+  teal:   { light: { c: '#1F9488', i: '#147A70', s: '#D2EEEA', d: '#136B62' }, dark: { c: '#52C2B4', i: '#6FD0C3', s: '#16403B', d: '#2E9488' } },
+  berry:  { light: { c: '#C24B7A', i: '#A53A65', s: '#F6D8E4', d: '#9C3A60' }, dark: { c: '#E681A8', i: '#EE9BBC', s: '#4A2333', d: '#C25C84' } },
+};
+const READ_FONTS = {
+  Newsreader: "'Newsreader', Georgia, serif",
+  Lora: "'Newsreader', Georgia, serif",
+};
+
+// ── persisted settings (replaces the design-tool tweaks panel) ──
+const SETTINGS_DEFAULTS = { dark: false, accent: 'clay', readScale: 1 };
+function lsGet(key, fallback){ try{ const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }catch(e){ return fallback; } }
+function lsSet(key, val){ try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
+function useSettings(){
+  const [s, setS] = useA(() => Object.assign({}, SETTINGS_DEFAULTS, lsGet('lumen.settings', {})));
+  const set = (k, v) => setS(prev => { const n = { ...prev, [k]: v }; lsSet('lumen.settings', n); return n; });
+  return [s, set];
+}
+// subscribe a component to the engine (module load / active-version changes)
+function useBible(){
+  const [, force] = useA(0);
+  useAE(() => window.Bible.subscribe(() => force(x => x + 1)), []);
+  return window.Bible;
+}
+
+// ── share verse card ──
+const CARD_STYLES = [
+  { id: 'clay', bg: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', fg: '#fff', serif: true },
+  { id: 'sage', bg: 'linear-gradient(155deg, #6BA17C, #3C6E57)', fg: '#fff', serif: true },
+  { id: 'paper', bg: 'var(--surface)', fg: 'var(--ink)', serif: true, bordered: true },
+  { id: 'night', bg: 'linear-gradient(155deg, #2a2218, #16120c)', fg: '#F3ECDC', serif: true },
+];
+function ShareCard({ verse, open, onClose, ctx }) {
+  const [style, setStyle] = useA(0);
+  useAE(() => { if (open) setStyle(0); }, [open]);
+  if (!verse) return null;
+  const s = CARD_STYLES[style];
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px' }}>
+          <IconBtn name="chevD" onClick={onClose} />
+          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Share verse</span>
+          <IconBtn name="share" onClick={() => { onClose(); ctx.toast('Card ready to share'); }} />
+        </div>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 26px' }}>
+          <div style={{
+            width: '100%', aspectRatio: '4/5', borderRadius: 26, background: s.bg, color: s.fg,
+            border: s.bordered ? '1px solid var(--line)' : 'none', boxShadow: 'var(--shadow-lg)',
+            display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 30, position: 'relative', overflow: 'hidden',
+            transition: 'background .3s',
+          }}>
+            <div style={{ position: 'absolute', right: -20, top: -20, opacity: s.bordered ? .06 : .14 }}>
+              <Icon name="sparkle" size={130} stroke={1.3} color={s.fg} /></div>
+            <Icon name="sparkle" size={26} stroke={1.8} color={s.id === 'clay' ? '#fff' : 'var(--clay)'} />
+            <p style={{ fontFamily: s.serif ? 'var(--font-read)' : 'var(--font-ui)', fontSize: 25, lineHeight: 1.4,
+              fontWeight: 500, margin: '18px 0 20px', textWrap: 'pretty' }}>“{verse.text}”</p>
+            <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, letterSpacing: '.5px',
+              color: s.bordered ? 'var(--clay)' : s.fg, opacity: s.bordered ? 1 : .9 }}>{verse.ref} · {verse.version || 'WEB'}</div>
+            <div style={{ position: 'absolute', bottom: 16, right: 22, fontSize: 11, fontWeight: 700, letterSpacing: '1px', opacity: .5 }}>LUMEN</div>
+          </div>
+        </div>
+        <div style={{ padding: '4px 26px 8px' }}>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginBottom: 18 }}>
+            {CARD_STYLES.map((c, i) => (
+              <button key={c.id} onClick={() => setStyle(i)} style={{
+                width: 46, height: 46, borderRadius: 14, background: c.bg, cursor: 'pointer',
+                border: style === i ? '2.5px solid var(--clay)' : '1px solid var(--line)', flexShrink: 0,
+              }} />
+            ))}
+          </div>
+          <button onClick={() => { onClose(); ctx.toast('Saved to Photos'); }} style={{
+            width: '100%', padding: 15, borderRadius: 16, border: 'none', background: 'var(--clay)', color: '#fff',
+            fontWeight: 700, fontSize: 15.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}><Icon name="arrowUp" size={18} color="#fff" /> Save image</button>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+// ── devotional overlay ──
+function DevotionalView({ open, onClose, ctx }) {
+  const d = window.LumenData.DEVOTIONAL;
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, #6BA17C, #3C6E57)', color: '#fff', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', right: -24, top: -10, opacity: .18 }}><Icon name="sun" size={150} stroke={1.3} color="#fff" /></div>
+        <div style={{ padding: '10px 18px 24px', position: 'relative' }}>
+          <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
+            color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={20} color="#fff" /></button>
+          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9, marginTop: 16 }}>{d.series} · {d.day}</div>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 29, fontWeight: 700, margin: '6px 0 8px', lineHeight: 1.08 }}>{d.title}</h1>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(255,255,255,.2)', padding: '5px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700 }}>
+            <Icon name="read" size={15} color="#fff" /> {d.ref} · {d.read}</div>
+        </div>
+      </div>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '22px 22px 30px' }}>
+        {d.body.map((para, i) => (
+          <p key={i} style={{ fontFamily: 'var(--font-read)', fontSize: 18.5, lineHeight: 1.66, color: 'var(--ink)', margin: '0 0 16px', textWrap: 'pretty' }}>{para}</p>
+        ))}
+        <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 20, padding: 20, marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--clay)', fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
+            <Icon name="pen" size={16} /> REFLECT</div>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.55, color: 'var(--ink)', margin: '0 0 14px', fontStyle: 'italic' }}>{d.prompt}</p>
+          <button onClick={() => { onClose(); ctx.go('library'); ctx.toast('Opening journal'); }} style={{
+            border: 'none', background: 'var(--clay)', color: '#fff', padding: '11px 18px', borderRadius: 13,
+            fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Write a reflection</button>
+        </div>
+        <button onClick={() => { onClose(); ctx.toast('Day 4 complete · streak 13'); }} style={{
+          width: '100%', marginTop: 16, padding: 15, borderRadius: 16, border: '1.5px solid var(--clay)', background: 'transparent',
+          color: 'var(--clay)', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <Icon name="check" size={18} stroke={2.4} /> Mark complete</button>
+      </div>
+    </Overlay>
+  );
+}
+
+// ── empty state: choose / download a Bible module ──
+function EmptyState({ loading, error, onBrowse }) {
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '0 34px', animation: 'lumenFade .5s ease both' }}>
+      <div style={{ width: 76, height: 76, borderRadius: 24, background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow-lg)', marginBottom: 22 }}>
+        <Icon name="read" size={38} color="#fff" />
+      </div>
+      <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 27, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>A quiet place to read.</h1>
+      <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 0 26px', textWrap: 'pretty' }}>
+        Open a Bible module to begin — a MySword <code style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.bbl.mybible</code> file,
+        or an open.bible download (a <code style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.zip</code> of USFM books).
+      </p>
+      {loading ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--clay)', fontWeight: 700 }}>
+          <div style={{ width: 18, height: 18, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'lumenSpin .8s linear infinite' }} /> Loading…
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 13 }}>
+          <button onClick={onBrowse} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 10, border: 'none', cursor: 'pointer',
+            background: 'var(--clay)', color: '#fff', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 16,
+            padding: '15px 26px', borderRadius: 16, boxShadow: 'var(--shadow-lg)' }}>
+            <Icon name="plus" size={20} color="#fff" /> Browse modules
+          </button>
+          <button onClick={() => window.Bible.pickFile()} style={{
+            border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-2)',
+            fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 14 }}>
+            or open a file from this device
+          </button>
+        </div>
+      )}
+      {error ? <p style={{ color: 'var(--clay-ink)', fontSize: 13, marginTop: 18, fontWeight: 600 }}>{error}</p> : null}
+      <p style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--ink-3)', marginTop: 26 }}>Everything stays on this device — nothing is uploaded.</p>
+    </div>
+  );
+}
+
+function App() {
+  const [t, setTweak] = useSettings();
+  const Bible = useBible();
+  const tabParam = new URLSearchParams(location.search).get('tab');
+  const [tab, setTab] = useA(['today', 'read', 'plans', 'chat', 'library', 'search'].includes(tabParam) ? tabParam : 'today');
+  const [toastMsg, setToastMsg] = useA('');
+  const toastTimer = useAR();
+
+  // reading location + active version (lifted so Today/Search can navigate)
+  const [loc, setLoc] = useA(null);
+  useAE(() => { if (Bible.loaded && !loc) setLoc(Bible.defaultLoc()); }, [Bible.loaded]);
+  const version = Bible.activeVersion;
+
+  // shared study state, persisted, keyed by "book.chap.verse"
+  const [highlights, setHighlights] = useA(() => lsGet('lumen.highlights', {}));
+  const [notes, setNotes] = useA(() => lsGet('lumen.notes', {}));
+  const [bookmarks, setBookmarks] = useA(() => lsGet('lumen.bookmarks', []));
+
+  // overlays
+  const [share, setShare] = useA(null);
+  const [devo, setDevo] = useA(false);
+  const [plan, setPlan] = useA(null);
+  const [journal, setJournal] = useA(null);
+  const [wordOv, setWordOv] = useA(null);
+  const [video, setVideo] = useA(null);
+  const storeParam = new URLSearchParams(location.search).get('store'); // 'featured' | 'language'
+  const [store, setStore] = useA(!!storeParam);
+  // fellowship (chat + giving)
+  const [group, setGroup] = useA(null);
+  const [walletSats, setWalletSats] = useA(window.LumenData.WALLET.sats);
+  const [giving, setGiving] = useA(window.LumenData.GIVING_HISTORY);
+
+  // scaling to viewport
+  const wrapRef = useAR();
+  useAE(() => {
+    const fit = () => {
+      const W = 392, H = 846, m = 24;
+      const sc = Math.min(1, (window.innerWidth - m) / W, (window.innerHeight - m) / H);
+      if (wrapRef.current) wrapRef.current.style.transform = `scale(${sc})`;
+    };
+    fit(); window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, []);
+
+  const toast = (msg) => {
+    setToastMsg(msg); clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(''), 1900);
+  };
+
+  const ctx = {
+    dark: t.dark,
+    toggleDark: () => setTweak('dark', !t.dark),
+    accent: t.accent, setAccent: (a) => setTweak('accent', a),
+    go: setTab, toast,
+    loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
+    gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setTab('read'); },
+    addModule: () => Bible.pickFile(),
+    openStore: () => setStore(true), closeStore: () => setStore(false),
+    openGroup: (g) => setGroup(g),
+    walletSats, setWalletSats, giving, setGiving,
+    openReader: () => setTab('read'),
+    openShare: (v) => setShare(v),
+    openDevotional: () => setDevo(true),
+    openPlan: (p) => setPlan(p),
+    openJournal: (j) => setJournal(j),
+    openVideo: (v) => setVideo(v),
+    openWord: (id) => setWordOv(id),
+    readScale: t.readScale,
+    highlights, setHighlight: (k, c) => setHighlights(h => { const n = { ...h }; if (c) n[k] = c; else delete n[k]; lsSet('lumen.highlights', n); return n; }),
+    notes, setNote: (k, txt) => setNotes(n => { const o = { ...n }; if (txt) o[k] = txt; else delete o[k]; lsSet('lumen.notes', o); return o; }),
+    bookmarks, toggleBookmark: (k) => setBookmarks(b => { const n = b.includes(k) ? b.filter(x => x !== k) : [...b, k]; lsSet('lumen.bookmarks', n); return n; }),
+  };
+
+  // apply accent vars
+  const acc = ACCENTS[t.accent] || ACCENTS.clay;
+  const ap = t.dark ? acc.dark : acc.light;
+  const rootStyle = {
+    '--clay': ap.c, '--clay-ink': ap.i, '--clay-soft': ap.s, '--clay-deep': ap.d,
+    '--read-scale': t.readScale,
+  };
+
+  const screens = {
+    today: <TodayScreen ctx={ctx} />,
+    read: <ReadScreen ctx={ctx} />,
+    plans: <PlansScreen ctx={ctx} />,
+    chat: <ChatScreen ctx={ctx} />,
+    library: <LibraryScreen ctx={ctx} />,
+    search: <SearchScreen ctx={ctx} />,
+  };
+
+  return (
+    <div ref={wrapRef} className={cx('lumen', t.dark && 'dark')} style={{ ...rootStyle, transformOrigin: 'center center' }}>
+      <PhoneFrame>
+        {Bible.loaded ? (
+          <React.Fragment>
+            <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>
+            <TabBar active={tab} onChange={setTab} />
+
+            {/* overlays */}
+            <ShareCard verse={share} open={!!share} onClose={() => setShare(null)} ctx={ctx} />
+            <DevotionalView open={devo} onClose={() => setDevo(false)} ctx={ctx} />
+            <PlanDetail plan={plan} open={!!plan} onClose={() => setPlan(null)} ctx={ctx} />
+            <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} />
+            <VideoPlayer video={video} open={!!video} onClose={() => setVideo(null)} ctx={ctx} />
+            <WordStudySheet id={wordOv} open={!!wordOv} onClose={() => setWordOv(null)} />
+            <ChatRoom group={group} open={!!group} onClose={() => setGroup(null)} ctx={ctx} />
+
+            <Toast msg={toastMsg} />
+          </React.Fragment>
+        ) : (
+          <EmptyState loading={Bible.loading} error={Bible._error} onBrowse={() => setStore(true)} />
+        )}
+
+        {/* module store — available in both the loaded and first-run states */}
+        <ModuleStore open={store} onClose={() => setStore(false)} ctx={ctx}
+          initialView={storeParam === 'language' ? 'language' : 'featured'} />
+      </PhoneFrame>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);

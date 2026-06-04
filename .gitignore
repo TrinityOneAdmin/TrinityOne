@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# generated / build outputs
+# www/ is populated by scripts/sync-web.sh
+www/
+# android/ native project — regenerate with `npx cap add android`
+android/
+*.apk
+dist/
+*.log
+
+# large local stragglers (not used by the app)
+/akjvpce.bbl.mybible
+/sample-openbible-usfm.zip
+/reader-basic.html.bak
+
+# os
+.DS_Store

@@ -1,0 +1,10 @@
+{
+  "appId": "com.lumenbible.app",
+  "appName": "Lumen",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

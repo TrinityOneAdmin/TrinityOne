@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Lumen — Bible Study</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: #ddd6c8;
+    background-image: radial-gradient(circle at 30% 20%, #e7e0d1, #cfc7b6);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    overflow: hidden;
+  }
+  #root { display: flex; align-items: center; justify-content: center; }
+
+  /* ── Lumen design tokens (light) ── */
+  .lumen {
+    --paper:     #F4EEE2;
+    --surface:   #FFFDF8;
+    --surface-2: #FBF5EA;
+    --ink:       #2B2620;
+    --ink-2:     #756B5E;
+    --ink-3:     #A89E8E;
+    --line:      rgba(43,38,32,0.09);
+    --line-2:    rgba(43,38,32,0.05);
+    --clay:      #C25A38;
+    --clay-ink:  #A8462A;
+    --clay-soft: #F3DECF;
+    --gold:      #C2913A;
+    --sage:      #5E8C6A;
+    --shadow:    0 1px 2px rgba(43,38,32,.05), 0 8px 24px rgba(43,38,32,.06);
+    --shadow-lg: 0 4px 12px rgba(43,38,32,.10), 0 24px 48px rgba(43,38,32,.14);
+
+    --hl-yellow: #FCE08A;
+    --hl-green:  #BFE3AE;
+    --hl-pink:   #F7C2CE;
+    --hl-blue:   #BCD6F2;
+    --hl-clay:   #F2CBB4;
+
+    --font-ui: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-display: 'Bricolage Grotesque', 'Plus Jakarta Sans', sans-serif;
+    --font-read: 'Newsreader', Georgia, serif;
+    --read-scale: 1;
+  }
+  /* ── dark ── */
+  .lumen.dark {
+    --paper:     #16120C;
+    --surface:   #211B13;
+    --surface-2: #2A2218;
+    --ink:       #F3ECDC;
+    --ink-2:     #B6AB96;
+    --ink-3:     #7C7261;
+    --line:      rgba(243,236,220,0.11);
+    --line-2:    rgba(243,236,220,0.06);
+    --clay:      #E68A66;
+    --clay-ink:  #EE9E7E;
+    --clay-soft: #43271B;
+    --gold:      #D9AE5A;
+    --sage:      #7FAE8A;
+    --shadow:    0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.45);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,.5), 0 28px 60px rgba(0,0,0,.6);
+
+    --hl-yellow: #6E5A1E;
+    --hl-green:  #2F4A2A;
+    --hl-pink:   #5A2E37;
+    --hl-blue:   #233f57;
+    --hl-clay:   #5A3422;
+  }
+
+  ::-webkit-scrollbar { width: 0; height: 0; }
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+
+  /* ── live scripture markup (rendered from MySword / USFM) ── */
+  .reader-body sup.st { font-family: var(--font-ui); font-size: .56em; font-weight: 700; color: var(--clay); vertical-align: super; line-height: 0; cursor: pointer; margin: 0 1px; }
+  .reader-body.hide-strong sup.st { display: none; }
+  .reader-body .red { color: var(--clay); }
+  .reader-body i.sup { font-style: italic; color: var(--ink-2); }
+  .reader-body .fn { font-size: .8em; color: var(--ink-3); font-style: italic; }
+  .reader-body .nd { font-variant: small-caps; letter-spacing: .3px; }
+  .reader-body .sec { display: block; font-family: var(--font-ui); font-weight: 700; font-size: .6em; letter-spacing: .6px; color: var(--clay); margin: 1em 0 .15em; text-transform: uppercase; }
+  .reader-body .parref { display: block; font-family: var(--font-ui); font-style: italic; font-size: .66em; color: var(--ink-3); margin-bottom: .3em; }
+
+  @keyframes lumenFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes lumenRise { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: none; } }
+  @keyframes lumenScale { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+  @keyframes lumenSpin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- data layer: in-browser unzip (jsDelivr) + SQLite-WASM (cdnjs) -->
+<script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+<!-- Machaira engine: loads MySword + open.bible USFM modules, exposes window.Bible -->
+<script src="engine.js"></script>
+<!-- Self-custodial Nostr identity (BIP-39 → NIP-06), bundled; exposes window.LumenIdentity -->
+<script src="vendor/identity.js"></script>
+
+<!-- Lumen UI (JSX, transpiled in-browser by Babel) -->
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="ui.jsx"></script>
+<script type="text/babel" src="screens-today.jsx"></script>
+<script type="text/babel" src="screens-read.jsx"></script>
+<script type="text/babel" src="screens-plans.jsx"></script>
+<script type="text/babel" src="screens-library.jsx"></script>
+<script type="text/babel" src="screens-watch.jsx"></script>
+<script type="text/babel" src="screens-search.jsx"></script>
+<script type="text/babel" src="screens-giving.jsx"></script>
+<script type="text/babel" src="screens-chat.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+</body>
+</html>
