@@ -31,7 +31,7 @@ function Avatar({ handle, color, size = 38 }) {
 // ── Identity manager sheet (anonymous Nostr key: recovery / restore / steward invite) ──
 function NostrSheet({ open, onClose, ctx, initialPane }) {
   const id = useIdentity();
-  const relays = window.TrinityData.RELAYS;
+  const [relayList, setRelayList] = useC(null);   // live relay status from the transport
   const [pane, setPane] = useC('main');      // main | recovery | restore | invite
   const [words, setWords] = useC(null);      // revealed recovery phrase
   const [restoreText, setRestoreText] = useC('');
@@ -42,6 +42,16 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
     if (!open) return;
     setPane(initialPane || 'main'); setWords(null); setRestoreText('');
     setInvite(initialPane === 'invite' && ID && ID.makeInvite ? ID.makeInvite() : null);
+  }, [open]);
+
+  // poll real relay connection status while the sheet is open
+  useCE(() => {
+    if (!open) return;
+    if (!(window.Fellowship && window.Fellowship.relayStatus)) { setRelayList(window.TrinityData.RELAYS); return; }
+    let live = true;
+    const load = () => window.Fellowship.relayStatus().then(r => { if (live) setRelayList(r); }).catch(() => {});
+    load(); const iv = setInterval(load, 4000);
+    return () => { live = false; clearInterval(iv); };
   }, [open]);
 
   const copyNpub = () => { if (ID && ID.copyNpub) ID.copyNpub(); else if (navigator.clipboard) navigator.clipboard.writeText(id.npub).catch(() => {}); ctx.toast('Public key copied'); };
@@ -102,8 +112,9 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
           {rowBtn('qr', 'Invite a member', 'Hand someone a ready-made anonymous identity', startInvite, 'var(--clay)')}
         </div>
         <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 9px' }}>RELAYS</div>
+        {relayList === null ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '4px 2px 8px' }}>Checking…</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
-          {relays.map(r => (
+          {(relayList || []).map(r => (
             <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <Icon name="globe" size={17} color={r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)'} />
               <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)' }}>{r.url}</span>
@@ -183,7 +194,34 @@ function ChatScreen({ ctx }) {
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
   const [view, setView] = useC(chatParam === 'giving' ? 'giving' : 'groups');
   const id = useIdentity();
-  const onCount = D.RELAYS.filter(r => r.status === 'on').length;
+  const live = !!(window.Fellowship && window.Fellowship.subscribeGroups);
+  const relayCount = live ? window.Fellowship.relays.length : D.RELAYS.filter(r => r.status === 'on').length;
+  const [activity, setActivity] = useC({});   // gid -> { text, ts }
+  const [unread, setUnread] = useC({});        // gid -> count
+
+  // watch every group for last-message previews + unread badges
+  useCE(() => {
+    if (!live) return;
+    const ids = D.GROUPS.map(g => g.id);
+    const seen = lsGet('trinityone.chatSeen', {});
+    const unsub = window.Fellowship.subscribeGroups(ids, (gid, e) => {
+      setActivity(prev => {
+        if (prev[gid] && prev[gid].ts >= e.created_at) return prev;
+        const isVerse = (e.tags.find(t => t[0] === 'k') || [])[1] === 'verse';
+        return { ...prev, [gid]: { text: isVerse ? '📖 Shared a verse' : e.content, ts: e.created_at } };
+      });
+      if (e.created_at > (seen[gid] || 0) && e.pubkey !== window.Fellowship.myPubkey)
+        setUnread(prev => ({ ...prev, [gid]: (prev[gid] || 0) + 1 }));
+    });
+    return () => unsub();
+  }, []);
+
+  const openGroup = (g) => {
+    const seen = lsGet('trinityone.chatSeen', {});
+    seen[g.id] = Math.floor(Date.now() / 1000); lsSet('trinityone.chatSeen', seen);
+    setUnread(prev => ({ ...prev, [g.id]: 0 }));
+    ctx.openGroup(g);
+  };
 
   return (
     <ScreenScroll>
@@ -226,7 +264,7 @@ function ChatScreen({ ctx }) {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--ink-3)', fontSize: 12, marginTop: 2 }}>
             <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} />
-            {onCount} relays · Nostr · tap to manage
+            {relayCount} relay{relayCount === 1 ? '' : 's'} · Nostr · tap to manage
           </div>
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
@@ -235,7 +273,7 @@ function ChatScreen({ ctx }) {
       <SectionLabel>Your groups</SectionLabel>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, animation: 'trinityFade .5s ease .1s both' }}>
         {D.GROUPS.map(g => (
-          <div key={g.id} onClick={() => ctx.openGroup(g)} style={{
+          <div key={g.id} onClick={() => openGroup(g)} style={{
             display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
             background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)',
           }}>
@@ -248,11 +286,11 @@ function ChatScreen({ ctx }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                 <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</span>
-                <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{g.when}</span>
+                <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{live ? (activity[g.id] ? relTime(activity[g.id].ts) : '') : g.when}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
-                <span style={{ fontSize: 13, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{g.last}</span>
-                {g.unread ? <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 11.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{g.unread}</span> : null}
+                <span style={{ fontSize: 13, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{live ? (activity[g.id] ? activity[g.id].text : 'No messages yet') : g.last}</span>
+                {(live ? unread[g.id] : g.unread) ? <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 11.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{live ? unread[g.id] : g.unread}</span> : null}
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{g.kind}</span>
@@ -340,6 +378,11 @@ function Row({ me, m, children }) {
 
 // map a Nostr event → a chat bubble
 function fmtClock(ts) { try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } }
+function relTime(ts) {
+  const d = new Date(ts * 1000), now = new Date();
+  if (d.toDateString() === now.toDateString()) return fmtClock(ts);
+  return Math.round((now - d) / 864e5) === 1 ? 'Yesterday' : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
 function evtToMsg(e) {
   const p = window.Fellowship.profile(e.pubkey);
   const me = e.pubkey === window.Fellowship.myPubkey;

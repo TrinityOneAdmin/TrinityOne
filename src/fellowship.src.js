@@ -53,6 +53,32 @@ window.Fellowship = {
     return evt;
   },
 
+  // live connection status of each configured relay (throwaway WS probe)
+  async relayStatus() {
+    return Promise.all(window.Fellowship.relays.map(url => new Promise(res => {
+      let done = false;
+      const finish = (status) => { if (done) return; done = true; try { ws.close(); } catch {} res({ url, status }); };
+      let ws;
+      try { ws = new WebSocket(url); } catch { return res({ url, status: 'off' }); }
+      const t = setTimeout(() => finish('off'), 2500);
+      ws.onopen = () => { clearTimeout(t); finish('on'); };
+      ws.onerror = () => { clearTimeout(t); finish('off'); };
+    })));
+  },
+
+  // watch several groups at once (for the group-list previews/unread); onEvent(groupId, e)
+  subscribeGroups(groupIds, onEvent) {
+    const set = new Set(groupIds);
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#t': groupIds, limit: 500 }], {
+      onevent(e) {
+        const gid = (e.tags.find(t => t[0] === 't' && set.has(t[1])) || [])[1];
+        if (gid) { try { onEvent(gid, e); } catch (err) { console.error(err); } }
+      },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+
   // live subscription to a group's messages; returns an unsubscribe fn
   subscribeGroup(groupId, onEvent) {
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#t': [groupId], limit: 200 }], {
