@@ -98,7 +98,8 @@ function miniBtn() {
 function ChatScreen({ ctx }) {
   const D = window.LumenData;
   const [nostr, setNostr] = useC(false);
-  const [view, setView] = useC('groups');
+  const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
+  const [view, setView] = useC(chatParam === 'giving' ? 'giving' : 'groups');
   const id = useIdentity();
   const onCount = D.RELAYS.filter(r => r.status === 'on').length;
 

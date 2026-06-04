@@ -173,6 +173,11 @@ function App() {
   // reading location + active version (lifted so Today/Search can navigate)
   const [loc, setLoc] = useA(null);
   useAE(() => { if (Bible.loaded && !loc) setLoc(Bible.defaultLoc()); }, [Bible.loaded]);
+  // deep-link: ?group=<id> auto-opens a chat room (handy for sharing / screenshots)
+  useAE(() => {
+    const gid = new URLSearchParams(location.search).get('group');
+    if (gid && Bible.loaded) { const g = window.LumenData.GROUPS.find(x => x.id === gid); if (g) setGroup(g); }
+  }, [Bible.loaded]);
   const version = Bible.activeVersion;
 
   // shared study state, persisted, keyed by "book.chap.verse"
