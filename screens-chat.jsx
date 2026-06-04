@@ -338,6 +338,17 @@ function Row({ me, m, children }) {
   );
 }
 
+// map a Nostr event → a chat bubble
+function fmtClock(ts) { try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } }
+function evtToMsg(e) {
+  const p = window.Fellowship.profile(e.pubkey);
+  const me = e.pubkey === window.Fellowship.myPubkey;
+  const kTag = (e.tags.find(t => t[0] === 'k') || [])[1];
+  const base = { id: e.id, me, handle: p.handle, color: p.color, when: fmtClock(e.created_at), _ts: e.created_at };
+  if (kTag === 'verse') { try { return { ...base, kind: 'verse', verse: JSON.parse(e.content) }; } catch {} }
+  return { ...base, text: e.content };
+}
+
 // ── conversation room (overlay) ──
 function ChatRoom({ group, open, onClose, ctx }) {
   const [msgs, setMsgs] = useC([]);
@@ -345,8 +356,19 @@ function ChatRoom({ group, open, onClose, ctx }) {
   const id = useIdentity();
   const scRef = useCR();
   useCE(() => {
-    if (group) setMsgs((window.TrinityData.GROUP_MESSAGES[group.id] || []).map(m => ({ ...m })));
     setDraft('');
+    if (!group) return;
+    if (window.Fellowship) {                       // live: subscribe to the group over Nostr
+      setMsgs([]);
+      const seen = new Set();
+      const add = (e) => setMsgs(prev => {
+        if (seen.has(e.id)) return prev; seen.add(e.id);
+        return [...prev, evtToMsg(e)].sort((a, b) => (a._ts || 0) - (b._ts || 0));
+      });
+      const unsub = window.Fellowship.subscribeGroup(group.id, add);
+      return () => unsub();
+    }
+    setMsgs((window.TrinityData.GROUP_MESSAGES[group.id] || []).map(m => ({ ...m }))); // fallback: mock seed
   }, [group]);
   useCE(() => {
     if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight;
@@ -355,6 +377,11 @@ function ChatRoom({ group, open, onClose, ctx }) {
   if (!group) return null;
 
   const send = (extra) => {
+    if (window.Fellowship) {                        // publish over Nostr; relay echoes it back to our sub
+      if (extra.kind === 'verse') window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse']]);
+      else window.Fellowship.publishMessage(group.id, extra.text);
+      return;
+    }
     const base = { id: 'me-' + Date.now(), me: true, handle: id.handle, color: id.color, when: 'now' };
     setMsgs(prev => [...prev, { ...base, ...extra }]);
   };
