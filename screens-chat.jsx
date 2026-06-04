@@ -44,6 +44,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   const [restoreText, setRestoreText] = useC('');
   const [invite, setInvite] = useC(null);    // {mnemonic, profile}
   const [nameInput, setNameInput] = useC('');
+  const [relayInput, setRelayInput] = useC('');
   const ID = window.TrinityIdentity;
   const FS = window.Fellowship;
 
@@ -67,8 +68,10 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
     let live = true;
     const load = () => window.Fellowship.relayStatus().then(r => { if (live) setRelayList(r); }).catch(() => {});
     load(); const iv = setInterval(load, 4000);
-    return () => { live = false; clearInterval(iv); };
+    window.addEventListener('trinity-relays', load);
+    return () => { live = false; clearInterval(iv); window.removeEventListener('trinity-relays', load); };
   }, [open]);
+  const addRelay = () => { const u = relayInput.trim(); if (!/^wss?:\/\//i.test(u)) { ctx.toast('Use a ws:// or wss:// URL'); return; } FS.addRelay(u); setRelayInput(''); ctx.toast('Relay added'); };
 
   const copyNpub = () => { if (ID && ID.copyNpub) ID.copyNpub(); else if (navigator.clipboard) navigator.clipboard.writeText(id.npub).catch(() => {}); ctx.toast('Public key copied'); };
   const regen = async () => { if (ID && ID.regenerate) { await ID.regenerate(); ctx.toast('New anonymous identity created'); } };
@@ -134,12 +137,20 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
           {(relayList || []).map(r => (
             <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <Icon name="globe" size={17} color={r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)'} />
-              <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)' }}>{r.url}</span>
+              <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.url}</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
                 <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />{r.status === 'on' ? 'Connected' : 'Off'}</span>
+              {FS && FS.removeRelay && (relayList || []).length > 1 ? <button onClick={() => FS.removeRelay(r.url)} title="Remove relay" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={15} /></button> : null}
             </div>
           ))}
         </div>
+        {FS && FS.addRelay ? (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <input value={relayInput} onChange={e => setRelayInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
+              placeholder="wss://relay.yourchurch.org" style={{ flex: 1, minWidth: 0, height: 40, padding: '0 12px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontFamily: 'monospace', fontSize: 13, color: 'var(--ink)' }} />
+            <button onClick={addRelay} style={{ border: 'none', background: 'var(--clay)', color: '#fff', padding: '0 14px', borderRadius: 12, fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', flexShrink: 0 }}>Add</button>
+          </div>
+        ) : null}
       </React.Fragment>}
 
       {pane === 'profile' && <React.Fragment>

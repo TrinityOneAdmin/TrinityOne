@@ -4161,7 +4161,16 @@
 
   // src/fellowship.src.js
   var NET = "trinityone";
-  var RELAYS = ["ws://127.0.0.1:7447"];
+  var DEFAULT_RELAYS = ["ws://127.0.0.1:7447"];
+  var RELAYS_KEY = "trinityone.relays";
+  function loadRelays() {
+    try {
+      const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || "null");
+      if (Array.isArray(r) && r.length) return r;
+    } catch {
+    }
+    return DEFAULT_RELAYS.slice();
+  }
   var HANDLE_POOL = ["Cedar", "River", "Sparrow", "Olive", "Wren", "Maple", "Reed", "Dove", "Ash", "Linden", "Heron", "Bramble"];
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
   function hashStr(s) {
@@ -4209,12 +4218,29 @@
     });
   });
   window.Fellowship = {
-    relays: RELAYS,
+    relays: loadRelays(),
     myPubkey: null,
     myProfile: null,
     ready: null,
     profile,
     displayFor,
+    // relay configuration (persisted) — accepts ws:// or wss:// URLs
+    setRelays(urls) {
+      const list = [...new Set((urls || []).map((u) => (u || "").trim()).filter((u) => /^wss?:\/\//i.test(u)))];
+      window.Fellowship.relays = list.length ? list : DEFAULT_RELAYS.slice();
+      try {
+        localStorage.setItem(RELAYS_KEY, JSON.stringify(window.Fellowship.relays));
+      } catch {
+      }
+      window.dispatchEvent(new CustomEvent("trinity-relays", { detail: window.Fellowship.relays }));
+      return window.Fellowship.relays;
+    },
+    addRelay(url) {
+      return window.Fellowship.setRelays([...window.Fellowship.relays, url]);
+    },
+    removeRelay(url) {
+      return window.Fellowship.setRelays(window.Fellowship.relays.filter((r) => r !== url));
+    },
     // publish this user's kind-0 profile (display name etc.) and cache it
     async setProfile(meta) {
       if (!sk) await window.Fellowship.ready;
