@@ -413,6 +413,40 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
     );
   }
 
+  if (m.kind === 'devotional') {
+    const c = m.card || {};
+    return (
+      <Row me={me} m={m}>
+        <div onClick={() => ctx.openDevotional && ctx.openDevotional()} style={{ maxWidth: 280, borderRadius: 18, overflow: 'hidden', cursor: 'pointer',
+          background: 'linear-gradient(155deg, #6BA17C, #3C6E57)', color: '#fff', boxShadow: 'var(--shadow)' }}>
+          <div style={{ padding: '14px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.6px', opacity: .9, marginBottom: 7 }}>
+              <Icon name="sun" size={13} stroke={2} color="#fff" /> DEVOTIONAL</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, marginBottom: 5 }}>{c.title}</div>
+            {c.excerpt ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.45, margin: '0 0 8px', opacity: .95, textWrap: 'pretty' }}>{c.excerpt}</p> : null}
+            <div style={{ fontWeight: 700, fontSize: 12 }}>{c.series ? c.series + ' · ' : ''}{c.ref}</div>
+          </div>
+        </div>
+        {react}
+      </Row>
+    );
+  }
+
+  if (m.kind === 'note') {
+    const c = m.card || {};
+    return (
+      <Row me={me} m={m}>
+        <div style={{ maxWidth: 280, borderRadius: 18, padding: '13px 15px', background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 6 }}>
+            <Icon name="pen" size={13} color="var(--clay)" /> NOTE · {c.ref}</div>
+          {c.text ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 14, lineHeight: 1.4, margin: '0 0 8px', color: 'var(--ink-2)', fontStyle: 'italic', textWrap: 'pretty' }}>“{c.text}”</p> : null}
+          <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, color: 'var(--ink)', textWrap: 'pretty' }}>{c.note}</p>
+        </div>
+        {react}
+      </Row>
+    );
+  }
+
   return (
     <Row me={me} m={m}>
       <div style={{ maxWidth: 270, borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
@@ -452,6 +486,8 @@ function evtToMsg(e) {
   const kTag = (e.tags.find(t => t[0] === 'k') || [])[1];
   const base = { id: e.id, me, pubkey: e.pubkey, when: fmtClock(e.created_at), _ts: e.created_at };
   if (kTag === 'verse') { try { return { ...base, kind: 'verse', verse: JSON.parse(e.content) }; } catch {} }
+  if (kTag === 'devotional') { try { return { ...base, kind: 'devotional', card: JSON.parse(e.content) }; } catch {} }
+  if (kTag === 'note') { try { return { ...base, kind: 'note', card: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'prayer') return { ...base, kind: 'prayer', text: e.content };
   return { ...base, text: e.content };
 }
@@ -583,37 +619,65 @@ function ChatRoom({ group, open, onClose, ctx }) {
   );
 }
 
-// ── share a verse: as an image card, or send it into a chat group ──
-function VerseShareSheet({ verse, open, onClose, ctx }) {
-  if (!verse) return null;
+// ── share sheet: a verse / devotional / note — as an image (verse) or into a group ──
+function SharePreview({ p, type }) {
+  if (type === 'devotional') {
+    return (
+      <div style={{ borderRadius: 18, padding: '16px 18px', background: 'linear-gradient(155deg, #6BA17C, #3C6E57)', color: '#fff', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.6px', opacity: .9, marginBottom: 6 }}>DEVOTIONAL</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, marginBottom: 5 }}>{p.title}</div>
+        {p.excerpt ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.45, margin: '0 0 8px', opacity: .95, textWrap: 'pretty' }}>{p.excerpt}</p> : null}
+        <div style={{ fontWeight: 700, fontSize: 12.5 }}>{p.series ? p.series + ' · ' : ''}{p.ref}</div>
+      </div>
+    );
+  }
+  if (type === 'note') {
+    return (
+      <div style={{ borderRadius: 18, padding: '16px 18px', background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 18 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 7 }}>NOTE · {p.ref}</div>
+        {p.text ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.4, margin: '0 0 8px', color: 'var(--ink-2)', fontStyle: 'italic', textWrap: 'pretty' }}>“{p.text}”</p> : null}
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 15, lineHeight: 1.45, margin: 0, color: 'var(--ink)', textWrap: 'pretty' }}>{p.note}</p>
+      </div>
+    );
+  }
+  return (
+    <div style={{ borderRadius: 18, padding: '16px 18px', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
+      <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.45, margin: '0 0 8px', fontWeight: 500, textWrap: 'pretty' }}>“{p.text}”</p>
+      <div style={{ fontWeight: 700, fontSize: 13 }}>{p.ref}{p.version ? ' · ' + p.version : ''}</div>
+    </div>
+  );
+}
+
+function VerseShareSheet({ payload, open, onClose, ctx }) {
+  if (!payload) return null;
   const D = window.TrinityData;
+  const type = payload.type || 'verse';
   const live = !!(window.Fellowship && window.Fellowship.publishMessage);
+  const heading = type === 'devotional' ? 'Share devotional' : type === 'note' ? 'Share note' : 'Share verse';
   const sendToGroup = (g) => {
     if (!live) { ctx.toast('Chat isn’t available'); return; }
-    window.Fellowship.publishMessage(g.id, JSON.stringify(verse), [['k', 'verse']]);
+    window.Fellowship.publishMessage(g.id, JSON.stringify(payload), [['k', type]]);
     ctx.toast('Shared to ' + g.name); onClose();
   };
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="86%">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>Share verse</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{heading}</div>
         <IconBtn name="x" onClick={onClose} />
       </div>
 
-      {/* verse preview */}
-      <div style={{ borderRadius: 18, padding: '16px 18px', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
-        <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.45, margin: '0 0 8px', fontWeight: 500, textWrap: 'pretty' }}>“{verse.text}”</p>
-        <div style={{ fontWeight: 700, fontSize: 13 }}>{verse.ref}{verse.version ? ' · ' + verse.version : ''}</div>
-      </div>
+      <SharePreview p={payload} type={type} />
 
-      <button onClick={() => { onClose(); ctx.openShare(verse); }} style={{
-        width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
-        border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
-        <Icon name="share" size={20} color="var(--clay)" />
-        <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>Share as image</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>A card for your camera roll or socials</div></div>
-        <Icon name="chevR" size={17} color="var(--ink-3)" />
-      </button>
+      {type === 'verse' ? (
+        <button onClick={() => { onClose(); ctx.openShare(payload); }} style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
+          border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
+          <Icon name="share" size={20} color="var(--clay)" />
+          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>Share as image</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>A card for your camera roll or socials</div></div>
+          <Icon name="chevR" size={17} color="var(--ink-3)" />
+        </button>
+      ) : null}
 
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 10px' }}>SEND TO A GROUP</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>

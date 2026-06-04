@@ -93,8 +93,13 @@ function DevotionalView({ open, onClose, ctx }) {
       <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, #6BA17C, #3C6E57)', color: '#fff', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', right: -24, top: -10, opacity: .18 }}><Icon name="sun" size={150} stroke={1.3} color="#fff" /></div>
         <div style={{ padding: '10px 18px 24px', position: 'relative' }}>
-          <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
-            color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={20} color="#fff" /></button>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
+              color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={20} color="#fff" /></button>
+            <button onClick={() => ctx.openShareSheet({ type: 'devotional', title: d.title, ref: d.ref, series: d.series, excerpt: (d.body && d.body[0]) || '' })}
+              style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
+              color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="share" size={18} color="#fff" /></button>
+          </div>
           <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9, marginTop: 16 }}>{d.series} · {d.day}</div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 29, fontWeight: 700, margin: '6px 0 8px', lineHeight: 1.08 }}>{d.title}</h1>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(255,255,255,.2)', padding: '5px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700 }}>
@@ -283,7 +288,7 @@ function App() {
 
             {/* overlays */}
             <ShareCard verse={share} open={!!share} onClose={() => setShare(null)} ctx={ctx} />
-            <VerseShareSheet verse={shareSheet} open={!!shareSheet} onClose={() => setShareSheet(null)} ctx={ctx} />
+            <VerseShareSheet payload={shareSheet} open={!!shareSheet} onClose={() => setShareSheet(null)} ctx={ctx} />
             <DevotionalView open={devo} onClose={() => setDevo(false)} ctx={ctx} />
             <PlanDetail plan={plan} open={!!plan} onClose={() => setPlan(null)} ctx={ctx} />
             <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} />

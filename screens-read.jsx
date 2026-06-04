@@ -69,12 +69,13 @@ function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare,
 }
 
 // ── verse action sheet ──
-function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onCross, onCommentary, bookmarked }) {
+function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onCross, onCommentary, bookmarked, hasNote }) {
   const acts = [
     { ic: 'pen', label: 'Note', fn: onNote },
     { ic: 'bookmark', label: bookmarked ? 'Saved' : 'Bookmark', fn: ctx._bm, active: bookmarked },
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
+    ...(hasNote ? [{ ic: 'pen', label: 'Share note', fn: ctx._shareNote }] : []),
     { ic: 'link', label: 'Cross-refs', fn: onCross },
     { ic: 'comment', label: 'Commentary', fn: onCommentary },
   ];
@@ -398,6 +399,7 @@ function ReadScreen({ ctx }) {
     _bm: () => { const k = keyOf(sel); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(labelOf(sel) + ' — ' + (selRow ? selRow.text : '')); } catch (e) {} close(); ctx.toast('Copied to clipboard'); },
     _share: () => { close(); ctx.openShareSheet({ ref: labelOf(sel), text: selRow ? selRow.text : '', version }); },
+    _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel), text: selRow ? selRow.text : '', version, note: ctx.notes[keyOf(sel)] || '' }); },
   };
 
   const prev = Bible.step(loc, -1), next = Bible.step(loc, 1);
@@ -463,7 +465,7 @@ function ReadScreen({ ctx }) {
 
       <ActionSheet label={labelOf(sel)} ctx={sheetCtx} open={sheet === 'action'} onClose={close}
         curColor={ctx.highlights[keyOf(sel)]} onColor={(c) => { ctx.setHighlight(keyOf(sel), c); }}
-        bookmarked={ctx.bookmarks.includes(keyOf(sel))}
+        bookmarked={ctx.bookmarks.includes(keyOf(sel))} hasNote={!!ctx.notes[keyOf(sel)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => setSheet('commentary')} />
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} />
       <CrossRefSheet loc={loc} v={sel} label={labelOf(sel)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
