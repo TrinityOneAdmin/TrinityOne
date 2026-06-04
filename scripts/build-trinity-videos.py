@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Snapshot Trinity Church Littlehampton's latest YouTube videos for Lumen.
+"""Snapshot Trinity Church Littlehampton's latest YouTube videos for TrinityOne.
 
 Pulls YouTube's public per-channel RSS feed (no API key) and writes a bundled
 ../trinity-videos.json the Watch screen reads. The feed has no CORS headers, so
@@ -29,7 +29,7 @@ def main():
         xml = open(sys.argv[sys.argv.index("--xml") + 1], encoding="utf-8").read()
     else:
         print("fetching", FEED)
-        req = urllib.request.Request(FEED, headers={"User-Agent": "Mozilla/5.0 lumen"})
+        req = urllib.request.Request(FEED, headers={"User-Agent": "Mozilla/5.0 trinityone"})
         xml = urllib.request.urlopen(req, timeout=40).read().decode("utf-8")
 
     videos = []

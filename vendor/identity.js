@@ -11010,7 +11010,7 @@ zoo`.split("\n"));
 
   // src/identity.src.js
   var import_qrcode_generator = __toESM(require_qrcode());
-  var STORE_KEY = "lumen.nostr.mnemonic";
+  var STORE_KEY = "trinityone.nostr.mnemonic";
   var HANDLE_POOL = ["Cedar", "River", "Sparrow", "Olive", "Wren", "Maple", "Reed", "Dove", "Ash", "Linden", "Heron", "Bramble"];
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
   var memMnemonic = null;
@@ -11069,11 +11069,11 @@ zoo`.split("\n"));
     apply(deriveProfile(mnemonic), { ephemeral: !isNative() });
   }
   function apply(profile, meta) {
-    window.LumenIdentity.current = profile;
-    window.LumenIdentity.ephemeral = !!(meta && meta.ephemeral);
-    window.dispatchEvent(new CustomEvent("lumen-identity", { detail: profile }));
+    window.TrinityIdentity.current = profile;
+    window.TrinityIdentity.ephemeral = !!(meta && meta.ephemeral);
+    window.dispatchEvent(new CustomEvent("trinity-identity", { detail: profile }));
   }
-  window.LumenIdentity = {
+  window.TrinityIdentity = {
     current: null,
     ephemeral: false,
     ready: null,
@@ -11081,10 +11081,10 @@ zoo`.split("\n"));
       const mnemonic = generateSeedWords();
       await secureSet(mnemonic);
       apply(deriveProfile(mnemonic), { ephemeral: !isNative() });
-      return window.LumenIdentity.current;
+      return window.TrinityIdentity.current;
     },
     copyNpub() {
-      const np = window.LumenIdentity.current && window.LumenIdentity.current.npub;
+      const np = window.TrinityIdentity.current && window.TrinityIdentity.current.npub;
       if (np && navigator.clipboard) navigator.clipboard.writeText(np).catch(() => {
       });
       return np;
@@ -11099,7 +11099,7 @@ zoo`.split("\n"));
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
       await secureSet(m);
       apply(deriveProfile(m), { ephemeral: !isNative() });
-      return window.LumenIdentity.current;
+      return window.TrinityIdentity.current;
     },
     // steward onboarding: mint a NEW identity to hand to a member (does NOT touch yours)
     makeInvite() {
@@ -11114,5 +11114,5 @@ zoo`.split("\n"));
       return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
     }
   };
-  window.LumenIdentity.ready = init().catch((e) => console.error("[identity] init failed", e));
+  window.TrinityIdentity.ready = init().catch((e) => console.error("[identity] init failed", e));
 })();

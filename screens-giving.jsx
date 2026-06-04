@@ -2,7 +2,7 @@
 const { useState: useG, useEffect: useGE } = React;
 
 const fmtSats = (n) => n.toLocaleString('en-US');
-const usdOf = (sats) => (sats / window.LumenData.SATS_PER_USD);
+const usdOf = (sats) => (sats / window.TrinityData.SATS_PER_USD);
 
 // deterministic faux-QR (visual only)
 function FauxQR({ seed = 'lnbc', size = 168 }) {
@@ -26,7 +26,7 @@ function FauxQR({ seed = 'lnbc', size = 168 }) {
 
 // ════ Strike load sheet: amount → connect → invoice ════
 function StrikeLoadSheet({ open, onClose, ctx, onLoaded }) {
-  const D = window.LumenData;
+  const D = window.TrinityData;
   const [stage, setStage] = useG('amount'); // amount | invoice | done
   const [amt, setAmt] = useG(25);
   const [custom, setCustom] = useG('');
@@ -112,7 +112,7 @@ function StrikeLoadSheet({ open, onClose, ctx, onLoaded }) {
       {stage === 'done' ? (
         <div style={{ textAlign: 'center', padding: '12px 0 8px' }}>
           <div style={{ width: 74, height: 74, borderRadius: 999, background: 'color-mix(in oklab, var(--sage) 18%, var(--surface))',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', animation: 'lumenScale .4s ease both' }}>
+            display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', animation: 'trinityScale .4s ease both' }}>
             <Icon name="check" size={40} stroke={2.6} color="var(--sage)" />
           </div>
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700 }}>Funds loaded</div>
@@ -127,7 +127,7 @@ function StrikeLoadSheet({ open, onClose, ctx, onLoaded }) {
 
 // ════ Give sheet: pick fund + amount, pay from wallet ════
 function GiveSheet({ fund, open, onClose, ctx, balance, onGive }) {
-  const D = window.LumenData;
+  const D = window.TrinityData;
   const [usd, setUsd] = useG(10);
   const [anon, setAnon] = useG(true);
   useGE(() => { if (open) { setUsd(10); setAnon(true); } }, [open, fund]);
@@ -188,7 +188,7 @@ function GiveSheet({ fund, open, onClose, ctx, balance, onGive }) {
 
 // ════ Giving view (the tab body) ════
 function GivingView({ ctx, balance, setBalance, history, setHistory }) {
-  const D = window.LumenData;
+  const D = window.TrinityData;
   const [load, setLoad] = useG(false);
   const [fund, setFund] = useG(null);
 
@@ -200,7 +200,7 @@ function GivingView({ ctx, balance, setBalance, history, setHistory }) {
   };
 
   return (
-    <div style={{ animation: 'lumenFade .4s ease both' }}>
+    <div style={{ animation: 'trinityFade .4s ease both' }}>
       {/* wallet hero */}
       <div style={{ position: 'relative', borderRadius: 24, overflow: 'hidden', marginBottom: 16,
         background: 'linear-gradient(150deg, #2a2218 0%, #16120c 100%)', color: '#F3ECDC', padding: '20px 22px', boxShadow: 'var(--shadow-lg)' }}>

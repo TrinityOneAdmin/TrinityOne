@@ -1,4 +1,4 @@
-// icons.jsx — Lumen line icons. <Icon name="..." size={22} stroke={1.8} />
+// icons.jsx — TrinityOne line icons. <Icon name="..." size={22} stroke={1.8} />
 // Exports window.Icon
 
 function Icon({ name, size = 22, stroke = 1.8, fill = false, style = {}, color = 'currentColor' }) {

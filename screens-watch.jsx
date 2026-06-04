@@ -87,7 +87,7 @@ function WatchView({ ctx }) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 50, color: 'var(--ink-3)', gap: 14 }}>
         {!data
-          ? <div style={{ width: 24, height: 24, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'lumenSpin .8s linear infinite' }} />
+          ? <div style={{ width: 24, height: 24, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
           : <span style={{ fontSize: 14 }}>No videos yet.</span>}
       </div>
     );
@@ -107,7 +107,7 @@ function WatchView({ ctx }) {
   };
 
   return (
-    <div style={{ animation: 'lumenFade .4s ease both' }}>
+    <div style={{ animation: 'trinityFade .4s ease both' }}>
       {/* church header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
         <ChannelAvatar ch={ch} size={56} />

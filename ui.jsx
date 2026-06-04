@@ -1,4 +1,4 @@
-// ui.jsx — Lumen shared UI primitives. Exports several to window.
+// ui.jsx — TrinityOne shared UI primitives. Exports several to window.
 const { useState, useEffect, useRef } = React;
 
 function cx(...a) { return a.filter(Boolean).join(' '); }
@@ -190,7 +190,7 @@ function Toast({ msg }) {
       zIndex: 60, background: 'var(--ink)', color: 'var(--paper)',
       padding: '11px 18px', borderRadius: 14, fontSize: 13.5, fontWeight: 600,
       fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow-lg)', whiteSpace: 'nowrap',
-      animation: 'lumenScale .3s ease both', display: 'flex', alignItems: 'center', gap: 8,
+      animation: 'trinityScale .3s ease both', display: 'flex', alignItems: 'center', gap: 8,
     }}>
       <Icon name="check" size={16} stroke={2.4} color="var(--clay)" />{msg}
     </div>

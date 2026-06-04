@@ -1,16 +1,16 @@
 // screens-chat.jsx — "Chat" tab: anonymous church + life-group messaging over Nostr.
 // UI is wired; transport is mock for now. Identity is REAL when lib/identity.js has
-// derived a key (window.LumenIdentity), otherwise falls back to the mock identity.
+// derived a key (window.TrinityIdentity), otherwise falls back to the mock identity.
 const { useState: useC, useEffect: useCE, useRef: useCR } = React;
 
 // reflect the live (real-or-mock) anonymous identity; re-render on regeneration
 function useIdentity() {
-  const read = () => (window.LumenIdentity && window.LumenIdentity.current) || window.LumenData.CHAT_IDENTITY;
+  const read = () => (window.TrinityIdentity && window.TrinityIdentity.current) || window.TrinityData.CHAT_IDENTITY;
   const [id, setId] = useC(read);
   useCE(() => {
     const h = () => setId(read());
-    window.addEventListener('lumen-identity', h); h();
-    return () => window.removeEventListener('lumen-identity', h);
+    window.addEventListener('trinity-identity', h); h();
+    return () => window.removeEventListener('trinity-identity', h);
   }, []);
   return id;
 }
@@ -31,12 +31,12 @@ function Avatar({ handle, color, size = 38 }) {
 // ── Identity manager sheet (anonymous Nostr key: recovery / restore / steward invite) ──
 function NostrSheet({ open, onClose, ctx, initialPane }) {
   const id = useIdentity();
-  const relays = window.LumenData.RELAYS;
+  const relays = window.TrinityData.RELAYS;
   const [pane, setPane] = useC('main');      // main | recovery | restore | invite
   const [words, setWords] = useC(null);      // revealed recovery phrase
   const [restoreText, setRestoreText] = useC('');
   const [invite, setInvite] = useC(null);    // {mnemonic, profile}
-  const ID = window.LumenIdentity;
+  const ID = window.TrinityIdentity;
 
   useCE(() => {
     if (!open) return;
@@ -177,7 +177,7 @@ function miniBtn() {
 
 // ── group list (the Chat tab body) ──
 function ChatScreen({ ctx }) {
-  const D = window.LumenData;
+  const D = window.TrinityData;
   const idParam = new URLSearchParams(location.search).get('identity'); // main|recovery|restore|invite
   const [nostr, setNostr] = useC(!!idParam);
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
@@ -187,7 +187,7 @@ function ChatScreen({ ctx }) {
 
   return (
     <ScreenScroll>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, animation: 'lumenFade .5s ease both' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, animation: 'trinityFade .5s ease both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
         <IconBtn name="plus" onClick={() => ctx.toast(view === 'giving' ? 'Load funds or give' : 'Create or join a group')} />
       </div>
@@ -215,7 +215,7 @@ function ChatScreen({ ctx }) {
       <button onClick={() => setNostr(true)} style={{
         width: '100%', textAlign: 'left', cursor: 'pointer', border: '1px solid var(--line)',
         background: 'var(--surface)', borderRadius: 20, padding: 14, marginBottom: 22, boxShadow: 'var(--shadow)',
-        display: 'flex', alignItems: 'center', gap: 13, animation: 'lumenFade .5s ease .05s both',
+        display: 'flex', alignItems: 'center', gap: 13, animation: 'trinityFade .5s ease .05s both',
       }}>
         <Avatar handle={id.handle} color={id.color} size={44} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -233,7 +233,7 @@ function ChatScreen({ ctx }) {
       </button>
 
       <SectionLabel>Your groups</SectionLabel>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, animation: 'lumenFade .5s ease .1s both' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, animation: 'trinityFade .5s ease .1s both' }}>
         {D.GROUPS.map(g => (
           <div key={g.id} onClick={() => ctx.openGroup(g)} style={{
             display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
@@ -326,7 +326,7 @@ function Bubble({ m, onAmen, ctx }) {
 
 function Row({ me, m, children }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'lumenFade .3s ease both' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both' }}>
       {!me ? <div style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px' }}>
         <Avatar handle={m.handle} color={m.color} size={22} />
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>{m.handle}</span>
@@ -345,7 +345,7 @@ function ChatRoom({ group, open, onClose, ctx }) {
   const id = useIdentity();
   const scRef = useCR();
   useCE(() => {
-    if (group) setMsgs((window.LumenData.GROUP_MESSAGES[group.id] || []).map(m => ({ ...m })));
+    if (group) setMsgs((window.TrinityData.GROUP_MESSAGES[group.id] || []).map(m => ({ ...m })));
     setDraft('');
   }, [group]);
   useCE(() => {
@@ -359,7 +359,7 @@ function ChatRoom({ group, open, onClose, ctx }) {
     setMsgs(prev => [...prev, { ...base, ...extra }]);
   };
   const sendText = () => { if (!draft.trim()) return; send({ text: draft.trim() }); setDraft(''); };
-  const shareVerse = () => { send({ kind: 'verse', verse: { ...window.LumenData.VOTD } }); ctx.toast('Verse shared'); };
+  const shareVerse = () => { send({ kind: 'verse', verse: { ...window.TrinityData.VOTD } }); ctx.toast('Verse shared'); };
   const amen = (mid) => setMsgs(prev => prev.map(m => m.id === mid ? { ...m, _amened: !m._amened, amens: m.amens + (m._amened ? -1 : 1) } : m));
 
   return (

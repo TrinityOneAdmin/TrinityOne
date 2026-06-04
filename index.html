@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Lumen — Bible Study</title>
+<title>TrinityOne — Bible Study</title>
 <link rel="stylesheet" href="vendor/fonts/fonts.css" />
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -20,8 +20,8 @@
   }
   #root { display: flex; align-items: center; justify-content: center; }
 
-  /* ── Lumen design tokens (light) ── */
-  .lumen {
+  /* ── TrinityOne design tokens (light) ── */
+  .trinity {
     --paper:     #F4EEE2;
     --surface:   #FFFDF8;
     --surface-2: #FBF5EA;
@@ -50,7 +50,7 @@
     --read-scale: 1;
   }
   /* ── dark ── */
-  .lumen.dark {
+  .trinity.dark {
     --paper:     #16120C;
     --surface:   #211B13;
     --surface-2: #2A2218;
@@ -88,10 +88,10 @@
   .reader-body .sec { display: block; font-family: var(--font-ui); font-weight: 700; font-size: .6em; letter-spacing: .6px; color: var(--clay); margin: 1em 0 .15em; text-transform: uppercase; }
   .reader-body .parref { display: block; font-family: var(--font-ui); font-style: italic; font-size: .66em; color: var(--ink-3); margin-bottom: .3em; }
 
-  @keyframes lumenFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-  @keyframes lumenRise { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: none; } }
-  @keyframes lumenScale { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
-  @keyframes lumenSpin { to { transform: rotate(360deg); } }
+  @keyframes trinityFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes trinityRise { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: none; } }
+  @keyframes trinityScale { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+  @keyframes trinitySpin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -104,12 +104,12 @@
 <!-- data layer: in-browser unzip + SQLite-WASM (vendored locally for offline use) -->
 <script src="vendor/fflate.js"></script>
 <script src="vendor/sqljs/sql-wasm.js"></script>
-<!-- Machaira engine: loads MySword + open.bible USFM modules, exposes window.Bible -->
+<!-- TrinityOne engine: loads MySword + open.bible USFM modules, exposes window.Bible -->
 <script src="engine.js"></script>
-<!-- Self-custodial Nostr identity (BIP-39 → NIP-06), bundled; exposes window.LumenIdentity -->
+<!-- Self-custodial Nostr identity (BIP-39 → NIP-06), bundled; exposes window.TrinityIdentity -->
 <script src="vendor/identity.js"></script>
 
-<!-- Lumen UI (JSX, transpiled in-browser by Babel) -->
+<!-- TrinityOne UI (JSX, transpiled in-browser by Babel) -->
 <script type="text/babel" src="data.jsx"></script>
 <script type="text/babel" src="icons.jsx"></script>
 <script type="text/babel" src="ui.jsx"></script>

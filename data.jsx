@@ -1,5 +1,5 @@
-// data.jsx — Lumen content (public-domain scripture: KJV + World English Bible)
-// Attached to window.LumenData
+// data.jsx — TrinityOne content (public-domain scripture: KJV + World English Bible)
+// Attached to window.TrinityData
 
 const BOOKS = [
   { abbr: 'Gen', name: 'Genesis', ch: 50, group: 'ot' },
@@ -118,7 +118,7 @@ const CROSSREFS = {
 };
 
 const COMMENTARY = {
-  source: "Lumen Study Notes",
+  source: "TrinityOne Study Notes",
   blocks: [
     { v: '1', title: 'The Word before time',
       text: 'John opens not with a manger but with eternity. Where Genesis says "In the beginning God created," John reaches further back: in the beginning the Word already was. Three short clauses set the whole Gospel in motion — the Word existed, the Word was in relationship ("with God"), and the Word was himself fully God.' },
@@ -249,7 +249,7 @@ const VIDEOS = [
 
 // ── Fellowship: anonymous chat (Nostr) ──
 // HANDLE_POOL + CHAT_IDENTITY are the mock fallback; once the real identity layer
-// (lib/identity.js) derives a key, it overrides window.LumenData.CHAT_IDENTITY.
+// (lib/identity.js) derives a key, it overrides window.TrinityData.CHAT_IDENTITY.
 const HANDLE_POOL = ['Cedar', 'River', 'Sparrow', 'Olive', 'Wren', 'Maple', 'Reed', 'Dove', 'Ash', 'Linden', 'Heron', 'Bramble'];
 
 const CHAT_IDENTITY = {
@@ -261,7 +261,7 @@ const CHAT_IDENTITY = {
 const RELAYS = [
   { url: 'relay.damus.io', status: 'on' },
   { url: 'nos.lol', status: 'on' },
-  { url: 'relay.machaira.faith', status: 'on' },
+  { url: 'relay.trinityone.faith', status: 'on' },
   { url: 'relay.snort.social', status: 'off' },
 ];
 
@@ -328,7 +328,7 @@ const GIVING_HISTORY = [
   { id: 'g4', fund: 'Building Fund', sats: 53750, usd: 50, when: 'May 4', anon: true, status: 'settled' },
 ];
 
-window.LumenData = {
+window.TrinityData = {
   BOOKS, LEXICON, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD,
   PLANS, PLAN_DETAIL, MODULES, COLLECTIONS, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
   VIDEO_CATS, CHANNELS, VIDEOS,

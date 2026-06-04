@@ -23,11 +23,11 @@ function ProgressRing({ value, size = 46, stroke = 4, color = 'var(--clay)' }) {
 }
 
 function TodayScreen({ ctx }) {
-  const D = window.LumenData;
+  const D = window.TrinityData;
   return (
     <ScreenScroll>
       {/* greeting */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, animation: 'lumenFade .5s ease both' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-3)', letterSpacing: '.3px', textTransform: 'uppercase' }}>Sunday · June 1</div>
           <h1 style={{ margin: '4px 0 0', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.6px', lineHeight: 1.05 }}>Good morning,<br/>Maria</h1>
@@ -51,7 +51,7 @@ function TodayScreen({ ctx }) {
         position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
         background: 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
         padding: '22px 22px 18px', color: '#fff', marginBottom: 22, boxShadow: 'var(--shadow-lg)',
-        animation: 'lumenFade .5s ease .05s both',
+        animation: 'trinityFade .5s ease .05s both',
       }}>
         <div style={{ position: 'absolute', inset: 0, opacity: .5,
           background: 'radial-gradient(circle at 85% 12%, rgba(255,255,255,.28), transparent 42%)' }} />
@@ -84,7 +84,7 @@ function TodayScreen({ ctx }) {
       <div onClick={() => ctx.openReader()} style={{
         display: 'flex', alignItems: 'center', gap: 14, padding: 14, borderRadius: 20,
         background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)',
-        cursor: 'pointer', marginBottom: 22, animation: 'lumenFade .5s ease .1s both',
+        cursor: 'pointer', marginBottom: 22, animation: 'trinityFade .5s ease .1s both',
       }}>
         <div style={{ width: 52, height: 60, borderRadius: 12, background: 'linear-gradient(160deg,#3c6e57,#2c5141)',
           display: 'flex', alignItems: 'flex-end', padding: 7, flexShrink: 0 }}>
@@ -104,7 +104,7 @@ function TodayScreen({ ctx }) {
 
       {/* Plan + devotional cards */}
       <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 14, animation: 'lumenFade .5s ease .15s both' }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 14, animation: 'trinityFade .5s ease .15s both' }}>
         <div onClick={() => ctx.go('plans')} style={{
           flex: 1, padding: 16, borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)',
           boxShadow: 'var(--shadow)', cursor: 'pointer',
@@ -128,7 +128,7 @@ function TodayScreen({ ctx }) {
       </div>
 
       {/* Quick row */}
-      <div style={{ display: 'flex', gap: 10, animation: 'lumenFade .5s ease .2s both' }}>
+      <div style={{ display: 'flex', gap: 10, animation: 'trinityFade .5s ease .2s both' }}>
         {[
           { ic: 'study', label: 'Search', go: () => ctx.go('search') },
           { ic: 'pen', label: 'Journal', go: () => ctx.go('library') },

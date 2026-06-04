@@ -1,6 +1,6 @@
 {
-  "appId": "com.lumenbible.app",
-  "appName": "Lumen",
+  "appId": "com.trinityone.app",
+  "appName": "TrinityOne",
   "webDir": "www",
   "plugins": {
     "CapacitorHttp": {

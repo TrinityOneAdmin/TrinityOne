@@ -1,11 +1,11 @@
-// identity.src.js — Lumen self-custodial Nostr identity (bundled by esbuild → vendor/identity.js)
+// identity.src.js — TrinityOne self-custodial Nostr identity (bundled by esbuild → vendor/identity.js)
 //
-// Hard constraints honoured (see reference/lumen-fellowship-spec.md §3, §13):
+// Hard constraints honoured (see reference/trinityone-fellowship-spec.md §3, §13):
 //   • Random entropy only — BIP-39 mnemonic, Nostr key via NIP-06 (m/44'/1237'/0'/0/0). No brainwallet.
 //   • Private material NEVER in localStorage. Native = OS secure store (Keystore/Keychain);
 //     web/dev = ephemeral in-memory only (regenerated each session, nothing persisted).
 //
-// Exposes window.LumenIdentity and dispatches a 'lumen-identity' event when it changes.
+// Exposes window.TrinityIdentity and dispatches a 'trinity-identity' event when it changes.
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
@@ -13,7 +13,7 @@ import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import qrcode from 'qrcode-generator';
 
-const STORE_KEY = 'lumen.nostr.mnemonic';
+const STORE_KEY = 'trinityone.nostr.mnemonic';
 const HANDLE_POOL = ['Cedar', 'River', 'Sparrow', 'Olive', 'Wren', 'Maple', 'Reed', 'Dove', 'Ash', 'Linden', 'Heron', 'Bramble'];
 const COLORS = ['#5E8C6A', '#C2913A', '#C25A38', '#5360D6', '#1F9488', '#C24B7A'];
 
@@ -67,12 +67,12 @@ async function init() {
 }
 
 function apply(profile, meta) {
-  window.LumenIdentity.current = profile;
-  window.LumenIdentity.ephemeral = !!(meta && meta.ephemeral);
-  window.dispatchEvent(new CustomEvent('lumen-identity', { detail: profile }));
+  window.TrinityIdentity.current = profile;
+  window.TrinityIdentity.ephemeral = !!(meta && meta.ephemeral);
+  window.dispatchEvent(new CustomEvent('trinity-identity', { detail: profile }));
 }
 
-window.LumenIdentity = {
+window.TrinityIdentity = {
   current: null,
   ephemeral: false,
   ready: null,
@@ -80,10 +80,10 @@ window.LumenIdentity = {
     const mnemonic = generateSeedWords();
     await secureSet(mnemonic);
     apply(deriveProfile(mnemonic), { ephemeral: !isNative() });
-    return window.LumenIdentity.current;
+    return window.TrinityIdentity.current;
   },
   copyNpub() {
-    const np = window.LumenIdentity.current && window.LumenIdentity.current.npub;
+    const np = window.TrinityIdentity.current && window.TrinityIdentity.current.npub;
     if (np && navigator.clipboard) navigator.clipboard.writeText(np).catch(() => {});
     return np;
   },
@@ -96,7 +96,7 @@ window.LumenIdentity = {
     if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
     await secureSet(m);
     apply(deriveProfile(m), { ephemeral: !isNative() });
-    return window.LumenIdentity.current;
+    return window.TrinityIdentity.current;
   },
 
   // steward onboarding: mint a NEW identity to hand to a member (does NOT touch yours)
@@ -112,4 +112,4 @@ window.LumenIdentity = {
   },
 };
 
-window.LumenIdentity.ready = init().catch(e => console.error('[identity] init failed', e));
+window.TrinityIdentity.ready = init().catch(e => console.error('[identity] init failed', e));

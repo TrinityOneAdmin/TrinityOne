@@ -31,17 +31,17 @@ function PlanCard({ p, onClick, big }) {
 }
 
 function PlansScreen({ ctx }) {
-  const D = window.LumenData;
+  const D = window.TrinityData;
   return (
     <ScreenScroll>
-      <h1 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'lumenFade .5s ease both' }}>Reading Plans</h1>
+      <h1 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'trinityFade .5s ease both' }}>Reading Plans</h1>
       <p style={{ margin: '0 0 20px', color: 'var(--ink-2)', fontSize: 14.5, lineHeight: 1.4 }}>A little every day. Pick a path and let it carry you.</p>
 
       {/* active plan */}
       <div onClick={() => ctx.openPlan(D.PLAN_DETAIL)} style={{
         borderRadius: 24, padding: 20, cursor: 'pointer', marginBottom: 24, position: 'relative', overflow: 'hidden',
         background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow-lg)',
-        animation: 'lumenFade .5s ease .05s both',
+        animation: 'trinityFade .5s ease .05s both',
       }}>
         <div style={{ position: 'absolute', right: -30, top: -30, opacity: .16 }}><Icon name="read" size={170} stroke={1.2} color="#fff" /></div>
         <div style={{ position: 'relative' }}>
@@ -62,7 +62,7 @@ function PlansScreen({ ctx }) {
       </div>
 
       <SectionLabel>Discover plans</SectionLabel>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'lumenFade .5s ease .1s both' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'trinityFade .5s ease .1s both' }}>
         {D.PLANS.map(p => <PlanCard key={p.id} p={p} onClick={() => ctx.openPlan({ ...D.PLAN_DETAIL, title: p.title, sub: p.sub })} />)}
       </div>
     </ScreenScroll>

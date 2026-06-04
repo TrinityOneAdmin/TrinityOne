@@ -1,4 +1,4 @@
-// engine.js — Machaira/Lumen data layer (plain JS, no JSX).
+// engine.js — TrinityOne data layer (plain JS, no JSX).
 // Loads MySword (.bbl.mybible SQLite) and open.bible (USFM-in-zip) modules
 // entirely in-browser, parses Scripture markup, and exposes window.Bible.
 "use strict";
@@ -261,7 +261,7 @@
   }
 
   // ── catalog + installed-module registry (download-once, MySword style) ──
-  const INSTALLED_KEY = "lumen.installed";   // localStorage map: url -> meta
+  const INSTALLED_KEY = "trinityone.installed";   // localStorage map: url -> meta
   const installing = new Set();              // urls currently downloading
   let catalogPromise = null;
 

@@ -20,12 +20,12 @@ function ModuleTile({ m, onClick }) {
 }
 
 function LibraryScreen({ ctx }) {
-  const D = window.LumenData;
+  const D = window.TrinityData;
   const libParam = new URLSearchParams(location.search).get('lib');
   const [view, setView] = React.useState(libParam === 'watch' ? 'watch' : 'library');
   return (
     <ScreenScroll>
-      <h1 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'lumenFade .5s ease both' }}>Library</h1>
+      <h1 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'trinityFade .5s ease both' }}>Library</h1>
 
       {/* segmented: Library / Watch */}
       <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 15, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 20 }}>
@@ -56,7 +56,7 @@ const CAT_STYLE = {
 };
 
 function LibraryHome({ ctx }) {
-  const D = window.LumenData;
+  const D = window.TrinityData;
   const [, force] = React.useState(0);
   React.useEffect(() => window.Bible.subscribe(() => force(x => x + 1)), []);
 
@@ -68,7 +68,7 @@ function LibraryHome({ ctx }) {
   return (
     <React.Fragment>
       {/* collections strip */}
-      <div className="no-scrollbar" style={{ display: 'flex', gap: 10, overflowX: 'auto', margin: '0 -18px 22px', padding: '0 18px', animation: 'lumenFade .5s ease .05s both' }}>
+      <div className="no-scrollbar" style={{ display: 'flex', gap: 10, overflowX: 'auto', margin: '0 -18px 22px', padding: '0 18px', animation: 'trinityFade .5s ease .05s both' }}>
         {D.COLLECTIONS.map(c => (
           <button key={c.id} onClick={() => ctx.toast(`${c.name}: ${c.count}`)} style={{
             flexShrink: 0, width: 110, padding: '14px 14px', borderRadius: 18, border: '1px solid var(--line)',
@@ -82,7 +82,7 @@ function LibraryHome({ ctx }) {
       </div>
 
       <SectionLabel action="Get modules" onAction={() => ctx.openStore()}>Installed</SectionLabel>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 24, animation: 'lumenFade .5s ease .1s both' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 24, animation: 'trinityFade .5s ease .1s both' }}>
         {versions.map(v => {
           const active = window.Bible.activeVersion === v.abbr;
           return (
@@ -107,7 +107,7 @@ function LibraryHome({ ctx }) {
       </div>
 
       <SectionLabel action="New" onAction={() => ctx.toast('New journal entry')}>Recent journal</SectionLabel>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 11, animation: 'lumenFade .5s ease .15s both' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 11, animation: 'trinityFade .5s ease .15s both' }}>
         {D.JOURNAL.map(j => (
           <div key={j.id} onClick={() => ctx.openJournal(j)} style={{
             padding: 15, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)',
@@ -153,7 +153,7 @@ function JournalView({ entry, open, onClose }) {
 // ── Module Store: download catalog entries (download-once → cached on device) ──
 function Spinner({ size = 18 }) {
   return <div style={{ width: size, height: size, borderRadius: 999, border: '2.5px solid var(--clay-soft)',
-    borderTopColor: 'var(--clay)', animation: 'lumenSpin .8s linear infinite' }} />;
+    borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />;
 }
 
 function StoreRow({ item, catIcon, ctx }) {

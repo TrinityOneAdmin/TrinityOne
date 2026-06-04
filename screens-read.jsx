@@ -164,7 +164,7 @@ function WordStudySheet({ id, open, onClose }) {
 // ── cross refs (built-in study notes; shown for John 1 where seeded) ──
 function CrossRefSheet({ loc, v, label, open, onClose, ctx }) {
   const seeded = loc && loc.book === 43 && loc.chap === 1;
-  const refs = (seeded && v != null && window.LumenData.CROSSREFS[v]) || [];
+  const refs = (seeded && v != null && window.TrinityData.CROSSREFS[v]) || [];
   return (
     <BottomSheet open={open} onClose={onClose}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -189,7 +189,7 @@ function CrossRefSheet({ loc, v, label, open, onClose, ctx }) {
 
 // ── commentary (built-in study notes; seeded for John 1) ──
 function CommentarySheet({ loc, label, open, onClose }) {
-  const C = window.LumenData.COMMENTARY;
+  const C = window.TrinityData.COMMENTARY;
   const seeded = loc && loc.book === 43 && loc.chap === 1;
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="82%">
@@ -367,15 +367,15 @@ function ReadScreen({ ctx }) {
   const loc = ctx.loc || Bible.defaultLoc() || { book: 43, chap: 1 };
   const version = ctx.version;
   const [compare, setCompare] = useS(false);
-  const [scale, setScale] = useS(() => lsGet('lumen.readerScale', 1.08));
-  const [serif, setSerif] = useS(() => lsGet('lumen.readerSerif', true));
+  const [scale, setScale] = useS(() => lsGet('trinityone.readerScale', 1.08));
+  const [serif, setSerif] = useS(() => lsGet('trinityone.readerSerif', true));
   const [showStrongs, setShowStrongs] = useS(false);
   const [sel, setSel] = useS(null);
   const [sheet, setSheet] = useS(null);
   const [wordId, setWordId] = useS(null);
   const scrollRef = useR();
-  useE(() => { lsSet('lumen.readerScale', scale); }, [scale]);
-  useE(() => { lsSet('lumen.readerSerif', serif); }, [serif]);
+  useE(() => { lsSet('trinityone.readerScale', scale); }, [scale]);
+  useE(() => { lsSet('trinityone.readerSerif', serif); }, [serif]);
   // arriving on a specific verse (from Today / Search): select it, scroll up
   useE(() => { setSel(loc.verse || null); if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [loc.book, loc.chap, loc.verse, version]);
 
@@ -412,7 +412,7 @@ function ReadScreen({ ctx }) {
         onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)} />
 
       <div ref={scrollRef} className="no-scrollbar" style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: '112px 18px 100px' }}>
-        <div style={{ animation: 'lumenFade .4s ease both' }}>
+        <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>{bname}</div>
             <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 27, fontWeight: 700, margin: '6px 0 0', letterSpacing: '-.4px' }}>Chapter {loc.chap}</h1>

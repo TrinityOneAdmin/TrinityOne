@@ -36,7 +36,7 @@ function SearchScreen({ ctx }) {
       </div>
 
       {!active ? (
-        <div style={{ animation: 'lumenFade .4s ease both' }}>
+        <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 11 }}>TRY SEARCHING</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9, marginBottom: 28 }}>
             {seeds.map(s => <Chip key={s} onClick={() => run(s)}>{s}</Chip>)}
@@ -52,7 +52,7 @@ function SearchScreen({ ctx }) {
           </div>
         </div>
       ) : (
-        <div style={{ animation: 'lumenFade .4s ease both' }}>
+        <div style={{ animation: 'trinityFade .4s ease both' }}>
           {lexEntry ? (
             <div onClick={() => ctx.openWord(active)} style={{
               borderRadius: 18, padding: 16, marginBottom: 18, cursor: 'pointer',

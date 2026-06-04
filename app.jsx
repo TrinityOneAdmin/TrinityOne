@@ -1,4 +1,4 @@
-// app.jsx — Lumen root: nav, theme, shared state, overlays, tweaks
+// app.jsx — TrinityOne root: nav, theme, shared state, overlays, tweaks
 const { useState: useA, useEffect: useAE, useRef: useAR } = React;
 
 const ACCENTS = {
@@ -17,8 +17,8 @@ const SETTINGS_DEFAULTS = { dark: false, accent: 'clay', readScale: 1 };
 function lsGet(key, fallback){ try{ const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }catch(e){ return fallback; } }
 function lsSet(key, val){ try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
 function useSettings(){
-  const [s, setS] = useA(() => Object.assign({}, SETTINGS_DEFAULTS, lsGet('lumen.settings', {})));
-  const set = (k, v) => setS(prev => { const n = { ...prev, [k]: v }; lsSet('lumen.settings', n); return n; });
+  const [s, setS] = useA(() => Object.assign({}, SETTINGS_DEFAULTS, lsGet('trinityone.settings', {})));
+  const set = (k, v) => setS(prev => { const n = { ...prev, [k]: v }; lsSet('trinityone.settings', n); return n; });
   return [s, set];
 }
 // subscribe a component to the engine (module load / active-version changes)
@@ -62,7 +62,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
               fontWeight: 500, margin: '18px 0 20px', textWrap: 'pretty' }}>“{verse.text}”</p>
             <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, letterSpacing: '.5px',
               color: s.bordered ? 'var(--clay)' : s.fg, opacity: s.bordered ? 1 : .9 }}>{verse.ref} · {verse.version || 'WEB'}</div>
-            <div style={{ position: 'absolute', bottom: 16, right: 22, fontSize: 11, fontWeight: 700, letterSpacing: '1px', opacity: .5 }}>LUMEN</div>
+            <div style={{ position: 'absolute', bottom: 16, right: 22, fontSize: 11, fontWeight: 700, letterSpacing: '1px', opacity: .5 }}>TRINITYONE</div>
           </div>
         </div>
         <div style={{ padding: '4px 26px 8px' }}>
@@ -87,7 +87,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
 
 // ── devotional overlay ──
 function DevotionalView({ open, onClose, ctx }) {
-  const d = window.LumenData.DEVOTIONAL;
+  const d = window.TrinityData.DEVOTIONAL;
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, #6BA17C, #3C6E57)', color: '#fff', position: 'relative', overflow: 'hidden' }}>
@@ -127,7 +127,7 @@ function DevotionalView({ open, onClose, ctx }) {
 function EmptyState({ loading, error, onBrowse }) {
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '0 34px', animation: 'lumenFade .5s ease both' }}>
+      alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '0 34px', animation: 'trinityFade .5s ease both' }}>
       <div style={{ width: 76, height: 76, borderRadius: 24, background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))',
         display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow-lg)', marginBottom: 22 }}>
         <Icon name="read" size={38} color="#fff" />
@@ -139,7 +139,7 @@ function EmptyState({ loading, error, onBrowse }) {
       </p>
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--clay)', fontWeight: 700 }}>
-          <div style={{ width: 18, height: 18, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'lumenSpin .8s linear infinite' }} /> Loading…
+          <div style={{ width: 18, height: 18, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} /> Loading…
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 13 }}>
@@ -176,14 +176,14 @@ function App() {
   // deep-link: ?group=<id> auto-opens a chat room (handy for sharing / screenshots)
   useAE(() => {
     const gid = new URLSearchParams(location.search).get('group');
-    if (gid && Bible.loaded) { const g = window.LumenData.GROUPS.find(x => x.id === gid); if (g) setGroup(g); }
+    if (gid && Bible.loaded) { const g = window.TrinityData.GROUPS.find(x => x.id === gid); if (g) setGroup(g); }
   }, [Bible.loaded]);
   const version = Bible.activeVersion;
 
   // shared study state, persisted, keyed by "book.chap.verse"
-  const [highlights, setHighlights] = useA(() => lsGet('lumen.highlights', {}));
-  const [notes, setNotes] = useA(() => lsGet('lumen.notes', {}));
-  const [bookmarks, setBookmarks] = useA(() => lsGet('lumen.bookmarks', []));
+  const [highlights, setHighlights] = useA(() => lsGet('trinityone.highlights', {}));
+  const [notes, setNotes] = useA(() => lsGet('trinityone.notes', {}));
+  const [bookmarks, setBookmarks] = useA(() => lsGet('trinityone.bookmarks', []));
 
   // overlays
   const [share, setShare] = useA(null);
@@ -196,8 +196,8 @@ function App() {
   const [store, setStore] = useA(!!storeParam);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
-  const [walletSats, setWalletSats] = useA(window.LumenData.WALLET.sats);
-  const [giving, setGiving] = useA(window.LumenData.GIVING_HISTORY);
+  const [walletSats, setWalletSats] = useA(window.TrinityData.WALLET.sats);
+  const [giving, setGiving] = useA(window.TrinityData.GIVING_HISTORY);
 
   // scaling to viewport
   const wrapRef = useAR();
@@ -235,9 +235,9 @@ function App() {
     openVideo: (v) => setVideo(v),
     openWord: (id) => setWordOv(id),
     readScale: t.readScale,
-    highlights, setHighlight: (k, c) => setHighlights(h => { const n = { ...h }; if (c) n[k] = c; else delete n[k]; lsSet('lumen.highlights', n); return n; }),
-    notes, setNote: (k, txt) => setNotes(n => { const o = { ...n }; if (txt) o[k] = txt; else delete o[k]; lsSet('lumen.notes', o); return o; }),
-    bookmarks, toggleBookmark: (k) => setBookmarks(b => { const n = b.includes(k) ? b.filter(x => x !== k) : [...b, k]; lsSet('lumen.bookmarks', n); return n; }),
+    highlights, setHighlight: (k, c) => setHighlights(h => { const n = { ...h }; if (c) n[k] = c; else delete n[k]; lsSet('trinityone.highlights', n); return n; }),
+    notes, setNote: (k, txt) => setNotes(n => { const o = { ...n }; if (txt) o[k] = txt; else delete o[k]; lsSet('trinityone.notes', o); return o; }),
+    bookmarks, toggleBookmark: (k) => setBookmarks(b => { const n = b.includes(k) ? b.filter(x => x !== k) : [...b, k]; lsSet('trinityone.bookmarks', n); return n; }),
   };
 
   // apply accent vars
@@ -258,7 +258,7 @@ function App() {
   };
 
   return (
-    <div ref={wrapRef} className={cx('lumen', t.dark && 'dark')} style={{ ...rootStyle, transformOrigin: 'center center' }}>
+    <div ref={wrapRef} className={cx('trinity', t.dark && 'dark')} style={{ ...rootStyle, transformOrigin: 'center center' }}>
       <PhoneFrame>
         {Bible.loaded ? (
           <React.Fragment>

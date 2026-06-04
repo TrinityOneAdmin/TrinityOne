@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a compact, bundled eBible.org mirror index for Lumen.
+"""Build a compact, bundled eBible.org mirror index for TrinityOne.
 
 Fetches eBible's machine-readable translations.csv, keeps only the entries that
 are both `downloadable` and `Redistributable`, and writes ../ebible-catalog.json
@@ -28,7 +28,7 @@ def load_csv():
         data = open(path, encoding="utf-8-sig").read()
     else:
         print("fetching", CSV_URL)
-        req = urllib.request.Request(CSV_URL, headers={"User-Agent": "lumen-catalog-builder"})
+        req = urllib.request.Request(CSV_URL, headers={"User-Agent": "trinityone-catalog-builder"})
         data = urllib.request.urlopen(req, timeout=60).read().decode("utf-8-sig")
     return list(csv.DictReader(io.StringIO(data)))
 
