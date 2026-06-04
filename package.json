@@ -1,10 +1,20 @@
 {
   "name": "trinityone",
   "version": "0.1.0",
-  "description": "",
+  "description": "Offline-first Bible app with anonymous Nostr fellowship + Lightning giving",
   "main": "engine.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "relay": "node relay/dev-relay.mjs",
+    "serve": "python3 -m http.server 8000",
+    "dev": "node relay/dev-relay.mjs & python3 -m http.server 8000",
+    "build:vendor": "bash scripts/build-vendor.sh",
+    "build:identity": "bash scripts/build-identity.sh",
+    "build:fellowship": "bash scripts/build-fellowship.sh",
+    "build:bundles": "bash scripts/build-identity.sh && bash scripts/build-fellowship.sh",
+    "sync:web": "bash scripts/sync-web.sh",
+    "catalog:ebible": "python3 scripts/build-ebible-catalog.py",
+    "catalog:videos": "python3 scripts/build-trinity-videos.py",
+    "smoke": "bash scripts/smoke.sh"
   },
   "keywords": [],
   "author": "",
