@@ -23,11 +23,15 @@ Design for someone in their 70s–80s who finds most apps confusing. This drives
   a "no photo" mark) — not decoration.
 
 ## Two surfaces, same content
-1. **Embedded on the landing page** (public web) — so prospective members *and* church leaders
-   can understand the privacy/security model before installing. Reassurance-forward.
+1. **Embedded on the landing page / website** (the public marketing site — you already built a
+   first version: `TrinityOne Landing.html` in the handoff). The help/setup guides should be a
+   section of that site, **matching its existing look** — so prospective members *and* church
+   leaders can understand the privacy/security model before installing. Reassurance-forward.
 2. **In-app Help section** — reachable any time inside the app (propose where it lives; at
    minimum from the identity/profile area, and surfaced during first-run setup).
 Design a layout that works for both (shared article content, different surrounding chrome).
+*(Note: this is the **landing page/website**, not the app's animated boot splash — the splash
+is a ~2-second logo reveal and stays as-is.)*
 
 ## What to design
 1. **Help index / home** — a simple, scannable list of the topics, with the **recovery-phrase**
@@ -48,10 +52,8 @@ Design a layout that works for both (shared article content, different surroundi
 - **Illustration style:** simple line illustrations (Halo-flavoured) vs. icon-only — recommend one.
 - **Steward handout:** is the printable card enough, or design a short printable "Setting up
   TrinityOne for a member" leaflet for stewards too?
-- **Splash vs landing:** confirm the app's animated **boot splash** stays as-is (logo reveal),
-  and the help lives on the **landing page** + in-app Help — not on the boot splash itself
-  (the splash is a 2-second reveal, not a place to read). If the user means the *landing* page,
-  this brief covers it; if they truly want something on the boot splash, raise it.
+- **Site integration:** should the guides be a new page/section in the existing landing site,
+  or a dedicated "Help / Get started" sub-site that links back? Recommend a structure.
 
 ## Deliverable
 Mock the Help index, the article template, the recovery-phrase hero/walkthrough, the first-run
