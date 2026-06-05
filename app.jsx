@@ -222,6 +222,10 @@ function App() {
   const storeParam = new URLSearchParams(location.search).get('store'); // 'featured' | 'language'
   const [store, setStore] = useA(!!storeParam);
   const [showSplash, setShowSplash] = useA(!storeParam && !tabParam);   // skip splash on deep-links
+  const onboardParam = new URLSearchParams(location.search).get('onboard');
+  const [showOnboarding, setShowOnboarding] = useA(
+    onboardParam === '1' || (!storeParam && !tabParam && !lsGet('trinityone.onboarded', false))
+  );
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
   const [walletSats, setWalletSats] = useA(window.TrinityData.WALLET.sats);
@@ -325,6 +329,7 @@ function App() {
           initialView={storeParam === 'language' ? 'language' : 'featured'} />
 
         {showSplash ? <Splash onDone={() => setShowSplash(false)} /> : null}
+        {!showSplash && showOnboarding ? <Onboarding onDone={() => setShowOnboarding(false)} ctx={ctx} /> : null}
       </PhoneFrame>
     </div>
   );
