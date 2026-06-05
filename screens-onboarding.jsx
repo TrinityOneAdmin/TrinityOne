@@ -40,6 +40,8 @@ function Onboarding({ onDone, ctx }) {
   const stepParam = Math.min(3, Math.max(0, parseInt(new URLSearchParams(location.search).get('onbstep') || '0', 10) || 0));
   const [step, setStep] = useO(stepParam);  // 0 welcome · 1 name · 2 backup · 3 done
   const [name, setName] = useO('');
+  const [av, setAv] = useO({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' });
+  const [touchedAv, setTouchedAv] = useO(false);
   const [words, setWords] = useO(null);
   const [saved, setSaved] = useO(false);
   const [color, setColor] = useO('#5E8C6A');
@@ -59,7 +61,14 @@ function Onboarding({ onDone, ctx }) {
     if (ID && ID.exportMnemonic) { const m = await ID.exportMnemonic(); setWords(m ? m.split(' ') : []); }
   };
   const finish = async () => {
-    try { if (name.trim() && window.Fellowship) { await window.Fellowship.ready; await window.Fellowship.setProfile({ name: name.trim() }); } } catch (e) {}
+    // publish a profile if they chose a name or deliberately picked a mark; pure-anonymous
+    // users (no name, untouched avatar) get a deterministic symbol with no kind-0 broadcast.
+    try {
+      if ((name.trim() || touchedAv) && window.Fellowship) {
+        await window.Fellowship.ready;
+        await window.Fellowship.setProfile({ name: name.trim(), av });
+      }
+    } catch (e) {}
     try { localStorage.setItem('trinityone.onboarded', 'true'); if (saved) localStorage.setItem('trinityone.backedup', 'true'); } catch (e) {}
     onDone();
   };
@@ -90,12 +99,11 @@ function Onboarding({ onDone, ctx }) {
           <div style={{ paddingTop: 8 }}>
             <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, margin: '0 0 8px' }}>What should people call you?</h1>
             <p style={{ fontSize: 16, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 0 22px' }}>This is the only thing others see — <b style={{ color: 'var(--ink)' }}>never</b> your phone number or real name. You can change it any time.</p>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, marginBottom: 22 }}>
-              <Mono name={name || anonHandle} color={color} size={96} />
-              <input value={name} onChange={e => setName(e.target.value)} maxLength={40} placeholder="e.g. Maria" autoFocus
-                style={{ width: '100%', boxSizing: 'border-box', height: 56, padding: '0 18px', borderRadius: 16, textAlign: 'center',
-                  border: '1.5px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 19, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
-            </div>
+            <input value={name} onChange={e => setName(e.target.value)} maxLength={40} placeholder="e.g. Maria" autoFocus
+              style={{ width: '100%', boxSizing: 'border-box', height: 56, padding: '0 18px', borderRadius: 16, textAlign: 'center', marginBottom: 22,
+                border: '1.5px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 19, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 14px' }}>CHOOSE YOUR MARK</div>
+            <AvatarPicker value={av} name={name} onChange={(next) => { setAv(next); setTouchedAv(true); }} />
           </div>
         )}
 
