@@ -272,6 +272,10 @@ const VIDEOS = [
 // (lib/identity.js) derives a key, it overrides window.TrinityData.CHAT_IDENTITY.
 const HANDLE_POOL = ['Cedar', 'River', 'Sparrow', 'Olive', 'Wren', 'Maple', 'Reed', 'Dove', 'Ash', 'Linden', 'Heron', 'Bramble'];
 
+// avatar picker: Halo-styled symbols + a brand color palette (no photo uploads)
+const AVATAR_COLORS = ['#C25A38', '#5E8C6A', '#C8962E', '#5360D6', '#C24B7A', '#2A8C82', '#9C5BB8', '#46708C'];
+const AVATAR_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 'crook', 'chalice', 'olive', 'mountain', 'well', 'star'];
+
 const CHAT_IDENTITY = {
   handle: 'Anonymous Cedar',
   npub: 'npub1q8s7v3x2k9m4f7p0r6t1y5w8n2c4j6h3l9d0a',
@@ -352,7 +356,7 @@ window.TrinityData = {
   BOOKS, LEXICON, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,
   PLANS, MODULES, COLLECTIONS, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
   VIDEO_CATS, CHANNELS, VIDEOS,
-  HANDLE_POOL, CHAT_IDENTITY, RELAYS, GROUPS, GROUP_MESSAGES,
+  HANDLE_POOL, AVATAR_COLORS, AVATAR_SYMBOLS, CHAT_IDENTITY, RELAYS, GROUPS, GROUP_MESSAGES,
   SATS_PER_USD, WALLET, FUNDS, STRIKE_PRESETS, GIVING_HISTORY,
   CHAPTER: {
     book: 'John', bookAbbr: 'Joh', ch: 1,

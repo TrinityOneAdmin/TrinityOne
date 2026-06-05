@@ -16,6 +16,13 @@ function useIdentity() {
 }
 // the current user's chosen display name (kind-0) or the anonymous handle
 function myName(id) { return (window.Fellowship && window.Fellowship.myProfile && window.Fellowship.myProfile.name) || id.handle; }
+// the current user's avatar (chosen symbol/monogram, or a deterministic default)
+function myAvatar(id) {
+  const FS = window.Fellowship;
+  if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d.av) return d.av; }
+  return { kind: 'monogram', color: (id && id.color) || '#5E8C6A' };
+}
+function avOf(d) { return d.av || { kind: 'monogram', color: d.color || '#5E8C6A' }; }
 
 // avatar = profile picture if set, else a colored circle with the name's initial
 function Avatar({ handle, color, size = 38, src }) {
@@ -112,7 +119,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
         </p>
         <div style={{ borderRadius: 18, padding: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Avatar handle={myName(id)} color={id.color} size={48} src={window.Fellowship && window.Fellowship.myProfile && window.Fellowship.myProfile.picture} />
+            <UserAvatar av={myAvatar(id)} name={myName(id)} size={48} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{myName(id)}</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--ink-3)', fontSize: 12 }}>
@@ -347,7 +354,7 @@ function ChatScreen({ ctx }) {
             return (
               <div key={i} onClick={() => openGroup(group)} style={{ padding: 13, borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                  <Avatar handle={d.handle} color={d.color} size={20} src={d.picture} />
+                  <UserAvatar av={avOf(d)} name={d.handle} size={20} />
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{me ? 'You' : d.handle}</span>
                   <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>· {group.name}</span>
                 </div>
@@ -365,7 +372,7 @@ function ChatScreen({ ctx }) {
         background: 'var(--surface)', borderRadius: 20, padding: 14, marginBottom: 22, boxShadow: 'var(--shadow)',
         display: 'flex', alignItems: 'center', gap: 13, animation: 'trinityFade .5s ease .05s both',
       }}>
-        <Avatar handle={myName(id)} color={id.color} size={44} src={window.Fellowship && window.Fellowship.myProfile && window.Fellowship.myProfile.picture} />
+        <UserAvatar av={myAvatar(id)} name={myName(id)} size={44} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{myName(id)}</span>
@@ -545,7 +552,7 @@ function Row({ me, m, children }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both' }}>
       {!me ? <div style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px' }}>
-        <Avatar handle={d.handle} color={d.color} size={22} src={d.picture} />
+        <UserAvatar av={avOf(d)} name={d.handle} size={22} />
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>{d.handle}</span>
         <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{m.when}</span>
       </div> : null}

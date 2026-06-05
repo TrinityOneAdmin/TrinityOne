@@ -33,11 +33,14 @@ const profiles = {};
 const pendingProfiles = new Set();
 const PROFILE_KEY = 'trinityone.profile';   // own display name (public; ok in localStorage)
 
-// resolved display = kind-0 name if known, else the deterministic anonymous handle
+const AV_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 'crook', 'chalice', 'olive', 'mountain', 'well', 'star'];
+// resolved display = kind-0 name/avatar if known, else a deterministic anonymous handle + symbol
 function displayFor(pubkey) {
   const base = profile(pubkey);
   const p = profiles[pubkey];
-  return { pubkey, handle: (p && p.name) || base.handle, color: base.color, picture: p && p.picture };
+  const av = (p && p.av) || { kind: 'symbol', color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || '') % AV_SYMBOLS.length] };
+  const handle = (p && p.name) || base.handle;
+  return { pubkey, handle, name: handle, color: av.color || base.color, av, picture: p && p.picture };
 }
 
 async function deriveFromIdentity() {
@@ -80,7 +83,13 @@ window.Fellowship = {
   // publish this user's kind-0 profile (display name etc.) and cache it
   async setProfile(meta) {
     if (!sk) await window.Fellowship.ready;
-    const p = { name: (meta.name || '').trim(), about: (meta.about || '').trim(), picture: (meta.picture || '').trim() };
+    const prev = profiles[pub] || {};
+    const p = {
+      name: (meta.name != null ? meta.name : (prev.name || '')).trim(),
+      about: (meta.about != null ? meta.about : (prev.about || '')).trim(),
+      picture: (meta.picture != null ? meta.picture : (prev.picture || '')).trim(),
+    };
+    if (meta.av || prev.av) p.av = meta.av || prev.av;   // chosen symbol/monogram avatar
     const evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify(p) }, sk);
     try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] profile publish failed', e); }
     profiles[pub] = p; window.Fellowship.myProfile = p;
@@ -98,7 +107,7 @@ window.Fellowship = {
       onevent(e) {
         try {
           const m = JSON.parse(e.content);
-          profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '' };
+          profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '', av: m.av || undefined };
           window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } }));
         } catch {}
       },

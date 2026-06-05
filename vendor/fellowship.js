@@ -4188,10 +4188,13 @@
   var profiles = {};
   var pendingProfiles = /* @__PURE__ */ new Set();
   var PROFILE_KEY = "trinityone.profile";
+  var AV_SYMBOLS = ["halo", "dove", "fish", "flame", "vine", "wheat", "anchor", "crook", "chalice", "olive", "mountain", "well", "star"];
   function displayFor(pubkey) {
     const base = profile(pubkey);
     const p = profiles[pubkey];
-    return { pubkey, handle: p && p.name || base.handle, color: base.color, picture: p && p.picture };
+    const av = p && p.av || { kind: "symbol", color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] };
+    const handle = p && p.name || base.handle;
+    return { pubkey, handle, name: handle, color: av.color || base.color, av, picture: p && p.picture };
   }
   async function deriveFromIdentity() {
     const mnemonic = window.TrinityIdentity ? await window.TrinityIdentity.exportMnemonic() : null;
@@ -4244,7 +4247,13 @@
     // publish this user's kind-0 profile (display name etc.) and cache it
     async setProfile(meta) {
       if (!sk) await window.Fellowship.ready;
-      const p = { name: (meta.name || "").trim(), about: (meta.about || "").trim(), picture: (meta.picture || "").trim() };
+      const prev = profiles[pub] || {};
+      const p = {
+        name: (meta.name != null ? meta.name : prev.name || "").trim(),
+        about: (meta.about != null ? meta.about : prev.about || "").trim(),
+        picture: (meta.picture != null ? meta.picture : prev.picture || "").trim()
+      };
+      if (meta.av || prev.av) p.av = meta.av || prev.av;
       const evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: JSON.stringify(p) }, sk);
       try {
         await Promise.any(pool.publish(window.Fellowship.relays, evt));
@@ -4269,7 +4278,7 @@
         onevent(e) {
           try {
             const m = JSON.parse(e.content);
-            profiles[e.pubkey] = { name: m.name || m.display_name || "", picture: m.picture || "", about: m.about || "" };
+            profiles[e.pubkey] = { name: m.name || m.display_name || "", picture: m.picture || "", about: m.about || "", av: m.av || void 0 };
             window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
           } catch {
           }
