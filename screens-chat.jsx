@@ -51,6 +51,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   const [restoreText, setRestoreText] = useC('');
   const [invite, setInvite] = useC(null);    // {mnemonic, profile}
   const [nameInput, setNameInput] = useC('');
+  const [avInput, setAvInput] = useC(null);   // editable mark in the profile pane
   const [relayInput, setRelayInput] = useC('');
   const ID = window.TrinityIdentity;
   const FS = window.Fellowship;
@@ -60,12 +61,13 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
     setPane(initialPane || 'main'); setWords(null); setRestoreText('');
     setInvite(initialPane === 'invite' && ID && ID.makeInvite ? ID.makeInvite() : null);
     setNameInput((FS && FS.myProfile && FS.myProfile.name) || '');
+    setAvInput(myAvatar(id));
   }, [open]);
 
   const saveProfile = async () => {
     if (!(FS && FS.setProfile)) { ctx.toast('Chat transport not ready'); return; }
-    await FS.setProfile({ name: nameInput });
-    ctx.toast(nameInput.trim() ? 'Display name saved' : 'Name cleared'); setPane('main');
+    await FS.setProfile({ name: nameInput, av: avInput || undefined });
+    ctx.toast(nameInput.trim() ? 'Profile saved' : 'Name cleared'); setPane('main');
   };
 
   // poll real relay connection status while the sheet is open
@@ -119,12 +121,11 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
         </p>
         <div style={{ borderRadius: 18, padding: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <UserAvatar av={myAvatar(id)} name={myName(id)} size={48} />
+            <UserAvatar av={myAvatar(id)} name={myName(id)} size={52} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{myName(id)}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--ink-3)', fontSize: 12 }}>
-                <Icon name="key" size={13} /><span style={{ fontFamily: 'monospace', letterSpacing: '-.3px' }}>{id.npub.slice(0, 20)}…</span>
-              </div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 4, background: 'var(--clay-soft)', color: 'var(--clay-ink)', padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 700 }}>
+                <Icon name="shield" size={12} /> {myName(id) === id.handle ? 'Anonymous member' : 'TrinityOne member'}</div>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
@@ -162,17 +163,16 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
       </React.Fragment>}
 
       {pane === 'profile' && <React.Fragment>
-        <Header title="Display name" back />
-        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '2px 0 14px' }}>
-          Pick a name your church sees instead of an anonymous handle. You stay anonymous — no email or phone, just a name on your key. Leave it blank to go back to <b style={{ color: 'var(--ink)' }}>{id.handle}</b>.
+        <Header title="Name & mark" back />
+        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '2px 0 16px' }}>
+          Pick a name and a mark your church sees instead of an anonymous handle. You stay anonymous — no email or phone, just a name on your key. Leave the name blank to go back to <b style={{ color: 'var(--ink)' }}>{id.handle}</b>.
         </p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
-          <Avatar handle={nameInput || id.handle} color={id.color} size={48} />
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{nameInput || id.handle}</div>
-        </div>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' }}>DISPLAY NAME</div>
         <input value={nameInput} onChange={e => setNameInput(e.target.value)} maxLength={40} placeholder="e.g. Maria from Tuesday group"
-          style={{ width: '100%', boxSizing: 'border-box', height: 48, padding: '0 14px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)', marginBottom: 12 }} />
-        <button onClick={saveProfile} style={primaryBtn()}><Icon name="check" size={18} stroke={2.4} color="#fff" /> Save name</button>
+          style={{ width: '100%', boxSizing: 'border-box', height: 50, padding: '0 14px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 16, color: 'var(--ink)', fontFamily: 'var(--font-ui)', marginBottom: 20 }} />
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 12px' }}>YOUR MARK</div>
+        <AvatarPicker value={avInput || { kind: 'monogram', color: id.color }} name={nameInput} onChange={setAvInput} />
+        <button onClick={saveProfile} style={{ ...primaryBtn(), marginTop: 18 }}><Icon name="check" size={18} stroke={2.4} color="#fff" /> Save profile</button>
       </React.Fragment>}
 
       {pane === 'recovery' && <React.Fragment>
