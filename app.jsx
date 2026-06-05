@@ -221,10 +221,12 @@ function App() {
   const [video, setVideo] = useA(null);
   const storeParam = new URLSearchParams(location.search).get('store'); // 'featured' | 'language'
   const [store, setStore] = useA(!!storeParam);
-  const [showSplash, setShowSplash] = useA(!storeParam && !tabParam);   // skip splash on deep-links
+  const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
+  const [help, setHelp] = useA(helpParam || null);
+  const [showSplash, setShowSplash] = useA(!storeParam && !tabParam && !helpParam);   // skip splash on deep-links
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
-    onboardParam === '1' || (!storeParam && !tabParam && !lsGet('trinityone.onboarded', false))
+    onboardParam === '1' || (!storeParam && !tabParam && !helpParam && !lsGet('trinityone.onboarded', false))
   );
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
@@ -262,6 +264,7 @@ function App() {
     openReader: () => setTab('read'),
     openShare: (v) => setShare(v),
     openShareSheet: (v) => setShareSheet(v),
+    openHelp: (initial) => setHelp(initial || 'index'),
     openDevotional: () => setDevo(true),
     openPlan: (p) => setPlan(p),
     openPlanDay: (plan, day) => {
@@ -327,6 +330,8 @@ function App() {
         {/* module store — available in both the loaded and first-run states */}
         <ModuleStore open={store} onClose={() => setStore(false)} ctx={ctx}
           initialView={storeParam === 'language' ? 'language' : 'featured'} />
+
+        <HelpCenter open={!!help} onClose={() => setHelp(null)} initial={help} ctx={ctx} />
 
         {showSplash ? <Splash onDone={() => setShowSplash(false)} /> : null}
         {!showSplash && showOnboarding ? <Onboarding onDone={() => setShowOnboarding(false)} ctx={ctx} /> : null}

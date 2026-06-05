@@ -58,6 +58,7 @@ function Icon({ name, size = 22, stroke = 1.8, fill = false, style = {}, color =
     send: <><path d="M5 12 19.5 5.5 14 20l-3.4-6.2L5 12Z" {...p} /><path d="m10.6 13.8 4-4" {...p} /></>,
     qr: <><rect x="4" y="4" width="6" height="6" rx="1.2" {...p} /><rect x="14" y="4" width="6" height="6" rx="1.2" {...p} /><rect x="4" y="14" width="6" height="6" rx="1.2" {...p} /><path d="M14 14h2.5v2.5M20 14v.01M14 20h.01M17 17v3M20 17v.01M20 20v.01" {...p} /></>,
     gift: <><rect x="4" y="9" width="16" height="11" rx="2" {...p} /><path d="M4 13h16M12 9v11" {...p} /><path d="M12 9C12 6.5 10.5 5 8.8 5 7.5 5 7 6 7 6.8 7 8.2 8.6 9 12 9ZM12 9c0-2.5 1.5-4 3.2-4C16.5 5 17 6 17 6.8 17 8.2 15.4 9 12 9Z" {...p} /></>,
+    receipt: <><path d="M6 3.5h12v17l-2.5-1.6L13 20.5l-2.5-1.6L8 20.5l-2-1.6Z" {...p} /><path d="M9 8h6M9 11.5h6M9 15h3.5" {...p} /></>,
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" style={style} aria-hidden="true">
@@ -67,3 +68,15 @@ function Icon({ name, size = 22, stroke = 1.8, fill = false, style = {}, color =
 }
 
 window.Icon = Icon;
+
+// TrinityOne "Halo" mark — one ring, three breaks, a gold spark
+function Halo({ size = 28, color = 'currentColor', spark = 'var(--gold)', open = false, style = {} }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={style} aria-hidden="true">
+      <circle cx="50" cy="50" r="36" fill="none" stroke={color} strokeWidth="7" strokeLinecap="round"
+        strokeDasharray="57.4 18" transform="rotate(-90 50 50)" />
+      {!open ? <circle cx="50" cy="50" r="6.5" fill={spark} /> : null}
+    </svg>
+  );
+}
+window.Halo = Halo;

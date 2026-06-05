@@ -126,6 +126,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 16 }}>
+          {rowBtn('book', 'Help & guides', 'Simple guides — read aloud if you like', () => { onClose(); ctx.openHelp('index'); }, 'var(--clay)')}
           {rowBtn('pen', 'Display name', myName(id) === id.handle ? 'Choose a name your church sees' : myName(id), () => setPane('profile'))}
           {rowBtn('key', 'Recovery phrase', 'Back up your 12 words — your only way to restore', () => setPane('recovery'))}
           {rowBtn('refresh', 'Restore an identity', 'Paste a 12-word phrase from another device', () => setPane('restore'))}
