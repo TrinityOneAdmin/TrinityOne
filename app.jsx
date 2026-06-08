@@ -205,11 +205,20 @@ function App() {
   }, [Bible.loaded]);
   const version = Bible.activeVersion;
 
-  // shared study state, persisted, keyed by "book.chap.verse"
-  const [highlights, setHighlights] = useA(() => lsGet('trinityone.highlights', {}));
-  const [notes, setNotes] = useA(() => lsGet('trinityone.notes', {}));
-  const [bookmarks, setBookmarks] = useA(() => lsGet('trinityone.bookmarks', []));
-  const [planProgress, setPlanProgress] = useA(() => lsGet('trinityone.plans', {})); // planId -> [done day numbers]
+  // shared study state -- now owned by window.MyData (local store, swappable to encrypted Nostr).
+  // Seed/migrate once, then re-render whenever the user's data changes.
+  const MD = window.MyData;
+  const [mdv, setMdv] = useA(0);
+  useAE(() => {
+    MD.seedIfEmpty(window.TrinityData);
+    const off = MD.on(() => setMdv(x => x + 1));
+    return off;
+  }, []);
+  // legacy-shaped projections the reader/screens already consume (keyed by "book.chap.verse")
+  const highlights = Object.fromEntries(MD.list('highlights').map(h => [h.ref, h.color]));   // {ref: color}
+  const notes = Object.fromEntries(MD.list('notes').map(n => [n.ref, n.text]));               // {ref: text}
+  const bookmarks = MD.list('bookmarks').map(b => b.ref);                                      // [ref]
+  const planProgress = MD.settings.get('plans', {});                                           // planId -> [done days]
 
   // overlays
   const [share, setShare] = useA(null);
@@ -228,17 +237,18 @@ function App() {
   // library drill-ins
   const bookParam = new URLSearchParams(location.search).get('book');     // a BOOK_TEXT id, e.g. pilgrim
   const moduleParam = new URLSearchParams(location.search).get('mod');    // a MODULES id, e.g. books
+  const collParam = new URLSearchParams(location.search).get('coll');     // a COLLECTIONS id, e.g. highlights|prayer
   const [module, setModule] = useA(() => window.TrinityData.MODULES.find(m => m.id === moduleParam) || null);
-  const [collection, setCollection] = useA(null);  // saved-items collection overlay
+  const [collection, setCollection] = useA(() => window.TrinityData.COLLECTIONS.find(c => c.id === collParam) || null);  // saved-items collection overlay
   const [book, setBook] = useA(() => (window.TrinityData.MODULE_ITEMS.books || []).find(b => b.id === bookParam) || null);
   const [journalEditor, setJournalEditor] = useA(null);  // null | {} (new) | entry (edit)
-  const [journalEntries, setJournalEntries] = useA(() => lsGet('trinityone.journal', window.TrinityData.JOURNAL));
+  const journalEntries = MD.list('journal');
   const storeParam = new URLSearchParams(location.search).get('store'); // 'featured' | 'language'
   const [store, setStore] = useA(!!storeParam);
   const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
   const [help, setHelp] = useA(helpParam || null);
   const idParam = new URLSearchParams(location.search).get('id');   // profile|recovery|invite|relays|newid|member
-  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || churchParam || extraParam || idParam;   // any deep-link skips splash/onboarding
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
@@ -344,25 +354,23 @@ function App() {
     openChurchSwitcher: () => setChurchSwitcher(true),
     setActiveChurch: (id) => { setActiveChurch(id); lsSet('trinityone.activeChurch', id); },
     addChurch: (c) => { setChurches(cs => cs.find(x => x.id === c.id) ? cs : [...cs, c]); setActiveChurch(c.id); lsSet('trinityone.activeChurch', c.id); },
-    // journal CRUD (persisted locally; will move onto the user's key as encrypted NIP-78 events)
+    // ---- user-owned data: everything routes through window.MyData (local now, Nostr later) ----
+    myData: MD,
     journalEntries,
     newJournal: () => setJournalEditor({}),
     editJournal: (entry) => setJournalEditor(entry),
-    deleteJournal: (id) => setJournalEntries(es => { const n = es.filter(e => e.id !== id); lsSet('trinityone.journal', n); return n; }),
-    saveJournal: (entry) => setJournalEntries(es => {
-      const i = es.findIndex(e => e.id === entry.id);
-      const n = i >= 0 ? es.map(e => e.id === entry.id ? entry : e) : [entry, ...es];
-      lsSet('trinityone.journal', n); return n;
-    }),
+    deleteJournal: (id) => MD.remove('journal', id),
+    saveJournal: (entry) => MD.put('journal', entry),
     readScale: t.readScale,
-    highlights, setHighlight: (k, c) => setHighlights(h => { const n = { ...h }; if (c) n[k] = c; else delete n[k]; lsSet('trinityone.highlights', n); return n; }),
-    notes, setNote: (k, txt) => setNotes(n => { const o = { ...n }; if (txt) o[k] = txt; else delete o[k]; lsSet('trinityone.notes', o); return o; }),
-    bookmarks, toggleBookmark: (k) => setBookmarks(b => { const n = b.includes(k) ? b.filter(x => x !== k) : [...b, k]; lsSet('trinityone.bookmarks', n); return n; }),
+    highlights, setHighlight: (k, c) => { if (c) MD.put('highlights', { id: k, ref: k, color: c }); else MD.remove('highlights', k); },
+    notes, setNote: (k, txt) => { if (txt) MD.put('notes', { id: k, ref: k, text: txt }); else MD.remove('notes', k); },
+    bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
-    togglePlanDay: (pid, day) => setPlanProgress(prev => {
+    togglePlanDay: (pid, day) => {
+      const prev = MD.settings.get('plans', {});
       const set = new Set(prev[pid] || []); set.has(day) ? set.delete(day) : set.add(day);
-      const n = { ...prev, [pid]: [...set].sort((a, b) => a - b) }; lsSet('trinityone.plans', n); return n;
-    }),
+      MD.settings.set('plans', { ...prev, [pid]: [...set].sort((a, b) => a - b) });
+    },
   };
 
   // apply accent vars

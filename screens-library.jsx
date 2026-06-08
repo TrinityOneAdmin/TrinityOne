@@ -58,7 +58,7 @@ function LibraryHome({ ctx }) {
           background: 'var(--surface)', cursor: 'pointer', textAlign: 'left', color: 'var(--ink)', boxShadow: 'var(--shadow)'
         }}>
             <Icon name={c.icon} size={20} color="var(--clay)" />
-            <div style={{ fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, marginTop: 7, lineHeight: 1 }}>{c.count}</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, marginTop: 7, lineHeight: 1 }}>{c.id === 'crossrefs' ? c.count : window.MyData.count(c.id)}</div>
             <div style={{ fontSize: 11, color: 'var(--ink-2)', fontWeight: 600, marginTop: 3, lineHeight: 1.15 }}>{c.name}</div>
           </button>
         )}
@@ -374,20 +374,51 @@ function ModuleView({ module, open, onClose, ctx }) {
 
 }
 
-// ── collection drill-in (Highlights / Bookmarks / Notes / Cross refs) ──
+// small private/public chip — surfaces (and toggles) the MyData visibility flag
+function VisChip({ visibility, onClick }) {
+  const priv = visibility === 'private';
+  return (
+    <button onClick={(e) => { e.stopPropagation(); onClick && onClick(); }} title={priv ? 'Private — only you' : 'Public'} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 999, cursor: onClick ? 'pointer' : 'default',
+      border: '1px solid var(--line)', background: priv ? 'var(--surface-2)' : 'color-mix(in oklab, var(--sage) 12%, var(--surface))',
+      color: priv ? 'var(--ink-3)' : 'var(--sage)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 10.5, letterSpacing: '.3px' }}>
+      <Icon name={priv ? 'lock' : 'globe'} size={11} color="currentColor" />{priv ? 'Private' : 'Public'}</button>
+  );
+}
+
+// ── collection drill-in (Highlights / Bookmarks / Notes / Prayer list / Cross refs) ──
+// User-owned types read + manage through window.MyData; cross-refs stay reference data.
 function CollectionView({ coll, open, onClose, ctx }) {
   const D = window.TrinityData;
+  const MD = window.MyData;
   const [q, setQ] = React.useState('');
-  React.useEffect(() => { if (open) setQ(''); }, [open, coll && coll.id]);
+  const [, force] = React.useState(0);
+  const [adding, setAdding] = React.useState(false);
+  const [pWho, setPWho] = React.useState('');
+  const [pText, setPText] = React.useState('');
+  React.useEffect(() => { if (open) { setQ(''); setAdding(false); setPWho(''); setPText(''); } }, [open, coll && coll.id]);
+  React.useEffect(() => MD.on(() => force(x => x + 1)), []);
   if (!coll) return null;
-  const raw = D.COLLECTION_ITEMS[coll.id] || [];
-  const ql = q.trim().toLowerCase();
-  const items = ql ? raw.filter(it => (it.ref + ' ' + (it.text || '')).toLowerCase().includes(ql)) : raw;
-  const isNotes = coll.id === 'notes';
-  const isXref = coll.id === 'crossrefs';
-  const blurb = { highlights: 'Verses you’ve marked', bookmarks: 'Saved for later', notes: 'Your reflections in the margin', crossrefs: 'Where scripture echoes scripture' }[coll.id];
 
-  const jump = (it) => { onClose(); setTimeout(() => ctx.openReader(), 200); ctx.toast('Jumping to ' + it.ref); };
+  const isXref = coll.id === 'crossrefs';
+  const isNotes = coll.id === 'notes';
+  const isPrayer = coll.id === 'prayer';
+  const owned = !isXref;   // user-owned types are managed; cross-refs are read-only reference data
+
+  const raw = isXref ? (D.COLLECTION_ITEMS.crossrefs || []) : MD.list(coll.id);
+  const ql = q.trim().toLowerCase();
+  const items = ql ? raw.filter(it => ((it.ref || '') + ' ' + (it.text || '') + ' ' + (it.who || '')).toLowerCase().includes(ql)) : raw;
+  const blurb = { highlights: 'Verses you’ve marked', bookmarks: 'Saved for later', notes: 'Your reflections in the margin',
+    prayer: 'People and things you’re praying for', crossrefs: 'Where scripture echoes scripture' }[coll.id];
+
+  const jump = (it) => { if (!it.ref) return; onClose(); setTimeout(() => ctx.openReader(), 200); ctx.toast('Jumping to ' + it.ref); };
+  const del = (it) => { MD.remove(coll.id, it.id); ctx.toast('Removed'); };
+  const toggleVis = (it) => MD.setVisibility(coll.id, it.id, it.visibility === 'private' ? 'public' : 'private');
+  const savePrayer = () => {
+    if (!pText.trim() && !pWho.trim()) return;
+    MD.put('prayer', { who: pWho.trim() || 'A request', text: pText.trim(), answered: false, date: 'Today' });
+    setPWho(''); setPText(''); setAdding(false); ctx.toast('Added to your prayer list');
+  };
 
   return (
     <Overlay open={open} onClose={onClose}>
@@ -398,8 +429,9 @@ function CollectionView({ coll, open, onClose, ctx }) {
             <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, letterSpacing: '-.4px', lineHeight: 1.1 }}>{coll.name}</h1>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1 }}>{raw.length} · {blurb}</div>
           </div>
-          <div style={{ width: 40, height: 40, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name={coll.icon} size={21} stroke={1.8} /></div>
+          {isPrayer ? <IconBtn name="plus" onClick={() => setAdding(a => !a)} /> :
+            <div style={{ width: 40, height: 40, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name={coll.icon} size={21} stroke={1.8} /></div>}
         </div>
         <div style={{ padding: '0 16px 13px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, height: 42, padding: '0 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
@@ -412,29 +444,58 @@ function CollectionView({ coll, open, onClose, ctx }) {
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '12px 16px 30px' }}>
+        {/* prayer add form */}
+        {isPrayer && adding ? (
+          <div style={{ marginBottom: 14, padding: 14, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', animation: 'trinityFade .2s ease both' }}>
+            <input value={pWho} onChange={e => setPWho(e.target.value)} placeholder="Who or what? (e.g. Mum)" style={{
+              width: '100%', boxSizing: 'border-box', height: 42, padding: '0 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14.5, fontWeight: 700, color: 'var(--ink)', fontFamily: 'var(--font-ui)', marginBottom: 9 }} />
+            <textarea value={pText} onChange={e => setPText(e.target.value)} rows={2} placeholder="What are you praying for?" style={{
+              width: '100%', boxSizing: 'border-box', resize: 'none', padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.5, color: 'var(--ink)' }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button onClick={() => { setAdding(false); setPWho(''); setPText(''); }} style={{ flex: 1, padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
+              <button onClick={savePrayer} style={{ flex: 1, padding: 10, borderRadius: 11, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Add</button>
+            </div>
+          </div>
+        ) : null}
+
         {items.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--ink-3)' }}>
             <Icon name={coll.icon} size={30} color="var(--ink-3)" />
-            <p style={{ margin: '12px 0 0', fontSize: 14.5 }}>No matches in {coll.name}</p>
+            <p style={{ margin: '12px 0 0', fontSize: 14.5 }}>{q ? `No matches in ${coll.name}` : (isPrayer ? 'Add someone or something to pray for.' : `Nothing in ${coll.name} yet.`)}</p>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-            {items.map((it, i) => (
-              <div key={i} onClick={() => jump(it)} style={{
-                padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)',
-                position: 'relative', overflow: 'hidden', paddingLeft: it.color ? 18 : 15 }}>
+            {items.map((it) => (
+              <div key={it.id || it.ref} onClick={() => !isPrayer && jump(it)} style={{
+                padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: it.ref && !isPrayer ? 'pointer' : 'default', boxShadow: 'var(--shadow)',
+                position: 'relative', overflow: 'hidden', paddingLeft: it.color ? 18 : 15, opacity: it.answered ? .62 : 1 }}>
                 {it.color ? <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 5, background: it.color }} /> : null}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 700, color: 'var(--clay)', fontSize: 13.5 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5, gap: 8 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 700, color: 'var(--clay)', fontSize: 13.5, minWidth: 0 }}>
                     {isXref ? <Icon name="link" size={14} color="var(--clay)" /> : null}
                     {coll.id === 'bookmarks' ? <Icon name="bookmark" size={13} color="var(--clay)" fill /> : null}
-                    {it.ref}
+                    {isPrayer ? <Icon name="pray" size={14} color="var(--clay)" /> : null}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isPrayer ? it.who : it.ref}{isPrayer && it.answered ? ' · answered 🙏' : ''}</span>
                   </span>
-                  {isNotes ? <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{it.date}</span> : <Icon name="chevR" size={16} color="var(--ink-3)" />}
+                  {isNotes || isPrayer ? <span style={{ fontSize: 12, color: 'var(--ink-3)', flexShrink: 0 }}>{it.date}</span> : (!owned ? <Icon name="chevR" size={16} color="var(--ink-3)" /> : null)}
                 </div>
                 <p style={{ margin: 0, fontFamily: isXref ? 'var(--font-ui)' : 'var(--font-read)', fontSize: isXref ? 13.5 : 16, fontWeight: isXref ? 600 : 400,
                   lineHeight: 1.5, color: isXref ? 'var(--ink-2)' : 'var(--ink)', textWrap: 'pretty',
-                  display: '-webkit-box', WebkitLineClamp: isNotes ? 3 : 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{it.text}</p>
+                  display: '-webkit-box', WebkitLineClamp: isNotes || isPrayer ? 3 : 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{it.text}</p>
+
+                {/* management footer (user-owned only) */}
+                {owned ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 11 }} onClick={e => e.stopPropagation()}>
+                    <VisChip visibility={it.visibility} onClick={() => toggleVis(it)} />
+                    {isPrayer ? (
+                      <button onClick={() => MD.put('prayer', { ...it, answered: !it.answered })} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 999, cursor: 'pointer',
+                        border: '1px solid var(--line)', background: it.answered ? 'color-mix(in oklab, var(--sage) 14%, var(--surface))' : 'var(--surface-2)', color: it.answered ? 'var(--sage)' : 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 10.5 }}>
+                        <Icon name="check" size={11} stroke={2.6} color="currentColor" />{it.answered ? 'Answered' : 'Mark answered'}</button>
+                    ) : null}
+                    <div style={{ flex: 1 }} />
+                    <button onClick={() => del(it)} aria-label="Delete" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3 }}><Icon name="trash" size={16} /></button>
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>

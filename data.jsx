@@ -287,7 +287,15 @@ const COLLECTIONS = [
   { id: 'highlights', name: 'Highlights', count: 9, icon: 'marker' },
   { id: 'bookmarks', name: 'Bookmarks', count: 7, icon: 'bookmark' },
   { id: 'notes', name: 'Notes', count: 6, icon: 'pen' },
+  { id: 'prayer', name: 'Prayer list', count: 3, icon: 'pray' },
   { id: 'crossrefs', name: 'Cross References', count: 5, icon: 'link' },
+];
+
+// sample personal prayer list (seeds MyData on first run; then user-owned + private)
+const PRAYER_SEED = [
+  { id: 'pr1', who: 'Mum', text: 'Surgery on Tuesday — for steady hands and quick healing.', answered: false, date: 'Today' },
+  { id: 'pr2', who: 'Tuesday group', text: 'That we’d keep showing up for each other.', answered: false, date: 'Yesterday' },
+  { id: 'pr3', who: 'Myself', text: 'Patience this week. Less hurry, more presence.', answered: true, date: 'May 28' },
 ];
 
 const JOURNAL = [
@@ -714,7 +722,7 @@ const LISTEN = {
 
 window.TrinityData = {
   BOOKS, LEXICON, CONCORDANCE, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,
-  PLANS, MODULES, MODULE_ITEMS, COLLECTIONS, COLLECTION_ITEMS, BOOK_TEXT, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
+  PLANS, MODULES, MODULE_ITEMS, COLLECTIONS, COLLECTION_ITEMS, BOOK_TEXT, JOURNAL, PRAYER_SEED, SEARCH_SEED, SEARCH_RESULTS,
   VIDEO_CATS, CHANNELS, VIDEOS, NOTIFICATIONS, LISTEN, MEMBERS,
   HANDLE_POOL, AVATAR_COLORS, AVATAR_SYMBOLS, CHAT_IDENTITY, RELAYS, CHURCHES, GROUPS, GROUP_MESSAGES,
   SATS_PER_USD, WALLET, FUNDS, STRIKE_PRESETS, GIVING_HISTORY,
