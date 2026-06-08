@@ -675,10 +675,37 @@ const BOOK_TEXT = {
   },
 };
 
+// ── Notifications + Listen (audio) ──
+const NOTIFICATIONS = [
+  { id: 'n1', kind: 'message', group: 'Tuesday Life Group', who: 'Steady Cedar',
+    text: 'The “light shines in the darkness” line has been with me all week.', time: '2m', unread: true, accent: 'var(--clay)' },
+  { id: 'n2', kind: 'prayer', group: 'Prayer Wall', who: 'Quiet Harbor',
+    text: 'asked for prayer before a job interview today.', time: '18m', unread: true, accent: 'var(--sage)' },
+  { id: 'n3', kind: 'giving', group: 'Building Fund', who: 'Grace Chapel',
+    text: 'Your gift of 5,000 sats was received. Thank you!', time: '1h', unread: true, accent: 'var(--gold)' },
+  { id: 'n4', kind: 'amen', group: 'Tuesday Life Group', who: '23 people',
+    text: 'said Amen to your prayer request.', time: '3h', unread: false, accent: 'var(--clay)' },
+  { id: 'n5', kind: 'notice', group: 'Grace Chapel', who: 'Pastor’s notice',
+    text: 'Sunday service moves to 10:30am this week — see you there.', time: 'Yesterday', unread: false, accent: 'var(--sage)' },
+  { id: 'n6', kind: 'plan', group: 'Gospel of John', who: 'Reading plan',
+    text: 'Day 4 is ready — Water into wine (John 2).', time: 'Yesterday', unread: false, accent: 'var(--gold)' },
+];
+
+const LISTEN = {
+  now: { id: 'a1', title: 'John 1 · The Word', sub: 'The Gospel of John · WEB', reader: 'Narrated by David Cochran Heath',
+    color: 'linear-gradient(160deg,#3c6e57,#2c5141)', tag: 'John', pos: 0.32, len: '6:48', at: '2:10' },
+  queue: [
+    { id: 'a2', title: 'A Light the Dark Can’t Hold', sub: 'Devotional · 2 min', kind: 'Devotional', dur: '2:04', accent: 'var(--sage)', ic: 'sun' },
+    { id: 'a3', title: 'John 2 · Water Into Wine', sub: 'The Gospel of John · WEB', kind: 'Scripture', dur: '5:31', accent: 'var(--clay)', ic: 'read' },
+    { id: 'a4', title: 'Be Still — Evening Prayer', sub: 'Guided prayer · 8 min', kind: 'Prayer', dur: '8:12', accent: 'var(--gold)', ic: 'pray' },
+    { id: 'a5', title: 'Psalms for a Heavy Day', sub: 'Audio collection · 5 readings', kind: 'Collection', dur: '21:40', accent: 'var(--clay)', ic: 'books' },
+  ],
+};
+
 window.TrinityData = {
   BOOKS, LEXICON, CONCORDANCE, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,
   PLANS, MODULES, MODULE_ITEMS, COLLECTIONS, COLLECTION_ITEMS, BOOK_TEXT, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
-  VIDEO_CATS, CHANNELS, VIDEOS,
+  VIDEO_CATS, CHANNELS, VIDEOS, NOTIFICATIONS, LISTEN,
   HANDLE_POOL, AVATAR_COLORS, AVATAR_SYMBOLS, CHAT_IDENTITY, RELAYS, CHURCHES, GROUPS, GROUP_MESSAGES,
   SATS_PER_USD, WALLET, FUNDS, STRIKE_PRESETS, GIVING_HISTORY,
   CHAPTER: {

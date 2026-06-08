@@ -78,6 +78,21 @@ function TodayScreen({ ctx }) {
           <h1 style={{ margin: '4px 0 0', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.6px', lineHeight: 1.05 }}>{greet}</h1>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          {(() => {
+            const hdrBtn = { width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
+              background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' };
+            const unread = (D.NOTIFICATIONS || []).some(n => n.unread);
+            return (
+              <React.Fragment>
+                <button onClick={ctx.openListen} aria-label="Listen" style={hdrBtn}><Icon name="headphones" size={19} /></button>
+                <button onClick={ctx.openNotifications} aria-label="Notifications" style={hdrBtn}>
+                  <Icon name="bell" size={19} />
+                  {unread ? <span style={{ position: 'absolute', top: 9, right: 10, width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', border: '1.5px solid var(--surface)' }} /> : null}
+                </button>
+              </React.Fragment>
+            );
+          })()}
           <button onClick={ctx.toggleDark} style={{
             width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
             background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',

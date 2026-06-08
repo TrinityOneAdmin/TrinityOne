@@ -219,6 +219,9 @@ function App() {
   const [journal, setJournal] = useA(null);
   const [wordOv, setWordOv] = useA(null);
   const [video, setVideo] = useA(null);
+  const extraParam = new URLSearchParams(location.search).get('extra');  // 'notif' | 'listen'
+  const [notif, setNotif] = useA(extraParam === 'notif');   // notifications overlay
+  const [listen, setListen] = useA(extraParam === 'listen'); // audio Listen overlay
   const concordParam = new URLSearchParams(location.search).get('concord');  // '1' = index, or a Strong's id (e.g. G5457)
   const [concord, setConcord] = useA(concordParam === '1');   // concordance index overlay
   const [allUses, setAllUses] = useA(/^[GH]\d/.test(concordParam || '') ? concordParam : null);  // per-lemma "all uses" (Strong's id)
@@ -234,7 +237,7 @@ function App() {
   const [store, setStore] = useA(!!storeParam);
   const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
   const [help, setHelp] = useA(helpParam || null);
-  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || churchParam;   // any deep-link skips splash/onboarding
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || churchParam || extraParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
@@ -294,6 +297,8 @@ function App() {
     openWord: (id) => setWordOv(id),
     openConcordance: () => setConcord(true),
     openAllUses: (id) => setAllUses(id),
+    openNotifications: () => setNotif(true),
+    openListen: () => setListen(true),
     // library drill-ins
     openModule: (m) => setModule(m),
     openCollection: (c) => setCollection(c),
@@ -364,6 +369,8 @@ function App() {
             <WordStudySheet id={wordOv} open={!!wordOv} onClose={() => setWordOv(null)} />
             <ConcordanceIndex open={concord} onClose={() => setConcord(false)} ctx={ctx} />
             <AllUsesView id={allUses} open={!!allUses} onClose={() => setAllUses(null)} ctx={ctx} />
+            <NotificationsScreen open={notif} onClose={() => setNotif(false)} ctx={ctx} />
+            <ListenScreen open={listen} onClose={() => setListen(false)} ctx={ctx} />
             <ChatRoom group={group} open={!!group} onClose={() => setGroup(null)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx}
               churches={churches} activeId={activeChurch}
