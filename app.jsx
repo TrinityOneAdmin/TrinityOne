@@ -222,11 +222,19 @@ function App() {
   const concordParam = new URLSearchParams(location.search).get('concord');  // '1' = index, or a Strong's id (e.g. G5457)
   const [concord, setConcord] = useA(concordParam === '1');   // concordance index overlay
   const [allUses, setAllUses] = useA(/^[GH]\d/.test(concordParam || '') ? concordParam : null);  // per-lemma "all uses" (Strong's id)
+  // library drill-ins
+  const bookParam = new URLSearchParams(location.search).get('book');     // a BOOK_TEXT id, e.g. pilgrim
+  const moduleParam = new URLSearchParams(location.search).get('mod');    // a MODULES id, e.g. books
+  const [module, setModule] = useA(() => window.TrinityData.MODULES.find(m => m.id === moduleParam) || null);
+  const [collection, setCollection] = useA(null);  // saved-items collection overlay
+  const [book, setBook] = useA(() => (window.TrinityData.MODULE_ITEMS.books || []).find(b => b.id === bookParam) || null);
+  const [journalEditor, setJournalEditor] = useA(null);  // null | {} (new) | entry (edit)
+  const [journalEntries, setJournalEntries] = useA(() => lsGet('trinityone.journal', window.TrinityData.JOURNAL));
   const storeParam = new URLSearchParams(location.search).get('store'); // 'featured' | 'language'
   const [store, setStore] = useA(!!storeParam);
   const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
   const [help, setHelp] = useA(helpParam || null);
-  const deepLinked = storeParam || tabParam || helpParam || concordParam;   // any deep-link skips splash/onboarding
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
@@ -281,6 +289,20 @@ function App() {
     openWord: (id) => setWordOv(id),
     openConcordance: () => setConcord(true),
     openAllUses: (id) => setAllUses(id),
+    // library drill-ins
+    openModule: (m) => setModule(m),
+    openCollection: (c) => setCollection(c),
+    openBook: (b) => setBook(b),
+    // journal CRUD (persisted locally; will move onto the user's key as encrypted NIP-78 events)
+    journalEntries,
+    newJournal: () => setJournalEditor({}),
+    editJournal: (entry) => setJournalEditor(entry),
+    deleteJournal: (id) => setJournalEntries(es => { const n = es.filter(e => e.id !== id); lsSet('trinityone.journal', n); return n; }),
+    saveJournal: (entry) => setJournalEntries(es => {
+      const i = es.findIndex(e => e.id === entry.id);
+      const n = i >= 0 ? es.map(e => e.id === entry.id ? entry : e) : [entry, ...es];
+      lsSet('trinityone.journal', n); return n;
+    }),
     readScale: t.readScale,
     highlights, setHighlight: (k, c) => setHighlights(h => { const n = { ...h }; if (c) n[k] = c; else delete n[k]; lsSet('trinityone.highlights', n); return n; }),
     notes, setNote: (k, txt) => setNotes(n => { const o = { ...n }; if (txt) o[k] = txt; else delete o[k]; lsSet('trinityone.notes', o); return o; }),
@@ -322,7 +344,11 @@ function App() {
             <VerseShareSheet payload={shareSheet} open={!!shareSheet} onClose={() => setShareSheet(null)} ctx={ctx} />
             <DevotionalView open={devo} onClose={() => setDevo(false)} ctx={ctx} />
             <PlanDetail plan={plan} open={!!plan} onClose={() => setPlan(null)} ctx={ctx} />
-            <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} />
+            <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} ctx={ctx} />
+            <JournalEditor entry={journalEditor} open={!!journalEditor} onClose={() => setJournalEditor(null)} ctx={ctx} />
+            <ModuleView module={module} open={!!module} onClose={() => setModule(null)} ctx={ctx} />
+            <CollectionView coll={collection} open={!!collection} onClose={() => setCollection(null)} ctx={ctx} />
+            <BookReader book={book} open={!!book} onClose={() => setBook(null)} ctx={ctx} />
             <VideoPlayer video={video} open={!!video} onClose={() => setVideo(null)} ctx={ctx} />
             <WordStudySheet id={wordOv} open={!!wordOv} onClose={() => setWordOv(null)} />
             <ConcordanceIndex open={concord} onClose={() => setConcord(false)} ctx={ctx} />

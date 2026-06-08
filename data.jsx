@@ -279,15 +279,15 @@ const MODULES = [
   { id: 'commentaries', name: 'Commentaries', count: '8 sets', icon: 'comment', accent: 'var(--sage)' },
   { id: 'dictionaries', name: 'Dictionaries & Lexicons', count: '6 references', icon: 'lex', accent: 'var(--gold)' },
   { id: 'devotionals', name: 'Devotionals', count: '5 series', icon: 'sun', accent: 'var(--clay)' },
-  { id: 'books', name: 'Books', count: '34 titles', icon: 'books', accent: 'var(--sage)' },
-  { id: 'journals', name: 'Journals & Notes', count: '23 entries', icon: 'pen', accent: 'var(--gold)' },
+  { id: 'books', name: 'Books', count: '13 free titles', icon: 'books', accent: 'var(--sage)' },
+  { id: 'journals', name: 'Journals & Notes', count: '3 entries', icon: 'pen', accent: 'var(--gold)' },
 ];
 
 const COLLECTIONS = [
-  { id: 'highlights', name: 'Highlights', count: 41, icon: 'marker' },
-  { id: 'bookmarks', name: 'Bookmarks', count: 12, icon: 'bookmark' },
-  { id: 'notes', name: 'Notes', count: 23, icon: 'pen' },
-  { id: 'crossrefs', name: 'Cross References', count: '—', icon: 'link' },
+  { id: 'highlights', name: 'Highlights', count: 9, icon: 'marker' },
+  { id: 'bookmarks', name: 'Bookmarks', count: 7, icon: 'bookmark' },
+  { id: 'notes', name: 'Notes', count: 6, icon: 'pen' },
+  { id: 'crossrefs', name: 'Cross References', count: 5, icon: 'link' },
 ];
 
 const JOURNAL = [
@@ -429,9 +429,242 @@ const GIVING_HISTORY = [
   { id: 'g4', fund: 'Building Fund', sats: 53750, usd: 50, when: 'May 4', anon: true, status: 'settled' },
 ];
 
+// ── Library: items inside each module + collection, and book full-text ──
+// resources inside each module — the bookshelf you drill into
+const MODULE_ITEMS = {
+  bibles: [
+    { id: 'web', name: 'World English Bible', sub: 'WEB · public domain', abbr: 'WEB', current: true, downloaded: true },
+    { id: 'esv', name: 'English Standard Version', sub: 'ESV · Crossway', abbr: 'ESV', downloaded: true },
+    { id: 'kjv', name: 'King James Version', sub: 'KJV · 1611', abbr: 'KJV', downloaded: true },
+    { id: 'niv', name: 'New International Version', sub: 'NIV · Biblica', abbr: 'NIV' },
+    { id: 'nasb', name: 'New American Standard', sub: 'NASB · Lockman', abbr: 'NASB' },
+    { id: 'nlt', name: 'New Living Translation', sub: 'NLT · Tyndale House', abbr: 'NLT' },
+    { id: 'csb', name: 'Christian Standard Bible', sub: 'CSB · Holman', abbr: 'CSB' },
+    { id: 'nkjv', name: 'New King James Version', sub: 'NKJV · Thomas Nelson', abbr: 'NKJV' },
+    { id: 'rsv', name: 'Revised Standard Version', sub: 'RSV · NCC', abbr: 'RSV' },
+    { id: 'sblgnt', name: 'Greek New Testament', sub: 'SBLGNT · original language', abbr: 'GRK', original: true, downloaded: true },
+    { id: 'wlc', name: 'Hebrew Bible', sub: 'Westminster Leningrad · original', abbr: 'HEB', original: true },
+    { id: 'lxx', name: 'Septuagint', sub: 'LXX · Greek Old Testament', abbr: 'LXX', original: true },
+  ],
+  commentaries: [
+    { id: 'mhenry', name: "Matthew Henry's Commentary", sub: 'Whole Bible · Matthew Henry', downloaded: true },
+    { id: 'ivpbg', name: 'IVP Bible Background Commentary', sub: 'Keener & Walton' },
+    { id: 'calvin', name: "Calvin's Commentaries", sub: 'John Calvin', downloaded: true },
+    { id: 'tyndale', name: 'Tyndale NT Commentaries', sub: '20-volume series' },
+    { id: 'bkc', name: 'Bible Knowledge Commentary', sub: 'Walvoord & Zuck' },
+    { id: 'barnes', name: "Barnes' Notes", sub: 'Albert Barnes', downloaded: true },
+    { id: 'ebc', name: "Expositor's Bible Commentary", sub: 'Frank Gaebelein, ed.' },
+    { id: 'nicnt', name: 'NICNT / NICOT', sub: 'Bruce, Fee & others' },
+  ],
+  dictionaries: [
+    { id: 'strongs', name: "Strong's Exhaustive Concordance", sub: 'with numbering system', downloaded: true },
+    { id: 'thayer', name: "Thayer's Greek Lexicon", sub: 'Greek–English', downloaded: true },
+    { id: 'bdb', name: 'Brown–Driver–Briggs', sub: 'Hebrew & English Lexicon' },
+    { id: 'vines', name: "Vine's Expository Dictionary", sub: 'W.E. Vine' },
+    { id: 'easton', name: "Easton's Bible Dictionary", sub: 'M.G. Easton', downloaded: true },
+    { id: 'isbe', name: 'Standard Bible Encyclopedia', sub: 'ISBE · revised' },
+  ],
+  devotionals: [
+    { id: 'utmost', name: 'My Utmost for His Highest', sub: 'Oswald Chambers', downloaded: true },
+    { id: 'morneve', name: 'Morning & Evening', sub: 'Charles Spurgeon', downloaded: true },
+    { id: 'nmm', name: 'New Morning Mercies', sub: 'Paul David Tripp' },
+    { id: 'streams', name: 'Streams in the Desert', sub: 'L.B. Cowman' },
+    { id: 'dailylight', name: 'Daily Light on the Daily Path', sub: 'Samuel Bagster' },
+  ],
+  books: [
+    { id: 'pilgrim', name: "The Pilgrim's Progress", sub: 'John Bunyan', cat: 'Fiction', downloaded: true },
+    { id: 'paradise', name: 'Paradise Lost', sub: 'John Milton', cat: 'Fiction' },
+    { id: 'holywar', name: 'The Holy War', sub: 'John Bunyan', cat: 'Fiction' },
+    { id: 'confessions', name: 'Confessions', sub: 'Augustine of Hippo', cat: 'Biography', downloaded: true },
+    { id: 'grace', name: 'Grace Abounding', sub: 'John Bunyan', cat: 'Biography' },
+    { id: 'martyrs', name: "Foxe's Book of Martyrs", sub: 'John Foxe', cat: 'Biography' },
+    { id: 'imitation', name: 'The Imitation of Christ', sub: 'Thomas à Kempis', cat: 'Devotional', downloaded: true },
+    { id: 'presence', name: 'The Practice of the Presence of God', sub: 'Brother Lawrence', cat: 'Devotional' },
+    { id: 'interior', name: 'The Interior Castle', sub: 'Teresa of Ávila', cat: 'Devotional' },
+    { id: 'institutes', name: 'Institutes of the Christian Religion', sub: 'John Calvin', cat: 'Theology' },
+    { id: 'cityofgod', name: 'The City of God', sub: 'Augustine of Hippo', cat: 'Theology' },
+    { id: 'orthodoxy', name: 'Orthodoxy', sub: 'G.K. Chesterton', cat: 'Apologetics', downloaded: true },
+    { id: 'pensees', name: 'Pensées', sub: 'Blaise Pascal', cat: 'Apologetics' },
+  ],
+};
+
+// saved items behind each collection card
+const COLLECTION_ITEMS = {
+  highlights: [
+    { ref: 'John 1:4', text: 'In him was life, and the life was the light of men.', color: 'var(--hl-yellow)' },
+    { ref: 'Psalm 23:4', text: 'Even though I walk through the valley of the shadow of death, I will fear no evil, for you are with me.', color: 'var(--hl-blue)' },
+    { ref: 'Romans 8:28', text: 'We know that all things work together for good to those who love God.', color: 'var(--hl-green)' },
+    { ref: 'Isaiah 41:10', text: 'Don’t be afraid, for I am with you. Don’t be dismayed, for I am your God.', color: 'var(--hl-yellow)' },
+    { ref: 'Philippians 4:13', text: 'I can do all things through Christ who strengthens me.', color: 'var(--hl-clay)' },
+    { ref: 'Matthew 11:28', text: 'Come to me, all you who labor and are heavily burdened, and I will give you rest.', color: 'var(--hl-pink)' },
+    { ref: 'Proverbs 3:5', text: 'Trust in the LORD with all your heart, and don’t lean on your own understanding.', color: 'var(--hl-green)' },
+    { ref: 'John 8:12', text: 'I am the light of the world. He who follows me will have the light of life.', color: 'var(--hl-yellow)' },
+    { ref: '2 Corinthians 12:9', text: 'My grace is sufficient for you, for my power is made perfect in weakness.', color: 'var(--hl-blue)' },
+  ],
+  bookmarks: [
+    { ref: 'John 1:1', text: 'In the beginning was the Word, and the Word was with God, and the Word was God.' },
+    { ref: 'Genesis 1:1', text: 'In the beginning, God created the heavens and the earth.' },
+    { ref: 'Psalm 1:1', text: 'Blessed is the man who doesn’t walk in the counsel of the wicked.' },
+    { ref: 'John 3:16', text: 'For God so loved the world, that he gave his one and only Son.' },
+    { ref: 'Romans 12:2', text: 'Don’t be conformed to this world, but be transformed by the renewing of your mind.' },
+    { ref: 'Ephesians 2:8', text: 'For by grace you have been saved through faith, and that not of yourselves.' },
+    { ref: 'Revelation 21:4', text: 'He will wipe away every tear from their eyes. Death will be no more.' },
+  ],
+  notes: [
+    { ref: 'John 1:4', date: 'Today', text: 'Life and light keep showing up together in John. The life comes first.' },
+    { ref: 'John 1:14', date: 'Yesterday', text: '“Dwelt” = tabernacled. God pitching his tent among us.' },
+    { ref: 'Psalm 23:1', date: 'May 28', text: 'If the LORD is my shepherd, then what I lack isn’t a sign he’s absent.' },
+    { ref: 'Romans 8:1', date: 'May 24', text: 'No condemnation — present tense, already true of me now.' },
+    { ref: 'Matthew 5:14', date: 'May 20', text: 'Light isn’t something I generate; it’s something I reflect.' },
+    { ref: 'Philippians 4:6', date: 'May 18', text: 'The antidote to anxiety here is prayer with thanksgiving.' },
+  ],
+  crossrefs: [
+    { ref: 'John 1:1', text: 'Genesis 1:1 · 1 John 1:1 · Revelation 19:13' },
+    { ref: 'John 1:14', text: 'Exodus 33:18 · Colossians 2:9 · Hebrews 1:3' },
+    { ref: 'John 1:4', text: 'John 8:12 · 1 John 1:5 · Psalm 36:9' },
+    { ref: 'Romans 8:28', text: 'Genesis 50:20 · Ephesians 1:11' },
+    { ref: 'Psalm 23:1', text: 'John 10:11 · Isaiah 40:11 · Ezekiel 34:15' },
+  ],
+};
+
+// ── reading content for the Books module (public-domain openings) ──
+const BOOK_TEXT = {
+  pilgrim: {
+    year: '1678', pages: 312,
+    blurb: 'An allegory of the Christian life, told as a dream of one man’s journey from the City of Destruction to the Celestial City.',
+    chapter: 'The First Stage',
+    body: [
+      'As I walked through the wilderness of this world, I lighted on a certain place where was a den, and laid me down in that place to sleep; and as I slept, I dreamed a dream.',
+      'I dreamed, and behold, I saw a man clothed with rags standing in a certain place, with his face from his own house, a book in his hand, and a great burden upon his back. I looked, and saw him open the book, and read therein; and as he read, he wept and trembled.',
+      'Not being able longer to contain, he brake out with a lamentable cry, saying, “What shall I do?” In this plight, therefore, he went home and refrained himself as long as he could, that his wife and children should not perceive his distress; but he could not be silent long.',
+      'At last he brake his mind to his wife and children; and thus he began to talk to them: “O my dear wife, and you the children of my bowels, I, your dear friend, am in myself undone by reason of a burden that lieth hard upon me.”',
+    ],
+  },
+  paradise: {
+    year: '1667', pages: 458, verse: true,
+    blurb: 'Milton’s epic in blank verse on the fall of man — the rebellion of Satan, the temptation in Eden, and the loss of paradise.',
+    chapter: 'Book I',
+    body: [
+      'Of Man’s first disobedience, and the fruit\nOf that forbidden tree whose mortal taste\nBrought death into the World, and all our woe,\nWith loss of Eden, till one greater Man\nRestore us, and regain the blissful seat,\nSing, Heavenly Muse, that, on the secret top\nOf Oreb, or of Sinai, didst inspire\nThat shepherd who first taught the chosen seed.',
+      'And chiefly Thou, O Spirit, that dost prefer\nBefore all temples the upright heart and pure,\nInstruct me, for Thou know’st; Thou from the first\nWast present, and, with mighty wings outspread,\nDove-like sat’st brooding on the vast Abyss,\nAnd mad’st it pregnant.',
+      'What in me is dark\nIllumine, what is low raise and support;\nThat, to the height of this great argument,\nI may assert Eternal Providence,\nAnd justify the ways of God to men.',
+    ],
+  },
+  holywar: {
+    year: '1682', pages: 276,
+    blurb: 'Bunyan’s allegory of the town of Mansoul, besieged and reclaimed — the soul as a city contested between Diabolus and the King’s Son.',
+    chapter: 'The Town of Mansoul',
+    body: [
+      'In my travels, as I walked through many regions and countries, it was my chance to happen into that famous continent of Universe. A very large and spacious country it is: it lieth between the two poles, and just amidst the four points of the heavens.',
+      'In this country there is a fair and delicate town, a corporation, called Mansoul; a town for its building so curious, for its situation so commodious, for its privileges so advantageous, that I may say of it, there is not its equal under the whole heaven.',
+      'The walls of the town were well built, yea, so fast and firm were they knit and compact together, that, had it not been for the townsmen themselves, they could not have been shaken or broken for ever.',
+    ],
+  },
+  confessions: {
+    year: '397', pages: 416,
+    blurb: 'Augustine’s autobiography and prayer — the restless search of a soul for God, written as one long address to his Maker.',
+    chapter: 'Book I',
+    body: [
+      'Great art Thou, O Lord, and greatly to be praised; great is Thy power, and of Thy wisdom there is no end. And man, being a part of Thy creation, desires to praise Thee — man, who bears about with him his mortality, the witness of his sin.',
+      'Yet would man praise Thee; he, but a particle of Thy creation. Thou awakest us to delight in Thy praise; for Thou madest us for Thyself, and our heart is restless, until it repose in Thee.',
+      'Grant me, Lord, to know and understand which is first — to call on Thee, or to praise Thee; and, again, to know Thee, or to call on Thee. But who there is that calls on Thee, not knowing Thee?',
+    ],
+  },
+  grace: {
+    year: '1666', pages: 168,
+    blurb: 'Bunyan’s spiritual autobiography — the account of a tinker’s conversion, doubts, and the grace that abounded to the chief of sinners.',
+    chapter: 'A Preface',
+    body: [
+      'In this my relation of the merciful working of God upon my soul, it will not be amiss, if in the first place, I do in a few words give you a hint of my pedigree and manner of bringing up; that thereby the goodness and bounty of God towards me may be the more advanced.',
+      'For my descent, then, it was, as is well known by many, of a low and inconsiderable generation; my father’s house being of that rank that is meanest and most despised of all the families in the land.',
+      'Nevertheless, I bless God that by this door He brought me into the world, to partake of the grace and life that is in Christ by the gospel.',
+    ],
+  },
+  martyrs: {
+    year: '1563', pages: 524,
+    blurb: 'Foxe’s history of the persecutions of the Christian church, from the early martyrs to the reformers of his own age.',
+    chapter: 'The Primitive Church',
+    body: [
+      'Christ our Saviour, in the Gospel of St. Matthew, hearing the confession of Simon Peter, answered and said, “Upon this rock I will build my Church, and the gates of hell shall not prevail against it,” in which words three things are to be noted.',
+      'First, that Christ will have a Church in this world. Secondly, that the same Church should mightily be impugned, not only by the world, but also by the uttermost strength and powers of all hell. And thirdly, that the same Church, notwithstanding, should continue.',
+      'Which prophecy of Christ we see wonderfully to be verified, insomuch that the whole course of the Church to this day may seem nothing else but a verifying of the said prophecy.',
+    ],
+  },
+  imitation: {
+    year: '1418', pages: 196,
+    blurb: 'À Kempis’s manual of devotion — counsel on the inner life, humility, and the following of Christ above all things.',
+    chapter: 'Of the Imitation of Christ',
+    body: [
+      '“He that followeth Me shall not walk in darkness,” saith the Lord. These are the words of Christ, by which we are taught how we ought to imitate His life and manners, if we would be truly enlightened, and be delivered from all blindness of heart.',
+      'Let it be our chiefest study to meditate upon the life of Jesus Christ. The teaching of Christ surpasseth all the teaching of holy men; and he that hath the Spirit will find therein a hidden manna.',
+      'What doth it profit thee to enter into deep discussion concerning the Holy Trinity, if thou lack humility, and be thus displeasing to the Trinity? Verily, high words make not a man holy and just; but a virtuous life maketh him dear to God.',
+    ],
+  },
+  presence: {
+    year: '1692', pages: 96,
+    blurb: 'The collected conversations and letters of Brother Lawrence, a kitchen monk who learned to commune with God in the smallest tasks.',
+    chapter: 'The First Conversation',
+    body: [
+      'He told me that the first time he saw Brother Lawrence, he found him a man of about sixty years of age, of a clownish kind, who had a great inclination to do nothing but love and serve God.',
+      'That he had been converted at the age of eighteen, in the winter, upon seeing a tree stripped of its leaves, and considering that within a little time the leaves would be renewed, and after that the flowers and fruit appear. He received a high view of the providence and power of God, which has never since been effaced from his soul.',
+      'That we ought to give ourselves up to God with regard both to things temporal and spiritual, and seek our satisfaction only in the fulfilling of His will, whether He lead us by suffering or by consolation.',
+    ],
+  },
+  interior: {
+    year: '1577', pages: 248,
+    blurb: 'Teresa of Ávila’s map of the soul as a crystal castle of many rooms, drawing the reader inward toward union with God.',
+    chapter: 'The First Mansions',
+    body: [
+      'While beseeching our Lord to speak for me, because I could think of nothing to say nor knew how to begin to carry out this obedience, there came to my mind what I shall now speak about, to lay a foundation.',
+      'I began to think of the soul as if it were a castle made of a single diamond or of very clear crystal, in which there are many rooms, just as in heaven there are many mansions.',
+      'Now if we consider it carefully, the soul of the just is nothing else than a paradise where, as God tells us, He takes His delight. What, then, must that dwelling be in which a King so mighty, so wise, so pure, so full of all good things, takes His delight?',
+    ],
+  },
+  institutes: {
+    year: '1536', pages: 612,
+    blurb: 'Calvin’s systematic theology — the knowledge of God and of ourselves set out for the instruction of the faithful.',
+    chapter: 'The Knowledge of God and of Ourselves',
+    body: [
+      'Nearly all the wisdom we possess, that is to say, true and sound wisdom, consists of two parts: the knowledge of God and of ourselves. But, while joined by many bonds, which one precedes and brings forth the other is not easy to discern.',
+      'In the first place, no man can survey himself without forthwith turning his thoughts towards the God in whom he lives and moves; because it is perfectly obvious that the endowments which we possess cannot possibly be from ourselves.',
+      'On the other hand, it is evident that man never attains to a true self-knowledge until he have previously contemplated the face of God, and come down after such contemplation to look into himself.',
+    ],
+  },
+  cityofgod: {
+    year: '426', pages: 698,
+    blurb: 'Augustine’s great work on the two cities — the City of God and the city of man — written as Rome fell to the Goths.',
+    chapter: 'Book I · The Two Cities',
+    body: [
+      'The glorious city of God is my theme in this work, which you, my dearest son Marcellinus, suggested, and which is due to you by my promise. I have undertaken its defence against those who prefer their own gods to the Founder of this city.',
+      'A city surpassingly glorious, whether we view it as it still lives by faith in this fleeting course of time, and sojourns as a stranger in the midst of the ungodly, or as it shall dwell in the fixed stability of its eternal seat.',
+      'The earthly city glories in itself, the heavenly city glories in the Lord. The one seeks glory from men; but the greatest glory of the other is God, the witness of conscience.',
+    ],
+  },
+  orthodoxy: {
+    year: '1908', pages: 184,
+    blurb: 'Chesterton’s witty defence of the Christian faith as the answer to the deepest puzzles of the human heart.',
+    chapter: 'Introduction in Defence of Everything Else',
+    body: [
+      'I have often had a fancy for writing a romance about an English yachtsman who slightly miscalculated his course and discovered England under the impression that it was a new island in the South Seas.',
+      'There will probably be a general impression that the man who landed (armed to the teeth and talking by signs) to plant the British flag on that barbaric temple which turned out to be the Pavilion at Brighton, felt rather a fool.',
+      'What could be more delightful than to have in the same few minutes all the fascinating terrors of going abroad combined with all the humane security of coming home again? This at least seems to me the main problem for philosophers.',
+    ],
+  },
+  pensees: {
+    year: '1670', pages: 356,
+    blurb: 'Pascal’s scattered notes toward a defence of the faith — fragments on the greatness and wretchedness of man.',
+    chapter: 'Thoughts on Man',
+    body: [
+      'Man is but a reed, the most feeble thing in nature; but he is a thinking reed. The entire universe need not arm itself to crush him. A vapour, a drop of water suffices to kill him.',
+      'But, if the universe were to crush him, man would still be more noble than that which killed him, because he knows that he dies and the advantage which the universe has over him; the universe knows nothing of this.',
+      'All our dignity consists, then, in thought. By it we must elevate ourselves, and not by space and time which we cannot fill. Let us endeavour, then, to think well; this is the principle of morality.',
+    ],
+  },
+};
+
 window.TrinityData = {
   BOOKS, LEXICON, CONCORDANCE, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,
-  PLANS, MODULES, COLLECTIONS, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
+  PLANS, MODULES, MODULE_ITEMS, COLLECTIONS, COLLECTION_ITEMS, BOOK_TEXT, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
   VIDEO_CATS, CHANNELS, VIDEOS,
   HANDLE_POOL, AVATAR_COLORS, AVATAR_SYMBOLS, CHAT_IDENTITY, RELAYS, GROUPS, GROUP_MESSAGES,
   SATS_PER_USD, WALLET, FUNDS, STRIKE_PRESETS, GIVING_HISTORY,
