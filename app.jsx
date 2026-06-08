@@ -237,12 +237,25 @@ function App() {
   const [store, setStore] = useA(!!storeParam);
   const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
   const [help, setHelp] = useA(helpParam || null);
-  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || churchParam || extraParam;   // any deep-link skips splash/onboarding
+  const idParam = new URLSearchParams(location.search).get('id');   // profile|recovery|invite|relays|newid|member
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || churchParam || extraParam || idParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
     onboardParam === '1' || (!deepLinked && !lsGet('trinityone.onboarded', false))
   );
+  // identity surfaces (ProfileSheet hub + the focused sheets)
+  const [profile, setProfile] = useA(idParam === 'profile');
+  const [member, setMember] = useA(idParam === 'member' ? window.TrinityData.MEMBERS.River : null);
+  const [idSheet, setIdSheet] = useA(['recovery', 'invite', 'relays'].includes(idParam) ? idParam : null);
+  const [newId, setNewId] = useA(idParam === 'newid');
+  const [, forceId] = useA(0);                 // re-render on identity / profile changes
+  useAE(() => {
+    const h = () => forceId(x => x + 1);
+    window.addEventListener('trinity-identity', h);
+    window.addEventListener('trinity-profiles', h);
+    return () => { window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-profiles', h); };
+  }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const churchParam = new URLSearchParams(location.search).get('church');   // '1' opens the switcher
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', window.TrinityData.CHURCHES[0].id));
@@ -264,6 +277,21 @@ function App() {
     fit(); window.addEventListener('resize', fit);
     return () => window.removeEventListener('resize', fit);
   }, []);
+
+  // real identity object for the ProfileSheet/onboarding (derived from the live identity + profile)
+  const identity = (() => {
+    const cur = (window.TrinityIdentity && window.TrinityIdentity.current) || window.TrinityData.CHAT_IDENTITY || {};
+    const FS = window.Fellowship;
+    const name = (FS && FS.myProfile && FS.myProfile.name) || '';
+    let avatar = { kind: 'monogram', color: cur.color || '#5E8C6A' };
+    if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; }
+    return { name, avatar, npub: cur.npub || '', handle: cur.handle || 'Anonymous', steward: true };
+  })();
+  // saving a profile publishes name + mark to the user's key (kind-0)
+  const saveIdentity = (patch) => {
+    const FS = window.Fellowship;
+    if (FS && FS.setProfile) FS.ready.then(() => FS.setProfile({ name: (patch.name || '').trim(), av: patch.avatar })).catch(() => {});
+  };
 
   const toast = (msg) => {
     setToastMsg(msg); clearTimeout(toastTimer.current);
@@ -299,6 +327,13 @@ function App() {
     openAllUses: (id) => setAllUses(id),
     openNotifications: () => setNotif(true),
     openListen: () => setListen(true),
+    // identity surfaces
+    openProfile: () => setProfile(true),
+    openMember: (name) => { const m = window.TrinityData.MEMBERS[name]; if (m) setMember(m); else toast('Opening ' + name); },
+    openRecovery: () => setIdSheet('recovery'),
+    openInvite: () => setIdSheet('invite'),
+    openRelays: () => setIdSheet('relays'),
+    openNewIdentity: () => setNewId(true),
     // library drill-ins
     openModule: (m) => setModule(m),
     openCollection: (c) => setCollection(c),
@@ -371,6 +406,13 @@ function App() {
             <AllUsesView id={allUses} open={!!allUses} onClose={() => setAllUses(null)} ctx={ctx} />
             <NotificationsScreen open={notif} onClose={() => setNotif(false)} ctx={ctx} />
             <ListenScreen open={listen} onClose={() => setListen(false)} ctx={ctx} />
+            {/* identity: hub + focused sheets (designer layout, real backend) */}
+            <ProfileSheet open={profile} onClose={() => setProfile(false)} identity={identity} onSave={saveIdentity} ctx={ctx} />
+            <MemberCard member={member} open={!!member} onClose={() => setMember(null)} ctx={ctx} />
+            <RecoverySheet open={idSheet === 'recovery'} onClose={() => setIdSheet(null)} ctx={ctx} />
+            <InviteSheet open={idSheet === 'invite'} onClose={() => setIdSheet(null)} identity={identity} ctx={ctx} />
+            <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
+            <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
             <ChatRoom group={group} open={!!group} onClose={() => setGroup(null)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx}
               churches={churches} activeId={activeChurch}
@@ -390,7 +432,9 @@ function App() {
         <HelpCenter open={!!help} onClose={() => setHelp(null)} initial={help} ctx={ctx} />
 
         {showSplash ? <Splash onDone={() => setShowSplash(false)} /> : null}
-        {!showSplash && showOnboarding ? <Onboarding onDone={() => setShowOnboarding(false)} ctx={ctx} /> : null}
+        {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity}
+          onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); }}
+          onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); }} /> : null}
       </PhoneFrame>
     </div>
   );

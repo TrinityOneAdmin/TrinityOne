@@ -675,6 +675,16 @@ const BOOK_TEXT = {
   },
 };
 
+// members for the "view a member" card (tapped from a chat bubble)
+const MEMBERS = {
+  River:   { name: 'River', anon: true, avatar: { kind: 'symbol', color: '#46708C', symbol: 'fish' },     bio: 'Sunday Life Group. Always bringing the chili.', verses: ['John 1:5', 'Psalm 23:4'] },
+  Wren:    { name: 'Wren',  anon: true, avatar: { kind: 'symbol', color: '#C24B7A', symbol: 'dove' },      bio: 'New here — learning to pray out loud.', verses: ['Philippians 4:6'] },
+  Olive:   { name: 'Olive', anon: true, avatar: { kind: 'symbol', color: '#5E8C6A', symbol: 'olive' },     bio: '', verses: ['Romans 8:28'] },
+  Maple:   { name: 'Maple', anon: true, avatar: { kind: 'monogram', color: '#C8962E' },                   bio: 'Worship team. Coffee first, then grace.', verses: ['Psalm 96:1'] },
+  Reed:    { name: 'Reed',  anon: true, avatar: { kind: 'symbol', color: '#C25A38', symbol: 'flame' },     bio: '', verses: [] },
+  Sparrow: { name: 'Sparrow', anon: true, avatar: { kind: 'symbol', color: '#9C5BB8', symbol: 'wheat' },   bio: 'Mum of three. Tired but grateful.', verses: ['Matthew 6:26'] },
+};
+
 // ── Notifications + Listen (audio) ──
 const NOTIFICATIONS = [
   { id: 'n1', kind: 'message', group: 'Tuesday Life Group', who: 'Steady Cedar',
@@ -705,7 +715,7 @@ const LISTEN = {
 window.TrinityData = {
   BOOKS, LEXICON, CONCORDANCE, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,
   PLANS, MODULES, MODULE_ITEMS, COLLECTIONS, COLLECTION_ITEMS, BOOK_TEXT, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
-  VIDEO_CATS, CHANNELS, VIDEOS, NOTIFICATIONS, LISTEN,
+  VIDEO_CATS, CHANNELS, VIDEOS, NOTIFICATIONS, LISTEN, MEMBERS,
   HANDLE_POOL, AVATAR_COLORS, AVATAR_SYMBOLS, CHAT_IDENTITY, RELAYS, CHURCHES, GROUPS, GROUP_MESSAGES,
   SATS_PER_USD, WALLET, FUNDS, STRIKE_PRESETS, GIVING_HISTORY,
   CHAPTER: {

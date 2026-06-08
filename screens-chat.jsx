@@ -370,8 +370,8 @@ function ChatScreen({ ctx }) {
       </div>
       ) : (
       <React.Fragment>
-      {/* anonymous identity banner */}
-      <button onClick={() => setNostr(true)} style={{
+      {/* anonymous identity banner — opens the ProfileSheet hub */}
+      <button onClick={() => ctx.openProfile()} style={{
         width: '100%', textAlign: 'left', cursor: 'pointer', border: '1px solid var(--line)',
         background: 'var(--surface)', borderRadius: 20, padding: 14, marginBottom: 22, boxShadow: 'var(--shadow)',
         display: 'flex', alignItems: 'center', gap: 13, animation: 'trinityFade .5s ease .05s both',
