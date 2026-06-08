@@ -53,6 +53,83 @@ const LEXICON = {
     occ: 166 },
 };
 
+// Concordance: every use of a lemma (keyed by the same Strong's ids as LEXICON).
+// `en` = the English term(s) to highlight in each citation.
+const CONCORDANCE = {
+  G3056: { en: ['word'], uses: [
+    { ref: 'John 1:1', text: 'In the beginning was the Word, and the Word was with God, and the Word was God.' },
+    { ref: 'John 1:14', text: 'The Word became flesh and lived among us.' },
+    { ref: 'Hebrews 4:12', text: 'For the word of God is living and active, sharper than any two-edged sword.' },
+    { ref: 'Luke 8:11', text: 'Now the parable is this: The seed is the word of God.' },
+    { ref: 'Colossians 3:16', text: 'Let the word of Christ dwell in you richly.' },
+    { ref: 'James 1:22', text: 'But be doers of the word, and not only hearers.' },
+    { ref: '1 John 1:1', text: 'That which we have heard… concerning the Word of life.' },
+    { ref: 'Revelation 19:13', text: 'He is clothed in a garment sprinkled with blood. His name is called "The Word of God."' },
+  ] },
+  G2316: { en: ['God', "God's"], uses: [
+    { ref: 'John 1:1', text: 'In the beginning was the Word… and the Word was God.' },
+    { ref: 'John 3:16', text: 'For God so loved the world, that he gave his one and only Son.' },
+    { ref: 'Romans 8:28', text: 'We know that all things work together for good to those who love God.' },
+    { ref: '1 John 4:8', text: 'The one who doesn’t love doesn’t know God, for God is love.' },
+    { ref: 'Mark 12:30', text: 'You shall love the Lord your God with all your heart.' },
+    { ref: 'Ephesians 2:8', text: 'For by grace you have been saved through faith… it is the gift of God.' },
+    { ref: 'Philippians 4:6', text: 'Let your requests be made known to God.' },
+  ] },
+  G2222: { en: ['life'], uses: [
+    { ref: 'John 1:4', text: 'In him was life, and the life was the light of men.' },
+    { ref: 'John 3:16', text: 'Whoever believes in him should not perish, but have eternal life.' },
+    { ref: 'John 10:10', text: 'I came that they may have life, and may have it abundantly.' },
+    { ref: 'John 11:25', text: 'I am the resurrection and the life.' },
+    { ref: 'John 14:6', text: 'I am the way, the truth, and the life.' },
+    { ref: 'John 6:35', text: 'I am the bread of life.' },
+    { ref: 'Romans 6:23', text: 'But the free gift of God is eternal life in Christ Jesus our Lord.' },
+    { ref: '1 John 5:12', text: 'He who has the Son has the life.' },
+  ] },
+  G5457: { en: ['light'], uses: [
+    { ref: 'John 1:5', text: 'The light shines in the darkness, and the darkness hasn’t overcome it.' },
+    { ref: 'John 1:9', text: 'The true light that enlightens everyone was coming into the world.' },
+    { ref: 'John 8:12', text: 'I am the light of the world. He who follows me will have the light of life.' },
+    { ref: 'John 12:46', text: 'I have come as a light into the world.' },
+    { ref: 'Matthew 5:14', text: 'You are the light of the world. A city set on a hill can’t be hidden.' },
+    { ref: 'Matthew 5:16', text: 'Let your light shine before men, that they may see your good works.' },
+    { ref: '2 Corinthians 4:6', text: 'It is God who said, "Light will shine out of darkness," who has shone in our hearts.' },
+    { ref: '1 John 1:5', text: 'God is light, and in him is no darkness at all.' },
+    { ref: 'Ephesians 5:8', text: 'For you were once darkness, but are now light in the Lord.' },
+  ] },
+  G4561: { en: ['flesh'], uses: [
+    { ref: 'John 1:14', text: 'The Word became flesh and lived among us.' },
+    { ref: 'John 6:51', text: 'The bread which I will give for the life of the world is my flesh.' },
+    { ref: 'Romans 8:3', text: 'God, sending his own Son in the likeness of sinful flesh.' },
+    { ref: 'Galatians 5:16', text: 'Walk by the Spirit, and you won’t fulfill the lust of the flesh.' },
+    { ref: 'Matthew 26:41', text: 'The spirit indeed is willing, but the flesh is weak.' },
+    { ref: '1 Peter 1:24', text: 'All flesh is like grass, and all its glory like the flower in the grass.' },
+  ] },
+  G5485: { en: ['grace'], uses: [
+    { ref: 'John 1:14', text: 'We saw his glory… full of grace and truth.' },
+    { ref: 'John 1:16', text: 'Of his fullness we all received grace upon grace.' },
+    { ref: 'Ephesians 2:8', text: 'For by grace you have been saved through faith.' },
+    { ref: '2 Corinthians 12:9', text: 'He has said to me, "My grace is sufficient for you."' },
+    { ref: 'Romans 6:14', text: 'You are not under law, but under grace.' },
+    { ref: 'Titus 2:11', text: 'For the grace of God has appeared, bringing salvation to all people.' },
+  ] },
+  G225: { en: ['truth'], uses: [
+    { ref: 'John 1:14', text: 'We saw his glory… full of grace and truth.' },
+    { ref: 'John 8:32', text: 'You will know the truth, and the truth will make you free.' },
+    { ref: 'John 14:6', text: 'I am the way, the truth, and the life.' },
+    { ref: 'John 17:17', text: 'Sanctify them in your truth. Your word is truth.' },
+    { ref: 'John 4:24', text: 'Those who worship him must worship in spirit and truth.' },
+    { ref: '3 John 1:4', text: 'I have no greater joy than this, to hear about my children walking in truth.' },
+  ] },
+  G1391: { en: ['glory'], uses: [
+    { ref: 'John 1:14', text: 'We saw his glory, such glory as of the one and only Son of the Father.' },
+    { ref: 'John 17:5', text: 'Glorify me… with the glory which I had with you before the world existed.' },
+    { ref: 'Romans 3:23', text: 'For all have sinned, and fall short of the glory of God.' },
+    { ref: 'Romans 8:18', text: 'The sufferings… aren’t worthy to be compared with the glory which will be revealed.' },
+    { ref: '2 Corinthians 3:18', text: 'We are transformed into the same image from glory to glory.' },
+    { ref: '1 Corinthians 10:31', text: 'Whatever you do, do all to the glory of God.' },
+  ] },
+};
+
 // Per-verse word tags (case-insensitive match within that verse)
 const TAGS = {
   1: { Word: 'G3056', God: 'G2316' },
@@ -353,7 +430,7 @@ const GIVING_HISTORY = [
 ];
 
 window.TrinityData = {
-  BOOKS, LEXICON, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,
+  BOOKS, LEXICON, CONCORDANCE, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,
   PLANS, MODULES, COLLECTIONS, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
   VIDEO_CATS, CHANNELS, VIDEOS,
   HANDLE_POOL, AVATAR_COLORS, AVATAR_SYMBOLS, CHAT_IDENTITY, RELAYS, GROUPS, GROUP_MESSAGES,

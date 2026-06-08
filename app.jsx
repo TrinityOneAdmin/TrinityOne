@@ -219,14 +219,18 @@ function App() {
   const [journal, setJournal] = useA(null);
   const [wordOv, setWordOv] = useA(null);
   const [video, setVideo] = useA(null);
+  const concordParam = new URLSearchParams(location.search).get('concord');  // '1' = index, or a Strong's id (e.g. G5457)
+  const [concord, setConcord] = useA(concordParam === '1');   // concordance index overlay
+  const [allUses, setAllUses] = useA(/^[GH]\d/.test(concordParam || '') ? concordParam : null);  // per-lemma "all uses" (Strong's id)
   const storeParam = new URLSearchParams(location.search).get('store'); // 'featured' | 'language'
   const [store, setStore] = useA(!!storeParam);
   const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
   const [help, setHelp] = useA(helpParam || null);
-  const [showSplash, setShowSplash] = useA(!storeParam && !tabParam && !helpParam);   // skip splash on deep-links
+  const deepLinked = storeParam || tabParam || helpParam || concordParam;   // any deep-link skips splash/onboarding
+  const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
-    onboardParam === '1' || (!storeParam && !tabParam && !helpParam && !lsGet('trinityone.onboarded', false))
+    onboardParam === '1' || (!deepLinked && !lsGet('trinityone.onboarded', false))
   );
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
@@ -275,6 +279,8 @@ function App() {
     openJournal: (j) => setJournal(j),
     openVideo: (v) => setVideo(v),
     openWord: (id) => setWordOv(id),
+    openConcordance: () => setConcord(true),
+    openAllUses: (id) => setAllUses(id),
     readScale: t.readScale,
     highlights, setHighlight: (k, c) => setHighlights(h => { const n = { ...h }; if (c) n[k] = c; else delete n[k]; lsSet('trinityone.highlights', n); return n; }),
     notes, setNote: (k, txt) => setNotes(n => { const o = { ...n }; if (txt) o[k] = txt; else delete o[k]; lsSet('trinityone.notes', o); return o; }),
@@ -319,6 +325,8 @@ function App() {
             <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} />
             <VideoPlayer video={video} open={!!video} onClose={() => setVideo(null)} ctx={ctx} />
             <WordStudySheet id={wordOv} open={!!wordOv} onClose={() => setWordOv(null)} />
+            <ConcordanceIndex open={concord} onClose={() => setConcord(false)} ctx={ctx} />
+            <AllUsesView id={allUses} open={!!allUses} onClose={() => setAllUses(null)} ctx={ctx} />
             <ChatRoom group={group} open={!!group} onClose={() => setGroup(null)} ctx={ctx} />
 
             <Toast msg={toastMsg} />
