@@ -1,13 +1,17 @@
 // mydata.src.js -- user-owned data (bundled -> vendor/mydata.js).
 //
-// SPINE: the user's key is their portable database. THIS SLICE is LOCAL ONLY: one storage
-// INTERFACE with an on-device implementation. No crypto, no relay I/O, no key handling.
-//
-// The future encrypted-Nostr backend (NIP-78/84/51 events + NIP-44) is a drop-in SWAP: it
-// implements the same Backend interface (getDoc/putDoc) and MyData is constructed over it
-// instead of LocalBackend -- nothing above the backend line changes. Every item already
-// carries a `visibility` flag ('public' | 'private') so that future layer knows what to
-// seal. Journal, notes and the prayer list default to 'private'; highlights/bookmarks public.
+// SPINE: the user's key is their portable database. Two backends behind ONE interface
+// (getDoc/putDoc): LocalBackend (synchronous on-device working copy) and NostrBackend, which
+// WRAPS the local copy and adds encrypted publish + multi-device sync on top -- so the API
+// above the backend line, and every screen, are unchanged. Per the approved proposal
+// (reference/proposal-mydata-nostr-backend.md): uniform NIP-78 (kind 30078) docs, NIP-44
+// encryption for private types (notes/journal/prayer), item-merge + tombstone reconciliation,
+// key from window.TrinityIdentity, relays from window.Fellowship. Relays are sync; the local
+// copy stays authoritative. Web ephemeral identity -> local-only (sync no-ops gracefully).
+import { SimplePool } from 'nostr-tools/pool';
+import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
+import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
+import { v2 as nip44 } from 'nostr-tools/nip44';
 
 // ---------------------------------------------------------------------------
 // Backend interface (the swap point). LOCAL implementation only this slice.
@@ -26,6 +30,141 @@ function LocalBackend(ns) {
     },
     putDoc: function (key, value) {
       try { localStorage.setItem(prefix + key, JSON.stringify(value)); } catch (e) {}
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// NostrBackend: wraps a LocalBackend `cache` and syncs it to relays.
+//   - getDoc(key)        -> from the cache (synchronous, unchanged behavior)
+//   - putDoc(key, value) -> write cache (sync) + track tombstones + queue an encrypted publish
+//   - startSync(onChange)-> derive the key, pull + reconcile, then publish local up (migration)
+// Each synced doc is a replaceable NIP-78 event (kind 30078, addressed by a `d` tag).
+// ---------------------------------------------------------------------------
+function NostrBackend(cache) {
+  var KIND = 30078;
+  // docKey -> { d: tag, priv: encrypt with NIP-44 }
+  var SYNC = {
+    'data/highlights': { d: 'trinityone/highlights', priv: false },
+    'data/bookmarks':  { d: 'trinityone/bookmarks',  priv: false },
+    'data/notes':      { d: 'trinityone/notes',      priv: true  },
+    'data/journal':    { d: 'trinityone/journal',    priv: true  },
+    'data/prayer':     { d: 'trinityone/prayer',     priv: true  },
+    'settings':        { d: 'trinityone/settings',   priv: false },
+  };
+  var D_TO_KEY = {};
+  Object.keys(SYNC).forEach(function (k) { D_TO_KEY[SYNC[k].d] = k; });
+
+  var pool = new SimplePool();
+  var sk = null, pub = null, ck = null;
+  var timers = {};
+  var onChange = function () {};
+
+  function relays() { return (window.Fellowship && window.Fellowship.relays) || ['ws://127.0.0.1:7447']; }
+  function tombKey(key) { return 'tomb/' + key; }
+  function idset(arr) { var s = new Set(); (arr || []).forEach(function (it) { if (it && it.id != null) s.add(it.id); }); return s; }
+  function encode(key, payload) { var j = JSON.stringify(payload); return SYNC[key].priv ? nip44.encrypt(j, ck) : j; }
+  function decode(key, content) { var j = SYNC[key].priv ? nip44.decrypt(content, ck) : content; return JSON.parse(j); }
+
+  function schedulePublish(key) {
+    if (!sk || !SYNC[key]) return;
+    clearTimeout(timers[key]);
+    timers[key] = setTimeout(function () { publish(key); }, 800);
+  }
+  function publish(key) {
+    if (!sk || !SYNC[key]) return;
+    var doc = cache.getDoc(key);
+    if (doc == null) return;
+    var payload = Array.isArray(doc) ? { items: doc, deleted: cache.getDoc(tombKey(key)) || [] } : { settings: doc };
+    var evt = finalizeEvent({ kind: KIND, created_at: Math.floor(Date.now() / 1000), tags: [['d', SYNC[key].d]], content: encode(key, payload) }, sk);
+    try { Promise.any(pool.publish(relays(), evt)).catch(function () {}); } catch (e) { /* offline: local stays authoritative */ }
+  }
+
+  // merge a remote payload into the local cache; returns true if local changed
+  function reconcile(key, payload) {
+    if (payload && ('items' in payload)) {
+      var local = cache.getDoc(key) || [];
+      var tomb = new Set((cache.getDoc(tombKey(key)) || []).concat(payload.deleted || []));
+      var byId = new Map();
+      // local first, then remote: keep the newer-by-ts; skip tombstoned ids
+      local.concat(payload.items || []).forEach(function (it) {
+        if (!it || it.id == null || tomb.has(it.id)) return;
+        var ex = byId.get(it.id);
+        if (!ex || (it.ts || 0) >= (ex.ts || 0)) byId.set(it.id, it);
+      });
+      var merged = Array.from(byId.values());
+      var before = JSON.stringify(cache.getDoc(key)) + '|' + JSON.stringify(cache.getDoc(tombKey(key)));
+      cache.putDoc(key, merged);
+      cache.putDoc(tombKey(key), Array.from(tomb));
+      var localChanged = (JSON.stringify(merged) + '|' + JSON.stringify(Array.from(tomb))) !== before;
+      // converge: if our merged view differs from what the relay had, republish
+      var remoteSame = JSON.stringify(merged) === JSON.stringify(payload.items || []) &&
+                       JSON.stringify(Array.from(tomb)) === JSON.stringify(payload.deleted || []);
+      if (!remoteSame) schedulePublish(key);
+      return localChanged;
+    }
+    if (payload && payload.settings) {
+      var cur = cache.getDoc('settings') || {};
+      var next = Object.assign({}, payload.settings, cur); // local wins (never lose a local pref)
+      cache.putDoc('settings', next);
+      if (JSON.stringify(next) !== JSON.stringify(payload.settings)) schedulePublish('settings');
+      return JSON.stringify(next) !== JSON.stringify(cur);
+    }
+    return false;
+  }
+
+  function pull() {
+    return new Promise(function (resolve) {
+      var touched = false, done = false;
+      var finish = function () { if (done) return; done = true; if (touched) onChange(); resolve(touched); };
+      var sub = pool.subscribeMany(relays(), [{ kinds: [KIND], authors: [pub], '#d': Object.keys(D_TO_KEY) }], {
+        onevent: function (e) {
+          var dTag = (e.tags.find(function (t) { return t[0] === 'd'; }) || [])[1];
+          var key = D_TO_KEY[dTag];
+          if (!key) return;
+          try { if (reconcile(key, decode(key, e.content))) touched = true; }
+          catch (err) { console.warn('[mydata] reconcile failed', dTag, err); }
+        },
+        oneose: function () { try { sub.close(); } catch (e) {} finish(); },
+      });
+      setTimeout(finish, 6000); // resolve even if a relay never sends EOSE
+    });
+  }
+
+  return {
+    kind: 'nostr',
+    getDoc: function (key) { return cache.getDoc(key); },
+    putDoc: function (key, value) {
+      if (SYNC[key] && Array.isArray(value)) {
+        var prev = cache.getDoc(key) || [];
+        var nextIds = idset(value);
+        var removed = [];
+        idset(prev).forEach(function (id) { if (!nextIds.has(id)) removed.push(id); });
+        if (removed.length) {
+          var tomb = cache.getDoc(tombKey(key)) || [];
+          cache.putDoc(tombKey(key), Array.from(new Set(tomb.concat(removed))));
+        }
+      }
+      cache.putDoc(key, value);
+      schedulePublish(key);
+    },
+    // derive key, pull + reconcile, then publish local docs up (migration). false = local-only.
+    startSync: function (notify) {
+      onChange = notify || function () {};
+      var ID = window.TrinityIdentity;
+      var ready = (ID && ID.ready) ? Promise.resolve(ID.ready) : Promise.resolve();
+      return ready.then(function () {
+        return ID && ID.exportMnemonic ? ID.exportMnemonic() : null;
+      }).then(function (mnemonic) {
+        if (!mnemonic) return false; // no persistent identity (e.g. web ephemeral) -> local only
+        sk = privateKeyFromSeedWords(mnemonic);
+        pub = getPublicKey(sk);
+        ck = nip44.utils.getConversationKey(sk, pub);
+        return pull().then(function () {
+          Object.keys(SYNC).forEach(function (k) { if (cache.getDoc(k) != null) schedulePublish(k); });
+          return true;
+        });
+      }).catch(function (e) { console.warn('[mydata] startSync failed', e); return false; });
     },
   };
 }
@@ -126,10 +265,21 @@ function MyDataStore(backend) {
       }
       backend.putDoc('seeded', true);
       emit(null);
+      // publish freshly-seeded/migrated docs up if the backend syncs
+      if (backend.startSync) Object.keys(SCHEMA).forEach(function (t) { backend.putDoc('data/' + t, read(t)); });
       return true;
     },
   };
+
+  // start sync if the backend supports it (NostrBackend); re-pull on identity change
+  if (backend.startSync) {
+    var kick = function () { return backend.startSync(function () { emit(null); }); };
+    api.ready = kick();
+    window.addEventListener('trinity-identity', function () { kick(); });
+  } else {
+    api.ready = Promise.resolve(false);
+  }
   return api;
 }
 
-window.MyData = MyDataStore(LocalBackend('trinityone.mydata'));
+window.MyData = MyDataStore(NostrBackend(LocalBackend('trinityone.mydata')));
