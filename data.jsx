@@ -366,17 +366,29 @@ const RELAYS = [
   { url: 'relay.snort.social', status: 'off' },
 ];
 
+// Churches the member follows; groups + giving funds are scoped to the active one.
+const CHURCHES = [
+  { id: 'grace', name: 'Grace Chapel', sub: 'Riverside · main campus', tagline: 'Helping people find and follow Jesus', initials: 'GC', accent: 'var(--clay)',
+    npub: 'npub1grace8s7v3x2k9m4f7p0r6t1y5w8n2c4j6h3l9', nip05: 'grace.org', relays: 3, verified: true, members: 312, funds: 4, groups: 5 },
+  { id: 'cornerstone', name: 'Cornerstone Fellowship', sub: 'Tuesday house church', tagline: 'A small family, gathered around the table', initials: 'CF', accent: 'var(--sage)',
+    npub: 'npub1corner4f7p0r6t1y5w8n2c4j6h3l9d0a7grace', nip05: 'cornerstone.faith', relays: 2, verified: true, members: 28, funds: 1, groups: 2 },
+];
+
 const GROUPS = [
-  { id: 'sunday', name: 'Sunday Life Group', kind: 'Life Group', members: 14, accent: 'var(--clay)',
+  { id: 'sunday', church: 'grace', name: 'Sunday Life Group', kind: 'Life Group', members: 14, accent: 'var(--clay)',
     unread: 3, last: 'Anonymous River: see you all at 6 — bringing the chili 🌶 minus the emoji', when: '2m' },
-  { id: 'mens', name: "Men's Bible Study", kind: 'Ministry', members: 9, accent: 'var(--sage)',
+  { id: 'mens', church: 'grace', name: "Men's Bible Study", kind: 'Ministry', members: 9, accent: 'var(--sage)',
     unread: 0, last: 'You: Reading John 1 again this week', when: '1h' },
-  { id: 'prayer', name: 'Prayer Requests', kind: 'Whole Church', members: 132, accent: 'var(--gold)',
+  { id: 'prayer', church: 'grace', name: 'Prayer Requests', kind: 'Whole Church', members: 132, accent: 'var(--gold)',
     unread: 7, last: 'Anonymous Wren: please pray for my mom’s surgery tomorrow', when: '12m', prayer: true },
-  { id: 'youth', name: 'Youth Group', kind: 'Ministry', members: 28, accent: 'var(--clay)',
+  { id: 'youth', church: 'grace', name: 'Youth Group', kind: 'Ministry', members: 28, accent: 'var(--clay)',
     unread: 0, last: 'Anonymous Sparrow: who’s in for the lock-in?', when: '3h' },
-  { id: 'church', name: 'Trinity — All', kind: 'Whole Church', members: 312, accent: 'var(--sage)',
+  { id: 'church', church: 'grace', name: 'Grace Chapel — All', kind: 'Whole Church', members: 312, accent: 'var(--sage)',
     unread: 0, last: 'Anonymous Maple: thank you for a beautiful service', when: 'Yesterday' },
+  { id: 'cf-table', church: 'cornerstone', name: 'Around the Table', kind: 'House Church', members: 28, accent: 'var(--sage)',
+    unread: 2, last: 'Anonymous Olive: bringing soup on Tuesday', when: '20m' },
+  { id: 'cf-prayer', church: 'cornerstone', name: 'Prayer Chain', kind: 'Whole Church', members: 28, accent: 'var(--gold)',
+    unread: 0, last: 'Anonymous Reed: praying for you all this week', when: '2h', prayer: true },
 ];
 
 const GROUP_MESSAGES = {
@@ -416,10 +428,11 @@ const GROUP_MESSAGES = {
 const SATS_PER_USD = 1075; // mock spot rate (~$93k/BTC)
 const WALLET = { sats: 48250, address: 'cedar@trinity.faith', node: 'Strike' };
 const FUNDS = [
-  { id: 'tithe', name: 'Tithe & Offering', desc: 'General fund — wherever needed most', icon: 'heart', accent: 'var(--clay)' },
-  { id: 'missions', name: 'Missions', desc: 'Supporting partners around the world', icon: 'globe', accent: 'var(--sage)' },
-  { id: 'building', name: 'Building Fund', desc: 'The new youth & community space', icon: 'library', accent: 'var(--gold)' },
-  { id: 'benevolence', name: 'Benevolence', desc: 'Helping families in hard seasons', icon: 'pray', accent: 'var(--clay)' },
+  { id: 'tithe', church: 'grace', name: 'Tithe & Offering', desc: 'General fund — wherever needed most', icon: 'heart', accent: 'var(--clay)' },
+  { id: 'missions', church: 'grace', name: 'Missions', desc: 'Supporting partners around the world', icon: 'globe', accent: 'var(--sage)' },
+  { id: 'building', church: 'grace', name: 'Building Fund', desc: 'The new youth & community space', icon: 'library', accent: 'var(--gold)' },
+  { id: 'benevolence', church: 'grace', name: 'Benevolence', desc: 'Helping families in hard seasons', icon: 'pray', accent: 'var(--clay)' },
+  { id: 'cf-general', church: 'cornerstone', name: 'House Church Fund', desc: 'Supporting our little family', icon: 'heart', accent: 'var(--sage)' },
 ];
 const STRIKE_PRESETS = [10, 25, 50, 100];
 const GIVING_HISTORY = [
@@ -666,7 +679,7 @@ window.TrinityData = {
   BOOKS, LEXICON, CONCORDANCE, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,
   PLANS, MODULES, MODULE_ITEMS, COLLECTIONS, COLLECTION_ITEMS, BOOK_TEXT, JOURNAL, SEARCH_SEED, SEARCH_RESULTS,
   VIDEO_CATS, CHANNELS, VIDEOS,
-  HANDLE_POOL, AVATAR_COLORS, AVATAR_SYMBOLS, CHAT_IDENTITY, RELAYS, GROUPS, GROUP_MESSAGES,
+  HANDLE_POOL, AVATAR_COLORS, AVATAR_SYMBOLS, CHAT_IDENTITY, RELAYS, CHURCHES, GROUPS, GROUP_MESSAGES,
   SATS_PER_USD, WALLET, FUNDS, STRIKE_PRESETS, GIVING_HISTORY,
   CHAPTER: {
     book: 'John', bookAbbr: 'Joh', ch: 1,

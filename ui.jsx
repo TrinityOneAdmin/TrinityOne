@@ -87,12 +87,12 @@ function TabBar({ active, onChange }) {
 }
 
 // ── Bottom sheet ──
-function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true }) {
+function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z = 50 }) {
   const [mounted, setMounted] = useState(open);
   useEffect(() => { if (open) setMounted(true); }, [open]);
   if (!mounted && !open) return null;
   return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 50, pointerEvents: open ? 'auto' : 'none' }}>
+    <div style={{ position: 'absolute', inset: 0, zIndex: z, pointerEvents: open ? 'auto' : 'none' }}>
       <div onClick={onClose} style={{
         position: 'absolute', inset: 0, background: 'rgba(20,14,8,.42)',
         opacity: open ? 1 : 0, transition: 'opacity .28s',

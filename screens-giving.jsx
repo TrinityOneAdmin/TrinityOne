@@ -242,7 +242,7 @@ function GivingView({ ctx, balance, setBalance, history, setHistory }) {
       {/* funds */}
       <SectionLabel>Give to</SectionLabel>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 24 }}>
-        {D.FUNDS.map(f => (
+        {D.FUNDS.filter(f => f.church === ctx.church.id).map(f => (
           <div key={f.id} onClick={() => setFund(f)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
             background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
             <div style={{ width: 44, height: 44, borderRadius: 13, background: `color-mix(in oklab, ${f.accent} 16%, var(--surface))`,

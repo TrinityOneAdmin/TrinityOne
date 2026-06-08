@@ -244,6 +244,7 @@ function ChatScreen({ ctx }) {
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
   const [view, setView] = useC(chatParam === 'giving' ? 'giving' : 'groups');
   const id = useIdentity();
+  const churchGroups = D.GROUPS.filter(g => g.church === ctx.church.id);   // groups for the active church
   const live = !!(window.Fellowship && window.Fellowship.subscribeGroups);
   const relayCount = live ? window.Fellowship.relays.length : D.RELAYS.filter(r => r.status === 'on').length;
   const [activity, setActivity] = useC({});   // gid -> { text, ts }
@@ -254,7 +255,7 @@ function ChatScreen({ ctx }) {
   // watch every group for last-message previews + unread badges
   useCE(() => {
     if (!live) return;
-    const ids = D.GROUPS.map(g => g.id);
+    const ids = churchGroups.map(g => g.id);
     const seen = lsGet('trinityone.chatSeen', {});
     const unsub = window.Fellowship.subscribeGroups(ids, (gid, e) => {
       msgBuf.current.unshift({ gid, e });        // buffer for search
@@ -270,7 +271,7 @@ function ChatScreen({ ctx }) {
         setUnread(prev => ({ ...prev, [gid]: (prev[gid] || 0) + 1 }));
     });
     return () => unsub();
-  }, []);
+  }, [ctx.church.id]);   // re-subscribe when the active church changes
 
   const openGroup = (g) => {
     const seen = lsGet('trinityone.chatSeen', {});
@@ -280,7 +281,7 @@ function ChatScreen({ ctx }) {
   };
 
   const ql = q.trim().toLowerCase();
-  const groupHits = ql ? D.GROUPS.filter(g => g.name.toLowerCase().includes(ql) || g.kind.toLowerCase().includes(ql)) : [];
+  const groupHits = ql ? churchGroups.filter(g => g.name.toLowerCase().includes(ql) || g.kind.toLowerCase().includes(ql)) : [];
   const msgHits = ql ? msgBuf.current
     .filter(({ e }) => searchableText(e).toLowerCase().includes(ql))
     .slice(0, 40)
@@ -294,9 +295,12 @@ function ChatScreen({ ctx }) {
 
   return (
     <ScreenScroll>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, animation: 'trinityFade .5s ease both' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, animation: 'trinityFade .5s ease both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
         <IconBtn name="plus" onClick={() => ctx.toast(view === 'giving' ? 'Load funds or give' : 'Create or join a group')} />
+      </div>
+      <div style={{ marginBottom: 16, animation: 'trinityFade .5s ease .04s both' }}>
+        <ChurchPill ctx={ctx} />
       </div>
 
       {/* segmented: Groups / Giving */}
@@ -389,7 +393,7 @@ function ChatScreen({ ctx }) {
 
       <SectionLabel>Your groups</SectionLabel>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, animation: 'trinityFade .5s ease .1s both' }}>
-        {D.GROUPS.map(g => (
+        {churchGroups.map(g => (
           <div key={g.id} onClick={() => openGroup(g)} style={{
             display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
             background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)',
@@ -777,7 +781,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
 
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 10px' }}>SEND TO A GROUP</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-        {D.GROUPS.map(g => (
+        {D.GROUPS.filter(g => g.church === ctx.church.id).map(g => (
           <button key={g.id} onClick={() => sendToGroup(g)} style={{
             width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 14,
             border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' }}>

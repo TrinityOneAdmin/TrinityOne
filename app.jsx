@@ -234,12 +234,17 @@ function App() {
   const [store, setStore] = useA(!!storeParam);
   const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
   const [help, setHelp] = useA(helpParam || null);
-  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam;   // any deep-link skips splash/onboarding
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || churchParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
     onboardParam === '1' || (!deepLinked && !lsGet('trinityone.onboarded', false))
   );
+  // multi-church: groups + giving funds are scoped to the active church
+  const churchParam = new URLSearchParams(location.search).get('church');   // '1' opens the switcher
+  const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', window.TrinityData.CHURCHES[0].id));
+  const [churches, setChurches] = useA(window.TrinityData.CHURCHES);
+  const [churchSwitcher, setChurchSwitcher] = useA(churchParam === '1');
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
   const [walletSats, setWalletSats] = useA(window.TrinityData.WALLET.sats);
@@ -293,6 +298,12 @@ function App() {
     openModule: (m) => setModule(m),
     openCollection: (c) => setCollection(c),
     openBook: (b) => setBook(b),
+    // multi-church
+    churches, activeChurch,
+    church: churches.find(c => c.id === activeChurch) || churches[0],
+    openChurchSwitcher: () => setChurchSwitcher(true),
+    setActiveChurch: (id) => { setActiveChurch(id); lsSet('trinityone.activeChurch', id); },
+    addChurch: (c) => { setChurches(cs => cs.find(x => x.id === c.id) ? cs : [...cs, c]); setActiveChurch(c.id); lsSet('trinityone.activeChurch', c.id); },
     // journal CRUD (persisted locally; will move onto the user's key as encrypted NIP-78 events)
     journalEntries,
     newJournal: () => setJournalEditor({}),
@@ -354,6 +365,10 @@ function App() {
             <ConcordanceIndex open={concord} onClose={() => setConcord(false)} ctx={ctx} />
             <AllUsesView id={allUses} open={!!allUses} onClose={() => setAllUses(null)} ctx={ctx} />
             <ChatRoom group={group} open={!!group} onClose={() => setGroup(null)} ctx={ctx} />
+            <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx}
+              churches={churches} activeId={activeChurch}
+              onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); }}
+              onAdd={(c) => { ctx.addChurch(c); setChurchSwitcher(false); toast('Following ' + c.name); }} />
 
             <Toast msg={toastMsg} />
           </React.Fragment>
