@@ -20,23 +20,36 @@
   }
   #root { display: flex; align-items: center; justify-content: center; }
 
-  /* ── TrinityOne design tokens (light) ── */
+  /* ── TrinityOne design tokens (light) — Halo brand.css ── */
   .trinity {
-    --paper:     #F4EEE2;
-    --surface:   #FFFDF8;
-    --surface-2: #FBF5EA;
-    --ink:       #2B2620;
-    --ink-2:     #756B5E;
-    --ink-3:     #A89E8E;
-    --line:      rgba(43,38,32,0.09);
-    --line-2:    rgba(43,38,32,0.05);
-    --clay:      #C25A38;
-    --clay-ink:  #A8462A;
-    --clay-soft: #F3DECF;
-    --gold:      #C2913A;
-    --sage:      #5E8C6A;
-    --shadow:    0 1px 2px rgba(43,38,32,.05), 0 8px 24px rgba(43,38,32,.06);
-    --shadow-lg: 0 4px 12px rgba(43,38,32,.10), 0 24px 48px rgba(43,38,32,.14);
+    --paper:      #F4EEE2;
+    --paper-soft: #FBF6EC;
+    --surface:    #FFFDF8;
+    --surface-2:  #FBF5EA;
+    --ink:        #221C16;
+    --ink-2:      #6B6052;
+    --ink-3:      #A89E8E;
+    --line:       rgba(34,28,22,0.10);
+    --line-2:     rgba(34,28,22,0.05);
+    --clay:       #C25A38;
+    --clay-deep:  #9C4327;
+    --clay-ink:   #A8462A;
+    --clay-soft:  #F3DECF;
+    --gold:       #C8962E;
+    --gold-soft:  #E0B860;
+    --gold-tint:  #F3E4C4;
+    --sage:       #5E8C6A;
+    --sage-soft:  #D8E6DC;
+    --midnight:   #17120B;
+    --midnight-2: #241C12;
+    --spark:      var(--gold);
+
+    --r-sm: 10px;  --r-md: 16px;  --r-lg: 24px;  --r-xl: 32px;
+    --shadow:    0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);
+    --shadow-sm: 0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);
+    --shadow-md: 0 4px 12px rgba(34,28,16,.10), 0 20px 44px rgba(34,28,16,.12);
+    --shadow-lg: 0 10px 30px rgba(34,28,16,.14), 0 40px 80px rgba(34,28,16,.18);
+    --ease: cubic-bezier(.32,.72,0,1);
 
     --hl-yellow: #FCE08A;
     --hl-green:  #BFE3AE;
@@ -44,9 +57,11 @@
     --hl-blue:   #BCD6F2;
     --hl-clay:   #F2CBB4;
 
-    --font-ui: 'Plus Jakarta Sans', system-ui, sans-serif;
-    --font-display: 'Bricolage Grotesque', 'Plus Jakarta Sans', sans-serif;
+    /* Halo type: Sora for display + UI, Newsreader for scripture/reading */
+    --font-ui: 'Sora', system-ui, sans-serif;
+    --font-display: 'Sora', system-ui, sans-serif;
     --font-read: 'Newsreader', Georgia, serif;
+    --font-serif: 'Newsreader', Georgia, serif;
     --read-scale: 1;
   }
   /* ── dark ── */
