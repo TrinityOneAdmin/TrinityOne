@@ -287,9 +287,10 @@ const COLLECTIONS = [
   { id: 'highlights', name: 'Highlights', count: 9, icon: 'marker' },
   { id: 'bookmarks', name: 'Bookmarks', count: 7, icon: 'bookmark' },
   { id: 'notes', name: 'Notes', count: 6, icon: 'pen' },
-  { id: 'prayer', name: 'Prayer list', count: 3, icon: 'pray' },
   { id: 'crossrefs', name: 'Cross References', count: 5, icon: 'link' },
 ];
+// Prayer list intentionally NOT a Library collection -- it's community-shaped; the MyData
+// 'prayer' type + CollectionView handling stay in place for a future Community-page home.
 
 // sample personal prayer list (seeds MyData on first run; then user-owned + private)
 const PRAYER_SEED = [
