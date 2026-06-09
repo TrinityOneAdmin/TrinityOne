@@ -97,13 +97,14 @@ function Panel({ title, action, children, style = {} }) {
 }
 
 function DashOverview({ onTab }) {
+  const funds = window.useStewardFunds();   // real published funds
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       <div style={{ display: 'flex', gap: 14 }}>
         <StatCard label="Given this month" value="$11,500" sub="↑ 12% vs last" ic="bolt" tint="gold" />
-        <StatCard label="Year to date" value="$85,630" sub="across 4 funds" ic="gift" tint="clay" />
+        <StatCard label="Year to date" value="$85,630" sub="across funds" ic="gift" tint="clay" />
         <StatCard label="Members" value="312" sub="+8 this week" ic="pray" tint="sage" />
-        <StatCard label="Active funds" value="4" sub="2 self-custodied" ic="bank" tint="ink" />
+        <StatCard label="Active funds" value={String(funds.length)} sub="signed to your relay" ic="bank" tint="ink" />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -112,11 +113,12 @@ function DashOverview({ onTab }) {
           </Panel>
           <Panel title="Funds" action={<button onClick={() => onTab('giving')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={{ flex: 1 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {SK.funds.map(f => (
+              {funds.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No funds yet.</div> : null}
+              {funds.map(f => (
                 <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface-2)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={f.icon} size={18} color="currentColor" /></div>
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{f.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{f.custody}</div></div>
-                  <div style={{ textAlign: 'right' }}><div style={{ fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-display)' }}>{f.month}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>this month</div></div>
+                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface-2)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={f.icon || 'gift'} size={18} color="currentColor" /></div>
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{f.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{f.custody || 'Custodial · Strike'}</div></div>
+                  <div style={{ textAlign: 'right' }}><div style={{ fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-display)' }}>{f.month || '—'}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>this month</div></div>
                 </div>
               ))}
             </div>
@@ -155,20 +157,29 @@ function DashOverview({ onTab }) {
 }
 
 function DashGiving() {
+  const funds = window.useStewardFunds();   // REAL funds the church has published (kind-30078)
+  const newFund = () => {
+    const name = window.prompt('New fund name (e.g. Missions)');
+    if (name && name.trim()) window.Steward.publishFund({ name: name.trim(), custody: 'Custodial · Strike', icon: 'gift' });
+  };
   return (
-    <Panel title="Funds" action={<button className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New fund</button>} style={{ height: '100%' }}>
+    <Panel title="Funds" action={<button onClick={newFund} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New fund</button>} style={{ height: '100%' }}>
       <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 1.3fr 1fr 1fr 0.4fr', padding: '0 8px 12px', borderBottom: '1px solid var(--line)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>
         <div>Fund</div><div>Custody</div><div style={{ textAlign: 'right' }}>This month</div><div style={{ textAlign: 'right' }}>Year to date</div><div></div>
       </div>
-      {SK.funds.map(f => (
+      {funds.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '36px 10px', color: 'var(--ink-3)' }}>
+          <Icon name="gift" size={26} color="var(--ink-3)" /><p style={{ margin: '10px 0 0', fontSize: 13.5 }}>No funds yet — add your first.</p></div>
+      ) : null}
+      {funds.map(f => (
         <div key={f.id} style={{ display: 'grid', gridTemplateColumns: '2.2fr 1.3fr 1fr 1fr 0.4fr', alignItems: 'center', padding: '15px 8px', borderBottom: '1px solid var(--line-2)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface-2)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={f.icon} size={18} color="currentColor" /></div>
             <div><div style={{ fontWeight: 700, fontSize: 14.5 }}>{f.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{f.sub}{f.goal ? ` · ${Math.round(f.raised / f.goal * 100)}% of $${(f.goal / 1000)}k` : ''}</div></div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--ink-2)', fontWeight: 600 }}><Icon name={f.custody.includes('Strike') ? 'wallet' : 'bank'} size={15} color="var(--ink-3)" /> {f.custody}</div>
-          <div style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-display)', fontSize: 15 }}>{f.month}</div>
-          <div style={{ textAlign: 'right', fontWeight: 600, fontSize: 14, color: 'var(--ink-2)' }}>{f.ytd}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--ink-2)', fontWeight: 600 }}><Icon name={(f.custody || '').includes('Strike') ? 'wallet' : 'bank'} size={15} color="var(--ink-3)" /> {f.custody || 'Custodial · Strike'}</div>
+          <div style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-display)', fontSize: 15 }}>{f.month || '—'}</div>
+          <div style={{ textAlign: 'right', fontWeight: 600, fontSize: 14, color: 'var(--ink-2)' }}>{f.ytd || '—'}</div>
           <div style={{ textAlign: 'right' }}><Icon name="dots" size={18} color="var(--ink-3)" /></div>
         </div>
       ))}

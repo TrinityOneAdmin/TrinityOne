@@ -1,6 +1,33 @@
 // steward-root.jsx — real entry for the TrinityOne steward surfaces.
 // Renders the handoff's stew-* components as navigable pages (NOT on the design canvas).
-const { useState: useSt } = React;
+// Phase B: wired to window.Steward (real church key + Nostr publishing on the self-hosted relay).
+const { useState: useSt, useEffect: useStE } = React;
+
+// live church funds from the relay (published by this console). Shared by the dashboard sections.
+function useStewardFunds() {
+  const [funds, setFunds] = useSt([]);
+  useStE(() => window.Steward.subscribeFunds(setFunds), []);
+  return funds;
+}
+window.useStewardFunds = useStewardFunds;
+
+// ensure a church key exists; on first run, seed the church's funds from the sample set (published
+// for real, so the console is populated AND every fund is a signed event members can read).
+function initChurch() {
+  const params = new URLSearchParams(location.search);
+  const inject = params.get('churchkey');                 // test hook: load a known church key
+  if (inject) window.Steward.init(inject);
+  window.Steward.ensureKey();
+  let seeded = false;
+  const off = window.Steward.subscribeFunds(list => {
+    if (seeded) return;
+    seeded = true;
+    setTimeout(off, 0);
+    if (!list.length && !inject) {
+      (window.SK.funds || []).forEach(f => window.Steward.publishFund({ id: f.id, name: f.name, sub: f.sub, icon: f.icon, custody: f.custody }));
+    }
+  });
+}
 
 const SURFACES = [
   { key: 'console',   label: 'Console',     ic: 'sliders' },
@@ -72,4 +99,5 @@ function StewardRoot() {
   );
 }
 
+initChurch();   // set the church key + start seeding BEFORE any component subscribes to funds
 ReactDOM.createRoot(document.getElementById('root')).render(<StewardRoot />);
