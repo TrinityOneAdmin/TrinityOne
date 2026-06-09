@@ -288,6 +288,8 @@ function App() {
     const npub = m[0];
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
+    // announce membership so the steward sees this person joined, even if they never post
+    if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     return window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (p && p.name) setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name, initials: p.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));

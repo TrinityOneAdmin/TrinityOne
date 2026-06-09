@@ -91,6 +91,33 @@ window.Fellowship = {
   // app calls this with the active church's npub whenever it changes; null clears the scope.
   setChurch(npubOrHex) { window.Fellowship.churchPub = toPub(npubOrHex); return window.Fellowship.churchPub; },
 
+  // announce membership of a church (a signed, addressable presence event) so the steward can see
+  // people who joined even if they never post. Idempotent (addressable, d=member:<churchPub>).
+  // This makes the member's pseudonymous npub visible as a member of this church.
+  async announceMembership(npubOrHex) {
+    const cp = toPub(npubOrHex); if (!cp) return;
+    if (!sk) { try { await window.Fellowship.ready; } catch { return; } }
+    if (!sk) return;
+    const evt = finalizeEvent({
+      kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]],
+      content: JSON.stringify({ joined: Math.floor(Date.now() / 1000) }),
+    }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] membership publish failed', e); }
+    return evt;
+  },
+  // leave a church: tombstone the membership event (they vanish from the steward's list unless they
+  // have posted). Wired for when an unfollow action exists.
+  async leaveMembership(npubOrHex) {
+    const cp = toPub(npubOrHex); if (!cp || !sk) return;
+    const evt = finalizeEvent({
+      kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '',
+    }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch {}
+    return evt;
+  },
+
   // relay configuration (persisted) — accepts ws:// or wss:// URLs
   setRelays(urls) {
     const list = [...new Set((urls || []).map(u => (u || '').trim()).filter(u => /^wss?:\/\//i.test(u)))];

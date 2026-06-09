@@ -151,14 +151,16 @@ function Panel({ title, action, children, style = {} }) {
 
 function DashOverview({ onTab }) {
   const groups = window.useStewardGroups();   // real chat groups (the focus)
-  const members = window.useStewardMembers(); // real participants
+  const members = window.useStewardMembers(); // real members (joined and/or active)
+  const relays = window.useStewardRelays();   // real relay status
+  const relayUp = relays.some(r => r.status === 'on');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       <div style={{ display: 'flex', gap: 14 }}>
-        <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'participating' : 'invite your church'} ic="pray" tint="sage" />
+        <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'invite more' : 'invite your church'} ic="pray" tint="sage" />
         <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" />
         <StatCard label="Announcements" value="—" sub="post to everyone" ic="send" tint="gold" />
-        <StatCard label="Your relay" value="Live" sub="self-hosted" ic="globe" tint="ink" />
+        <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="self-hosted" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -304,15 +306,41 @@ function DashGroups() {
 }
 
 function DashRelays() {
-  const items = SK.relays.map(r => ({ name: r.url, sub: r.label, ic: 'globe', fg: 'var(--sage)', kind: r.kind }));
+  const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
+  const stats = window.useStewardStats();     // { events }
+  const host = (typeof location !== 'undefined' && location.host) || '';
+  const online = status.filter(r => r.status === 'on').length;
+  const checking = status.length === 0;
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <ListPanel title="Relays" addLabel="Add relay" items={items} renderRight={(it) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {it.kind === 'own' ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--sage)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} /> Live</span>
+      <div style={{ display: 'flex', gap: 14 }}>
+        <StatCard label="Relays online" value={checking ? '…' : `${online}/${status.length}`} sub={online === status.length && !checking ? 'all reachable' : 'check connection'} ic="globe" tint={online ? 'sage' : 'clay'} />
+        <StatCard label="Events stored" value={String(stats.events)} sub="your church's footprint" ic="receipt" tint="clay" />
+        <StatCard label="Hosting" value="Self" sub="this church's relay" ic="shield" tint="ink" />
+      </div>
+      <Panel title="Relays" style={{ flex: 1 }}>
+        {checking ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>Checking relays…</div> : null}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {status.map(r => {
+            const self = host && r.url.includes(host);
+            const up = r.status === 'on';
+            return (
+              <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface)', color: up ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="globe" size={18} color="currentColor" /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.url}</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{self ? 'Your relay · self-hosted' : 'Shared relay'}{up && r.ms != null ? ` · ${r.ms}ms` : ''}</div>
+                </div>
+                {self ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage)' : 'var(--clay)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Live' : 'Offline'}</span>
+              </div>
+            );
+          })}
         </div>
-      )} />
+        <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
+          <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church hosts its own relay — every message, group, and member lives on infrastructure you control. Members reach it wherever you serve the app.</div>
+        </div>
+      </Panel>
     </div>
   );
 }
@@ -382,17 +410,18 @@ function ago(ts) {
 }
 
 function DashMembers() {
-  const members = window.useStewardMembers();   // real participants (kind-1 events addressed to the church)
+  const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
   const [copied, setCopied] = React.useState('');
   const total = members.length;
+  const active = members.filter(m => m.count > 0).length;
   const doCopy = (np) => { copyText(np); setCopied(np); setTimeout(() => setCopied(''), 1400); };
   return (
-    <Panel title="Members" action={<SkPill tint="sage">{total ? `${total} participating` : 'none yet'}</SkPill>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Panel title="Members" action={<SkPill tint="sage">{total ? `${total} member${total === 1 ? '' : 's'}${active ? ` · ${active} chatting` : ''}` : 'none yet'}</SkPill>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {total === 0 ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'var(--ink-3)', padding: 24 }}>
           <div style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="pray" size={26} color="var(--ink-3)" /></div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink-2)' }}>No one’s chatted yet.</div>
-          <p style={{ fontSize: 13, margin: '6px 0 0', maxWidth: 320, lineHeight: 1.5 }}>Share your invite code — people appear here as they post in your groups. You’ll never see anyone who only reads.</p>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink-2)' }}>No members yet.</div>
+          <p style={{ fontSize: 13, margin: '6px 0 0', maxWidth: 320, lineHeight: 1.5 }}>Share your invite code — people appear here the moment they join, whether or not they’ve posted.</p>
         </div>
       ) : (
         <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto' }}>
@@ -408,8 +437,9 @@ function DashMembers() {
                     <span style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</span>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{shortNpub(m.npub)}</span>
                   </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{m.count} message{m.count === 1 ? '' : 's'} · last {ago(m.lastTs)}</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
                 </div>
+                {m.count === 0 ? <SkPill tint="ink">joined</SkPill> : null}
                 {!named ? <SkPill tint="sage">anonymous</SkPill> : null}
                 <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
                   <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
@@ -419,7 +449,7 @@ function DashMembers() {
         </div>
       )}
       <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)', flexShrink: 0 }}>
-        <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Anonymous by design — you see who’s <b style={{ color: 'var(--ink)' }}>active</b>, never anyone’s identity unless they chose a name. People who only read stay invisible, and no giving is ever shown here.</div>
+        <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Anonymous by design — you see who’s <b style={{ color: 'var(--ink)' }}>joined</b> and who’s active, never anyone’s real-world identity unless they chose a name. No giving is ever shown here.</div>
       </div>
     </Panel>
   );

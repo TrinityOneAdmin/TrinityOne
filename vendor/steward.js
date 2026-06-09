@@ -8347,9 +8347,11 @@ zoo`.split("\n");
     // church's pubkey (['p', churchPub]), so we read kind-1 events addressed to us, aggregate by
     // author, and resolve each author's kind-0 profile. The church's own posts are excluded.
     subscribeMembers(onMembers) {
+      const MEMBER_D = "trinityone/member:";
       const byPub = /* @__PURE__ */ new Map();
       const profSubs = /* @__PURE__ */ new Map();
-      const emit = () => onMembers([...byPub.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0)));
+      const emit = () => onMembers([...byPub.values()].sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)));
+      const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: "", picture: "", count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
       const ensureProfile = (pk) => {
         if (profSubs.has(pk)) return;
         const s = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pk] }], {
@@ -8370,10 +8372,35 @@ zoo`.split("\n");
         });
         profSubs.set(pk, s);
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [1], "#p": [pub] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [1], "#p": [pub] }, { kinds: [30078], "#p": [pub] }], {
         onevent(e) {
           if (e.pubkey === pub) return;
-          const m = byPub.get(e.pubkey) || { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name: "", picture: "", count: 0, lastTs: 0, firstTs: Infinity };
+          if (e.kind === 30078) {
+            const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+            if (!d.startsWith(MEMBER_D)) return;
+            const left = e.tags.some((t) => t[0] === "deleted") || !e.content;
+            const m2 = get(e.pubkey);
+            if (left) {
+              m2.joined = 0;
+              if (m2.count === 0) {
+                byPub.delete(e.pubkey);
+                emit();
+                return;
+              }
+            } else {
+              let j = e.created_at;
+              try {
+                j = JSON.parse(e.content).joined || e.created_at;
+              } catch {
+              }
+              m2.joined = j;
+            }
+            byPub.set(e.pubkey, m2);
+            ensureProfile(e.pubkey);
+            emit();
+            return;
+          }
+          const m = get(e.pubkey);
           m.count++;
           if (e.created_at > m.lastTs) m.lastTs = e.created_at;
           if (e.created_at < m.firstTs) m.firstTs = e.created_at;
@@ -8411,6 +8438,60 @@ zoo`.split("\n");
           }
         },
         oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ---- relays: the church's relay(s) — real status, not a mock ----
+    relayList() {
+      return relays();
+    },
+    // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms }]
+    relayStatus() {
+      return Promise.all(relays().map((url) => new Promise((res) => {
+        let done = false;
+        const t0 = Date.now();
+        const finish = (status) => {
+          if (done) return;
+          done = true;
+          try {
+            ws.close();
+          } catch {
+          }
+          res({ url, status, ms: status === "on" ? Date.now() - t0 : null });
+        };
+        let ws;
+        try {
+          ws = new WebSocket(url);
+        } catch {
+          return res({ url, status: "off", ms: null });
+        }
+        const to = setTimeout(() => finish("off"), 2500);
+        ws.onopen = () => {
+          clearTimeout(to);
+          finish("on");
+        };
+        ws.onerror = () => {
+          clearTimeout(to);
+          finish("off");
+        };
+      })));
+    },
+    // live count of the church's footprint on the relay (its own events + everything addressed to it)
+    subscribeStats(onStats) {
+      const ids = /* @__PURE__ */ new Set();
+      const sub = pool.subscribeMany(relays(), [{ authors: [pub] }, { "#p": [pub] }], {
+        onevent(e) {
+          ids.add(e.id);
+          onStats({ events: ids.size });
+        },
+        oneose() {
+          onStats({ events: ids.size });
         }
       });
       return () => {

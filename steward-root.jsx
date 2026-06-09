@@ -26,6 +26,26 @@ function useStewardMembers() {
 }
 window.useStewardMembers = useStewardMembers;
 
+// live relay status (re-probed every 10s) + the church's footprint count on the relay
+function useStewardRelays() {
+  const [status, setStatus] = useSt([]);
+  useStE(() => {
+    let alive = true;
+    const probe = () => window.Steward.relayStatus().then(s => { if (alive) setStatus(s); }).catch(() => {});
+    probe(); const t = setInterval(probe, 10000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  return status;
+}
+window.useStewardRelays = useStewardRelays;
+
+function useStewardStats() {
+  const [stats, setStats] = useSt({ events: 0 });
+  useStE(() => window.Steward.subscribeStats(setStats), []);
+  return stats;
+}
+window.useStewardStats = useStewardStats;
+
 // the church's own profile (name etc.) + npub
 function useStewardChurch() {
   const [p, setP] = useSt({});
