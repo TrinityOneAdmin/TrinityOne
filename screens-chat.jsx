@@ -461,10 +461,10 @@ function ChatScreen({ ctx }) {
 const REACT_EMOJIS = ['🙏', '❤️', '🔥', '🙌', '✨'];
 
 // reaction pills + a small react button (with emoji picker), shown under each bubble
-function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live }) {
+function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) {
   if (!live) return null;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap', justifyContent: me ? 'flex-end' : 'flex-start' }}>
       {summary.map(r => (
         <button key={r.emoji} onClick={() => onReact(r.emoji)} style={{
           display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
@@ -479,7 +479,7 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live }) {
           cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: .8 }}>
           <Icon name="heart" size={13} /></button>
         {pickerOpen ? (
-          <div style={{ position: 'absolute', bottom: 28, left: 0, zIndex: 5, display: 'flex', gap: 2, padding: '6px 8px', borderRadius: 14,
+          <div style={{ position: 'absolute', bottom: 28, [me ? 'right' : 'left']: 0, zIndex: 5, display: 'flex', gap: 2, padding: '6px 8px', borderRadius: 14,
             background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
             {REACT_EMOJIS.map(e => <button key={e} onClick={() => onReact(e)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, padding: '2px 4px', lineHeight: 1 }}>{e}</button>)}
           </div>
@@ -493,7 +493,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
-  const react = <ReactionsRow summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
+  const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
 
   if (m.kind === 'verse') {
     return (

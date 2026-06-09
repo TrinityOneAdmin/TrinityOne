@@ -17,7 +17,7 @@
       "name": "Dictionaries & Lexicons",
       "icon": "lex",
       "items": [
-        { "id": "strongs", "name": "Strong's Greek & Hebrew Dictionary", "abbr": "Strong's", "lang": "Greek / Hebrew", "size": "2.3 MB", "license": "CC-BY-SA · 1890 Strong's", "kind": "dict", "format": "JSON", "url": "modules/strongs-dict.json", "desc": "14,197 lexical entries. Once installed, every Strong's number in the reader opens a full definition." },
+        { "id": "strongs", "name": "Strong's Greek & Hebrew Dictionary", "abbr": "Strong's", "lang": "Greek / Hebrew", "size": "4.0 MB", "license": "CC-BY-SA · 1890 Strong's", "kind": "dict", "format": "JSON", "url": "modules/strongs-dict.json", "desc": "14,197 full lexical entries (definition + etymology + KJV usage). Every Strong's number in the reader opens a complete definition." },
         { "id": "import-dict", "name": "Import a dictionary…", "kind": "import", "accept": "dictionary", "desc": "Add your own MySword .dct.mybible dictionary or lexicon." }
       ]
     },

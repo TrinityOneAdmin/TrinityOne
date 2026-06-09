@@ -66,7 +66,11 @@ function LibraryHome({ ctx }) {
 
       <SectionLabel>Modules</SectionLabel>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 24, animation: 'lumenFade .5s ease .1s both' }}>
-        {D.MODULES.map((m) => <ModuleTile key={m.id} m={m} onClick={() => ctx.openModule(m)} />)}
+        {D.MODULES.map((m) => <ModuleTile key={m.id} m={m} onClick={() =>
+          m.id === 'bibles' ? ctx.openStore('language', 'bibles')
+          : m.id === 'dictionaries' ? ctx.openStore('featured', 'dictionaries')
+          : ctx.openModule(m)
+        } />)}
       </div>
 
       <SectionLabel action="+ New" onAction={() => ctx.newJournal()}>Recent journal</SectionLabel>
@@ -629,11 +633,13 @@ function MirrorBrowser({ mirror, ctx }) {
   );
 }
 
-function ModuleStore({ open, onClose, ctx, initialView }) {
+function ModuleStore({ open, onClose, ctx, initialView, category }) {
   const [, force] = React.useState(0);
   const [cat, setCat] = React.useState(null);
   const [mirror, setMirror] = React.useState(null);
   const [view, setView] = React.useState(initialView || 'featured');
+  const showLang = !category || category === 'bibles';   // "By language" (eBible mirror) is bibles-only
+  const titleFor = category ? ({ bibles: 'Bibles', dictionaries: 'Dictionaries & Lexicons', commentaries: 'Commentaries', devotionals: 'Devotionals' }[category] || 'Get Modules') : 'Get Modules';
   React.useEffect(() => window.Bible.subscribe(() => force(x => x + 1)), []);
   React.useEffect(() => { if (open) setView(initialView || 'featured'); }, [open, initialView]);
   React.useEffect(() => { if (open && !cat) window.Bible.getCatalog().then(setCat); }, [open]);
@@ -645,11 +651,12 @@ function ModuleStore({ open, onClose, ctx, initialView }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 18px 10px' }}>
           <IconBtn name="chevD" onClick={onClose} />
           <div>
-            <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, lineHeight: 1.1 }}>Get Modules</h1>
+            <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, lineHeight: 1.1 }}>{titleFor}</h1>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Download once — stays on your device</div>
           </div>
         </div>
-        {/* segmented: Featured / By language */}
+        {/* segmented: Featured / By language (language = full eBible mirror, bibles only) */}
+        {showLang ? (
         <div style={{ display: 'flex', gap: 4, padding: 4, margin: '0 18px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           {[['featured', 'Featured'], ['language', 'By language']].map(([id, label]) => {
             const on = view === id;
@@ -663,12 +670,13 @@ function ModuleStore({ open, onClose, ctx, initialView }) {
             );
           })}
         </div>
+        ) : null}
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
         {view === 'featured' ? (
           !cat ? <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><Spinner size={26} /></div>
-          : (cat.categories || []).map(c => {
+          : (cat.categories || []).filter(c => !category || c.id === category).map(c => {
             const ic = (CAT_STYLE[c.id] || CAT_STYLE.bibles).icon;
             return (
               <div key={c.id} style={{ marginBottom: 22 }}>

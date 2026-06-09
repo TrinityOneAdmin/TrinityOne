@@ -144,16 +144,32 @@ function WordStudySheet({ id, open, onClose }) {
             No entry in the built-in lexicon for this number. A dictionary module (<span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.dct.mybible</span>) would supply the full definition.
           </p>
         ) : <React.Fragment>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
-            padding: '6px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, margin: '16px 0 14px' }}>
-            <Icon name="sparkle" size={15} stroke={2} /> {e.short}
-          </div>
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 18px', textWrap: 'pretty' }}>{e.gloss}</p>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <div style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 16, padding: '13px 15px' }}>
-              <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, color: 'var(--clay)' }}>{e.occ}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>occurrences in scripture</div>
+          {e.short ? (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
+              padding: '6px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, margin: '16px 0 14px' }}>
+              <Icon name="sparkle" size={15} stroke={2} /> {e.short}
             </div>
+          ) : <div style={{ height: 16 }} />}
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 16px', textWrap: 'pretty' }}>{e.def || e.gloss}</p>
+          {e.deriv ? (
+            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>Derivation</div>
+              <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{e.deriv}</div>
+            </div>
+          ) : null}
+          {e.kjv ? (
+            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>KJV translates it</div>
+              <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{e.kjv}</div>
+            </div>
+          ) : null}
+          <div style={{ display: 'flex', gap: 10 }}>
+            {e.occ ? (
+              <div style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 16, padding: '13px 15px' }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, color: 'var(--clay)' }}>{e.occ}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>occurrences in scripture</div>
+              </div>
+            ) : null}
             <div style={{ flex: 1, background: 'var(--ink)', color: 'var(--paper)', borderRadius: 16,
               fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', display: 'flex',
               flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', padding: '13px 15px', gap: 2 }}>
@@ -449,7 +465,7 @@ function ReadScreen({ ctx }) {
   const [showStrongs, setShowStrongs] = useS(false);
   const [sel, setSel] = useS(null);
   const [sheet, setSheet] = useS(new URLSearchParams(location.search).get('sheet') || null);
-  const [wordId, setWordId] = useS(null);
+  const [wordId, setWordId] = useS(new URLSearchParams(location.search).get('word') || null);
   const scrollRef = useR();
   useE(() => { lsSet('trinityone.readerScale', scale); }, [scale]);
   useE(() => { lsSet('trinityone.readerSerif', serif); }, [serif]);

@@ -252,6 +252,7 @@ function App() {
   const storeParam = new URLSearchParams(location.search).get('store'); // 'featured' | 'language'
   const [store, setStore] = useA(!!storeParam);
   const [storeView, setStoreView] = useA(null);   // 'featured' | 'language' when opened programmatically
+  const [storeCat, setStoreCat] = useA(null);      // limit the store to one catalog category (e.g. 'dictionaries')
   const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
   const [help, setHelp] = useA(helpParam || null);
   const idParam = new URLSearchParams(location.search).get('id');   // profile|recovery|invite|relays|newid|member
@@ -396,7 +397,7 @@ function App() {
     gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setTab('read'); },
     addModule: () => Bible.pickFile(),
     removeTranslation: (abbr) => Bible.removeModule(abbr),
-    openStore: (view) => { setStoreView(view || null); setStore(true); }, closeStore: () => setStore(false),
+    openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
     openGroup: (g) => setGroup(g),
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
@@ -519,7 +520,7 @@ function App() {
         )}
 
         {/* module store — available in both the loaded and first-run states */}
-        <ModuleStore open={store} onClose={() => setStore(false)} ctx={ctx}
+        <ModuleStore open={store} onClose={() => setStore(false)} ctx={ctx} category={storeCat}
           initialView={storeView || (storeParam === 'language' ? 'language' : 'featured')} />
 
         <HelpCenter open={!!help} onClose={() => setHelp(null)} initial={help} ctx={ctx} />

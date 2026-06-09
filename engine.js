@@ -73,7 +73,7 @@
     if(!id) return null;
     id = id.toUpperCase();
     for(const d of dicts){
-      if(d[id]){ const e = d[id]; return { id, lang: id[0] === "H" ? "HEBREW" : "GREEK", lemma: e.lemma || "", translit: e.translit || "", pos: e.pos || "", short: e.short || "", gloss: e.gloss || "", kjv: e.kjv, occ: e.occ }; }
+      if(d[id]){ const e = d[id]; return { id, lang: id[0] === "H" ? "HEBREW" : "GREEK", lemma: e.lemma || "", translit: e.translit || "", pos: e.pos || "", short: e.short || "", gloss: e.gloss || "", def: e.def || "", deriv: e.deriv || "", kjv: e.kjv, occ: e.occ }; }
     }
     const e = LEX[id];
     if(e) return Object.assign({ id, lang: id[0] === "H" ? "HEBREW" : "GREEK" }, e);
@@ -298,6 +298,10 @@
   const DEFAULT_MODULE = { id: "eng-akjv-pce", abbr: "AKJV/PCE",
     name: "Authorised (King James) Version, Pure Cambridge Edition",
     kind: "bible", format: "mysword", category: "bibles", url: "modules/eng-akjv.bbl.mybible" };
+  // the full Strong's lexicon (14,197 entries) is auto-installed on first run too, so every Strong's
+  // number resolves to a full definition (not just the tiny built-in fallback set).
+  const DEFAULT_LEXICON = { id: "strongs", abbr: "Strong's", name: "Strong's Greek & Hebrew Dictionary",
+    kind: "dict", format: "JSON", category: "dictionaries", url: "modules/strongs-dict.json" };
 
   // ── catalog + installed-module registry (download-once, MySword style) ──
   const INSTALLED_KEY = "trinityone.installed";   // localStorage map: url -> meta
@@ -469,6 +473,11 @@
     if(order.length === 0 && !url){
       try{ await installModule(DEFAULT_MODULE); }
       catch(err){ console.error(err); window.Bible._error = err.message; }
+    }
+    // ensure the full lexicon is present (first run / never installed)
+    if(!isInstalled(DEFAULT_LEXICON.url)){
+      try{ await installModule(DEFAULT_LEXICON); }
+      catch(err){ console.error("lexicon install failed", err); }
     }
     loadingFlag = false; notify();
   }
