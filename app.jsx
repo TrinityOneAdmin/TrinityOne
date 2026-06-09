@@ -281,6 +281,7 @@ function App() {
   const [group, setGroup] = useA(null);
   const [walletSats, setWalletSats] = useA(window.TrinityData.WALLET.sats);
   const [giving, setGiving] = useA(window.TrinityData.GIVING_HISTORY);
+  const [funds, setFunds] = useA(window.TrinityData.FUNDS);   // giving funds (stewards can add)
 
   // scaling to viewport
   const wrapRef = useAR();
@@ -325,6 +326,7 @@ function App() {
     openStore: () => setStore(true), closeStore: () => setStore(false),
     openGroup: (g) => setGroup(g),
     walletSats, setWalletSats, giving, setGiving,
+    funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
     readView, setReadView,
     openReader: () => { setReadView('bible'); setTab('read'); },
     openPlans: () => { setReadView('plans'); setTab('read'); },
