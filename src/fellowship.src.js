@@ -27,7 +27,15 @@ const NET = 'trinityone';                       // network-wide tag
 // with no hardcoded host and over a single tunnel. ws on http, wss on https (a tunnel).
 const _loc = (typeof location !== 'undefined') ? location : null;
 const RELAY_BASE = _loc && _loc.host ? _loc.host : '127.0.0.1:8090';
-const DEFAULT_RELAYS = [((_loc && _loc.protocol === 'https:') ? 'wss://' : 'ws://') + RELAY_BASE + '/relay'];
+// The packaged app (Capacitor) runs from localhost inside the webview, so it can't derive the
+// church relay from its own origin like the web build does. Ship the church's relay as the DEFAULT
+// (still changeable in the in-app Relays settings + persisted to localStorage). Pilot = Trinity
+// Littlehampton's stable Funnel.
+const CHURCH_RELAY = 'wss://trinityone.tailbeaac0.ts.net/relay';
+const _native = !!(typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+const DEFAULT_RELAYS = _native
+  ? [CHURCH_RELAY]
+  : [((_loc && _loc.protocol === 'https:') ? 'wss://' : 'ws://') + RELAY_BASE + '/relay'];
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
   try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r) && r.length) return r; } catch {}

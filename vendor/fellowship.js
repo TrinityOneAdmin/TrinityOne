@@ -4430,7 +4430,9 @@
   var NET = "trinityone";
   var _loc = typeof location !== "undefined" ? location : null;
   var RELAY_BASE = _loc && _loc.host ? _loc.host : "127.0.0.1:8090";
-  var DEFAULT_RELAYS = [(_loc && _loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay"];
+  var CHURCH_RELAY = "wss://trinityone.tailbeaac0.ts.net/relay";
+  var _native = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  var DEFAULT_RELAYS = _native ? [CHURCH_RELAY] : [(_loc && _loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay"];
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
     try {
