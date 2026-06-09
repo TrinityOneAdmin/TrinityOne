@@ -353,19 +353,20 @@ function App() {
     return () => window.removeEventListener('resize', fit);
   }, [fullscreen]);
 
-  // Android hardware back button: dismiss the topmost overlay/sheet, else return to Today, else exit.
-  // (Without this the webview has no history, so back closes the app.)
+  // Hardware/browser back: dismiss the topmost overlay/sheet, else return to Today, else allow exit.
+  // Uses history + popstate (no native plugin) — on Android the webview's default back fires popstate
+  // when there's a history entry; we keep a "guard" entry so back has something to pop and stays in-app.
   const tabRef = useAR(); tabRef.current = tab;
   useAE(() => {
-    const App = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
-    if (!App || !App.addListener) return;
-    let sub;
-    App.addListener('backButton', () => {
-      if (window.trinityGoBack && window.trinityGoBack()) return;   // closed a sheet/overlay
-      if (tabRef.current !== 'today') { setTab('today'); return; }  // not home -> home
-      App.exitApp();                                                // home + nothing open -> exit
-    }).then(h => { sub = h; }).catch(() => {});
-    return () => { if (sub && sub.remove) sub.remove(); };
+    const guard = () => { try { history.pushState({ trinity: 1 }, ''); } catch (e) {} };
+    guard();   // seed one entry so the first back press is intercepted, not an app exit
+    const onPop = () => {
+      if (window.trinityGoBack && window.trinityGoBack()) { guard(); return; }       // closed a layer
+      if (tabRef.current !== 'today') { setTab('today'); guard(); return; }          // -> Today
+      // on Today with nothing open: don't re-guard -> the next back exits the app naturally
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
   }, []);
 
   // real identity object for the ProfileSheet/onboarding (derived from the live identity + profile)
