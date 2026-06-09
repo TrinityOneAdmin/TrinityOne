@@ -255,6 +255,7 @@ function App() {
   const [help, setHelp] = useA(helpParam || null);
   const idParam = new URLSearchParams(location.search).get('id');   // profile|recovery|invite|relays|newid|member
   const followParam = new URLSearchParams(location.search).get('follow');   // follow a church by its npub
+  const churchParam = new URLSearchParams(location.search).get('church');   // '1' / 'follow' opens the switcher
   const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
@@ -274,22 +275,28 @@ function App() {
     return () => { window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-profiles', h); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
-  const churchParam = new URLSearchParams(location.search).get('church');   // '1' opens the switcher
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', window.TrinityData.CHURCHES[0].id));
   const [churches, setChurches] = useA(window.TrinityData.CHURCHES);
-  const [churchSwitcher, setChurchSwitcher] = useA(churchParam === '1');
-  // follow a real church by its npub (the steward shares it): add it + make it active, and resolve
-  // its name from the relay. The church's real groups (published by its console) then load in chat.
-  useAE(() => {
-    if (!followParam || !(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
-    const npub = followParam;
-    const initials = 'CH';
-    setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials, accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
+  const [churchSwitcher, setChurchSwitcher] = useA(churchParam === '1' || churchParam === 'follow');
+  // follow a real church by its npub (the steward shares it via QR/link/code): add it + make it
+  // active, and resolve its name from the relay. The church's real groups (published by its console)
+  // then load in chat. Accepts a bare npub OR anything containing one (a ?follow= link). Returns
+  // false if no valid npub is found, else an unsubscribe fn.
+  const followChurch = (raw) => {
+    const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
+    if (!m) return false;
+    const npub = m[0];
+    setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
-    const off = window.Fellowship.subscribeChurchProfile(npub, (p) => {
+    if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
+    return window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (p && p.name) setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name, initials: p.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
     });
-    return off;
+  };
+  useAE(() => {
+    if (!followParam) return;
+    const off = followChurch(followParam);
+    return typeof off === 'function' ? off : undefined;
   }, []);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
@@ -379,6 +386,8 @@ function App() {
     openChurchSwitcher: () => setChurchSwitcher(true),
     setActiveChurch: (id) => { setActiveChurch(id); lsSet('trinityone.activeChurch', id); },
     addChurch: (c) => { setChurches(cs => cs.find(x => x.id === c.id) ? cs : [...cs, c]); setActiveChurch(c.id); lsSet('trinityone.activeChurch', c.id); },
+    followChurch,   // follow a real church by npub (from a scanned/pasted invite); false if invalid
+    activeChurchId: activeChurch,
     // ---- user-owned data: everything routes through window.MyData (local now, Nostr later) ----
     myData: MD,
     journalEntries,
@@ -449,7 +458,7 @@ function App() {
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx}
               churches={churches} activeId={activeChurch}
               onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); }}
-              onAdd={(c) => { ctx.addChurch(c); setChurchSwitcher(false); toast('Following ' + c.name); }} />
+              onFollowed={() => { setChurchSwitcher(false); toast('Now following — loading church…'); }} />
 
             <Toast msg={toastMsg} />
           </React.Fragment>

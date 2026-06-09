@@ -34,18 +34,16 @@ function ChurchPill({ ctx }) {
 window.ChurchPill = ChurchPill;
 
 // ════ Follow a church (scan / code) ════
-function FollowChurch({ onBack, onAdd, ctx }) {
+function FollowChurch({ onBack, onFollowed, ctx }) {
   const [code, setCode] = useCh('');
-  // demo: a code resolves to a sample church
+  const [err, setErr] = useCh('');
+  const hasNpub = /npub1[0-9a-z]{20,}/.test(code);
+  // follow by the church's real npub (a scanned QR opens ?follow= directly; here we accept the
+  // npub or invite link a steward pasted/typed).
   const resolve = () => {
-    const c = code.trim();
-    onAdd({
-      id: 'ch-' + (c.toLowerCase().replace(/[^a-z0-9]/g, '') || Date.now()),
-      name: c ? `Church · ${c.toUpperCase()}` : 'New Church', sub: 'Followed just now',
-      initials: (c[0] || 'N').toUpperCase() + (c[1] || 'C').toUpperCase(), accent: 'var(--sage)',
-      npub: 'npub1' + (c.toLowerCase() || 'new') + '4f7p0r6t1y5w8n2c4j6h3l9', nip05: '', relays: 2, verified: false,
-      members: 1, funds: 0, groups: 0,
-    });
+    const off = ctx.followChurch(code);
+    if (off === false) { setErr('That doesn’t look like a church code. Paste the npub or invite link your steward shared.'); return; }
+    onFollowed();
   };
   return (
     <div style={{ animation: 'trinityFade .25s ease both' }}>
@@ -74,12 +72,13 @@ function FollowChurch({ onBack, onAdd, ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 0 16px' }}>
         <div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>enter code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
       </div>
-      <input value={code} onChange={e => setCode(e.target.value.slice(0, 12).toUpperCase())} autoFocus placeholder="CHURCH CODE" style={{
-        width: '100%', height: 58, border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface)', padding: '0 18px',
-        fontSize: 22, fontFamily: 'monospace', fontWeight: 700, letterSpacing: '4px', color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', textAlign: 'center' }} />
-      <button onClick={resolve} disabled={!code.trim()} style={{
-        width: '100%', marginTop: 16, padding: 16, borderRadius: 15, border: 'none', cursor: code.trim() ? 'pointer' : 'default',
-        background: code.trim() ? 'var(--clay)' : 'var(--line)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
+      <input value={code} onChange={e => { setCode(e.target.value.trim()); setErr(''); }} autoFocus placeholder="npub1… or invite link" style={{
+        width: '100%', height: 58, border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 18px',
+        fontSize: 14, fontFamily: 'monospace', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', textAlign: 'center', textOverflow: 'ellipsis' }} />
+      {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8, lineHeight: 1.4 }}>{err}</div> : null}
+      <button onClick={resolve} disabled={!hasNpub} style={{
+        width: '100%', marginTop: 16, padding: 16, borderRadius: 15, border: 'none', cursor: hasNpub ? 'pointer' : 'default',
+        background: hasNpub ? 'var(--clay)' : 'var(--line)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
         <Icon name="check" size={18} stroke={2.4} color="#fff" /> Follow church</button>
 
@@ -93,9 +92,9 @@ function FollowChurch({ onBack, onAdd, ctx }) {
 }
 
 // ════ Church switcher sheet ════
-function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onAdd }) {
+function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFollowed }) {
   const [mode, setMode] = useCh('list'); // 'list' | 'follow'
-  useChE(() => { if (open) setMode('list'); }, [open]);
+  useChE(() => { if (open) setMode(new URLSearchParams(location.search).get('church') === 'follow' ? 'follow' : 'list'); }, [open]);
 
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="86%" z={60}>
@@ -143,7 +142,7 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onAdd 
           </div>
         </div>
       ) : (
-        <FollowChurch onBack={() => setMode('list')} onAdd={onAdd} ctx={ctx} />
+        <FollowChurch onBack={() => setMode('list')} onFollowed={onFollowed} ctx={ctx} />
       )}
     </BottomSheet>
   );

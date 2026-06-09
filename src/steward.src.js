@@ -16,6 +16,7 @@ import { SimplePool } from 'nostr-tools/pool';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { npubEncode } from 'nostr-tools/nip19';
+import qrcode from 'qrcode-generator';
 
 const NET = 'trinityone';
 const KEY_LS = 'trinityone.steward.church-key';     // localStorage seed (pilot)
@@ -143,6 +144,21 @@ window.Steward = {
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };
+  },
+
+  // ---- join flow: members follow the church by its npub ----
+  // The member app at the gateway root reads ?follow=<npub> and follows the church.
+  joinUrl() {
+    const np = window.Steward.npub || '';
+    const origin = (typeof location !== 'undefined' && location.origin) || '';
+    return origin + '/?follow=' + np;
+  },
+  // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
+  joinCode() { return window.Steward.npub || ''; },
+  // a real QR encoding the join URL; scan with a phone camera to open the app already following.
+  joinQR() {
+    const qr = qrcode(0, 'M'); qr.addData(window.Steward.joinUrl()); qr.make();
+    return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
   },
 };
 

@@ -11,6 +11,7 @@ const NAV = [
 
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
+  const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const church = window.useStewardChurch();   // real church profile + npub from the relay
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -20,6 +21,7 @@ function StewDashboard({ initial = 'overview' }) {
   };
   return (
     <ConsoleChrome>
+      {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
         {/* sidebar */}
         <div style={{ width: 232, flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', padding: '22px 16px' }}>
@@ -60,7 +62,7 @@ function StewDashboard({ initial = 'overview' }) {
           <div style={{ height: 64, flexShrink: 0, borderBottom: '1px solid var(--line)', background: 'var(--surface)', display: 'flex', alignItems: 'center', padding: '0 28px', gap: 16 }}>
             <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20 }}>{NAV.find(n => n.key === tab).label}</div></div>
             <div style={{ flex: 1 }} />
-            <button className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> Invite code</button>
+            <button onClick={() => setInvite(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> Invite code</button>
             <button className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> New post</button>
             <SkBadge initials="PJ" size={36} radius={11} accent="var(--sage)" />
           </div>
@@ -76,6 +78,47 @@ function StewDashboard({ initial = 'overview' }) {
         </div>
       </div>
     </ConsoleChrome>
+  );
+}
+
+// ---- the join flow: a real QR + code members scan/paste to follow this church ----
+function shortNpub(np) { return np ? np.slice(0, 14) + '…' + np.slice(-6) : '—'; }
+function copyText(t) { try { navigator.clipboard.writeText(t); } catch {} }
+
+function JoinCard({ qrSize = 92, center = false }) {
+  const church = window.useStewardChurch();   // re-renders once the npub is ready
+  const np = church.npub || '';
+  const url = np ? window.Steward.joinUrl() : '';
+  const svg = np ? window.Steward.joinQR() : '';
+  const [copied, setCopied] = React.useState('');
+  const doCopy = (what, text) => { copyText(text); setCopied(what); setTimeout(() => setCopied(''), 1400); };
+  return (
+    <div style={{ display: 'flex', flexDirection: center ? 'column' : 'row', gap: 16, alignItems: 'center', textAlign: center ? 'center' : 'left' }}>
+      <div style={{ width: qrSize + 18, height: qrSize + 18, borderRadius: 14, background: '#fff', boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 9, boxSizing: 'border-box' }}>
+        {svg ? <div style={{ width: qrSize, height: qrSize, display: 'flex' }} dangerouslySetInnerHTML={{ __html: svg }} /> : <SkQR size={qrSize} />}
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Your church code</div>
+        <div style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 15, letterSpacing: '.3px', margin: '4px 0 2px' }}>{shortNpub(np)}</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: center ? 'center' : 'flex-start' }}>
+          <button onClick={() => doCopy('link', url)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'link' ? 'check' : 'link'} size={14} color="#fff" /> {copied === 'link' ? 'Copied' : 'Copy link'}</button>
+          <button onClick={() => doCopy('code', np)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'code' ? 'check' : 'receipt'} size={14} color="currentColor" /> {copied === 'code' ? 'Copied' : 'Copy code'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function JoinModal({ onClose }) {
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 30 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, textAlign: 'center' }}>Invite your church</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 22px', textAlign: 'center' }}>Show this on screen or print it. One scan with a phone camera opens TrinityOne already following your church — anonymously, no sign-up.</p>
+        <JoinCard qrSize={168} center />
+        <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ width: '100%', padding: 11, fontSize: 14, marginTop: 24 }}>Done</button>
+      </div>
+    </div>
   );
 }
 
@@ -133,16 +176,7 @@ function DashOverview({ onTab }) {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           <Panel title="Joining code">
-            <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-              <div style={{ width: 92, height: 92, borderRadius: 14, background: '#fff', boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><SkQR size={74} /></div>
-              <div>
-                <div style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 22, letterSpacing: '1.5px' }}>GRACE-7K2</div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                  <button className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="link" size={14} color="#fff" /> Link</button>
-                  <button className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="receipt" size={14} color="currentColor" /> Print</button>
-                </div>
-              </div>
-            </div>
+            <JoinCard qrSize={92} />
           </Panel>
           <Panel title="Recent activity" style={{ flex: 1 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
