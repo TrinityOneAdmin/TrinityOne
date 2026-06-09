@@ -276,7 +276,24 @@ function App() {
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', window.TrinityData.CHURCHES[0].id));
-  const [churches, setChurches] = useA(window.TrinityData.CHURCHES);
+  // churches the member follows persist across reloads (a scanned QR / pasted npub should stick).
+  // Stored set = the real followed churches (npub ids); merged with the built-in sample churches.
+  const [churches, setChurches] = useA(() => {
+    const base = window.TrinityData.CHURCHES;
+    const followed = (lsGet('trinityone.followedChurches', []) || []).filter(f => f && f.id && !base.find(b => b.id === f.id));
+    return [...base, ...followed];
+  });
+  // persist the followed (real, npub-id) churches — incl. names resolved from the relay — on any change
+  useAE(() => { try { lsSet('trinityone.followedChurches', churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0)); } catch (e) {} }, [churches]);
+  // on load, refresh each followed church's name/groups from the relay (names may have changed)
+  useAE(() => {
+    if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
+    const offs = churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0).map(c =>
+      window.Fellowship.subscribeChurchProfile(c.npub || c.id, (p) => {
+        if (p && p.name) setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name, initials: p.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
+      }));
+    return () => offs.forEach(o => { try { o && o(); } catch (e) {} });
+  }, []);
   const [churchSwitcher, setChurchSwitcher] = useA(churchParam === '1' || churchParam === 'follow');
   // follow a real church by its npub (the steward shares it via QR/link/code): add it + make it
   // active, and resolve its name from the relay. The church's real groups (published by its console)

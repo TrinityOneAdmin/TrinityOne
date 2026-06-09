@@ -302,7 +302,7 @@ function ChatScreen({ ctx }) {
   const msgHits = ql ? msgBuf.current
     .filter(({ e }) => searchableText(e).toLowerCase().includes(ql))
     .slice(0, 40)
-    .map(({ gid, e }) => ({ e, group: D.GROUPS.find(g => g.id === gid) }))
+    .map(({ gid, e }) => ({ e, group: churchGroups.find(g => g.id === gid) }))
     .filter(x => x.group) : [];
   const hi = (txt) => {
     const i = (txt || '').toLowerCase().indexOf(ql);
@@ -411,6 +411,13 @@ function ChatScreen({ ctx }) {
       </button>
 
       <SectionLabel>Your groups</SectionLabel>
+      {churchGroups.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '38px 24px', color: 'var(--ink-3)', animation: 'trinityFade .4s ease both' }}>
+          <div style={{ width: 56, height: 56, borderRadius: 18, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="chat" size={28} color="var(--ink-3)" /></div>
+          <p style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink-2)', margin: '0 0 4px' }}>No groups yet</p>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, margin: 0, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto' }}>{ctx.church && ctx.church.name ? `${ctx.church.name} hasn’t opened any chat rooms yet — they’ll appear here when it does.` : 'Chat rooms will appear here once your church opens them.'}</p>
+        </div>
+      ) : null}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, animation: 'trinityFade .5s ease .1s both' }}>
         {churchGroups.map(g => (
           <div key={g.id} onClick={() => openGroup(g)} style={{

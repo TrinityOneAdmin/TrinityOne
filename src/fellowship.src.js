@@ -190,11 +190,15 @@ window.Fellowship = {
     })));
   },
 
-  // watch several groups at once (for the group-list previews/unread); onEvent(groupId, e)
+  // watch several groups at once (for the group-list previews/unread); onEvent(groupId, e).
+  // Scoped to the active church (read live so church switches don't miss events): churches that
+  // happen to share a group id (e.g. "prayer") don't cross-contaminate each other's chat.
   subscribeGroups(groupIds, onEvent) {
     const set = new Set(groupIds);
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#t': groupIds, limit: 500 }], {
       onevent(e) {
+        const cp = window.Fellowship.churchPub;
+        if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
         const gid = (e.tags.find(t => t[0] === 't' && set.has(t[1])) || [])[1];
         if (gid) { try { onEvent(gid, e); } catch (err) { console.error(err); } }
       },
@@ -232,6 +236,9 @@ window.Fellowship = {
       onevent(e) {
         // belt-and-suspenders: only deliver events actually tagged for this group
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
+        // and only this church's messages (when scoped) — avoids cross-church group-id collisions
+        const cp = window.Fellowship.churchPub;
+        if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
         try { onEvent(e); } catch (err) { console.error(err); }
       },
       oneose() {},
