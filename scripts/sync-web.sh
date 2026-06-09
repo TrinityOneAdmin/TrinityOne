@@ -17,6 +17,21 @@ cp -r icons "$WWW/" 2>/dev/null || true
 # vendored libs (React/Babel/sql.js/fflate/fonts/identity) — fully offline
 cp -r vendor/. "$WWW/vendor/"
 
+# Pre-transpile JSX -> plain JS so the PACKAGED app needs NO runtime Babel. Runtime @babel/standalone
+# is unreliable in the Capacitor webview (its native-HTTP patching can break Babel's fetch of the
+# .jsx files -> nothing renders -> solid blank screen). Plain <script> loads avoid all of that.
+echo "transpiling JSX -> JS for the packaged build…"
+for f in "$WWW"/*.jsx; do
+  base="$(basename "$f" .jsx)"
+  ./node_modules/.bin/esbuild "$f" --jsx=transform --log-level=error --outfile="$WWW/$base.js"
+  rm "$f"
+done
+# index.html for the packaged build: drop the Babel runtime, point script tags at the transpiled .js
+sed -i \
+  -e '/babel\.min\.js/d' \
+  -e 's#<script type="text/babel" src="\([^"]*\)\.jsx">#<script src="\1.js">#g' \
+  "$WWW/index.html"
+
 # local Featured modules (so the app is useful offline on first launch)
 cp modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
    modules/ahirani-usfm.zip modules/eng-akjv.bbl.mybible modules/strongs-dict.json \
