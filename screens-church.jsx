@@ -92,9 +92,9 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
 }
 
 // ════ Church switcher sheet ════
-function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFollowed }) {
+function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFollowed, initialMode }) {
   const [mode, setMode] = useCh('list'); // 'list' | 'follow'
-  useChE(() => { if (open) setMode(new URLSearchParams(location.search).get('church') === 'follow' ? 'follow' : 'list'); }, [open]);
+  useChE(() => { if (open) setMode(initialMode === 'follow' || new URLSearchParams(location.search).get('church') === 'follow' ? 'follow' : 'list'); }, [open]);
 
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="86%" z={60}>

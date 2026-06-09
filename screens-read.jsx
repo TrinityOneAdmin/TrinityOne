@@ -237,27 +237,93 @@ function NoteEditor({ label, open, onClose, value, onSave }) {
 }
 
 // ── version / translation sheet (loaded modules + add another) ──
-function VersionSheet({ open, onClose, version, onPick, onAdd }) {
-  const vs = window.Bible.versions();
+// ── translations manager: switch · remove · add (Read owns "what loads") ──
+function AbbrTile({ abbr, on }) {
   return (
-    <BottomSheet open={open} onClose={onClose}>
-      <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, marginBottom: 12 }}>Translation</div>
-      {vs.map((m, i) => (
-        <button key={m.abbr} onClick={() => onPick(m.abbr)} style={{
-          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '14px 4px', borderTop: i ? '1px solid var(--line)' : 'none', background: 'none', border: 'none',
-          cursor: 'pointer', color: 'var(--ink)', textAlign: 'left',
-        }}>
-          <div><div style={{ fontWeight: 700, fontSize: 15 }}>{m.abbr}</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{m.name}</div></div>
-          {version === m.abbr ? <Icon name="check" size={20} stroke={2.4} color="var(--clay)" /> : null}
-        </button>
-      ))}
+    <div style={{ width: 46, height: 46, borderRadius: 12, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: `color-mix(in oklab, var(--clay) ${on ? 22 : 12}%, var(--surface))`, color: 'var(--clay)' }}>
+      <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: (abbr || '').length > 3 ? 12 : 13.5, letterSpacing: '-.3px' }}>{abbr}</span>
+    </div>
+  );
+}
+function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
+  const [, force] = React.useState(0);
+  const [cat, setCat] = React.useState(null);
+  React.useEffect(() => window.Bible.subscribe(() => force(x => x + 1)), []);
+  React.useEffect(() => { if (open && !cat) window.Bible.getCatalog().then(setCat); }, [open, cat]);
+
+  const installed = window.Bible.versions();   // [{abbr,name,kind}] — what's loaded now
+  const owned = new Set(installed.map(v => v.abbr));
+  const bibles = cat ? (((cat.categories || []).find(c => c.id === 'bibles') || {}).items || []) : [];
+  const available = bibles.filter(b => !owned.has(b.abbr) && !window.Bible.isInstalled(b.url));
+
+  const remove = (e, abbr) => { e.stopPropagation(); ctx.removeTranslation(abbr); ctx.toast('Removed ' + abbr); };
+  const add = (item) => { ctx.toast('Adding ' + item.abbr + '…'); window.Bible.installModule(item).then(() => ctx.toast(item.abbr + ' added')).catch(() => ctx.toast("Couldn't add " + item.abbr)); };
+
+  return (
+    <BottomSheet open={open} onClose={onClose} maxHeight="84%">
+      <div style={{ marginBottom: 4 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700 }}>Translations</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>What loads when you read · tap to switch</div>
+      </div>
+
+      <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.4px', color: 'var(--ink-3)', textTransform: 'uppercase', margin: '18px 0 9px' }}>In your reader</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {installed.map(m => {
+          const on = m.abbr === version;
+          return (
+            <div key={m.abbr} onClick={() => onPick(m.abbr)} style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: 11, borderRadius: 15, cursor: 'pointer',
+              background: on ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface)',
+              border: on ? '1.5px solid color-mix(in oklab, var(--clay) 40%, var(--line))' : '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+              <AbbrTile abbr={m.abbr} on={on} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{m.name}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.abbr}{m.kind && m.kind !== 'bible' ? ' · ' + m.kind : ''}</div>
+              </div>
+              {on ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, fontSize: 11, fontWeight: 800, letterSpacing: '.3px', color: '#fff', background: 'var(--clay)', padding: '5px 11px', borderRadius: 999 }}>
+                  <Icon name="check" size={13} stroke={2.6} color="#fff" /> READING</span>
+              ) : (
+                <button onClick={(e) => remove(e, m.abbr)} aria-label={'Remove ' + m.name} style={{
+                  flexShrink: 0, width: 36, height: 36, borderRadius: 11, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-3)', cursor: 'pointer' }}>
+                  <Icon name="trash" size={17} color="var(--ink-3)" /></button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {available.length ? (
+        <React.Fragment>
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.4px', color: 'var(--ink-3)', textTransform: 'uppercase', margin: '22px 0 9px' }}>Add a translation</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {available.map(item => {
+              const busy = window.Bible.isInstalling(item.url);
+              return (
+                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 11, borderRadius: 15, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+                  <AbbrTile abbr={item.abbr} on={false} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{item.name}</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{[item.lang, item.size].filter(Boolean).join(' · ')}</div>
+                  </div>
+                  <button onClick={() => add(item)} disabled={busy} style={{
+                    flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '8px 13px', borderRadius: 11,
+                    border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}>
+                    {busy ? 'Adding…' : <React.Fragment><Icon name="plus" size={15} stroke={2.4} color="#fff" /> Add</React.Fragment>}</button>
+                </div>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      ) : null}
+
       <button onClick={onAdd} style={{
-        width: '100%', display: 'flex', alignItems: 'center', gap: 9, marginTop: 12,
+        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 16,
         padding: '13px 14px', borderRadius: 14, border: '1px dashed var(--line)', background: 'var(--surface-2)',
         cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)' }}>
-        <Icon name="plus" size={18} /> Add a translation…
+        <Icon name="plus" size={18} /> Load from a file (MySword · USFM)
       </button>
     </BottomSheet>
   );
@@ -376,7 +442,7 @@ function ReadScreen({ ctx }) {
   const [serif, setSerif] = useS(() => lsGet('trinityone.readerSerif', true));
   const [showStrongs, setShowStrongs] = useS(false);
   const [sel, setSel] = useS(null);
-  const [sheet, setSheet] = useS(null);
+  const [sheet, setSheet] = useS(new URLSearchParams(location.search).get('sheet') || null);
   const [wordId, setWordId] = useS(null);
   const scrollRef = useR();
   useE(() => { lsSet('trinityone.readerScale', scale); }, [scale]);
@@ -476,7 +542,7 @@ function ReadScreen({ ctx }) {
       <CommentarySheet loc={loc} label={bname + ' ' + loc.chap} open={sheet === 'commentary'} onClose={() => setSheet('action')} />
       <NoteEditor label={labelOf(sel)} open={sheet === 'note'} value={ctx.notes[keyOf(sel)]} onClose={() => setSheet('action')}
         onSave={(t) => { ctx.setNote(keyOf(sel), t); setSheet('action'); ctx.toast('Note saved'); }} />
-      <VersionSheet open={sheet === 'version'} onClose={close} version={version} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
+      <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
       <SettingsSheet open={sheet === 'settings'} onClose={close} scale={scale} setScale={setScale}
         serif={serif} setSerif={setSerif} showStrongs={showStrongs} setShowStrongs={setShowStrongs} ctx={ctx} />
       <BookPicker open={sheet === 'book'} onClose={close}

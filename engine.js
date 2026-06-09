@@ -281,6 +281,7 @@
   async function cacheGet(key){ try{ const db = await idb(); return await new Promise((res, rej) => { const q = idbStore(db, "readonly").get(key); q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error); }); }catch(e){ return null; } }
   async function cachePut(key, u8){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").put(u8, key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
   async function cacheKeys(){ try{ const db = await idb(); return await new Promise((res, rej) => { const q = idbStore(db, "readonly").getAllKeys(); q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error); }); }catch(e){ return []; } }
+  async function cacheDelete(key){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").delete(key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
 
   async function fetchAndCacheModule(url, meta){
     const cached = await cacheGet(url);
@@ -379,6 +380,19 @@
   }
   function pickFile(){ ensureInput().click(); }
 
+  // remove an installed module by its version abbr: drop it from memory, forget it, clear its cache.
+  // Refuses to remove the active version (you'd have nothing to read) — the UI hides remove for it.
+  async function removeModule(abbr){
+    if(!modules[abbr] || abbr === active) return false;
+    const inst = getInstalled();
+    const url = Object.keys(inst).find(u => inst[u].abbr === abbr);
+    delete modules[abbr];
+    order = order.filter(a => a !== abbr);
+    if(url){ const m = getInstalled(); delete m[url]; setInstalled(m); cacheDelete(url); }
+    notify();
+    return true;
+  }
+
   // ── reading helpers over the active module ──
   function src(version){ return modules[version || active] || null; }
   function versions(){ return order.map(a => ({ abbr: a, name: modules[a].name, kind: modules[a].kind })); }
@@ -451,7 +465,7 @@
     BOOK_NAMES, bookName, bookAbbr, bookGroup, bookNum, parseRef,
     parseVerse, lex,
     loadModuleBytes, fetchAndCacheModule, pickFile,
-    cacheKeys, getCatalog, getMirror, getVideos, installModule, isInstalled, isInstalling,
+    cacheKeys, getCatalog, getMirror, getVideos, installModule, removeModule, isInstalled, isInstalling,
     installedMap: getInstalled,
     subscribe(fn){ subs.add(fn); return () => subs.delete(fn); },
     get loaded(){ return order.length > 0; },

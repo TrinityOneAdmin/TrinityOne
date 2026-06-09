@@ -205,7 +205,7 @@ function App() {
   useAE(() => {
     const sp = new URLSearchParams(location.search);
     if (!Bible.loaded) return;
-    const gid = sp.get('group'); if (gid) { const g = window.TrinityData.GROUPS.find(x => x.id === gid); if (g) setGroup(g); }
+    const gid = sp.get('group'); if (gid) { const g = window.TrinityData.GROUPS.find(x => x.id === gid) || { id: gid, name: gid, accent: 'var(--clay)', members: 0, prayer: /prayer/i.test(gid) }; setGroup(g); }
     const pid = sp.get('plan'); if (pid) { const p = window.TrinityData.PLANS.find(x => x.id === pid); if (p) setPlan(p); }
     if (sp.get('share')) setShareSheet(window.TrinityData.VOTD);
   }, [Bible.loaded]);
@@ -295,6 +295,7 @@ function App() {
     return () => offs.forEach(o => { try { o && o(); } catch (e) {} });
   }, []);
   const [churchSwitcher, setChurchSwitcher] = useA(churchParam === '1' || churchParam === 'follow');
+  const [churchSwitcherMode, setChurchSwitcherMode] = useA(churchParam === 'follow' ? 'follow' : 'list');
   // follow a real church by its npub (the steward shares it via QR/link/code): add it + make it
   // active, and resolve its name from the relay. The church's real groups (published by its console)
   // then load in chat. Accepts a bare npub OR anything containing one (a ?follow= link). Returns
@@ -368,6 +369,7 @@ function App() {
     loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
     gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setTab('read'); },
     addModule: () => Bible.pickFile(),
+    removeTranslation: (abbr) => Bible.removeModule(abbr),
     openStore: () => setStore(true), closeStore: () => setStore(false),
     openGroup: (g) => setGroup(g),
     walletSats, setWalletSats, giving, setGiving,
@@ -407,7 +409,7 @@ function App() {
     // multi-church
     churches, activeChurch,
     church: churches.find(c => c.id === activeChurch) || churches[0],
-    openChurchSwitcher: () => setChurchSwitcher(true),
+    openChurchSwitcher: (mode) => { setChurchSwitcherMode(mode === 'follow' ? 'follow' : 'list'); setChurchSwitcher(true); },
     setActiveChurch: (id) => { setActiveChurch(id); lsSet('trinityone.activeChurch', id); },
     addChurch: (c) => { setChurches(cs => cs.find(x => x.id === c.id) ? cs : [...cs, c]); setActiveChurch(c.id); lsSet('trinityone.activeChurch', c.id); },
     followChurch,   // follow a real church by npub (from a scanned/pasted invite); false if invalid
@@ -479,7 +481,7 @@ function App() {
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
             <ChatRoom group={group} open={!!group} onClose={() => setGroup(null)} ctx={ctx} />
-            <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx}
+            <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx} initialMode={churchSwitcherMode}
               churches={churches} activeId={activeChurch}
               onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); }}
               onFollowed={() => { setChurchSwitcher(false); toast('Now following — loading church…'); }} />

@@ -314,7 +314,7 @@ function ChatScreen({ ctx }) {
     <ScreenScroll>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, animation: 'trinityFade .5s ease both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
-        <IconBtn name="plus" onClick={() => ctx.toast(view === 'giving' ? 'Load funds or give' : 'Create or join a group')} />
+        <IconBtn name="plus" onClick={() => ctx.openChurchSwitcher('follow')} />
       </div>
       <div style={{ marginBottom: GIVING_ON ? 16 : 20, animation: 'trinityFade .5s ease .04s both' }}>
         <ChurchPill ctx={ctx} />
@@ -695,7 +695,7 @@ function ChatRoom({ group, open, onClose, ctx }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{group.name}</div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members} anonymous · Nostr</div>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members ? `${group.members} anonymous` : 'Anonymous'} · Nostr</div>
           </div>
           <IconBtn name="shield" onClick={() => ctx.toast('Everyone here is anonymous')} />
         </div>
