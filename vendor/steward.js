@@ -6465,6 +6465,7 @@ zoo`.split("\n");
   var NET = "trinityone";
   var KEY_LS = "trinityone.steward.church-key";
   var FUND_D = "trinityone/fund:";
+  var GROUP_D = "trinityone/group:";
   var now = () => Math.floor(Date.now() / 1e3);
   function relays() {
     const l = typeof location !== "undefined" ? location : null;
@@ -6578,6 +6579,69 @@ zoo`.split("\n");
         },
         oneose() {
           emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ---- groups (the church's chat rooms) ----
+    publishGroup(group) {
+      if (!sk) return Promise.resolve(null);
+      const id = group.id || "grp" + Date.now();
+      const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "" });
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET]], content }, sk)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
+    },
+    removeGroup(id) {
+      if (!sk) return Promise.resolve(null);
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+    },
+    subscribeGroups(onGroups) {
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => onGroups([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(GROUP_D)) return;
+          const id = d.slice(GROUP_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byId.delete(id);
+            emit();
+            return;
+          }
+          try {
+            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ---- church profile (kind-0): name etc. shown to members and in the console ----
+    subscribeProfile(onProfile) {
+      let latest = 0;
+      const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pub] }], {
+        onevent(e) {
+          if (e.created_at < latest) return;
+          latest = e.created_at;
+          try {
+            onProfile(JSON.parse(e.content));
+          } catch {
+          }
+        },
+        oneose() {
         }
       });
       return () => {

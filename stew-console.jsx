@@ -1,22 +1,24 @@
 // stew-console.jsx — desktop Steward Console: StewWizard + StewDashboard
 // Exports to window: StewWizard, StewDashboard
 
-// ── browser chrome wrapper ──
-function ConsoleChrome({ url = 'console.trinityone.app', children, bg = 'var(--paper)' }) {
+// ── console container (real app -- the fake browser chrome only shows in ?showcase mode) ──
+function ConsoleChrome({ children, bg = 'var(--paper)', showcase = false, url = 'console.trinityone.app' }) {
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: bg, fontFamily: 'var(--font-ui)' }}>
-      <div style={{ height: 46, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '0 16px', background: 'var(--surface-2)', borderBottom: '1px solid var(--line)' }}>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <span style={{ width: 12, height: 12, borderRadius: 999, background: '#E06C5B' }} />
-          <span style={{ width: 12, height: 12, borderRadius: 999, background: '#E0B860' }} />
-          <span style={{ width: 12, height: 12, borderRadius: 999, background: '#5E8C6A' }} />
+      {showcase ? (
+        <div style={{ height: 46, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '0 16px', background: 'var(--surface-2)', borderBottom: '1px solid var(--line)' }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <span style={{ width: 12, height: 12, borderRadius: 999, background: '#E06C5B' }} />
+            <span style={{ width: 12, height: 12, borderRadius: 999, background: '#E0B860' }} />
+            <span style={{ width: 12, height: 12, borderRadius: 999, background: '#5E8C6A' }} />
+          </div>
+          <div style={{ flex: 1, maxWidth: 520, margin: '0 auto', height: 28, borderRadius: 8, background: 'var(--surface)', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px' }}>
+            <Icon name="lock" size={13} color="var(--sage)" />
+            <span style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>{url}</span>
+          </div>
+          <div style={{ width: 52 }} />
         </div>
-        <div style={{ flex: 1, maxWidth: 520, margin: '0 auto', height: 28, borderRadius: 8, background: 'var(--surface)', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px' }}>
-          <Icon name="lock" size={13} color="var(--sage)" />
-          <span style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>{url}</span>
-        </div>
-        <div style={{ width: 52 }} />
-      </div>
+      ) : null}
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>{children}</div>
     </div>
   );

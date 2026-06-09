@@ -2,15 +2,22 @@
 
 const NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
-  { key: 'giving', label: 'Giving', ic: 'gift' },
   { key: 'groups', label: 'Groups', ic: 'chat' },
   { key: 'members', label: 'Members', ic: 'pray' },
   { key: 'relays', label: 'Relays', ic: 'globe' },
   { key: 'settings', label: 'Settings', ic: 'sliders' },
+  // { key: 'giving', label: 'Giving', ic: 'gift' },   // parked for the pilot (chat first)
 ];
 
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
+  const church = window.useStewardChurch();   // real church profile + npub from the relay
+  const churchName = church.name || 'Your Church';
+  const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
+  const editName = () => {
+    const n = window.prompt('Church name (members see this)', church.name || '');
+    if (n != null && n.trim()) window.Steward.publishProfile({ name: n.trim(), nip05: church.nip05 });
+  };
   return (
     <ConsoleChrome>
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
@@ -21,10 +28,13 @@ function StewDashboard({ initial = 'overview' }) {
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.5px', color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 6px', marginLeft: 'auto' }}>STEWARD</span>
           </div>
-          <button style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: 18, textAlign: 'left' }}>
-            <SkBadge initials="GC" size={34} radius={10} />
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14 }}>Grace Chapel</span><Icon name="check" size={12} stroke={3} color="var(--sage)" /></div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>grace.org</div></div>
-            <Icon name="chevD" size={15} color="var(--ink-3)" />
+          <button onClick={editName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: 18, textAlign: 'left' }}>
+            <SkBadge initials={initials} size={34} radius={10} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{churchName}</span>{church.name ? <Icon name="check" size={12} stroke={3} color="var(--sage)" /> : null}</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{church.npub ? church.npub.slice(0, 18) + '…' : 'no key'}</div>
+            </div>
+            <Icon name="pen" size={14} color="var(--ink-3)" />
           </button>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {NAV.map(n => {
@@ -97,28 +107,25 @@ function Panel({ title, action, children, style = {} }) {
 }
 
 function DashOverview({ onTab }) {
-  const funds = window.useStewardFunds();   // real published funds
+  const groups = window.useStewardGroups();   // real chat groups (the focus)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       <div style={{ display: 'flex', gap: 14 }}>
-        <StatCard label="Given this month" value="$11,500" sub="↑ 12% vs last" ic="bolt" tint="gold" />
-        <StatCard label="Year to date" value="$85,630" sub="across funds" ic="gift" tint="clay" />
-        <StatCard label="Members" value="312" sub="+8 this week" ic="pray" tint="sage" />
-        <StatCard label="Active funds" value={String(funds.length)} sub="signed to your relay" ic="bank" tint="ink" />
+        <StatCard label="Members" value="—" sub="invite your church" ic="pray" tint="sage" />
+        <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" />
+        <StatCard label="Announcements" value="—" sub="post to everyone" ic="send" tint="gold" />
+        <StatCard label="Your relay" value="Live" sub="self-hosted" ic="globe" tint="ink" />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          <Panel title="This week’s giving" action={<SkPill tint="sage">Sun was highest</SkPill>}>
-            <SkSpark data={SK.week} height={92} accent="var(--clay)" barW={26} />
-          </Panel>
-          <Panel title="Funds" action={<button onClick={() => onTab('giving')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={{ flex: 1 }}>
+          <Panel title="Groups & rooms" action={<button onClick={() => onTab('groups')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={{ flex: 1 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {funds.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No funds yet.</div> : null}
-              {funds.map(f => (
-                <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface-2)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={f.icon || 'gift'} size={18} color="currentColor" /></div>
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{f.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{f.custody || 'Custodial · Strike'}</div></div>
-                  <div style={{ textAlign: 'right' }}><div style={{ fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-display)' }}>{f.month || '—'}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>this month</div></div>
+              {groups.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No groups yet — create your church’s first chat room.</div> : null}
+              {groups.map(g => (
+                <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface-2)', color: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={g.kind === 'broadcast' ? 'send' : 'chat'} size={18} color="currentColor" /></div>
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{g.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.sub || (g.kind === 'broadcast' ? 'Broadcast' : 'Group')}</div></div>
+                  {g.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
                 </div>
               ))}
             </div>
@@ -191,9 +198,10 @@ function DashGiving() {
   );
 }
 
-function ListPanel({ title, items, addLabel, renderRight }) {
+function ListPanel({ title, items, addLabel, renderRight, onAdd, empty }) {
   return (
-    <Panel title={title} action={<button className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {addLabel}</button>} style={{ height: '100%' }}>
+    <Panel title={title} action={<button onClick={onAdd} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {addLabel}</button>} style={{ height: '100%' }}>
+      {items.length === 0 ? <div style={{ textAlign: 'center', padding: '34px 10px', color: 'var(--ink-3)', fontSize: 13.5 }}>{empty || 'Nothing here yet.'}</div> : null}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {items.map((it, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
@@ -208,8 +216,17 @@ function ListPanel({ title, items, addLabel, renderRight }) {
 }
 
 function DashGroups() {
-  const items = SK.groups.map(g => ({ ...g, ic: g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
-  return <ListPanel title="Groups & rooms" addLabel="New group" items={items} renderRight={(it) => it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : <Icon name="dots" size={18} color="var(--ink-3)" />} />;
+  const groups = window.useStewardGroups();   // REAL chat groups the church has published
+  const items = groups.map(g => ({ ...g, ic: g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
+  const add = () => { const n = window.prompt('New group name (e.g. Sunday Life Group)'); if (n && n.trim()) window.Steward.publishGroup({ name: n.trim(), kind: 'group' }); };
+  return <ListPanel title="Groups & rooms" addLabel="New group" onAdd={add} items={items}
+    empty="No groups yet — create your church's first chat room."
+    renderRight={(it) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
+        <button onClick={() => window.Steward.removeGroup(it.id)} title="Remove group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+      </div>
+    )} />;
 }
 
 function DashRelays() {

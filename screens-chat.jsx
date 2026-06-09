@@ -3,6 +3,10 @@
 // derived a key (window.TrinityIdentity), otherwise falls back to the mock identity.
 const { useState: useC, useEffect: useCE, useRef: useCR } = React;
 
+// Giving is PARKED for the pilot's first months (focus on chat first). Flip to true to bring it
+// back -- the whole Lightning giving flow stays built behind this flag.
+const GIVING_ON = false;
+
 // reflect the live (real-or-mock) anonymous identity; re-render on regeneration
 function useIdentity() {
   const [, force] = useC(0);
@@ -242,7 +246,7 @@ function ChatScreen({ ctx }) {
   const idParam = new URLSearchParams(location.search).get('identity'); // main|recovery|restore|invite
   const [nostr, setNostr] = useC(!!idParam);
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
-  const [view, setView] = useC(chatParam === 'giving' ? 'giving' : 'groups');
+  const [view, setView] = useC(GIVING_ON && chatParam === 'giving' ? 'giving' : 'groups');
   const id = useIdentity();
   const churchGroups = D.GROUPS.filter(g => g.church === ctx.church.id);   // groups for the active church
   const live = !!(window.Fellowship && window.Fellowship.subscribeGroups);
@@ -299,11 +303,12 @@ function ChatScreen({ ctx }) {
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
         <IconBtn name="plus" onClick={() => ctx.toast(view === 'giving' ? 'Load funds or give' : 'Create or join a group')} />
       </div>
-      <div style={{ marginBottom: 16, animation: 'trinityFade .5s ease .04s both' }}>
+      <div style={{ marginBottom: GIVING_ON ? 16 : 20, animation: 'trinityFade .5s ease .04s both' }}>
         <ChurchPill ctx={ctx} />
       </div>
 
-      {/* segmented: Groups / Giving */}
+      {/* segmented: Groups / Giving (giving parked for the pilot) */}
+      {GIVING_ON ? (
       <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 15, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 20 }}>
         {[['groups', 'Groups', 'chat'], ['giving', 'Giving', 'bolt']].map(([gid, label, ic]) => {
           const on = view === gid;
@@ -317,8 +322,9 @@ function ChatScreen({ ctx }) {
           );
         })}
       </div>
+      ) : null}
 
-      {view === 'giving' ? (
+      {GIVING_ON && view === 'giving' ? (
         <GivingView ctx={ctx} balance={ctx.walletSats} setBalance={ctx.setWalletSats} history={ctx.giving} setHistory={ctx.setGiving} />
       ) : (
       <React.Fragment>

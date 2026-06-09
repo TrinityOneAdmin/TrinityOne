@@ -3,13 +3,28 @@
 // Phase B: wired to window.Steward (real church key + Nostr publishing on the self-hosted relay).
 const { useState: useSt, useEffect: useStE } = React;
 
-// live church funds from the relay (published by this console). Shared by the dashboard sections.
+// live church data from the relay (published by this console). Shared by the dashboard sections.
 function useStewardFunds() {
   const [funds, setFunds] = useSt([]);
   useStE(() => window.Steward.subscribeFunds(setFunds), []);
   return funds;
 }
 window.useStewardFunds = useStewardFunds;
+
+function useStewardGroups() {
+  const [groups, setGroups] = useSt([]);
+  useStE(() => window.Steward.subscribeGroups(setGroups), []);
+  return groups;
+}
+window.useStewardGroups = useStewardGroups;
+
+// the church's own profile (name etc.) + npub
+function useStewardChurch() {
+  const [p, setP] = useSt({});
+  useStE(() => window.Steward.subscribeProfile(setP), []);
+  return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', npub: window.Steward.npub || '' };
+}
+window.useStewardChurch = useStewardChurch;
 
 // ensure a church key exists; on first run, seed the church's funds from the sample set (published
 // for real, so the console is populated AND every fund is a signed event members can read).
@@ -18,15 +33,15 @@ function initChurch() {
   const inject = params.get('churchkey');                 // test hook: load a known church key
   if (inject) window.Steward.init(inject);
   window.Steward.ensureKey();
-  let seeded = false;
-  const off = window.Steward.subscribeFunds(list => {
-    if (seeded) return;
-    seeded = true;
-    setTimeout(off, 0);
-    if (!list.length && !inject) {
-      (window.SK.funds || []).forEach(f => window.Steward.publishFund({ id: f.id, name: f.name, sub: f.sub, icon: f.icon, custody: f.custody }));
-    }
-  });
+  // first run: publish the sample groups (the chat focus) + funds (kept for when giving returns)
+  // as REAL signed events, so the console is populated and members can read them.
+  if (inject) return;
+  try {
+    if (localStorage.getItem('trinityone.steward.seeded')) return;
+    localStorage.setItem('trinityone.steward.seeded', '1');
+    (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: g.id, name: g.name, kind: g.kind, sub: g.sub }));
+    (window.SK.funds || []).forEach(f => window.Steward.publishFund({ id: f.id, name: f.name, sub: f.sub, icon: f.icon, custody: f.custody }));
+  } catch (e) {}
 }
 
 const SURFACES = [
@@ -58,10 +73,20 @@ function SegBtn({ on, onClick, children, icon }) {
 
 function StewardRoot() {
   const params = new URLSearchParams(location.search);
-  const initSurface = SURFACES.some(s => s.key === params.get('surface')) ? params.get('surface') : 'console';
-  const [surface, setSurface] = useSt(initSurface);
+  const showcase = params.get('showcase') === '1';   // ?showcase=1 = the design gallery (reference)
+  const [surface, setSurface] = useSt(SURFACES.some(s => s.key === params.get('surface')) ? params.get('surface') : 'console');
   const [consoleView, setConsoleView] = useSt(params.get('setup') === '1' ? 'wizard' : 'dashboard');
 
+  // ── Real product: steward.html IS the console, full-window ──
+  if (!showcase) {
+    return (
+      <div className="stew-root" style={{ height: '100%' }}>
+        {consoleView === 'wizard' ? <StewWizard /> : <StewDashboard initial={params.get('tab') || 'overview'} />}
+      </div>
+    );
+  }
+
+  // ── ?showcase=1: the design gallery of every surface (kept for reference) ──
   let body = null;
   if (surface === 'console') body = <Frame w={1180} h={800}>{consoleView === 'wizard' ? <StewWizard /> : <StewDashboard initial={params.get('tab') || 'overview'} />}</Frame>;
   else if (surface === 'relay') body = <Frame w={1180} h={760}><RelayNodeApp initial={params.get('relay') === 'setup' ? 'setup' : 'running'} /></Frame>;
@@ -70,15 +95,13 @@ function StewardRoot() {
   else if (surface === 'custody') body = <Frame w={1180} h={624}><CustodyExplainer /></Frame>;
 
   const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
-
   return (
     <div className="stew-root" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* top surface switcher */}
       <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '12px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <Halo size={24} color="var(--ink)" spark="var(--clay)" />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
-          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.5px', color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 6px' }}>STEWARD</span>
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.5px', color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 6px' }}>SHOWCASE</span>
         </div>
         <div style={{ flex: 1 }} />
         {surface === 'console' ? (
@@ -91,7 +114,6 @@ function StewardRoot() {
           {SURFACES.map(s => <SegBtn key={s.key} on={s.key === surface} icon={s.ic} onClick={() => setSurface(s.key)}>{s.label}</SegBtn>)}
         </div>
       </div>
-      {/* stage */}
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28, background: '#efece6' }}>
         {body}
       </div>
