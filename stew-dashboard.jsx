@@ -12,6 +12,7 @@ const NAV = [
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
+  const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const church = window.useStewardChurch();   // real church profile + npub from the relay
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -22,6 +23,7 @@ function StewDashboard({ initial = 'overview' }) {
   return (
     <ConsoleChrome>
       {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
+      {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
         {/* sidebar */}
         <div style={{ width: 232, flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', padding: '22px 16px' }}>
@@ -63,7 +65,7 @@ function StewDashboard({ initial = 'overview' }) {
             <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20 }}>{NAV.find(n => n.key === tab).label}</div></div>
             <div style={{ flex: 1 }} />
             <button onClick={() => setInvite(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> Invite code</button>
-            <button className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> New post</button>
+            <button onClick={() => setPosting(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> New post</button>
             <SkBadge initials="PJ" size={36} radius={11} accent="var(--sage)" />
           </div>
           {/* content */}
@@ -122,6 +124,44 @@ function JoinModal({ onClose }) {
   );
 }
 
+// post a signed announcement to the church (kind-1), targeting a broadcast room
+function NewPostModal({ onClose }) {
+  const groups = window.useStewardGroups();
+  const targets = groups.filter(g => g.kind === 'broadcast');
+  const [text, setText] = React.useState('');
+  const [target, setTarget] = React.useState(targets[0] ? targets[0].id : 'announce');
+  const [sending, setSending] = React.useState(false);
+  const post = async () => {
+    if (!text.trim() || sending) return;
+    setSending(true);
+    try { await window.Steward.publishPost(text.trim(), target); } catch {}
+    onClose();
+  };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>New announcement</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A signed message from your church. Everyone who joined sees it in the chosen room.</p>
+        {targets.length ? (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 8 }}>Post to</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {targets.map(g => (
+                <button key={g.id} onClick={() => setTarget(g.id)} style={{ padding: '7px 13px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: '1px solid ' + (target === g.id ? 'var(--clay)' : 'var(--line)'), background: target === g.id ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: target === g.id ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{g.name}</button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <textarea value={text} onChange={e => setText(e.target.value)} autoFocus rows={4} placeholder="Write to your church…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface-2)', padding: '13px 15px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.5 }} />
+        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+          <button onClick={post} disabled={!text.trim() || sending} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (!text.trim() || sending) ? 0.55 : 1 }}><Icon name="send" size={16} color="#fff" /> {sending ? 'Posting…' : 'Post'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, ic, tint }) {
   const t = SK_TINT[tint];
   return (
@@ -153,13 +193,15 @@ function DashOverview({ onTab }) {
   const groups = window.useStewardGroups();   // real chat groups (the focus)
   const members = window.useStewardMembers(); // real members (joined and/or active)
   const relays = window.useStewardRelays();   // real relay status
+  const stats = window.useStewardStats();     // real footprint + announcement counts
+  const activity = window.useStewardActivity(); // real recent-events feed
   const relayUp = relays.some(r => r.status === 'on');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       <div style={{ display: 'flex', gap: 14 }}>
         <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'invite more' : 'invite your church'} ic="pray" tint="sage" />
         <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" />
-        <StatCard label="Announcements" value="—" sub="post to everyone" ic="send" tint="gold" />
+        <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" />
         <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="self-hosted" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
@@ -182,13 +224,14 @@ function DashOverview({ onTab }) {
             <JoinCard qrSize={92} />
           </Panel>
           <Panel title="Recent activity" style={{ flex: 1 }}>
+            {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {SK.activity.map((a, i) => {
-                const t = SK_TINT[a.tint];
+              {activity.map((a) => {
+                const t = SK_TINT[a.tint] || SK_TINT.ink;
                 return (
-                  <div key={i} style={{ display: 'flex', gap: 11, alignItems: 'flex-start' }}>
-                    <div style={{ width: 30, height: 30, borderRadius: 9, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={a.ic} size={16} color="currentColor" fill={a.ic === 'bolt'} /></div>
-                    <div style={{ flex: 1 }}><div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>{a.text}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 1 }}>{a.time} · signed by Grace Chapel</div></div>
+                  <div key={a.id} style={{ display: 'flex', gap: 11, alignItems: 'flex-start' }}>
+                    <div style={{ width: 30, height: 30, borderRadius: 9, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={a.ic} size={16} color="currentColor" /></div>
+                    <div style={{ flex: 1 }}><div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>{a.text}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 1 }}>{ago(a.ts)}</div></div>
                   </div>
                 );
               })}
@@ -345,59 +388,6 @@ function DashRelays() {
   );
 }
 
-// shared promote-to-steward confirmation (founder action)
-function PromoteModal({ member, onConfirm, onClose }) {
-  if (!member) return null;
-  const isDemote = member.role === 'steward';
-  return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 30,
-      background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
-      <div style={{ width: 460, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
-        <div style={{ padding: '24px 26px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
-            <SkBadge initials={member.h.split(' ').map(w => w[0]).join('').slice(0, 2)} size={46} radius={13} accent={isDemote ? 'var(--ink-3)' : 'var(--clay)'} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{isDemote ? `Remove ${member.h} as steward?` : `Make ${member.h} a steward?`}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{member.handle || member.npub}</div>
-            </div>
-          </div>
-
-          {isDemote ? (
-            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.6, margin: '0 0 18px' }}>
-              They’ll lose sign-off rights for Grace Chapel. Their delegation is revoked at your next publish — past actions they signed stay valid. They remain an ordinary member.</p>
-          ) : (
-            <React.Fragment>
-              <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.6, margin: '0 0 14px' }}>
-                Stewards can create funds, post announcements, and manage groups for Grace Chapel. Here’s exactly what that grants — and what it doesn’t:</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
-                {[
-                  { ic: 'check', fg: 'var(--sage)', t: 'Signs on the church’s behalf', s: 'Via NIP-26 delegation from their own key' },
-                  { ic: 'lock', fg: 'var(--sage)', t: 'Your secret key is never shared', s: 'It stays in your Keykeeper — delegation is a signed permission, not a copy' },
-                  { ic: 'refresh', fg: 'var(--clay)', t: 'You can revoke it anytime', s: 'Removing them ends their sign-off rights at once' },
-                ].map(r => (
-                  <div key={r.t} style={{ display: 'flex', gap: 11, alignItems: 'flex-start' }}>
-                    <div style={{ width: 30, height: 30, borderRadius: 9, flexShrink: 0, background: 'var(--surface-2)', color: r.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={r.ic} size={16} color="currentColor" stroke={2.2} /></div>
-                    <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{r.t}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{r.s}</div></div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 28%, transparent)', marginBottom: 4 }}>
-                <Icon name="bolt" size={16} fill color="var(--gold)" style={{ flexShrink: 0, marginTop: 1 }} />
-                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Confirming signs a delegation token. <b style={{ color: 'var(--ink)' }}>Keykeeper</b> will ask you to approve it.</div>
-              </div>
-            </React.Fragment>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 10, padding: '18px 26px 22px' }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px' }}>Cancel</button>
-          <button onClick={() => onConfirm(member)} className="sk-btn" style={{ flex: 1, padding: '12px', background: isDemote ? 'var(--ink)' : 'var(--clay)', color: '#fff' }}>
-            {isDemote ? <React.Fragment><Icon name="refresh" size={16} color="#fff" /> Remove steward</React.Fragment> : <React.Fragment><Icon name="shield" size={16} color="#fff" /> Confirm &amp; sign</React.Fragment>}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function ago(ts) {
   if (!ts) return '';
@@ -457,33 +447,52 @@ function DashMembers() {
 window.DashMembers = DashMembers;
 
 function DashSettings({ onTab }) {
-  const stewards = [
-    { h: 'Pastor John', sub: 'Founder · holds the church key', founder: true },
-    { h: 'David Okafor', sub: 'Steward · delegated Apr 12', founder: false },
-  ];
+  const church = window.useStewardChurch();   // real church name + npub
+  const [revealed, setRevealed] = React.useState(false);
+  const [phrase, setPhrase] = React.useState('');
+  const [copied, setCopied] = React.useState(false);
+  const editName = () => {
+    const n = window.prompt('Church name (members see this)', church.name || '');
+    if (n != null && n.trim()) window.Steward.publishProfile({ name: n.trim(), nip05: church.nip05 });
+  };
+  const reveal = () => { try { setPhrase(window.Steward.exportMnemonic() || ''); } catch {} setRevealed(true); };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
-      <Panel title="Church key">
-        <SkKey value={SK.church.npub} label="npub" />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 14, padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          <Icon name="lock" size={18} color="var(--sage)" />
-          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Signer · Keykeeper extension</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Secret key held in your browser add-on</div></div>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--sage)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} /> Connected</span>
+      <Panel title="Church identity" action={<button onClick={editName} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
+          <SkBadge initials={(church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase()} size={44} radius={13} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{church.name || 'Name your church'}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Shown to everyone who joins</div>
+          </div>
         </div>
+        <SkKey value={church.npub || '—'} label="npub" />
       </Panel>
-      <Panel title="Stewards" action={<button onClick={() => onTab && onTab('members')} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Add a steward</button>}>
-        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Leaders who can sign for Grace Chapel. Each gets sign-off rights via their own key (NIP-26 delegation) — your church’s secret is never shared.</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {stewards.map(s => (
-            <div key={s.h} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-              <SkBadge initials={s.h.split(' ').map(w => w[0]).join('').slice(0, 2)} size={36} radius={11} accent="var(--clay)" />
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.h}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{s.sub}</div></div>
-              {s.founder ? <SkPill tint="clay">founder</SkPill> : <SkPill tint="ink">steward</SkPill>}
-            </div>
-          ))}
+
+      <Panel title="Church key">
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 12 }}>
+          <Icon name="lock" size={18} color="var(--sage)" />
+          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Held on this device</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Pilot key custody · a Keykeeper signer comes later</div></div>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--sage)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} /> Active</span>
         </div>
+        {!revealed ? (
+          <button onClick={reveal} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Reveal recovery phrase</button>
+        ) : (
+          <div style={{ padding: 14, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))' }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 14, lineHeight: 1.7, wordSpacing: 3, color: 'var(--ink)' }}>{phrase || 'No phrase available for this key.'}</div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              {phrase ? <button onClick={() => { copyText(phrase); setCopied(true); setTimeout(() => setCopied(false), 1400); }} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied ? 'check' : 'receipt'} size={14} color="#fff" /> {copied ? 'Copied' : 'Copy'}</button> : null}
+              <button onClick={() => { setRevealed(false); setPhrase(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}>Hide</button>
+            </div>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Stewards">
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>For the pilot, this one key runs {church.name || 'your church'}. Shared sign-off for multiple leaders — each with their own key via NIP-26 delegation, so the church secret is never copied — is on the roadmap.</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 12.5, color: 'var(--ink-3)' }}>
-          <Icon name="shield" size={14} color="var(--ink-3)" /> Promote anyone from the <button onClick={() => onTab && onTab('members')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Members list</button>.
+          <Icon name="pray" size={14} color="var(--ink-3)" /> See who’s joined in the <button onClick={() => onTab && onTab('members')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Members list</button>.
         </div>
       </Panel>
     </div>

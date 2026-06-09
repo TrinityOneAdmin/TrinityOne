@@ -201,12 +201,39 @@ window.Steward = {
       ws.onerror = () => { clearTimeout(to); finish('off'); };
     })));
   },
-  // live count of the church's footprint on the relay (its own events + everything addressed to it)
+  // live count of the church's footprint on the relay (its own events + everything addressed to it),
+  // plus how many of those are the church's own announcements (kind-1 it authored)
   subscribeStats(onStats) {
-    const ids = new Set();
+    const ids = new Set(), ann = new Set();
+    const emit = () => onStats({ events: ids.size, announcements: ann.size });
     const sub = pool.subscribeMany(relays(), [{ authors: [pub] }, { '#p': [pub] }], {
-      onevent(e) { ids.add(e.id); onStats({ events: ids.size }); },
-      oneose() { onStats({ events: ids.size }); },
+      onevent(e) { ids.add(e.id); if (e.kind === 1 && e.pubkey === pub) ann.add(e.id); emit(); },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+
+  // a live, recent activity feed derived from real events (groups, joins, posts) — newest first
+  subscribeActivity(onActivity, max = 12) {
+    const byId = new Map();
+    const emit = () => onActivity([...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max));
+    const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub] }, { kinds: [1, 30078], '#p': [pub] }], {
+      onevent(e) {
+        const own = e.pubkey === pub;
+        let item = null;
+        if (e.kind === 30078) {
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
+          if (d.startsWith(GROUP_D)) { let n = ''; try { n = JSON.parse(e.content).name; } catch {} item = { ic: 'chat', tint: 'sage', text: deleted ? 'A group was removed' : `Group “${n || 'untitled'}” ${own ? 'created' : 'updated'}` }; }
+          else if (d.startsWith('trinityone/member:')) { if (!deleted) item = { ic: 'pray', tint: 'sage', text: 'A new member joined' }; }
+          else if (d.startsWith(FUND_D)) { let n = ''; try { n = JSON.parse(e.content).name; } catch {} item = { ic: 'gift', tint: 'gold', text: deleted ? 'A fund was removed' : `Fund “${n || ''}” updated` }; }
+        } else if (e.kind === 1) {
+          if (own) item = { ic: 'send', tint: 'gold', text: 'You posted an announcement' };
+          else { const g = (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1] || 'a group'; item = { ic: 'chat', tint: 'clay', text: `New message in ${g}` }; }
+        }
+        if (item) { byId.set(e.id, { id: e.id, ts: e.created_at, ...item }); emit(); }
+      },
+      oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },

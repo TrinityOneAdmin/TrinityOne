@@ -40,11 +40,18 @@ function useStewardRelays() {
 window.useStewardRelays = useStewardRelays;
 
 function useStewardStats() {
-  const [stats, setStats] = useSt({ events: 0 });
+  const [stats, setStats] = useSt({ events: 0, announcements: 0 });
   useStE(() => window.Steward.subscribeStats(setStats), []);
   return stats;
 }
 window.useStewardStats = useStewardStats;
+
+function useStewardActivity() {
+  const [activity, setActivity] = useSt([]);
+  useStE(() => window.Steward.subscribeActivity(setActivity), []);
+  return activity;
+}
+window.useStewardActivity = useStewardActivity;
 
 // the church's own profile (name etc.) + npub
 function useStewardChurch() {
@@ -54,21 +61,20 @@ function useStewardChurch() {
 }
 window.useStewardChurch = useStewardChurch;
 
-// ensure a church key exists; on first run, seed the church's funds from the sample set (published
-// for real, so the console is populated AND every fund is a signed event members can read).
+// ensure a church key exists; on first run, seed the church's starter groups from the sample set
+// (published for real, so the console is populated AND every group is a signed event members read).
 function initChurch() {
   const params = new URLSearchParams(location.search);
   const inject = params.get('churchkey');                 // test hook: load a known church key
   if (inject) window.Steward.init(inject);
   window.Steward.ensureKey();
-  // first run: publish the sample groups (the chat focus) + funds (kept for when giving returns)
-  // as REAL signed events, so the console is populated and members can read them.
+  // first run: publish the sample chat groups (the focus) as REAL signed events. Funds are NOT
+  // seeded — giving is parked for the pilot, so the console stays chat-only.
   if (inject) return;
   try {
     if (localStorage.getItem('trinityone.steward.seeded')) return;
     localStorage.setItem('trinityone.steward.seeded', '1');
     (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: g.id, name: g.name, kind: g.kind, sub: g.sub }));
-    (window.SK.funds || []).forEach(f => window.Steward.publishFund({ id: f.id, name: f.name, sub: f.sub, icon: f.icon, custody: f.custody }));
   } catch (e) {}
 }
 

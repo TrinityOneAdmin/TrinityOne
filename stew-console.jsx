@@ -102,18 +102,21 @@ function StewWizard() {
 }
 
 function WizKey({ custody, setCustody }) {
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '', npub: '' };
+  const name = church.name || 'Your church';
+  const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
   return (
     <div style={{ marginTop: 18 }}>
-      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This mints your church’s identity on Nostr. Every fund, group and notice gets <b style={{ color: 'var(--ink)' }}>signed</b> by it — so members can trust a message is really from you.</p>
+      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This mints your church’s identity on Nostr. Every group and notice gets <b style={{ color: 'var(--ink)' }}>signed</b> by it — so members can trust a message is really from you.</p>
       <div style={{ marginTop: 22, borderRadius: 18, padding: 24, background: 'linear-gradient(160deg, var(--midnight-2), var(--midnight))', color: 'var(--paper)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <SkBadge initials="GC" size={42} />
-          <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Grace Chapel</div><div style={{ fontSize: 12.5, opacity: .6 }}>Public church key</div></div>
+          <SkBadge initials={initials} size={42} />
+          <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{name}</div><div style={{ fontSize: 12.5, opacity: .6 }}>Public church key</div></div>
           <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: 'var(--sage-soft)' }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--sage)' }} /> Generated</div>
         </div>
-        <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 11, background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.1)' }}>
+        <div onClick={() => { try { navigator.clipboard.writeText(church.npub || ''); } catch {} }} style={{ cursor: 'pointer', marginTop: 16, display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 11, background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.1)' }}>
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold-soft)', background: 'rgba(224,184,96,.16)', padding: '3px 7px', borderRadius: 6 }}>NPUB</span>
-          <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, opacity: .85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{SK.church.npub}</span>
+          <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, opacity: .85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{church.npub || '—'}</span>
           <Icon name="copy" size={16} color="rgba(255,255,255,.5)" />
         </div>
       </div>
@@ -168,16 +171,16 @@ function WizFund({ fundCustody, setFundCustody }) {
 function WizRelays({ ownRelay, setOwnRelay }) {
   return (
     <div style={{ marginTop: 18 }}>
-      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>Relays store and serve your church’s signed events. The shared ones work out of the box — add your own later for full control.</p>
+      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>Relays store and serve your church’s signed events. Your church already hosts its own — every message and member lives on infrastructure you control.</p>
       <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {SK.relays.filter(r => r.kind === 'shared' || ownRelay).map(r => (
-          <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+        {(window.Steward && window.Steward.relayList ? window.Steward.relayList() : []).map(url => (
+          <div key={url} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)' }}>
             <Icon name="globe" size={18} color="var(--sage)" />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600 }}>{r.url}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{r.label}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Your relay · self-hosted</div>
             </div>
-            {r.kind === 'own' ? <SkPill tint="clay">Yours</SkPill> : null}
+            <SkPill tint="clay">Yours</SkPill>
             <div style={{ width: 40, height: 24, borderRadius: 999, background: 'var(--sage)', position: 'relative' }}><span style={{ position: 'absolute', top: 3, right: 3, width: 18, height: 18, borderRadius: 999, background: '#fff' }} /></div>
           </div>
         ))}
@@ -189,7 +192,7 @@ function WizRelays({ ownRelay, setOwnRelay }) {
       ) : (
         <div style={{ marginTop: 12, display: 'flex', gap: 10, padding: 13, borderRadius: 13, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, transparent)' }}>
           <Icon name="check" size={18} stroke={2.4} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Added <span className="sk-mono" style={{ color: 'var(--ink)', fontWeight: 600 }}>relay.grace.org</span>. Run the <b style={{ color: 'var(--ink)' }}>TrinityOne Relay</b> app on any Mac, Windows or Linux machine — it does the rest, no command line.</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>You’re hosting your own relay. The <b style={{ color: 'var(--ink)' }}>TrinityOne Relay</b> app runs on any Mac, Windows or Linux machine — it does the rest, no command line.</div>
         </div>
       )}
     </div>
