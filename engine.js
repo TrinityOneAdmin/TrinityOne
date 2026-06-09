@@ -293,6 +293,12 @@
     return loadModuleBytes(u8, url.split("/").pop(), meta);
   }
 
+  // bundled default Bible — auto-installed on first run so the app lands reading, not on an
+  // empty "browse modules" wall. Removable/switchable like any other module afterwards.
+  const DEFAULT_MODULE = { id: "eng-akjv-pce", abbr: "AKJV/PCE",
+    name: "Authorised (King James) Version, Pure Cambridge Edition",
+    kind: "bible", format: "mysword", category: "bibles", url: "modules/eng-akjv.bbl.mybible" };
+
   // ── catalog + installed-module registry (download-once, MySword style) ──
   const INSTALLED_KEY = "trinityone.installed";   // localStorage map: url -> meta
   const installing = new Set();              // urls currently downloading
@@ -456,6 +462,12 @@
     const url = new URLSearchParams(location.search).get("module");
     if(url){
       try{ await fetchAndCacheModule(url); }
+      catch(err){ console.error(err); window.Bible._error = err.message; }
+    }
+    // first run: nothing installed and nothing requested — install the bundled default Bible so a
+    // fresh open lands on scripture, not the empty state.
+    if(order.length === 0 && !url){
+      try{ await installModule(DEFAULT_MODULE); }
       catch(err){ console.error(err); window.Bible._error = err.message; }
     }
     loadingFlag = false; notify();

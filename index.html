@@ -4,6 +4,13 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>TrinityOne — Bible Study</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#C25A38" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="TrinityOne" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<link rel="icon" type="image/png" href="icons/icon-192.png" />
 <link rel="stylesheet" href="vendor/fonts/fonts.css" />
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -184,5 +191,12 @@
 <script type="text/babel" src="screens-help.jsx"></script>
 <script type="text/babel" src="screens-help-main.jsx"></script>
 <script type="text/babel" src="app.jsx"></script>
+
+<!-- register the offline service worker (caches the app shell; modules live in IndexedDB) -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  }
+</script>
 </body>
 </html>
