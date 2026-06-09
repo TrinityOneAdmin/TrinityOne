@@ -215,18 +215,57 @@ function ListPanel({ title, items, addLabel, renderRight, onAdd, empty }) {
   );
 }
 
+// create-a-group modal (a real form, not a prompt)
+function NewGroupModal({ open, onClose }) {
+  const [name, setName] = React.useState('');
+  const [kind, setKind] = React.useState('group');
+  const [sub, setSub] = React.useState('');
+  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); } }, [open]);
+  if (!open) return null;
+  const create = () => { if (!name.trim()) return; window.Steward.publishGroup({ name: name.trim(), kind, sub: sub.trim() }); onClose(); };
+  const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
+  const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 30,
+      background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
+      <div style={{ width: 480, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+        <div style={{ padding: '24px 26px 0' }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, marginBottom: 4 }}>New group</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18, lineHeight: 1.5 }}>A chat room (or a broadcast channel) for your church. It’s published as a signed event your members can join.</div>
+          <div style={lbl}>NAME</div>
+          <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') create(); }} placeholder="e.g. Sunday Service" style={{ ...fld, fontWeight: 600, marginBottom: 16 }} />
+          <div style={lbl}>TYPE</div>
+          <SkToggle value={kind} onChange={setKind} options={[{ value: 'group', label: 'Group chat', icon: 'chat' }, { value: 'broadcast', label: 'Broadcast', icon: 'send' }]} style={{ marginBottom: 6 }} />
+          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '6px 0 16px', lineHeight: 1.45 }}>{kind === 'broadcast' ? 'Only stewards post; everyone reads. Good for announcements.' : 'Everyone in the group can post and reply.'}</div>
+          <div style={lbl}>DESCRIPTION</div>
+          <input value={sub} onChange={e => setSub(e.target.value)} placeholder="Optional — e.g. Whole church" style={{ ...fld, fontSize: 14.5 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 10, padding: '20px 26px 22px' }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px' }}>Cancel</button>
+          <button onClick={create} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: name.trim() ? 1 : .5 }}><Icon name="plus" size={16} color="#fff" /> Create group</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashGroups() {
   const groups = window.useStewardGroups();   // REAL chat groups the church has published
+  const [adding, setAdding] = React.useState(new URLSearchParams(location.search).get('newgroup') === '1');
   const items = groups.map(g => ({ ...g, ic: g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
-  const add = () => { const n = window.prompt('New group name (e.g. Sunday Life Group)'); if (n && n.trim()) window.Steward.publishGroup({ name: n.trim(), kind: 'group' }); };
-  return <ListPanel title="Groups & rooms" addLabel="New group" onAdd={add} items={items}
-    empty="No groups yet — create your church's first chat room."
-    renderRight={(it) => (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
-        <button onClick={() => window.Steward.removeGroup(it.id)} title="Remove group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
-      </div>
-    )} />;
+  return (
+    <div style={{ position: 'relative', height: '100%' }}>
+      <ListPanel title="Groups & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items}
+        empty="No groups yet — create your church's first chat room."
+        renderRight={(it) => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
+            <button onClick={() => window.Steward.removeGroup(it.id)} title="Remove group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+          </div>
+        )} />
+      <NewGroupModal open={adding} onClose={() => setAdding(false)} />
+    </div>
+  );
 }
 
 function DashRelays() {

@@ -6,6 +6,15 @@
 import { SimplePool } from 'nostr-tools/pool';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
+import { decode as nip19decode } from 'nostr-tools/nip19';
+
+// a church is identified by its npub (or hex pubkey) -- resolve to a 32-byte hex pubkey
+function toPub(npubOrHex) {
+  if (!npubOrHex) return null;
+  if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase();
+  try { const d = nip19decode(npubOrHex); return d.type === 'npub' ? d.data : null; } catch { return null; }
+}
+const GROUP_D = 'trinityone/group:';
 
 const NET = 'trinityone';                       // network-wide tag
 // Relays are configurable + persisted, so pointing at a hosted wss:// relay is a settings
@@ -192,6 +201,38 @@ window.Fellowship = {
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
         try { onEvent(e); } catch (err) { console.error(err); }
       },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+
+  // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──
+  // onGroups([{id,name,kind,sub}]) fires on change; returns an unsubscribe fn.
+  subscribeChurchGroups(churchNpub, onGroups) {
+    const pubk = toPub(churchNpub);
+    if (!pubk) { onGroups([]); return () => {}; }
+    const byId = new Map();
+    const emit = () => onGroups([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d.startsWith(GROUP_D)) return;
+        const id = d.slice(GROUP_D.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+
+  // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──
+  subscribeChurchProfile(churchNpub, onProfile) {
+    const pubk = toPub(churchNpub);
+    if (!pubk) { onProfile(null); return () => {}; }
+    let latest = 0;
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pubk] }], {
+      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { onProfile(JSON.parse(e.content)); } catch {} },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };

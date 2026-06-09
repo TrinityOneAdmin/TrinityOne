@@ -248,13 +248,26 @@ function ChatScreen({ ctx }) {
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
   const [view, setView] = useC(GIVING_ON && chatParam === 'giving' ? 'giving' : 'groups');
   const id = useIdentity();
-  const churchGroups = D.GROUPS.filter(g => g.church === ctx.church.id);   // groups for the active church
   const live = !!(window.Fellowship && window.Fellowship.subscribeGroups);
   const relayCount = live ? window.Fellowship.relays.length : D.RELAYS.filter(r => r.status === 'on').length;
   const [activity, setActivity] = useC({});   // gid -> { text, ts }
   const [unread, setUnread] = useC({});        // gid -> count
   const [q, setQ] = useC('');                  // chat search query
+  const [realGroups, setRealGroups] = useC([]); // the active church's REAL groups (steward console)
   const msgBuf = useCR([]);                     // recent messages buffer (for search)
+
+  // read the active church's real group definitions (kind-30078) when it has an npub
+  useCE(() => {
+    if (!ctx.church || !ctx.church.npub || !(window.Fellowship && window.Fellowship.subscribeChurchGroups)) { setRealGroups([]); return; }
+    return window.Fellowship.subscribeChurchGroups(ctx.church.npub, setRealGroups);
+  }, [ctx.church && ctx.church.npub]);
+
+  const accentFor = (s) => { const cs = ['var(--clay)', 'var(--sage)', 'var(--gold)', '#5360D6', '#C24B7A']; let h = 0; for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return cs[h % cs.length]; };
+  // real, steward-defined groups when the church has them; otherwise the sample set for this church
+  const churchGroups = realGroups.length
+    ? realGroups.map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : 'Group', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || '') }))
+    : D.GROUPS.filter(g => g.church === ctx.church.id);
+  const groupIdsKey = churchGroups.map(g => g.id).join(',');
 
   // watch every group for last-message previews + unread badges
   useCE(() => {
@@ -275,7 +288,7 @@ function ChatScreen({ ctx }) {
         setUnread(prev => ({ ...prev, [gid]: (prev[gid] || 0) + 1 }));
     });
     return () => unsub();
-  }, [ctx.church.id]);   // re-subscribe when the active church changes
+  }, [groupIdsKey]);   // re-subscribe when the group set changes (church switch or real groups load)
 
   const openGroup = (g) => {
     const seen = lsGet('trinityone.chatSeen', {});
@@ -421,7 +434,7 @@ function ChatScreen({ ctx }) {
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{g.kind}</span>
-                · {g.members} members
+                {g.members != null ? ` · ${g.members} members` : (g.sub ? ` · ${g.sub}` : '')}
               </div>
             </div>
           </div>

@@ -863,8 +863,8 @@
       const n = y - v * q;
       b = a, a = r, x = u, y = v, u = m, v = n;
     }
-    const gcd = b;
-    if (gcd !== _1n2)
+    const gcd2 = b;
+    if (gcd2 !== _1n2)
       throw new Error("invert: does not exist");
     return mod(x, modulo);
   }
@@ -3642,8 +3642,8 @@
     const id = (a) => a;
     const wrap = (a, b) => (c) => a(b(c));
     const encode = args.map((x) => x.encode).reduceRight(wrap, id);
-    const decode = args.map((x) => x.decode).reduce(wrap, id);
-    return { encode, decode };
+    const decode2 = args.map((x) => x.decode).reduce(wrap, id);
+    return { encode, decode: decode2 };
   }
   // @__NO_SIDE_EFFECTS__
   function alphabet(letters) {
@@ -3734,6 +3734,52 @@
       res.push(0);
     return res.reverse();
   }
+  var gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
+  var radix2carry = /* @__NO_SIDE_EFFECTS__ */ (from, to) => from + (to - gcd(from, to));
+  var powers = /* @__PURE__ */ (() => {
+    let res = [];
+    for (let i3 = 0; i3 < 40; i3++)
+      res.push(2 ** i3);
+    return res;
+  })();
+  function convertRadix2(data, from, to, padding) {
+    aArr(data);
+    if (from <= 0 || from > 32)
+      throw new Error(`convertRadix2: wrong from=${from}`);
+    if (to <= 0 || to > 32)
+      throw new Error(`convertRadix2: wrong to=${to}`);
+    if (/* @__PURE__ */ radix2carry(from, to) > 32) {
+      throw new Error(`convertRadix2: carry overflow from=${from} to=${to} carryBits=${/* @__PURE__ */ radix2carry(from, to)}`);
+    }
+    let carry = 0;
+    let pos = 0;
+    const max = powers[from];
+    const mask = powers[to] - 1;
+    const res = [];
+    for (const n of data) {
+      anumber2(n);
+      if (n >= max)
+        throw new Error(`convertRadix2: invalid data word=${n} from=${from}`);
+      carry = carry << from | n;
+      if (pos + from > 32)
+        throw new Error(`convertRadix2: carry overflow pos=${pos} from=${from}`);
+      pos += from;
+      for (; pos >= to; pos -= to)
+        res.push((carry >> pos - to & mask) >>> 0);
+      const pow = powers[pos];
+      if (pow === void 0)
+        throw new Error("invalid carry");
+      carry &= pow - 1;
+    }
+    carry = carry << to - pos & mask;
+    if (!padding && pos >= from)
+      throw new Error("Excess padding");
+    if (!padding && carry > 0)
+      throw new Error(`Non-zero padding: ${carry}`);
+    if (padding && pos > 0)
+      res.push(carry >>> 0);
+    return res;
+  }
   // @__NO_SIDE_EFFECTS__
   function radix(num2) {
     anumber2(num2);
@@ -3747,6 +3793,34 @@
       decode: (digits) => {
         anumArr("radix.decode", digits);
         return Uint8Array.from(convertRadix(digits, num2, _256));
+      }
+    };
+  }
+  // @__NO_SIDE_EFFECTS__
+  function radix2(bits, revPadding = false) {
+    anumber2(bits);
+    if (bits <= 0 || bits > 32)
+      throw new Error("radix2: bits should be in (0..32]");
+    if (/* @__PURE__ */ radix2carry(8, bits) > 32 || /* @__PURE__ */ radix2carry(bits, 8) > 32)
+      throw new Error("radix2: carry overflow");
+    return {
+      encode: (bytes) => {
+        if (!isBytes2(bytes))
+          throw new Error("radix2.encode input should be Uint8Array");
+        return convertRadix2(Array.from(bytes), 8, bits, !revPadding);
+      },
+      decode: (digits) => {
+        anumArr("radix2.decode", digits);
+        return Uint8Array.from(convertRadix2(digits, bits, 8, revPadding));
+      }
+    };
+  }
+  function unsafeWrapper(fn) {
+    afn(fn);
+    return function(...args) {
+      try {
+        return fn.apply(null, args);
+      } catch (e) {
       }
     };
   }
@@ -3779,6 +3853,99 @@
   var genBase58 = /* @__NO_SIDE_EFFECTS__ */ (abc) => /* @__PURE__ */ chain(/* @__PURE__ */ radix(58), /* @__PURE__ */ alphabet(abc), /* @__PURE__ */ join(""));
   var base58 = /* @__PURE__ */ genBase58("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz");
   var createBase58check = (sha2562) => /* @__PURE__ */ chain(checksum(4, (data) => sha2562(sha2562(data))), base58);
+  var BECH_ALPHABET = /* @__PURE__ */ chain(/* @__PURE__ */ alphabet("qpzry9x8gf2tvdw0s3jn54khce6mua7l"), /* @__PURE__ */ join(""));
+  var POLYMOD_GENERATORS = [996825010, 642813549, 513874426, 1027748829, 705979059];
+  function bech32Polymod(pre) {
+    const b = pre >> 25;
+    let chk = (pre & 33554431) << 5;
+    for (let i3 = 0; i3 < POLYMOD_GENERATORS.length; i3++) {
+      if ((b >> i3 & 1) === 1)
+        chk ^= POLYMOD_GENERATORS[i3];
+    }
+    return chk;
+  }
+  function bechChecksum(prefix, words, encodingConst = 1) {
+    const len = prefix.length;
+    let chk = 1;
+    for (let i3 = 0; i3 < len; i3++) {
+      const c = prefix.charCodeAt(i3);
+      if (c < 33 || c > 126)
+        throw new Error(`Invalid prefix (${prefix})`);
+      chk = bech32Polymod(chk) ^ c >> 5;
+    }
+    chk = bech32Polymod(chk);
+    for (let i3 = 0; i3 < len; i3++)
+      chk = bech32Polymod(chk) ^ prefix.charCodeAt(i3) & 31;
+    for (let v of words)
+      chk = bech32Polymod(chk) ^ v;
+    for (let i3 = 0; i3 < 6; i3++)
+      chk = bech32Polymod(chk);
+    chk ^= encodingConst;
+    return BECH_ALPHABET.encode(convertRadix2([chk % powers[30]], 30, 5, false));
+  }
+  // @__NO_SIDE_EFFECTS__
+  function genBech32(encoding) {
+    const ENCODING_CONST = encoding === "bech32" ? 1 : 734539939;
+    const _words = /* @__PURE__ */ radix2(5);
+    const fromWords = _words.decode;
+    const toWords = _words.encode;
+    const fromWordsUnsafe = unsafeWrapper(fromWords);
+    function encode(prefix, words, limit = 90) {
+      astr("bech32.encode prefix", prefix);
+      if (isBytes2(words))
+        words = Array.from(words);
+      anumArr("bech32.encode", words);
+      const plen = prefix.length;
+      if (plen === 0)
+        throw new TypeError(`Invalid prefix length ${plen}`);
+      const actualLength = plen + 7 + words.length;
+      if (limit !== false && actualLength > limit)
+        throw new TypeError(`Length ${actualLength} exceeds limit ${limit}`);
+      const lowered = prefix.toLowerCase();
+      const sum = bechChecksum(lowered, words, ENCODING_CONST);
+      return `${lowered}1${BECH_ALPHABET.encode(words)}${sum}`;
+    }
+    function decode2(str, limit = 90) {
+      astr("bech32.decode input", str);
+      const slen = str.length;
+      if (slen < 8 || limit !== false && slen > limit)
+        throw new TypeError(`invalid string length: ${slen} (${str}). Expected (8..${limit})`);
+      const lowered = str.toLowerCase();
+      if (str !== lowered && str !== str.toUpperCase())
+        throw new Error(`String must be lowercase or uppercase`);
+      const sepIndex = lowered.lastIndexOf("1");
+      if (sepIndex === 0 || sepIndex === -1)
+        throw new Error(`Letter "1" must be present between prefix and data only`);
+      const prefix = lowered.slice(0, sepIndex);
+      const data = lowered.slice(sepIndex + 1);
+      if (data.length < 6)
+        throw new Error("Data must be at least 6 characters long");
+      const words = BECH_ALPHABET.decode(data).slice(0, -6);
+      const sum = bechChecksum(prefix, words, ENCODING_CONST);
+      if (!data.endsWith(sum))
+        throw new Error(`Invalid checksum in ${str}: expected "${sum}"`);
+      return { prefix, words };
+    }
+    const decodeUnsafe = unsafeWrapper(decode2);
+    function decodeToBytes(str) {
+      const { prefix, words } = decode2(str, false);
+      return { prefix, words, bytes: fromWords(words) };
+    }
+    function encodeFromBytes(prefix, bytes) {
+      return encode(prefix, toWords(bytes));
+    }
+    return {
+      encode,
+      decode: decode2,
+      encodeFromBytes,
+      decodeToBytes,
+      decodeUnsafe,
+      fromWords,
+      fromWordsUnsafe,
+      toWords
+    };
+  }
+  var bech32 = /* @__PURE__ */ genBech32("bech32");
 
   // node_modules/nostr-tools/node_modules/@scure/bip39/index.js
   function nfkd(str) {
@@ -4159,7 +4326,107 @@
     return privateKey;
   }
 
+  // node_modules/nostr-tools/lib/esm/nip19.js
+  var utf8Decoder3 = new TextDecoder("utf-8");
+  var utf8Encoder3 = new TextEncoder();
+  var Bech32MaxSize = 5e3;
+  function decode(code) {
+    let { prefix, words } = bech32.decode(code, Bech32MaxSize);
+    let data = new Uint8Array(bech32.fromWords(words));
+    switch (prefix) {
+      case "nprofile": {
+        let tlv = parseTLV(data);
+        if (!tlv[0]?.[0])
+          throw new Error("missing TLV 0 for nprofile");
+        if (tlv[0][0].length !== 32)
+          throw new Error("TLV 0 should be 32 bytes");
+        return {
+          type: "nprofile",
+          data: {
+            pubkey: bytesToHex(tlv[0][0]),
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder3.decode(d)) : []
+          }
+        };
+      }
+      case "nevent": {
+        let tlv = parseTLV(data);
+        if (!tlv[0]?.[0])
+          throw new Error("missing TLV 0 for nevent");
+        if (tlv[0][0].length !== 32)
+          throw new Error("TLV 0 should be 32 bytes");
+        if (tlv[2] && tlv[2][0].length !== 32)
+          throw new Error("TLV 2 should be 32 bytes");
+        if (tlv[3] && tlv[3][0].length !== 4)
+          throw new Error("TLV 3 should be 4 bytes");
+        return {
+          type: "nevent",
+          data: {
+            id: bytesToHex(tlv[0][0]),
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder3.decode(d)) : [],
+            author: tlv[2]?.[0] ? bytesToHex(tlv[2][0]) : void 0,
+            kind: tlv[3]?.[0] ? parseInt(bytesToHex(tlv[3][0]), 16) : void 0
+          }
+        };
+      }
+      case "naddr": {
+        let tlv = parseTLV(data);
+        if (!tlv[0]?.[0])
+          throw new Error("missing TLV 0 for naddr");
+        if (!tlv[2]?.[0])
+          throw new Error("missing TLV 2 for naddr");
+        if (tlv[2][0].length !== 32)
+          throw new Error("TLV 2 should be 32 bytes");
+        if (!tlv[3]?.[0])
+          throw new Error("missing TLV 3 for naddr");
+        if (tlv[3][0].length !== 4)
+          throw new Error("TLV 3 should be 4 bytes");
+        return {
+          type: "naddr",
+          data: {
+            identifier: utf8Decoder3.decode(tlv[0][0]),
+            pubkey: bytesToHex(tlv[2][0]),
+            kind: parseInt(bytesToHex(tlv[3][0]), 16),
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder3.decode(d)) : []
+          }
+        };
+      }
+      case "nsec":
+        return { type: prefix, data };
+      case "npub":
+      case "note":
+        return { type: prefix, data: bytesToHex(data) };
+      default:
+        throw new Error(`unknown prefix ${prefix}`);
+    }
+  }
+  function parseTLV(data) {
+    let result = {};
+    let rest = data;
+    while (rest.length > 0) {
+      let t = rest[0];
+      let l = rest[1];
+      let v = rest.slice(2, 2 + l);
+      rest = rest.slice(2 + l);
+      if (v.length < l)
+        throw new Error(`not enough data to read on TLV ${t}`);
+      result[t] = result[t] || [];
+      result[t].push(v);
+    }
+    return result;
+  }
+
   // src/fellowship.src.js
+  function toPub(npubOrHex) {
+    if (!npubOrHex) return null;
+    if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase();
+    try {
+      const d = decode(npubOrHex);
+      return d.type === "npub" ? d.data : null;
+    } catch {
+      return null;
+    }
+  }
+  var GROUP_D = "trinityone/group:";
   var NET = "trinityone";
   var _loc = typeof location !== "undefined" ? location : null;
   var RELAY_BASE = _loc && _loc.host ? _loc.host : "127.0.0.1:8090";
@@ -4412,6 +4679,72 @@
             onEvent(e);
           } catch (err) {
             console.error(err);
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──
+    // onGroups([{id,name,kind,sub}]) fires on change; returns an unsubscribe fn.
+    subscribeChurchGroups(churchNpub, onGroups) {
+      const pubk = toPub(churchNpub);
+      if (!pubk) {
+        onGroups([]);
+        return () => {
+        };
+      }
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => onGroups([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(GROUP_D)) return;
+          const id = d.slice(GROUP_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byId.delete(id);
+            emit();
+            return;
+          }
+          try {
+            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──
+    subscribeChurchProfile(churchNpub, onProfile) {
+      const pubk = toPub(churchNpub);
+      if (!pubk) {
+        onProfile(null);
+        return () => {
+        };
+      }
+      let latest = 0;
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pubk] }], {
+        onevent(e) {
+          if (e.created_at < latest) return;
+          latest = e.created_at;
+          try {
+            onProfile(JSON.parse(e.content));
+          } catch {
           }
         },
         oneose() {

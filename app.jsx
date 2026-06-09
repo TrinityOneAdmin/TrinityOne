@@ -254,7 +254,8 @@ function App() {
   const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
   const [help, setHelp] = useA(helpParam || null);
   const idParam = new URLSearchParams(location.search).get('id');   // profile|recovery|invite|relays|newid|member
-  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam;   // any deep-link skips splash/onboarding
+  const followParam = new URLSearchParams(location.search).get('follow');   // follow a church by its npub
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
@@ -277,6 +278,19 @@ function App() {
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', window.TrinityData.CHURCHES[0].id));
   const [churches, setChurches] = useA(window.TrinityData.CHURCHES);
   const [churchSwitcher, setChurchSwitcher] = useA(churchParam === '1');
+  // follow a real church by its npub (the steward shares it): add it + make it active, and resolve
+  // its name from the relay. The church's real groups (published by its console) then load in chat.
+  useAE(() => {
+    if (!followParam || !(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
+    const npub = followParam;
+    const initials = 'CH';
+    setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials, accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
+    setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
+    const off = window.Fellowship.subscribeChurchProfile(npub, (p) => {
+      if (p && p.name) setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name, initials: p.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
+    });
+    return off;
+  }, []);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
   const [walletSats, setWalletSats] = useA(window.TrinityData.WALLET.sats);
