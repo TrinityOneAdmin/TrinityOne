@@ -59,10 +59,10 @@ function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare,
           fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)',
         }}>{loc.book} {loc.ch}<Icon name="chevD" size={15} stroke={2.2} color="var(--ink-3)" /></button>
         <button onClick={onVersion} style={{
-          border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)',
-          borderRadius: 13, padding: '9px 12px', fontWeight: 700, fontSize: 13, color: 'var(--clay)',
-          boxShadow: 'var(--shadow)', maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{version}</button>
+          display: 'flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)',
+          borderRadius: 13, padding: '9px 11px', fontWeight: 700, fontSize: 13, color: 'var(--clay)',
+          boxShadow: 'var(--shadow)', maxWidth: 130, whiteSpace: 'nowrap',
+        }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{version}</span><Icon name="chevD" size={14} stroke={2.2} color="var(--clay)" style={{ flexShrink: 0 }} /></button>
         <div style={{ flex: 1 }} />
         <IconBtn name="study" onClick={() => ctx.openSearch()} />
         <IconBtn name="compare" onClick={onCompare} style={compare ? { background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : {}} />
@@ -319,8 +319,14 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
         </React.Fragment>
       ) : null}
 
-      <button onClick={onAdd} style={{
+      <button onClick={() => { onClose(); ctx.openStore('language'); }} style={{
         width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 16,
+        padding: '13px 14px', borderRadius: 14, border: 'none', background: 'var(--clay)',
+        cursor: 'pointer', color: '#fff', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
+        <Icon name="globe" size={18} color="#fff" /> Browse all translations (1,000+)
+      </button>
+      <button onClick={onAdd} style={{
+        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 10,
         padding: '13px 14px', borderRadius: 14, border: '1px dashed var(--line)', background: 'var(--surface-2)',
         cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)' }}>
         <Icon name="plus" size={18} /> Load from a file (MySword · USFM)

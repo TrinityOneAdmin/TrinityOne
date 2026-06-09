@@ -99,11 +99,13 @@ function TodayScreen({ ctx }) {
             background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}><Icon name={ctx.dark ? 'sun' : 'moon'} size={19} /></button>
-          <div title={`${streak}-day streak`} style={{
-            height: 40, padding: '0 12px', borderRadius: 14, background: 'var(--clay-soft)',
+          <button title={`${streak}-day reading streak`}
+            onClick={() => ctx.toast(streak > 0 ? `🔥 ${streak}-day reading streak — open the app each day to keep it going` : 'Open the app each day to build a reading streak')}
+            style={{
+            height: 40, padding: '0 12px', borderRadius: 14, background: 'var(--clay-soft)', border: 'none', cursor: 'pointer',
             color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontWeight: 700, fontSize: 14,
-            boxShadow: 'var(--shadow)',
-          }}><Icon name="flame" size={18} stroke={2} />{streak}</div>
+            boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)',
+          }}><Icon name="flame" size={18} stroke={2} />{streak}</button>
         </div>
       </div>
 
@@ -191,8 +193,8 @@ function TodayScreen({ ctx }) {
       {/* Quick row */}
       <div style={{ display: 'flex', gap: 10, animation: 'trinityFade .5s ease .2s both' }}>
         {[
-          { ic: 'study', label: 'Search', go: () => ctx.go('search') },
-          { ic: 'pen', label: 'Journal', go: () => ctx.go('library') },
+          { ic: 'study', label: 'Search', go: () => ctx.openSearch() },
+          { ic: 'pen', label: 'Journal', go: () => ctx.newJournal() },
           { ic: 'headphones', label: 'Listen', go: () => ctx.toast('Audio coming soon') },
         ].map(q => (
           <button key={q.label} onClick={q.go} style={{

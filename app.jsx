@@ -251,6 +251,7 @@ function App() {
   const journalEntries = MD.list('journal');
   const storeParam = new URLSearchParams(location.search).get('store'); // 'featured' | 'language'
   const [store, setStore] = useA(!!storeParam);
+  const [storeView, setStoreView] = useA(null);   // 'featured' | 'language' when opened programmatically
   const helpParam = new URLSearchParams(location.search).get('help');   // index | backup | <articleId>
   const [help, setHelp] = useA(helpParam || null);
   const idParam = new URLSearchParams(location.search).get('id');   // profile|recovery|invite|relays|newid|member
@@ -351,6 +352,21 @@ function App() {
     return () => window.removeEventListener('resize', fit);
   }, [fullscreen]);
 
+  // Android hardware back button: dismiss the topmost overlay/sheet, else return to Today, else exit.
+  // (Without this the webview has no history, so back closes the app.)
+  const tabRef = useAR(); tabRef.current = tab;
+  useAE(() => {
+    const App = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+    if (!App || !App.addListener) return;
+    let sub;
+    App.addListener('backButton', () => {
+      if (window.trinityGoBack && window.trinityGoBack()) return;   // closed a sheet/overlay
+      if (tabRef.current !== 'today') { setTab('today'); return; }  // not home -> home
+      App.exitApp();                                                // home + nothing open -> exit
+    }).then(h => { sub = h; }).catch(() => {});
+    return () => { if (sub && sub.remove) sub.remove(); };
+  }, []);
+
   // real identity object for the ProfileSheet/onboarding (derived from the live identity + profile)
   const identity = (() => {
     const cur = (window.TrinityIdentity && window.TrinityIdentity.current) || window.TrinityData.CHAT_IDENTITY || {};
@@ -380,7 +396,7 @@ function App() {
     gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setTab('read'); },
     addModule: () => Bible.pickFile(),
     removeTranslation: (abbr) => Bible.removeModule(abbr),
-    openStore: () => setStore(true), closeStore: () => setStore(false),
+    openStore: (view) => { setStoreView(view || null); setStore(true); }, closeStore: () => setStore(false),
     openGroup: (g) => setGroup(g),
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
@@ -504,7 +520,7 @@ function App() {
 
         {/* module store — available in both the loaded and first-run states */}
         <ModuleStore open={store} onClose={() => setStore(false)} ctx={ctx}
-          initialView={storeParam === 'language' ? 'language' : 'featured'} />
+          initialView={storeView || (storeParam === 'language' ? 'language' : 'featured')} />
 
         <HelpCenter open={!!help} onClose={() => setHelp(null)} initial={help} ctx={ctx} />
 

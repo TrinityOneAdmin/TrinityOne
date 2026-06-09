@@ -119,7 +119,28 @@ function ReadPlansTabs({ ctx, style = {} }) {
 window.ReadPlansTabs = ReadPlansTabs;
 
 // ── Bottom sheet ──
+// ── global back-stack ──
+// Every open BottomSheet / Overlay registers its close handler here, so the Android hardware back
+// button (wired in app.jsx) dismisses the topmost layer instead of exiting the app.
+const _backStack = (window.__trinityBackStack = window.__trinityBackStack || []);
+function useBackLayer(open, onClose) {
+  const ref = useRef(onClose);
+  ref.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const entry = { close: () => { try { ref.current && ref.current(); } catch (e) {} } };
+    _backStack.push(entry);
+    return () => { const i = _backStack.indexOf(entry); if (i >= 0) _backStack.splice(i, 1); };
+  }, [open]);
+}
+// returns true if it closed a layer; app.jsx falls back to tab nav / exit when it returns false
+window.trinityGoBack = function () {
+  if (_backStack.length) { _backStack[_backStack.length - 1].close(); return true; }
+  return false;
+};
+
 function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z = 50 }) {
+  useBackLayer(open, onClose);
   const [mounted, setMounted] = useState(open);
   useEffect(() => { if (open) setMounted(true); }, [open]);
   if (!mounted && !open) return null;
@@ -151,6 +172,7 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
 
 // ── Full overlay (slides up, opaque) ──
 function Overlay({ open, onClose, children }) {
+  useBackLayer(open, onClose);
   const [mounted, setMounted] = useState(open);
   useEffect(() => { if (open) setMounted(true); }, [open]);
   if (!mounted && !open) return null;

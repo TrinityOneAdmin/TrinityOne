@@ -635,6 +635,7 @@ function ModuleStore({ open, onClose, ctx, initialView }) {
   const [mirror, setMirror] = React.useState(null);
   const [view, setView] = React.useState(initialView || 'featured');
   React.useEffect(() => window.Bible.subscribe(() => force(x => x + 1)), []);
+  React.useEffect(() => { if (open) setView(initialView || 'featured'); }, [open, initialView]);
   React.useEffect(() => { if (open && !cat) window.Bible.getCatalog().then(setCat); }, [open]);
   React.useEffect(() => { if (open && view === 'language' && !mirror) window.Bible.getMirror().then(setMirror); }, [open, view]);
 
