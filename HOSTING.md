@@ -42,10 +42,18 @@ The free Cloudflare **quick tunnel** URL **changes every time the tunnel restart
 The **LAN URL (192.168.0.34:8000) is stable** -- fine for in-building use. For a **stable public URL**
 (remote members), pick one:
 
-- **Tailscale Funnel (recommended -- this machine is already on Tailscale).** Run
-  `tailscale funnel 8000`; it prints a one-time link to enable Funnel for your tailnet -- approve it,
-  and you get a stable `https://adminl-aorus-15p-xc.<tailnet>.ts.net`. Then we point
-  `trinity-tunnel` at Funnel instead of the quick tunnel and the URL never changes.
+- **Tailscale Funnel (recommended -- this machine is already on Tailscale).** Stable URL, no domain
+  to buy. Two one-time toggles in the admin console (tailnet owner only), then one command:
+    1. **Enable HTTPS:** https://login.tailscale.com/admin/dns -> "Enable HTTPS"
+    2. **Enable Funnel:** https://login.tailscale.com/admin/acls -> add the `funnel` node attribute,
+       e.g. `"nodeAttrs": [ { "target": ["autogroup:member"], "attr": ["funnel"] } ]`
+    3. `bash scripts/funnel-up.sh` (may need sudo) -- runs `tailscale funnel --bg 8000`, which
+       persists across reboots. The URL never changes:
+       **https://adminl-aorus-15p-xc.tailbeaac0.ts.net** (rename the node for a nicer host:
+       `tailscale set --hostname=trinityone` -> `https://trinityone.tailbeaac0.ts.net`).
+  Everything is origin-relative, so the join QR/link and the relay (`wss://.../relay`) work over the
+  new URL with no code change. Then disable the old quick tunnel:
+  `systemctl --user disable --now trinity-tunnel`.
 - **Named Cloudflare tunnel** -- needs a Cloudflare account + a domain.
 
 ## Other notes
