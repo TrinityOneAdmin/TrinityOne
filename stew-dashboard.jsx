@@ -151,10 +151,11 @@ function Panel({ title, action, children, style = {} }) {
 
 function DashOverview({ onTab }) {
   const groups = window.useStewardGroups();   // real chat groups (the focus)
+  const members = window.useStewardMembers(); // real participants
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       <div style={{ display: 'flex', gap: 14 }}>
-        <StatCard label="Members" value="—" sub="invite your church" ic="pray" tint="sage" />
+        <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'participating' : 'invite your church'} ic="pray" tint="sage" />
         <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" />
         <StatCard label="Announcements" value="—" sub="post to everyone" ic="send" tint="gold" />
         <StatCard label="Your relay" value="Live" sub="self-hosted" ic="globe" tint="ink" />
@@ -370,61 +371,57 @@ function PromoteModal({ member, onConfirm, onClose }) {
   );
 }
 
+function ago(ts) {
+  if (!ts) return '';
+  const s = Math.floor(Date.now() / 1000) - ts;
+  if (s < 90) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  if (s < 86400 * 14) return Math.floor(s / 86400) + 'd ago';
+  return new Date(ts * 1000).toLocaleDateString();
+}
+
 function DashMembers() {
-  const [members, setMembers] = React.useState([
-    { id: 'm1', h: 'Quiet Cedar', role: 'anonymous', when: 'joined today', handle: 'Anonymous · npub1qc…7v3' },
-    { id: 'm2', h: 'Pastor John', role: 'steward', when: 'founder', founder: true, handle: 'npub1grace…d0a7q' },
-    { id: 'm3', h: 'Gentle Harbor', role: 'anonymous', when: 'joined 2d ago', handle: 'Anonymous · npub1gh…k2m' },
-    { id: 'm4', h: 'Maria R.', role: 'named', when: 'gives with receipt', handle: 'npub1mar…5e2' },
-    { id: 'm5', h: 'David Okafor', role: 'named', when: 'small groups lead', handle: 'npub1dav…9l4' },
-    { id: 'm6', h: 'Bright Sparrow', role: 'anonymous', when: 'joined 1w ago', handle: 'Anonymous · npub1bs…r8t' },
-  ]);
-  const [promote, setPromote] = React.useState(null);
-  const [flash, setFlash] = React.useState('');
-
-  const tintFor = (r) => r === 'steward' ? 'clay' : r === 'named' ? 'gold' : 'sage';
-  const confirm = (m) => {
-    const becoming = m.role !== 'steward';
-    setMembers(ms => ms.map(x => x.id === m.id ? { ...x, role: becoming ? 'steward' : (x.named ? 'named' : 'anonymous'), prevRole: becoming ? x.role : undefined } : x));
-    setPromote(null);
-    setFlash(becoming ? `${m.h} is now a steward` : `${m.h} is no longer a steward`);
-    setTimeout(() => setFlash(''), 2600);
-  };
-
+  const members = window.useStewardMembers();   // real participants (kind-1 events addressed to the church)
+  const [copied, setCopied] = React.useState('');
+  const total = members.length;
+  const doCopy = (np) => { copyText(np); setCopied(np); setTimeout(() => setCopied(''), 1400); };
   return (
-    <div style={{ position: 'relative', height: '100%' }}>
-      <Panel title="Members" action={<SkPill tint="sage">312 following · most anonymous</SkPill>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Panel title="Members" action={<SkPill tint="sage">{total ? `${total} participating` : 'none yet'}</SkPill>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {total === 0 ? (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'var(--ink-3)', padding: 24 }}>
+          <div style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="pray" size={26} color="var(--ink-3)" /></div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink-2)' }}>No one’s chatted yet.</div>
+          <p style={{ fontSize: 13, margin: '6px 0 0', maxWidth: 320, lineHeight: 1.5 }}>Share your invite code — people appear here as they post in your groups. You’ll never see anyone who only reads.</p>
+        </div>
+      ) : (
         <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto' }}>
-          {members.map(r => (
-            <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-              <SkBadge initials={r.h.split(' ').map(w => w[0]).join('').slice(0, 2)} size={36} radius={11} accent={SK_TINT[tintFor(r.role)].fg} />
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{r.h}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{r.when}</div></div>
-              {r.role === 'steward'
-                ? <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <SkPill tint="clay">{r.founder ? 'founder' : 'steward'}</SkPill>
-                    {r.founder ? null : <button onClick={() => setPromote(r)} title="Remove steward" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="dots" size={16} color="currentColor" /></button>}
+          {members.map(m => {
+            const named = !!m.name;
+            const label = named ? m.name : 'Anonymous';
+            const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+            return (
+              <div key={m.pubkey} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                <SkBadge initials={initials} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <span style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{shortNpub(m.npub)}</span>
                   </div>
-                : <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <SkPill tint={tintFor(r.role)}>{r.role}</SkPill>
-                    <button onClick={() => setPromote(r)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'var(--surface)', color: 'var(--clay-ink)', borderRadius: 10, padding: '7px 11px', cursor: 'pointer', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)' }}>
-                      <Icon name="shield" size={14} color="var(--clay)" /> Make steward</button>
-                  </div>}
-            </div>
-          ))}
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{m.count} message{m.count === 1 ? '' : 's'} · last {ago(m.lastTs)}</div>
+                </div>
+                {!named ? <SkPill tint="sage">anonymous</SkPill> : null}
+                <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
+                  <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
+              </div>
+            );
+          })}
         </div>
-        <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)', flexShrink: 0 }}>
-          <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>You can’t see who gave anonymously — and that’s the point. Promoting a steward grants sign-off rights via their own key (NIP-26); it never reveals anyone’s giving.</div>
-        </div>
-      </Panel>
-
-      {flash ? (
-        <div style={{ position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 40, display: 'flex', alignItems: 'center', gap: 9,
-          background: 'var(--ink)', color: 'var(--paper)', padding: '11px 18px', borderRadius: 999, fontSize: 13.5, fontWeight: 600, boxShadow: '0 12px 30px rgba(0,0,0,.25)', animation: 'lumenFade .25s ease both' }}>
-          <Icon name="check" size={16} stroke={2.6} color="var(--sage-soft)" /> {flash}</div>
-      ) : null}
-
-      <PromoteModal member={promote} onConfirm={confirm} onClose={() => setPromote(null)} />
-    </div>
+      )}
+      <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)', flexShrink: 0 }}>
+        <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Anonymous by design — you see who’s <b style={{ color: 'var(--ink)' }}>active</b>, never anyone’s identity unless they chose a name. People who only read stay invisible, and no giving is ever shown here.</div>
+      </div>
+    </Panel>
   );
 }
 window.DashMembers = DashMembers;

@@ -298,6 +298,11 @@ function App() {
     const off = followChurch(followParam);
     return typeof off === 'function' ? off : undefined;
   }, []);
+  // scope outgoing chat to the active church, so its steward sees who's participating (Members)
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    if (window.Fellowship && window.Fellowship.setChurch) window.Fellowship.setChurch(np || null);
+  }, [activeChurch, churches]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
   const [walletSats, setWalletSats] = useA(window.TrinityData.WALLET.sats);

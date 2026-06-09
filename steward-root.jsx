@@ -18,6 +18,14 @@ function useStewardGroups() {
 }
 window.useStewardGroups = useStewardGroups;
 
+// people participating in this church's chat (derived from messages addressed to the church)
+function useStewardMembers() {
+  const [members, setMembers] = useSt([]);
+  useStE(() => window.Steward.subscribeMembers(setMembers), []);
+  return members;
+}
+window.useStewardMembers = useStewardMembers;
+
 // the church's own profile (name etc.) + npub
 function useStewardChurch() {
   const [p, setP] = useSt({});

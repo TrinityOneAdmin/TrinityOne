@@ -8341,6 +8341,63 @@ zoo`.split("\n");
         }
       };
     },
+    // ---- members: people who participate in this church's chat ----
+    // In an anonymous, self-custodial model there is no follower registry. The real, privacy-
+    // respecting signal a steward can see is participation: members tag their messages with the
+    // church's pubkey (['p', churchPub]), so we read kind-1 events addressed to us, aggregate by
+    // author, and resolve each author's kind-0 profile. The church's own posts are excluded.
+    subscribeMembers(onMembers) {
+      const byPub = /* @__PURE__ */ new Map();
+      const profSubs = /* @__PURE__ */ new Map();
+      const emit = () => onMembers([...byPub.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0)));
+      const ensureProfile = (pk) => {
+        if (profSubs.has(pk)) return;
+        const s = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pk] }], {
+          onevent(e) {
+            try {
+              const meta = JSON.parse(e.content);
+              const m = byPub.get(pk);
+              if (m) {
+                m.name = meta.name || meta.display_name || "";
+                m.picture = meta.picture || "";
+                emit();
+              }
+            } catch {
+            }
+          },
+          oneose() {
+          }
+        });
+        profSubs.set(pk, s);
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [1], "#p": [pub] }], {
+        onevent(e) {
+          if (e.pubkey === pub) return;
+          const m = byPub.get(e.pubkey) || { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name: "", picture: "", count: 0, lastTs: 0, firstTs: Infinity };
+          m.count++;
+          if (e.created_at > m.lastTs) m.lastTs = e.created_at;
+          if (e.created_at < m.firstTs) m.firstTs = e.created_at;
+          byPub.set(e.pubkey, m);
+          ensureProfile(e.pubkey);
+          emit();
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+        for (const s of profSubs.values()) {
+          try {
+            s.close();
+          } catch {
+          }
+        }
+      };
+    },
     // ---- church profile (kind-0): name etc. shown to members and in the console ----
     subscribeProfile(onProfile) {
       let latest = 0;

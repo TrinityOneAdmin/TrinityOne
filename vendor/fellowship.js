@@ -4493,9 +4493,17 @@
     relays: loadRelays(),
     myPubkey: null,
     myProfile: null,
+    churchPub: null,
+    // hex pubkey of the active church; messages are tagged ['p', churchPub]
     ready: null,
     profile,
     displayFor,
+    // scope outgoing messages to a church (so its steward can see who's participating). The member
+    // app calls this with the active church's npub whenever it changes; null clears the scope.
+    setChurch(npubOrHex) {
+      window.Fellowship.churchPub = toPub(npubOrHex);
+      return window.Fellowship.churchPub;
+    },
     // relay configuration (persisted) — accepts ws:// or wss:// URLs
     setRelays(urls) {
       const list = [...new Set((urls || []).map((u) => (u || "").trim()).filter((u) => /^wss?:\/\//i.test(u)))];
@@ -4564,10 +4572,11 @@
     // publish a message to a group (kind 1, tagged with the network + group ids)
     async publishMessage(groupId, content, extraTags = []) {
       if (!sk) await window.Fellowship.ready;
+      const churchTag = window.Fellowship.churchPub ? [["p", window.Fellowship.churchPub]] : [];
       const evt = finalizeEvent2({
         kind: 1,
         created_at: Math.floor(Date.now() / 1e3),
-        tags: [["t", NET], ["t", groupId], ...extraTags],
+        tags: [["t", NET], ["t", groupId], ...churchTag, ...extraTags],
         content
       }, sk);
       try {
