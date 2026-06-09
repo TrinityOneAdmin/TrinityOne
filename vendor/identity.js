@@ -11014,6 +11014,7 @@ zoo`.split("\n"));
   var HANDLE_POOL = ["Cedar", "River", "Sparrow", "Olive", "Wren", "Maple", "Reed", "Dove", "Ash", "Linden", "Heron", "Bramble"];
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
   var memMnemonic = null;
+  var webPersisted = false;
   function hashStr(s) {
     let h = 0;
     for (let i2 = 0; i2 < s.length; i2++) h = h * 31 + s.charCodeAt(i2) >>> 0;
@@ -11032,8 +11033,21 @@ zoo`.split("\n"));
     const c = window.Capacitor;
     return !!(c && typeof c.isNativePlatform === "function" && c.isNativePlatform());
   }
+  function isEphemeral() {
+    return !isNative() && !webPersisted;
+  }
   async function secureGet() {
-    if (!isNative()) return memMnemonic;
+    if (!isNative()) {
+      try {
+        const v = localStorage.getItem(STORE_KEY);
+        if (typeof v === "string" && v) {
+          webPersisted = true;
+          return v;
+        }
+      } catch (e) {
+      }
+      return memMnemonic;
+    }
     try {
       const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
       const v = await SecureStorage.get(STORE_KEY);
@@ -11046,6 +11060,12 @@ zoo`.split("\n"));
   async function secureSet(mnemonic) {
     if (!isNative()) {
       memMnemonic = mnemonic;
+      try {
+        localStorage.setItem(STORE_KEY, mnemonic);
+        webPersisted = true;
+      } catch (e) {
+        webPersisted = false;
+      }
       return;
     }
     try {
@@ -11066,7 +11086,7 @@ zoo`.split("\n"));
       mnemonic = generateSeedWords();
       await secureSet(mnemonic);
     }
-    apply(deriveProfile(mnemonic), { ephemeral: !isNative() });
+    apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
   }
   function apply(profile, meta) {
     window.TrinityIdentity.current = profile;
@@ -11080,7 +11100,7 @@ zoo`.split("\n"));
     async regenerate() {
       const mnemonic = generateSeedWords();
       await secureSet(mnemonic);
-      apply(deriveProfile(mnemonic), { ephemeral: !isNative() });
+      apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
       return window.TrinityIdentity.current;
     },
     copyNpub() {
@@ -11098,7 +11118,7 @@ zoo`.split("\n"));
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
       await secureSet(m);
-      apply(deriveProfile(m), { ephemeral: !isNative() });
+      apply(deriveProfile(m), { ephemeral: isEphemeral() });
       return window.TrinityIdentity.current;
     },
     // steward onboarding: mint a NEW identity to hand to a member (does NOT touch yours)
