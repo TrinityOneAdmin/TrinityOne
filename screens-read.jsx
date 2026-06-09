@@ -49,7 +49,10 @@ function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare,
       backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
       borderBottom: '1px solid var(--line-2)',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px 11px' }}>
+      <div style={{ padding: '8px 14px 0' }}>
+        <ReadPlansTabs ctx={ctx} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px 11px' }}>
         <button onClick={onBook} style={{
           display: 'flex', alignItems: 'center', gap: 6, border: 'none', cursor: 'pointer',
           background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 13, padding: '9px 13px',
@@ -64,9 +67,6 @@ function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare,
         <IconBtn name="study" onClick={() => ctx.openSearch()} />
         <IconBtn name="compare" onClick={onCompare} style={compare ? { background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : {}} />
         <IconBtn name="sliders" onClick={onSettings} />
-      </div>
-      <div style={{ padding: '0 14px 11px' }}>
-        <ReadPlansTabs ctx={ctx} />
       </div>
     </div>
   );
@@ -483,7 +483,7 @@ function ReadScreen({ ctx }) {
         onBook={() => setSheet('book')} onVersion={() => setSheet('version')}
         onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)} />
 
-      <div ref={scrollRef} className="no-scrollbar" style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: '112px 18px 100px' }}>
+      <div ref={scrollRef} className="no-scrollbar" style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: '164px 18px 116px' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>{bname}</div>
