@@ -9,17 +9,19 @@ will wrap (see `reference/proposal-relay-app-steward-console.md`).
 | Service | What |
 |---|---|
 | `trinity-gateway.service` | `scripts/gateway.mjs` -- static app + Nostr relay (`/relay`) on `0.0.0.0:8000`, disk-persisted |
-| `trinity-tunnel.service`  | `scripts/tunnel.sh` -- Cloudflare quick tunnel -> a public `https://` URL for the gateway |
+| Tailscale **Funnel** | the public `https://` URL for the gateway -- config stored in tailscaled, restored on boot |
 
-Both are enabled with **linger on**, so they start on boot and survive logout. Older split services
-(`trinity-web`, `trinity-relay`) are disabled -- the gateway replaces them.
+The gateway is enabled with **linger on** (starts on boot, survives logout). The public URL is now a
+**stable Tailscale Funnel** (set via `tailscale funnel --bg 8000`), which replaced the old ephemeral
+`trinity-tunnel` cloudflare quick tunnel (disabled). Older split services (`trinity-web`,
+`trinity-relay`) are disabled -- the gateway replaces them.
 
 ## How to open it
 
-- **On the church wifi (stable):** http://192.168.0.34:8000
+- **Public (stable, anywhere):** https://adminl-aorus-15p-xc.tailbeaac0.ts.net
+  (member app `/`, steward `/steward.html`, relay `wss://.../relay`)
+- **On the church wifi:** http://192.168.0.34:8000
 - **On this machine:** http://localhost:8000
-- **From anywhere (current tunnel URL):** see `relay/tunnel-url.txt` -- e.g.
-  `https://<random>.trycloudflare.com`
 
 The app always finds its relay on **its own origin at `/relay`** (`ws://` on http, `wss://` on
 https) -- so whether opened on the LAN IP or the public URL, chat just works, no per-device config.
@@ -28,26 +30,26 @@ https) -- so whether opened on the LAN IP or the public URL, chat just works, no
 
 ```
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
-systemctl --user status  trinity-gateway trinity-tunnel
-systemctl --user restart trinity-gateway          # after editing gateway.mjs / app code
-cat relay/tunnel-url.txt                           # current public URL
-journalctl --user -u trinity-tunnel -f             # tunnel logs
+systemctl --user status  trinity-gateway              # the gateway (app + relay)
+systemctl --user restart trinity-gateway              # after editing gateway.mjs / app code
+tailscale funnel status                               # the public URL + proxy target
+tailscale funnel --https=443 off                      # take the public URL down
 ```
 
 Relay data: `relay/relay-db.json` (gitignored, survives restarts). Unit files: `deploy/systemd/`.
 
-## The tunnel URL is TEMPORARY -- read this
+## The public URL is now STABLE (Tailscale Funnel)
 
-The free Cloudflare **quick tunnel** URL **changes every time the tunnel restarts** (reboot/crash).
-The **LAN URL (192.168.0.34:8000) is stable** -- fine for in-building use. For a **stable public URL**
-(remote members), pick one:
+`https://adminl-aorus-15p-xc.tailbeaac0.ts.net` is a **permanent** Tailscale Funnel (set 2026-06-09),
+stored in tailscaled and restored on reboot -- it does **not** change. It replaced the old ephemeral
+cloudflare quick tunnel (`trinity-tunnel`, now disabled). Setup, for reference (already done):
 
 - **Tailscale Funnel (recommended -- this machine is already on Tailscale).** Stable URL, no domain
   to buy. Two one-time toggles in the admin console (tailnet owner only), then one command:
     1. **Enable HTTPS:** https://login.tailscale.com/admin/dns -> "Enable HTTPS"
     2. **Enable Funnel:** https://login.tailscale.com/admin/acls -> add the `funnel` node attribute,
        e.g. `"nodeAttrs": [ { "target": ["autogroup:member"], "attr": ["funnel"] } ]`
-    3. `bash scripts/funnel-up.sh` (may need sudo) -- runs `tailscale funnel --bg 8000`, which
+    3. `sudo tailscale funnel --bg 8000` (or `scripts/funnel-up.sh`) -- runs `tailscale funnel --bg 8000`, which
        persists across reboots. The URL never changes:
        **https://adminl-aorus-15p-xc.tailbeaac0.ts.net** (rename the node for a nicer host:
        `tailscale set --hostname=trinityone` -> `https://trinityone.tailbeaac0.ts.net`).
