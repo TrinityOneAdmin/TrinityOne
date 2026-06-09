@@ -1,0 +1,10 @@
+[Unit]
+Description=TrinityOne public tunnel (Cloudflare quick tunnel to the gateway)
+After=network.target trinity-gateway.service
+[Service]
+WorkingDirectory=/mnt/storage/projects/lumen-bible
+ExecStart=/bin/bash scripts/tunnel.sh
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=default.target

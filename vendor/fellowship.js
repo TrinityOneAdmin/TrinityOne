@@ -4161,8 +4161,9 @@
 
   // src/fellowship.src.js
   var NET = "trinityone";
-  var RELAY_HOST = typeof location !== "undefined" && location.hostname ? location.hostname : "127.0.0.1";
-  var DEFAULT_RELAYS = ["ws://" + RELAY_HOST + ":7447"];
+  var _loc = typeof location !== "undefined" ? location : null;
+  var RELAY_BASE = _loc && _loc.host ? _loc.host : "127.0.0.1:8090";
+  var DEFAULT_RELAYS = [(_loc && _loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay"];
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
     try {

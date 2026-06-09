@@ -13,8 +13,12 @@ const NET = 'trinityone';                       // network-wide tag
 // 7447. That makes self-hosting on one machine work for both this device (localhost) and phones
 // on the LAN (they open http://<machine-ip>:8000 -> relay at ws://<machine-ip>:7447) with no
 // hardcoded IP. Production points this at the church's wss:// relay via the in-app Relays setting.
-const RELAY_HOST = (typeof location !== 'undefined' && location.hostname) ? location.hostname : '127.0.0.1';
-const DEFAULT_RELAYS = ['ws://' + RELAY_HOST + ':7447'];
+// The unified gateway (scripts/gateway.mjs) serves the app AND the relay at /relay on ONE origin,
+// so the relay is reachable wherever the app is -- localhost, the LAN IP, or a public tunnel --
+// with no hardcoded host and over a single tunnel. ws on http, wss on https (a tunnel).
+const _loc = (typeof location !== 'undefined') ? location : null;
+const RELAY_BASE = _loc && _loc.host ? _loc.host : '127.0.0.1:8090';
+const DEFAULT_RELAYS = [((_loc && _loc.protocol === 'https:') ? 'wss://' : 'ws://') + RELAY_BASE + '/relay'];
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
   try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r) && r.length) return r; } catch {}
