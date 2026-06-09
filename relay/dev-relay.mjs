@@ -1,12 +1,28 @@
-// dev-relay.mjs — minimal in-memory Nostr relay (NIP-01) for TrinityOne local dev.
-// Private to this machine; not for production. Run: node relay/dev-relay.mjs
-// (production uses a hosted Khatru NIP-29 relay — see reference/trinityone-fellowship-spec.md §5)
+// dev-relay.mjs — small Nostr relay (NIP-01) for TrinityOne self-hosting on ONE machine.
+// Binds to the LAN (0.0.0.0) so phones on the same wifi connect, and persists events to disk so
+// chat + user-data survive a restart. Run: node relay/dev-relay.mjs
+// (a hardened Khatru/NIP-29 relay -- bundled in the church Relay app -- is the production upgrade;
+//  see reference/proposal-relay-app-steward-console.md)
 import { WebSocketServer } from 'ws';
+import { readFileSync, writeFileSync, renameSync } from 'fs';
 
 const PORT = Number(process.env.RELAY_PORT || 7447);
-const MAX_EVENTS = 5000;
-const events = [];                 // in-memory event log
+const HOST = process.env.RELAY_HOST || '0.0.0.0';                  // LAN-reachable (was 127.0.0.1)
+const DB = new URL('./relay-db.json', import.meta.url).pathname;  // gitignored on-disk event log
+const MAX_EVENTS = 20000;
+let events = [];                   // event log (loaded from disk, capped)
 const subs = new Map();            // ws -> Map(subId -> filters[])
+
+try { const d = JSON.parse(readFileSync(DB, 'utf8')); if (Array.isArray(d)) events = d.slice(-MAX_EVENTS); } catch { /* fresh */ }
+let saveTimer = null;
+function scheduleSave() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try { const tmp = DB + '.tmp'; writeFileSync(tmp, JSON.stringify(events)); renameSync(tmp, DB); }
+    catch (e) { console.warn('[relay] save failed:', e.message); }
+  }, 1500);
+}
 
 function matchFilter(evt, f) {
   if (!f || typeof f !== 'object' || Array.isArray(f)) return false;   // a real filter object only
@@ -25,7 +41,7 @@ function matchFilter(evt, f) {
 }
 const matchAny = (evt, filters) => filters.some(f => matchFilter(evt, f));
 
-const wss = new WebSocketServer({ port: PORT, host: '127.0.0.1' });
+const wss = new WebSocketServer({ port: PORT, host: HOST });
 wss.on('connection', ws => {
   subs.set(ws, new Map());
   ws.on('message', raw => {
@@ -36,6 +52,7 @@ wss.on('connection', ws => {
       const evt = rest[0];
       if (!evt || !evt.id) return;
       events.push(evt); if (events.length > MAX_EVENTS) events.shift();
+      scheduleSave();
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       for (const [client, m] of subs) {
         if (client.readyState !== 1) continue;
@@ -58,4 +75,4 @@ wss.on('connection', ws => {
   });
   ws.on('close', () => subs.delete(ws));
 });
-console.log(`TrinityOne dev relay listening on ws://127.0.0.1:${PORT}  (events kept in memory, max ${MAX_EVENTS})`);
+console.log(`TrinityOne relay listening on ws://${HOST}:${PORT}  (persisted to ${DB}, max ${MAX_EVENTS}, ${events.length} loaded)`);

@@ -8,9 +8,13 @@ import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 
 const NET = 'trinityone';                       // network-wide tag
-// Relays are configurable + persisted, so pointing at a hosted wss:// relay is a
-// settings change, not a code change. Default = the local dev relay.
-const DEFAULT_RELAYS = ['ws://127.0.0.1:7447'];
+// Relays are configurable + persisted, so pointing at a hosted wss:// relay is a settings
+// change, not a code change. Default = a relay on the SAME host the app is served from, port
+// 7447. That makes self-hosting on one machine work for both this device (localhost) and phones
+// on the LAN (they open http://<machine-ip>:8000 -> relay at ws://<machine-ip>:7447) with no
+// hardcoded IP. Production points this at the church's wss:// relay via the in-app Relays setting.
+const RELAY_HOST = (typeof location !== 'undefined' && location.hostname) ? location.hostname : '127.0.0.1';
+const DEFAULT_RELAYS = ['ws://' + RELAY_HOST + ':7447'];
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
   try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r) && r.length) return r; } catch {}

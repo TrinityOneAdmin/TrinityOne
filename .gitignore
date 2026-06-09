@@ -17,3 +17,5 @@ dist/
 
 # os
 .DS_Store
+relay/relay-db.json
+relay/relay-db.json.tmp
