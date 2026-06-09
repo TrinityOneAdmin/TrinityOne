@@ -329,9 +329,19 @@ function App() {
   const [giving, setGiving] = useA(window.TrinityData.GIVING_HISTORY);
   const [funds, setFunds] = useA(window.TrinityData.FUNDS);   // giving funds (stewards can add)
 
-  // scaling to viewport
+  // Real-device full-screen mode: the native app, an installed PWA, or a phone-sized viewport fills
+  // the screen. Only a wide desktop browser gets the scaled phone-frame mockup. (Also fixes the APK
+  // blank screen: the webview can boot with innerHeight 0, which made the fit() scale go negative.)
+  const fullscreen = (typeof window !== 'undefined') && (
+    !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ||
+    !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+    !!(window.navigator && window.navigator.standalone) ||
+    window.innerWidth <= 500
+  );
+  // scaling to viewport (desktop preview only)
   const wrapRef = useAR();
   useAE(() => {
+    if (fullscreen) { if (wrapRef.current) wrapRef.current.style.transform = 'none'; return; }
     const fit = () => {
       const W = 392, H = 846, m = 24;
       const sc = Math.min(1, (window.innerWidth - m) / W, (window.innerHeight - m) / H);
@@ -339,7 +349,7 @@ function App() {
     };
     fit(); window.addEventListener('resize', fit);
     return () => window.removeEventListener('resize', fit);
-  }, []);
+  }, [fullscreen]);
 
   // real identity object for the ProfileSheet/onboarding (derived from the live identity + profile)
   const identity = (() => {
@@ -449,8 +459,8 @@ function App() {
   };
 
   return (
-    <div ref={wrapRef} className={cx('trinity', t.dark && 'dark')} style={{ ...rootStyle, transformOrigin: 'center center' }}>
-      <PhoneFrame>
+    <div ref={wrapRef} className={cx('trinity', t.dark && 'dark')} style={{ ...rootStyle, ...(fullscreen ? { position: 'fixed', inset: 0 } : { transformOrigin: 'center center' }) }}>
+      <PhoneFrame bare={fullscreen}>
         {Bible.loaded ? (
           <React.Fragment>
             <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>

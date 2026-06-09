@@ -23,7 +23,20 @@ function StatusBar() {
 }
 
 // ── Device bezel ──
-function PhoneFrame({ children }) {
+function PhoneFrame({ children, bare }) {
+  // bare = a real device (native app / installed PWA / phone-sized viewport): fill the screen,
+  // no mockup bezel / notch / fake status bar — the OS provides those.
+  if (bare) {
+    return (
+      <div style={{
+        position: 'absolute', inset: 0, overflow: 'hidden',
+        background: 'var(--paper)', color: 'var(--ink)',
+        fontFamily: 'var(--font-ui)', WebkitFontSmoothing: 'antialiased',
+      }}>
+        {children}
+      </div>
+    );
+  }
   return (
     <div style={{
       width: 392, height: 846, borderRadius: 54, padding: 5,
