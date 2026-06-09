@@ -1,7 +1,7 @@
 // screens-search.jsx — full-text search across the loaded module (+ Strong's lookup)
 const { useState: useSrch } = React;
 
-function SearchScreen({ ctx }) {
+function SearchScreen({ ctx, onBack }) {
   const Bible = window.Bible;
   const qParam = new URLSearchParams(location.search).get('q') || '';
   const [q, setQ] = useSrch(qParam);
@@ -24,7 +24,10 @@ function SearchScreen({ ctx }) {
 
   return (
     <ScreenScroll top={56}>
-      <h1 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Search</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 0 14px' }}>
+        {onBack ? <IconBtn name="chevL" onClick={onBack} /> : null}
+        <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Search</h1>
+      </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 15px', height: 50, borderRadius: 16,
         background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 18 }}>

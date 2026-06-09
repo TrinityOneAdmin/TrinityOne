@@ -49,12 +49,10 @@ function PhoneFrame({ children }) {
 
 // ── Floating tab bar ──
 const TABS = [
-  { id: 'chat', label: 'Chat', icon: 'chat' },
-  { id: 'plans', label: 'Plans', icon: 'plans' },
-  { id: 'read', label: 'Read', icon: 'read' },
   { id: 'today', label: 'Today', icon: 'today' },
+  { id: 'read', label: 'Read', icon: 'read' },
+  { id: 'chat', label: 'Community', icon: 'chat' },
   { id: 'library', label: 'Library', icon: 'library' },
-  { id: 'search', label: 'Search', icon: 'study' },
 ];
 function TabBar({ active, onChange }) {
   return (
@@ -85,6 +83,27 @@ function TabBar({ active, onChange }) {
     </div>
   );
 }
+
+// ── Bible / Plans segmented toggle (the Read tab holds both views) ──
+function ReadPlansTabs({ ctx, style = {} }) {
+  const v = ctx.readView || 'bible';
+  return (
+    <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', ...style }}>
+      {[['bible', 'Bible', 'read'], ['plans', 'Plans', 'plans']].map(([id, label, ic]) => {
+        const on = v === id;
+        return (
+          <button key={id} onClick={() => ctx.setReadView(id)} style={{
+            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px',
+            borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5,
+            background: on ? 'var(--surface)' : 'transparent', color: on ? 'var(--clay)' : 'var(--ink-2)',
+            boxShadow: on ? 'var(--shadow-sm)' : 'none', transition: 'all .2s',
+          }}><Icon name={ic} size={16} stroke={on ? 2.1 : 1.8} />{label}</button>
+        );
+      })}
+    </div>
+  );
+}
+window.ReadPlansTabs = ReadPlansTabs;
 
 // ── Bottom sheet ──
 function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z = 50 }) {

@@ -188,7 +188,13 @@ function App() {
   const [t, setTweak] = useSettings();
   const Bible = useBible();
   const tabParam = new URLSearchParams(location.search).get('tab');
-  const [tab, setTab] = useA(['today', 'read', 'plans', 'chat', 'library', 'search'].includes(tabParam) ? tabParam : 'today');
+  // 4 tabs (today/read/chat/library); Plans is a view inside Read, Search is an overlay
+  const [readView, setReadView] = useA(tabParam === 'plans' ? 'plans' : 'bible');  // 'bible' | 'plans'
+  const [searchOpen, setSearchOpen] = useA(tabParam === 'search');
+  const [tab, setTab] = useA(() => {
+    if (tabParam === 'plans') return 'read';
+    return ['today', 'read', 'chat', 'library'].includes(tabParam) ? tabParam : 'today';
+  });
   const [toastMsg, setToastMsg] = useA('');
   const toastTimer = useAR();
 
@@ -319,7 +325,10 @@ function App() {
     openStore: () => setStore(true), closeStore: () => setStore(false),
     openGroup: (g) => setGroup(g),
     walletSats, setWalletSats, giving, setGiving,
-    openReader: () => setTab('read'),
+    readView, setReadView,
+    openReader: () => { setReadView('bible'); setTab('read'); },
+    openPlans: () => { setReadView('plans'); setTab('read'); },
+    openSearch: () => setSearchOpen(true),
     openShare: (v) => setShare(v),
     openShareSheet: (v) => setShareSheet(v),
     openHelp: (initial) => setHelp(initial || 'index'),
@@ -383,11 +392,9 @@ function App() {
 
   const screens = {
     today: <TodayScreen ctx={ctx} />,
-    read: <ReadScreen ctx={ctx} />,
-    plans: <PlansScreen ctx={ctx} />,
+    read: readView === 'plans' ? <PlansScreen ctx={ctx} /> : <ReadScreen ctx={ctx} />,
     chat: <ChatScreen ctx={ctx} />,
     library: <LibraryScreen ctx={ctx} />,
-    search: <SearchScreen ctx={ctx} />,
   };
 
   return (
@@ -414,6 +421,7 @@ function App() {
             <AllUsesView id={allUses} open={!!allUses} onClose={() => setAllUses(null)} ctx={ctx} />
             <NotificationsScreen open={notif} onClose={() => setNotif(false)} ctx={ctx} />
             <ListenScreen open={listen} onClose={() => setListen(false)} ctx={ctx} />
+            <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} ctx={ctx} />
             {/* identity: hub + focused sheets (designer layout, real backend) */}
             <ProfileSheet open={profile} onClose={() => setProfile(false)} identity={identity} onSave={saveIdentity} ctx={ctx} />
             <MemberCard member={member} open={!!member} onClose={() => setMember(null)} ctx={ctx} />

@@ -61,8 +61,12 @@ function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare,
           boxShadow: 'var(--shadow)', maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{version}</button>
         <div style={{ flex: 1 }} />
+        <IconBtn name="study" onClick={() => ctx.openSearch()} />
         <IconBtn name="compare" onClick={onCompare} style={compare ? { background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : {}} />
         <IconBtn name="sliders" onClick={onSettings} />
+      </div>
+      <div style={{ padding: '0 14px 11px' }}>
+        <ReadPlansTabs ctx={ctx} />
       </div>
     </div>
   );

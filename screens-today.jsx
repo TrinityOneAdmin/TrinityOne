@@ -85,6 +85,7 @@ function TodayScreen({ ctx }) {
             const unread = (D.NOTIFICATIONS || []).some(n => n.unread);
             return (
               <React.Fragment>
+                <button onClick={ctx.openSearch} aria-label="Search" style={hdrBtn}><Icon name="study" size={19} /></button>
                 <button onClick={ctx.openListen} aria-label="Listen" style={hdrBtn}><Icon name="headphones" size={19} /></button>
                 <button onClick={ctx.openNotifications} aria-label="Notifications" style={hdrBtn}>
                   <Icon name="bell" size={19} />

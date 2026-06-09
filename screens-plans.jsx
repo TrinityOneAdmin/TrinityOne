@@ -47,6 +47,7 @@ function PlansScreen({ ctx }) {
 
   return (
     <ScreenScroll>
+      <ReadPlansTabs ctx={ctx} style={{ marginBottom: 18 }} />
       <h1 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'trinityFade .5s ease both' }}>Reading Plans</h1>
       <p style={{ margin: '0 0 20px', color: 'var(--ink-2)', fontSize: 14.5, lineHeight: 1.4 }}>A little every day. Pick a path and let it carry you.</p>
 
