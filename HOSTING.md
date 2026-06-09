@@ -18,7 +18,7 @@ The gateway is enabled with **linger on** (starts on boot, survives logout). The
 
 ## How to open it
 
-- **Public (stable, anywhere):** https://adminl-aorus-15p-xc.tailbeaac0.ts.net
+- **Public (stable, anywhere):** https://trinityone.tailbeaac0.ts.net
   (member app `/`, steward `/steward.html`, relay `wss://.../relay`)
 - **On the church wifi:** http://192.168.0.34:8000
 - **On this machine:** http://localhost:8000
@@ -40,7 +40,7 @@ Relay data: `relay/relay-db.json` (gitignored, survives restarts). Unit files: `
 
 ## The public URL is now STABLE (Tailscale Funnel)
 
-`https://adminl-aorus-15p-xc.tailbeaac0.ts.net` is a **permanent** Tailscale Funnel (set 2026-06-09),
+`https://trinityone.tailbeaac0.ts.net` is a **permanent** Tailscale Funnel (set 2026-06-09),
 stored in tailscaled and restored on reboot -- it does **not** change. It replaced the old ephemeral
 cloudflare quick tunnel (`trinity-tunnel`, now disabled). Setup, for reference (already done):
 
@@ -51,7 +51,7 @@ cloudflare quick tunnel (`trinity-tunnel`, now disabled). Setup, for reference (
        e.g. `"nodeAttrs": [ { "target": ["autogroup:member"], "attr": ["funnel"] } ]`
     3. `sudo tailscale funnel --bg 8000` (or `scripts/funnel-up.sh`) -- runs `tailscale funnel --bg 8000`, which
        persists across reboots. The URL never changes:
-       **https://adminl-aorus-15p-xc.tailbeaac0.ts.net** (rename the node for a nicer host:
+       **https://trinityone.tailbeaac0.ts.net** (rename the node for a nicer host:
        `tailscale set --hostname=trinityone` -> `https://trinityone.tailbeaac0.ts.net`).
   Everything is origin-relative, so the join QR/link and the relay (`wss://.../relay`) work over the
   new URL with no code change. Then disable the old quick tunnel:
