@@ -62,6 +62,7 @@ const MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
   '.gz': 'application/gzip', '.zip': 'application/zip', '.txt': 'text/plain; charset=utf-8',
   '.ico': 'image/x-icon', '.map': 'application/json',
+  '.apk': 'application/vnd.android.package-archive', '.webmanifest': 'application/manifest+json',
 };
 function serveStatic(req, res) {
   let p = decodeURIComponent((req.url || '/').split('?')[0]);
