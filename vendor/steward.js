@@ -8559,8 +8559,10 @@ zoo`.split("\n");
     // The member app at the gateway root reads ?follow=<npub> and follows the church.
     joinUrl() {
       const np = window.Steward.npub || "";
-      const origin = typeof location !== "undefined" && location.origin || "";
-      return origin + "/?follow=" + np;
+      const o = typeof location !== "undefined" && location.origin || "";
+      const PUBLIC_BASE = "https://trinityone.tailbeaac0.ts.net";
+      const base = o.startsWith("https://") ? o : PUBLIC_BASE;
+      return base + "/?follow=" + np;
     },
     // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
     joinCode() {

@@ -242,8 +242,12 @@ window.Steward = {
   // The member app at the gateway root reads ?follow=<npub> and follows the church.
   joinUrl() {
     const np = window.Steward.npub || '';
-    const origin = (typeof location !== 'undefined' && location.origin) || '';
-    return origin + '/?follow=' + np;
+    const o = (typeof location !== 'undefined' && location.origin) || '';
+    // A LAN/localhost origin (plain http) isn't reachable by congregants off the church wifi, so
+    // join links/QRs must use the stable PUBLIC url. An https origin (the public Funnel) is used as-is.
+    const PUBLIC_BASE = 'https://trinityone.tailbeaac0.ts.net';
+    const base = o.startsWith('https://') ? o : PUBLIC_BASE;
+    return base + '/?follow=' + np;
   },
   // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
   joinCode() { return window.Steward.npub || ''; },
