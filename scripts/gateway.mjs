@@ -9,6 +9,7 @@ import { WebSocketServer } from 'ws';
 import { readFileSync, writeFileSync, renameSync, statSync, createReadStream } from 'fs';
 import { extname, normalize, join } from 'path';
 import { decode as nip19decode } from 'nostr-tools/nip19';
+import webpush from 'web-push';
 
 const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
@@ -27,6 +28,34 @@ let CHURCH_PUB = toHexPub(process.env.CHURCH_NPUB);
 if (!CHURCH_PUB) { try { CHURCH_PUB = toHexPub(JSON.parse(readFileSync(join(ROOT, 'relay', 'church.json'), 'utf8')).npub); } catch {} }
 const MEMBERS = new Set();     // pubkeys that announced membership (minus those removed)
 const BROADCAST = new Set();   // group ids the church marked broadcast
+
+// ---- web push (VAPID): notify members of serving requests in real time (PWA) ----
+const VAPID_PATH = join(ROOT, 'relay', 'vapid.json');
+const SUBS_PATH = join(ROOT, 'relay', 'push-subs.json');
+let VAPID = null;
+try { VAPID = JSON.parse(readFileSync(VAPID_PATH, 'utf8')); }
+catch { VAPID = webpush.generateVAPIDKeys(); try { writeFileSync(VAPID_PATH, JSON.stringify(VAPID)); } catch {} }
+webpush.setVapidDetails('mailto:steward@trinityone.app', VAPID.publicKey, VAPID.privateKey);
+let pushSubs = {};   // { memberHex: [PushSubscription, …] }
+try { pushSubs = JSON.parse(readFileSync(SUBS_PATH, 'utf8')); } catch {}
+function saveSubs() { try { writeFileSync(SUBS_PATH, JSON.stringify(pushSubs)); } catch {} }
+function pushTo(memberHex, payload) {
+  const list = pushSubs[memberHex] || [];
+  list.forEach(sub => webpush.sendNotification(sub, JSON.stringify(payload)).catch(err => {
+    if (err && (err.statusCode === 410 || err.statusCode === 404)) { pushSubs[memberHex] = (pushSubs[memberHex] || []).filter(s => s.endpoint !== sub.endpoint); saveSubs(); }
+  }));
+}
+// fire a push when the church sends a member a serving request (p-tagged to them)
+function maybePush(evt) {
+  try {
+    if (evt.kind !== 30078 || evt.pubkey !== CHURCH_PUB) return;
+    const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
+    if (!d.startsWith(REQUEST_D)) return;
+    const target = (evt.tags.find(t => t[0] === 'p') || [])[1]; if (!target) return;
+    const c = JSON.parse(evt.content || '{}');
+    pushTo(target, { title: 'Can you serve?', body: `${c.teamName || 'Serving'} · ${c.role || ''}${c.date ? ' · ' + c.date : ''}`, url: '/?serving=1' });
+  } catch {}
+}
 const dtag = (e) => { const t = (e.tags || []).find(t => t[0] === 'd'); return t ? t[1] : ''; };
 const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
@@ -67,7 +96,16 @@ const MIME = {
   '.apk': 'application/vnd.android.package-archive', '.webmanifest': 'application/manifest+json',
 };
 function serveStatic(req, res) {
-  let p = decodeURIComponent((req.url || '/').split('?')[0]);
+  const route = (req.url || '/').split('?')[0];
+  // web-push: hand out the VAPID public key + accept member push subscriptions
+  if (route === '/push/vapid') { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify({ publicKey: VAPID.publicKey })); return; }
+  if (route === '/push/subscribe') {
+    if (req.method !== 'POST') { res.writeHead(405).end('method'); return; }
+    let body = ''; req.on('data', c => { body += c; if (body.length > 1e5) req.destroy(); });
+    req.on('end', () => { try { const { sub, pubkey } = JSON.parse(body); if (sub && sub.endpoint && /^[0-9a-f]{64}$/i.test(pubkey || '')) { const list = pushSubs[pubkey] = pushSubs[pubkey] || []; if (!list.some(s => s.endpoint === sub.endpoint)) { list.push(sub); saveSubs(); } } res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); res.end('ok'); } catch { res.writeHead(400).end('bad'); } });
+    return;
+  }
+  let p = decodeURIComponent(route);
   if (p === '/' || p.endsWith('/')) p += 'index.html';
   const file = normalize(join(ROOT, p));
   if (!file.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }   // path traversal guard
@@ -125,6 +163,7 @@ wss.on('connection', ws => {
       note(evt);   // a membership/broadcast change takes effect for subsequent events
       events.push(evt); if (events.length > MAX_EVENTS) events.shift();
       scheduleSave();
+      maybePush(evt);   // notify the targeted member if this is a serving request
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       for (const [client, m] of subs) { if (client.readyState !== 1) continue;
         for (const [subId, filters] of m) if (matchAny(evt, filters)) client.send(JSON.stringify(['EVENT', subId, evt])); }

@@ -29,6 +29,7 @@
     "@scure/bip39": "^2.2.0",
     "nostr-tools": "^2.23.5",
     "qrcode-generator": "^1.5.2",
+    "web-push": "^3.6.7",
     "ws": "^8.21.0"
   },
   "devDependencies": {

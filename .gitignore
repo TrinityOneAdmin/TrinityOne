@@ -19,4 +19,8 @@ dist/
 .DS_Store
 relay/relay-db.json
 relay/relay-db.json.tmp
+relay/relay-db.json.bak-*
 relay/tunnel-url.txt
+relay/church.json
+relay/vapid.json
+relay/push-subs.json

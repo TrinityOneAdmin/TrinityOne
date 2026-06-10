@@ -49,5 +49,32 @@
     });
   }
 
-  window.TrinityReminders = { sync, ensurePerm };
+  // ---- web push registration (PWA only; Capacitor uses local notifications) ----
+  function b64ToU8(base64) {
+    const pad = '='.repeat((4 - base64.length % 4) % 4);
+    const s = (base64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(s); const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  let pushDone = '';
+  async function registerPush(pubkey) {
+    if (!pubkey || pushDone === pubkey) return;
+    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return; // native: local notifs
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    try {
+      if (Notification.permission !== 'granted') { const ok = await ensurePerm(); if (!ok) return; }
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        const vapid = await fetch('/push/vapid').then(r => r.json()).catch(() => null);
+        if (!vapid || !vapid.publicKey) return;
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(vapid.publicKey) });
+      }
+      await fetch('/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sub, pubkey }) });
+      pushDone = pubkey;
+    } catch (e) { /* push not available — local reminders still work */ }
+  }
+
+  window.TrinityReminders = { sync, ensurePerm, registerPush };
 })();

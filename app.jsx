@@ -362,8 +362,9 @@ function App() {
   const servPending = servReqs.filter(r => !servReplies[r.id]);
   const servConfirmed = servReqs.filter(r => servReplies[r.id] === 'accept' && (r.date || '') >= todayStr).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const servNext = servConfirmed[0] || null;
-  // schedule local reminders for confirmed slots (the day before)
+  // schedule local reminders for confirmed slots (the day before) + register web-push (PWA)
   useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servReqs, servReplies]);
+  useAE(() => { const pk = window.Fellowship && window.Fellowship.myPubkey; if (pk && window.TrinityReminders && window.TrinityReminders.registerPush) window.TrinityReminders.registerPush(pk); }, [servReqs, activeChurch]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
   const [dmPeer, setDmPeer] = useA(null);   // direct-message thread with a pubkey
