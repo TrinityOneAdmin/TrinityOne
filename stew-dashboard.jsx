@@ -85,7 +85,18 @@ function StewDashboard({ initial = 'overview' }) {
 
 // ---- the join flow: a real QR + code members scan/paste to follow this church ----
 function shortNpub(np) { return np ? np.slice(0, 14) + '…' + np.slice(-6) : '—'; }
-function copyText(t) { try { navigator.clipboard.writeText(t); } catch {} }
+function copyText(t) {
+  if (!t) return false;
+  // navigator.clipboard only works in a secure context (https / localhost). Over plain http on the
+  // LAN it's undefined, so fall back to a hidden-textarea execCommand copy (works everywhere).
+  try { if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(String(t)); return true; } } catch (e) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = String(t); ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '-9999px'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, String(t).length);
+    const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok;
+  } catch (e) { return false; }
+}
 
 function JoinCard({ qrSize = 92, center = false }) {
   const church = window.useStewardChurch();   // re-renders once the npub is ready
@@ -101,7 +112,9 @@ function JoinCard({ qrSize = 92, center = false }) {
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Your church code</div>
-        <div style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 15, letterSpacing: '.3px', margin: '4px 0 2px' }}>{shortNpub(np)}</div>
+        <div onClick={() => doCopy('code', np)} title={np} style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 15, letterSpacing: '.3px', margin: '4px 0 2px', cursor: 'pointer' }}>{shortNpub(np)}</div>
+        {/* full code, selectable — so copy works even if the buttons can't reach the clipboard */}
+        <textarea readOnly value={np} onFocus={e => e.target.select()} style={{ width: '100%', maxWidth: 280, height: 40, resize: 'none', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 10.5, padding: '6px 8px', marginTop: 2, lineHeight: 1.3, wordBreak: 'break-all' }} />
         <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: center ? 'center' : 'flex-start' }}>
           <button onClick={() => doCopy('link', url)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'link' ? 'check' : 'link'} size={14} color="#fff" /> {copied === 'link' ? 'Copied' : 'Copy link'}</button>
           <button onClick={() => doCopy('code', np)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'code' ? 'check' : 'receipt'} size={14} color="currentColor" /> {copied === 'code' ? 'Copied' : 'Copy code'}</button>
