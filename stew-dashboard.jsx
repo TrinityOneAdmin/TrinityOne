@@ -4,7 +4,7 @@ const NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
   { key: 'groups', label: 'Groups', ic: 'chat' },
   { key: 'teams', label: 'Teams', ic: 'shield' },
-  { key: 'plans', label: 'Plans', ic: 'read' },
+  { key: 'resources', label: 'Resources', ic: 'read' },
   { key: 'members', label: 'Members', ic: 'pray' },
   { key: 'relays', label: 'Relays', ic: 'globe' },
   { key: 'settings', label: 'Settings', ic: 'sliders' },
@@ -76,7 +76,7 @@ function StewDashboard({ initial = 'overview' }) {
             {tab === 'giving' && <DashGiving />}
             {tab === 'groups' && <DashGroups />}
             {tab === 'teams' && <DashTeams />}
-            {tab === 'plans' && <DashPlans />}
+            {tab === 'resources' && <DashResources />}
             {tab === 'members' && <DashMembers />}
             {tab === 'relays' && <DashRelays />}
             {tab === 'settings' && <DashSettings onTab={setTab} />}
@@ -530,6 +530,96 @@ function DashPlans() {
   );
 }
 window.DashPlans = DashPlans;
+
+// Upload a devotional — a reflection on a passage as a PDF or TXT file.
+function NewDevotionalModal({ onClose }) {
+  const [title, setTitle] = React.useState('');
+  const [ref, setRef] = React.useState('');
+  const [file, setFile] = React.useState(null);   // { type, name, text?, data? }
+  const [busy, setBusy] = React.useState(false);
+  const pick = (f) => {
+    if (!f) return;
+    const isPdf = /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name);
+    if (f.size > 4 * 1024 * 1024) { setFile({ error: 'File is over 4 MB — please use a smaller PDF or a text file.' }); return; }
+    const r = new FileReader();
+    if (isPdf) { r.onload = () => setFile({ type: 'pdf', name: f.name, data: r.result }); r.readAsDataURL(f); }
+    else { r.onload = () => setFile({ type: 'txt', name: f.name, text: r.result }); r.readAsText(f); }
+    if (!title.trim()) setTitle(f.name.replace(/\.(pdf|txt)$/i, ''));
+  };
+  const create = () => {
+    if (!title.trim() || !file || file.error || busy) return;
+    setBusy(true);
+    Promise.resolve(window.Steward.publishDevotional({ title: title.trim(), ref: ref.trim(), type: file.type, text: file.text || '', data: file.data || '' })).then(() => onClose());
+  };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Upload a devotional</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A reflection on a passage, as a PDF or text file. Your congregation reads it in their app.</p>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Title</div>
+        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Resting in Psalm 23" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Passage (optional)</div>
+        <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. Psalm 23" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer' }}>
+          <Icon name="read" size={20} color="var(--clay)" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: file && !file.error ? 'var(--ink)' : 'var(--ink-2)' }}>{file && file.name ? file.name : 'Choose a PDF or TXT file'}</div>
+            <div style={{ fontSize: 12, color: file && file.error ? 'var(--clay)' : 'var(--ink-3)' }}>{file && file.error ? file.error : (file && file.type ? file.type.toUpperCase() + ' ready' : 'Tap to pick a file')}</div>
+          </div>
+          <input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={e => pick(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
+        </label>
+        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+          <button onClick={create} disabled={!title.trim() || !file || file.error || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (!title.trim() || !file || file.error || busy) ? 0.55 : 1 }}><Icon name="send" size={16} color="#fff" /> {busy ? 'Sharing…' : 'Share devotional'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashDevotionals() {
+  const devos = window.useStewardDevotionals();
+  const [adding, setAdding] = React.useState(false);
+  return (
+    <div style={{ position: 'relative', height: '100%' }}>
+      {adding ? <NewDevotionalModal onClose={() => setAdding(false)} /> : null}
+      <Panel title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
+        action={<button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Upload devotional</button>} style={{ height: '100%' }}>
+        {devos.length === 0 ? (
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Upload a PDF or text reflection on a passage — your congregation reads it in their app.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {devos.map(d => (
+              <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>{d.title}</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[d.ref, (d.type || '').toUpperCase()].filter(Boolean).join(' · ')}</div>
+                </div>
+                <button onClick={() => window.Steward.removeDevotional(d.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function DashResources() {
+  const [view, setView] = React.useState('plans');   // plans | devotionals
+  const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 16 };
+  const btn = (k, label) => (
+    <button onClick={() => setView(k)} style={{ padding: '8px 16px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
+  );
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={seg}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}</div>
+      <div style={{ flex: 1, minHeight: 0 }}>{view === 'plans' ? <DashPlans /> : <DashDevotionals />}</div>
+    </div>
+  );
+}
+window.DashResources = DashResources;
 
 function DashMembers() {
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)

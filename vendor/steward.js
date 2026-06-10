@@ -8179,6 +8179,7 @@ zoo`.split("\n");
   var FUND_D = "trinityone/fund:";
   var GROUP_D = "trinityone/group:";
   var PLAN_D = "trinityone/plan:";
+  var DEVO_D = "trinityone/devotional:";
   var now = () => Math.floor(Date.now() / 1e3);
   function relays() {
     const l = typeof location !== "undefined" ? location : null;
@@ -8370,6 +8371,49 @@ zoo`.split("\n");
           }
           try {
             byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ---- devotionals the church shares (an uploaded PDF or text reflection on a passage) ----
+    // devo = { id?, title, ref, type:'txt'|'pdf', text?, data?(data: URL for pdf) }. Stored in the event.
+    publishDevotional(devo) {
+      if (!sk) return Promise.resolve(null);
+      const id = devo.id || "devo" + Date.now();
+      const content = JSON.stringify({ id, title: devo.title || "Devotional", ref: devo.ref || "", type: devo.type || "txt", text: devo.text || "", data: devo.data || "" });
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", DEVO_D + id], ["t", NET]], content }, sk)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
+    },
+    removeDevotional(id) {
+      if (!sk) return Promise.resolve(null);
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", DEVO_D + id], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+    },
+    subscribeDevotionals(onDevos) {
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => onDevos([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(DEVO_D)) return;
+          const id = d.slice(DEVO_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byId.delete(id);
+            emit();
+            return;
+          }
+          try {
+            const c = JSON.parse(e.content);
+            byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, hasFile: !!(c.text || c.data), ts: e.created_at });
             emit();
           } catch {
           }

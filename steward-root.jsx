@@ -25,6 +25,13 @@ function useStewardPlans() {
 }
 window.useStewardPlans = useStewardPlans;
 
+function useStewardDevotionals() {
+  const [devos, setDevos] = useSt([]);
+  useStE(() => window.Steward.subscribeDevotionals(setDevos), []);
+  return devos;
+}
+window.useStewardDevotionals = useStewardDevotionals;
+
 // people participating in this church's chat (derived from messages addressed to the church)
 function useStewardMembers() {
   const [members, setMembers] = useSt([]);

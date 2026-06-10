@@ -5444,6 +5444,44 @@
         }
       };
     },
+    // ── read the devotionals a church shares (kind-30078, d=devotional:) — full content for rendering ──
+    subscribeChurchDevotionals(churchNpub, onDevos) {
+      const pubk = toPub(churchNpub);
+      if (!pubk) {
+        onDevos([]);
+        return () => {
+        };
+      }
+      const DEVO_D = "trinityone/devotional:";
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => onDevos([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(DEVO_D)) return;
+          const id = d.slice(DEVO_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byId.delete(id);
+            emit();
+            return;
+          }
+          try {
+            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
     // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──
     subscribeChurchProfile(churchNpub, onProfile) {
       const pubk = toPub(churchNpub);

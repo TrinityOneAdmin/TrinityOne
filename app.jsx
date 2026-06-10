@@ -334,6 +334,14 @@ function App() {
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchPlans)) { setChurchPlans([]); return; }
     return window.Fellowship.subscribeChurchPlans(np, setChurchPlans);
   }, [activeChurch, churches]);
+  // devotionals the active church shares (PDF/TXT reflections)
+  const [churchDevos, setChurchDevos] = useA([]);
+  const [openDevo, setOpenDevo] = useA(null);   // a church devotional opened for reading
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchDevotionals)) { setChurchDevos([]); return; }
+    return window.Fellowship.subscribeChurchDevotionals(np, setChurchDevos);
+  }, [activeChurch, churches]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
   const [dmPeer, setDmPeer] = useA(null);   // direct-message thread with a pubkey
@@ -467,6 +475,8 @@ function App() {
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
     churchPlans,
+    churchDevos,
+    openChurchDevo: (d) => setOpenDevo(d),
     togglePlanDay: (pid, day) => {
       const prev = MD.settings.get('plans', {});
       const set = new Set(prev[pid] || []); set.has(day) ? set.delete(day) : set.add(day);
@@ -502,6 +512,7 @@ function App() {
             <VerseShareSheet payload={shareSheet} open={!!shareSheet} onClose={() => setShareSheet(null)} ctx={ctx} />
             <DevotionalView open={devo} onClose={() => setDevo(false)} ctx={ctx} />
             <PlanDetail plan={plan} open={!!plan} onClose={() => setPlan(null)} ctx={ctx} />
+            <ChurchDevoView devo={openDevo} open={!!openDevo} onClose={() => setOpenDevo(null)} ctx={ctx} />
             <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} ctx={ctx} />
             <JournalEditor entry={journalEditor} open={!!journalEditor} onClose={() => setJournalEditor(null)} ctx={ctx} />
             <ModuleView module={module} open={!!module} onClose={() => setModule(null)} ctx={ctx} />

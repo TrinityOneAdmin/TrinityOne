@@ -80,9 +80,27 @@ function PlansScreen({ ctx }) {
 
       {churchPlans.length ? (
         <React.Fragment>
-          <SectionLabel>Shared by {churchName}</SectionLabel>
+          <SectionLabel>Plans from {churchName}</SectionLabel>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22, animation: 'trinityFade .5s ease .08s both' }}>
             {churchPlans.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} />)}
+          </div>
+        </React.Fragment>
+      ) : null}
+
+      {(ctx.churchDevos || []).length ? (
+        <React.Fragment>
+          <SectionLabel>Devotionals from {churchName}</SectionLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .1s both' }}>
+            {ctx.churchDevos.map(d => (
+              <div key={d.id} onClick={() => ctx.openChurchDevo(d)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
+                <div style={{ width: 46, height: 46, borderRadius: 14, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={23} stroke={1.8} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[d.ref, (d.type || '').toUpperCase() + ' devotional'].filter(Boolean).join(' · ')}</div>
+                </div>
+                <Icon name="chevR" size={18} color="var(--ink-3)" />
+              </div>
+            ))}
           </div>
         </React.Fragment>
       ) : null}
@@ -159,4 +177,39 @@ function PlanDetail({ plan, open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { PlansScreen, PlanDetail });
+// ── church devotional reader (renders an uploaded TXT inline, or a PDF embedded) ──
+function ChurchDevoView({ devo, open, onClose, ctx }) {
+  if (!devo) return null;
+  const isPdf = devo.type === 'pdf' && devo.data;
+  const openPdf = () => { try { window.open(devo.data, '_blank'); } catch (e) {} };
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
+          <IconBtn name="chevL" onClick={onClose} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, lineHeight: 1.15 }}>{devo.title}</h1>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[devo.ref, 'Devotional'].filter(Boolean).join(' · ')}</div>
+          </div>
+          {isPdf ? <IconBtn name="share" onClick={openPdf} /> : null}
+        </div>
+      </div>
+      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', background: isPdf ? '#525659' : 'var(--paper)' }}>
+        {isPdf ? (
+          <object data={devo.data} type="application/pdf" style={{ width: '100%', height: '100%', minHeight: 480, border: 'none' }}>
+            <div style={{ padding: 40, textAlign: 'center', color: '#fff' }}>
+              <p style={{ fontSize: 15, lineHeight: 1.6 }}>This devotional is a PDF. Tap below to open it.</p>
+              <button onClick={openPdf} style={{ marginTop: 12, padding: '12px 22px', borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Open PDF</button>
+            </div>
+          </object>
+        ) : (
+          <div style={{ maxWidth: 640, margin: '0 auto', padding: '24px 22px 60px' }}>
+            <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.65, color: 'var(--ink)', whiteSpace: 'pre-wrap', margin: 0, textWrap: 'pretty' }}>{devo.text || 'This devotional has no text.'}</p>
+          </div>
+        )}
+      </div>
+    </Overlay>
+  );
+}
+
+Object.assign(window, { PlansScreen, PlanDetail, ChurchDevoView });
