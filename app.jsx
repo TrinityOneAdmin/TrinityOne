@@ -208,6 +208,7 @@ function App() {
     const gid = sp.get('group'); if (gid) { const g = window.TrinityData.GROUPS.find(x => x.id === gid) || { id: gid, name: gid, accent: 'var(--clay)', members: 0, prayer: /prayer/i.test(gid) }; setGroup(g); }
     const pid = sp.get('plan'); if (pid) { const p = window.TrinityData.PLANS.find(x => x.id === pid); if (p) setPlan(p); }
     if (sp.get('share')) setShareSheet(window.TrinityData.VOTD);
+    const dm = sp.get('dm'); if (dm === 'inbox') setDmInbox(true); else if (dm) setDmPeer(dm);
   }, [Bible.loaded]);
   const version = Bible.activeVersion;
 
@@ -258,7 +259,8 @@ function App() {
   const idParam = new URLSearchParams(location.search).get('id');   // profile|recovery|invite|relays|newid|member
   const followParam = new URLSearchParams(location.search).get('follow');   // follow a church by its npub
   const churchParam = new URLSearchParams(location.search).get('church');   // '1' / 'follow' opens the switcher
-  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam;   // any deep-link skips splash/onboarding
+  const dmParam = new URLSearchParams(location.search).get('dm');   // inbox | <peer pubkey> (verification deep-link)
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam || dmParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
@@ -327,6 +329,8 @@ function App() {
   }, [activeChurch, churches]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
+  const [dmPeer, setDmPeer] = useA(null);   // direct-message thread with a pubkey
+  const [dmInbox, setDmInbox] = useA(false); // direct-message conversation list
   const [walletSats, setWalletSats] = useA(window.TrinityData.WALLET.sats);
   const [giving, setGiving] = useA(window.TrinityData.GIVING_HISTORY);
   const [funds, setFunds] = useA(window.TrinityData.FUNDS);   // giving funds (stewards can add)
@@ -400,6 +404,7 @@ function App() {
     removeTranslation: (abbr) => Bible.removeModule(abbr),
     openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
     openGroup: (g) => setGroup(g),
+    openDM: (peer) => setDmPeer(peer), openDMInbox: () => setDmInbox(true),
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
     readView, setReadView,
@@ -509,6 +514,8 @@ function App() {
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
             <ChatRoom group={group} open={!!group} onClose={() => setGroup(null)} ctx={ctx} />
+            <DMInbox open={dmInbox} onClose={() => setDmInbox(false)} ctx={ctx} />
+            <DMThread peer={dmPeer} open={!!dmPeer} onClose={() => setDmPeer(null)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx} initialMode={churchSwitcherMode}
               churches={churches} activeId={activeChurch}
               onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); }}

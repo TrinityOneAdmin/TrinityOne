@@ -7,6 +7,7 @@ import { SimplePool } from 'nostr-tools/pool';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { decode as nip19decode } from 'nostr-tools/nip19';
+import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
 
 // a church is identified by its npub (or hex pubkey) -- resolve to a 32-byte hex pubkey
 function toPub(npubOrHex) {
@@ -183,6 +184,52 @@ window.Fellowship = {
     try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); }
     catch (e) { console.warn('[fellowship] publish failed', e); }
     return evt;
+  },
+
+  // ── direct messages (1:1, encrypted) ──
+  // NIP-04 encrypted kind-4: the content is private to the two parties; the relay sees only that two
+  // pubkeys are talking (full metadata privacy = NIP-17, a later/Stage-6 upgrade). Peer = a hex pubkey.
+  async sendDM(peerPub, content) {
+    if (!sk) await window.Fellowship.ready;
+    let ciphertext; try { ciphertext = await nip04encrypt(sk, peerPub, content); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
+    const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] DM publish failed', e); }
+    return evt;
+  },
+  // a 1:1 thread with one peer; onMsg({ id, mine, content, ts, pubkey }). Returns an unsubscribe fn.
+  subscribeThread(peerPub, onMsg) {
+    if (!pub) return () => {};
+    const seen = new Set();
+    const deliver = async (e) => {
+      if (seen.has(e.id)) return; seen.add(e.id);
+      const mine = e.pubkey === pub;
+      let content = ''; try { content = await nip04decrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
+      try { onMsg({ id: e.id, mine, content, ts: e.created_at, pubkey: e.pubkey }); } catch (err) {}
+    };
+    const sub = pool.subscribeMany(window.Fellowship.relays, [
+      { kinds: [4], authors: [pub], '#p': [peerPub] },   // sent by me to peer
+      { kinds: [4], authors: [peerPub], '#p': [pub] },   // sent by peer to me
+    ], { onevent: deliver, oneose() {} });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // inbox: every DM involving me, grouped by peer; onConvos([{ peer, lastTs, preview }]). Unsub fn.
+  subscribeDMs(onConvos) {
+    if (!pub) { onConvos([]); return () => {}; }
+    const byPeer = new Map();
+    const emit = () => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0)));
+    const handle = async (e) => {
+      const peer = e.pubkey === pub ? (e.tags.find(t => t[0] === 'p') || [])[1] : e.pubkey;
+      if (!peer) return;
+      const prev = byPeer.get(peer);
+      if (prev && prev.lastTs >= e.created_at) return;
+      let preview = ''; try { preview = await nip04decrypt(sk, peer, e.content); } catch (err) { preview = '🔒'; }
+      byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? 'You: ' : '') + preview });
+      emit();
+    };
+    const sub = pool.subscribeMany(window.Fellowship.relays, [
+      { kinds: [4], authors: [pub] }, { kinds: [4], '#p': [pub] },
+    ], { onevent: handle, oneose() { emit(); } });
+    return () => { try { sub.close(); } catch {} };
   },
 
   // live connection status of each configured relay (throwaway WS probe)

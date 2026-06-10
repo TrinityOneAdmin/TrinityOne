@@ -314,7 +314,10 @@ function ChatScreen({ ctx }) {
     <ScreenScroll>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, animation: 'trinityFade .5s ease both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
-        <IconBtn name="plus" onClick={() => ctx.openChurchSwitcher('follow')} />
+        <div style={{ display: 'flex', gap: 9 }}>
+          <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
+          <IconBtn name="plus" onClick={() => ctx.openChurchSwitcher('follow')} />
+        </div>
       </div>
       <div style={{ marginBottom: GIVING_ON ? 16 : 20, animation: 'trinityFade .5s ease .04s both' }}>
         <ChurchPill ctx={ctx} />
@@ -497,7 +500,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
 
   if (m.kind === 'verse') {
     return (
-      <Row me={me} m={m}>
+      <Row me={me} m={m} ctx={ctx}>
         <div onClick={() => ctx.openShare(m.verse)} style={{
           maxWidth: 270, borderRadius: 18, padding: 0, overflow: 'hidden', cursor: 'pointer',
           background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)',
@@ -516,7 +519,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
 
   if (m.kind === 'prayer') {
     return (
-      <Row me={me} m={m}>
+      <Row me={me} m={m} ctx={ctx}>
         <div style={{ maxWidth: 280 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', margin: '0 0 4px 2px' }}>
             <Icon name="pray" size={12} color="var(--gold)" /> PRAYER REQUEST</div>
@@ -534,7 +537,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
   if (m.kind === 'devotional') {
     const c = m.card || {};
     return (
-      <Row me={me} m={m}>
+      <Row me={me} m={m} ctx={ctx}>
         <div onClick={() => ctx.openDevotional && ctx.openDevotional()} style={{ maxWidth: 280, borderRadius: 18, overflow: 'hidden', cursor: 'pointer',
           background: 'linear-gradient(155deg, #6BA17C, #3C6E57)', color: '#fff', boxShadow: 'var(--shadow)' }}>
           <div style={{ padding: '14px 16px' }}>
@@ -553,7 +556,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
   if (m.kind === 'note') {
     const c = m.card || {};
     return (
-      <Row me={me} m={m}>
+      <Row me={me} m={m} ctx={ctx}>
         <div style={{ maxWidth: 280, borderRadius: 18, padding: '13px 15px', background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 6 }}>
             <Icon name="pen" size={13} color="var(--clay)" /> NOTE · {c.ref}</div>
@@ -566,7 +569,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
   }
 
   return (
-    <Row me={me} m={m}>
+    <Row me={me} m={m} ctx={ctx}>
       <div style={{ maxWidth: 270, borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
         border: me ? 'none' : '1px solid var(--line)', boxShadow: 'var(--shadow)',
         borderBottomRightRadius: me ? 5 : 18, borderBottomLeftRadius: me ? 18 : 5 }}>
@@ -577,11 +580,12 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
   );
 }
 
-function Row({ me, m, children }) {
+function Row({ me, m, children, ctx }) {
   const d = (m.pubkey && window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(m.pubkey) : { handle: m.handle, color: m.color };
+  const canDM = !!(m.pubkey && ctx && ctx.openDM);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both' }}>
-      {!me ? <div style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px' }}>
+      {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
         <UserAvatar av={avOf(d)} name={d.handle} size={22} />
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>{d.handle}</span>
         <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{m.when}</span>
@@ -824,4 +828,103 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { ChatScreen, ChatRoom, VerseShareSheet });
+// ── direct message thread (1:1, encrypted) ──
+function DMThread({ peer, open, onClose, ctx }) {
+  const [msgs, setMsgs] = useC([]);
+  const [draft, setDraft] = useC('');
+  const scRef = useCR();
+  const FS = window.Fellowship;
+  const d = (FS && FS.displayFor && peer) ? FS.displayFor(peer) : { handle: 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
+  useCE(() => {
+    setMsgs([]); setDraft('');
+    if (!peer || !FS || !FS.subscribeThread) return;
+    if (FS.requestProfiles) FS.requestProfiles([peer]);
+    return FS.subscribeThread(peer, (m) => setMsgs(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m].sort((a, b) => (a.ts || 0) - (b.ts || 0))));
+  }, [peer]);
+  useCE(() => { if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, open]);
+  if (!peer) return null;
+  const send = () => { if (!draft.trim() || !FS) return; FS.sendDM(peer, draft.trim()); setDraft(''); };
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
+          <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
+          <UserAvatar av={avOf(d)} name={d.handle} size={38} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{d.handle}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="lock" size={12} color="var(--sage)" /> Direct message · encrypted</div>
+          </div>
+        </div>
+      </div>
+      <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ textAlign: 'center', margin: '2px 0 6px' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
+            <Icon name="lock" size={13} /> Only you two can read these messages</span>
+        </div>
+        {msgs.map(m => (
+          <div key={m.id} style={{ display: 'flex', justifyContent: m.mine ? 'flex-end' : 'flex-start' }}>
+            <div style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)',
+              background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
+              border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', wordBreak: 'break-word' }}>{m.content}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 9 }}>
+          <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={1}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder="Message privately…" style={{ flex: 1, resize: 'none', minHeight: 44, maxHeight: 96, padding: '12px 15px', borderRadius: 16,
+              border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', lineHeight: 1.35 }} />
+          <button onClick={send} style={{ width: 44, height: 44, borderRadius: 14, border: 'none', flexShrink: 0,
+            background: draft.trim() ? 'var(--clay)' : 'var(--line)', cursor: draft.trim() ? 'pointer' : 'default',
+            color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background .2s' }}>
+            <Icon name="send" size={20} color="#fff" /></button>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+// ── direct-message inbox (conversation list) ──
+function DMInbox({ open, onClose, ctx }) {
+  const [convos, setConvos] = useC([]);
+  const FS = window.Fellowship;
+  useCE(() => { if (!open || !FS || !FS.subscribeDMs) return; return FS.subscribeDMs(setConvos); }, [open]);
+  useCE(() => { if (convos.length && FS && FS.requestProfiles) FS.requestProfiles(convos.map(c => c.peer)); }, [convos]);
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 18px 12px' }}>
+          <IconBtn name="chevL" onClick={onClose} />
+          <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700 }}>Messages</h1>
+        </div>
+      </div>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '6px 16px 30px' }}>
+        {convos.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '54px 24px', color: 'var(--ink-3)' }}>
+            <Icon name="chat" size={30} color="var(--ink-3)" />
+            <p style={{ margin: '12px 0 0', fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.5 }}>No messages yet. Open a group, tap someone’s name, and message them privately.</p>
+          </div>
+        ) : convos.map(c => {
+          const d = FS.displayFor(c.peer);
+          return (
+            <div key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 6px', borderBottom: '1px solid var(--line-2)', cursor: 'pointer' }}>
+              <UserAvatar av={avOf(d)} name={d.handle} size={44} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{d.handle}</span>
+                  <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{relTime(c.lastTs)}</span>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.preview}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Overlay>
+  );
+}
+
+Object.assign(window, { ChatScreen, ChatRoom, VerseShareSheet, DMThread, DMInbox });

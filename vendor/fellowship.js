@@ -162,7 +162,7 @@
     return a & b ^ a & c ^ b & c;
   }
   var HashMD = class {
-    constructor(blockLen, outputLen, padOffset, isLE) {
+    constructor(blockLen, outputLen, padOffset, isLE2) {
       __publicField(this, "blockLen");
       __publicField(this, "outputLen");
       __publicField(this, "padOffset");
@@ -177,7 +177,7 @@
       this.blockLen = blockLen;
       this.outputLen = outputLen;
       this.padOffset = padOffset;
-      this.isLE = isLE;
+      this.isLE = isLE2;
       this.buffer = new Uint8Array(blockLen);
       this.view = createView(this.buffer);
     }
@@ -210,7 +210,7 @@
       aexists(this);
       aoutput(out, this);
       this.finished = true;
-      const { buffer, view, blockLen, isLE } = this;
+      const { buffer, view, blockLen, isLE: isLE2 } = this;
       let { pos } = this;
       buffer[pos++] = 128;
       clean(this.buffer.subarray(pos));
@@ -220,7 +220,7 @@
       }
       for (let i3 = pos; i3 < blockLen; i3++)
         buffer[i3] = 0;
-      view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE);
+      view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE2);
       this.process(view, 0);
       const oview = createView(out);
       const len = this.outputLen;
@@ -231,7 +231,7 @@
       if (outLen > state.length)
         throw new Error("_sha2: outputLen bigger than state");
       for (let i3 = 0; i3 < outLen; i3++)
-        oview.setUint32(4 * i3, state[i3], isLE);
+        oview.setUint32(4 * i3, state[i3], isLE2);
     }
     digest() {
       const { buffer, outputLen } = this;
@@ -1156,18 +1156,18 @@
     }
     fromBytes(bytes, skipValidation = false) {
       abytes(bytes);
-      const { _lengths: allowedLengths, BYTES, isLE, ORDER, _mod: modFromBytes } = this;
+      const { _lengths: allowedLengths, BYTES, isLE: isLE2, ORDER, _mod: modFromBytes } = this;
       if (allowedLengths) {
         if (!allowedLengths.includes(bytes.length) || bytes.length > BYTES) {
           throw new Error("Field.fromBytes: expected " + allowedLengths + " bytes, got " + bytes.length);
         }
         const padded = new Uint8Array(BYTES);
-        padded.set(bytes, isLE ? 0 : padded.length - bytes.length);
+        padded.set(bytes, isLE2 ? 0 : padded.length - bytes.length);
         bytes = padded;
       }
       if (bytes.length !== BYTES)
         throw new Error("Field.fromBytes: expected " + BYTES + " bytes, got " + bytes.length);
-      let scalar = isLE ? bytesToNumberLE(bytes) : bytesToNumberBE(bytes);
+      let scalar = isLE2 ? bytesToNumberLE(bytes) : bytesToNumberBE(bytes);
       if (modFromBytes)
         scalar = mod(scalar, ORDER);
       if (!skipValidation) {
@@ -1199,16 +1199,16 @@
     const length = getFieldBytesLength(fieldOrder);
     return length + Math.ceil(length / 2);
   }
-  function mapHashToField(key, fieldOrder, isLE = false) {
+  function mapHashToField(key, fieldOrder, isLE2 = false) {
     abytes(key);
     const len = key.length;
     const fieldLen = getFieldBytesLength(fieldOrder);
     const minLen = getMinHashLength(fieldOrder);
     if (len < 16 || len < minLen || len > 1024)
       throw new Error("expected " + minLen + "-1024 bytes of input, got " + len);
-    const num2 = isLE ? bytesToNumberLE(key) : bytesToNumberBE(key);
+    const num2 = isLE2 ? bytesToNumberLE(key) : bytesToNumberBE(key);
     const reduced = mod(num2, fieldOrder - _1n2) + _1n2;
-    return isLE ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
+    return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
   }
 
   // node_modules/@noble/curves/abstract/curve.js
@@ -1406,14 +1406,14 @@
     }
     return { p1, p2 };
   }
-  function createField(order, field, isLE) {
+  function createField(order, field, isLE2) {
     if (field) {
       if (field.ORDER !== order)
         throw new Error("Field.ORDER must match order: Fp == p, Fn == n");
       validateField(field);
       return field;
     } else {
-      return Field(order, { isLE });
+      return Field(order, { isLE: isLE2 });
     }
   }
   function createCurveFields(type, CURVE, curveOpts = {}, FpFnLE) {
@@ -1991,15 +1991,15 @@
         if (!Fn2.isValidNot0(scalar))
           throw new Error("invalid scalar: out of range");
         let point, fake;
-        const mul = (n) => wnaf.cached(this, n, (p) => normalizeZ(_Point, p));
+        const mul3 = (n) => wnaf.cached(this, n, (p) => normalizeZ(_Point, p));
         if (endo2) {
           const { k1neg, k1, k2neg, k2 } = splitEndoScalarN(scalar);
-          const { p: k1p, f: k1f } = mul(k1);
-          const { p: k2p, f: k2f } = mul(k2);
+          const { p: k1p, f: k1f } = mul3(k1);
+          const { p: k2p, f: k2f } = mul3(k2);
           fake = k1f.add(k2f);
           point = finishEndo(endo2.beta, k1p, k2p, k1neg, k2neg);
         } else {
-          const { p, f } = mul(scalar);
+          const { p, f } = mul3(scalar);
           point = p;
           fake = f;
         }
@@ -3600,6 +3600,10 @@
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
+  function abytes2(b) {
+    if (!isBytes2(b))
+      throw new Error("Uint8Array expected");
+  }
   function isArrayOf(isString, arr) {
     if (!Array.isArray(arr))
       return false;
@@ -3686,6 +3690,32 @@
       }
     };
   }
+  // @__NO_SIDE_EFFECTS__
+  function padding(bits, chr = "=") {
+    anumber2(bits);
+    astr("padding", chr);
+    return {
+      encode(data) {
+        astrArr("padding.encode", data);
+        while (data.length * bits % 8)
+          data.push(chr);
+        return data;
+      },
+      decode(input) {
+        astrArr("padding.decode", input);
+        let end = input.length;
+        if (end * bits % 8)
+          throw new Error("padding: invalid, string should have whole number of bytes");
+        for (; end > 0 && input[end - 1] === chr; end--) {
+          const last = end - 1;
+          const byte = last * bits;
+          if (byte % 8 === 0)
+            throw new Error("padding: invalid, string has too much padding");
+        }
+        return input.slice(0, end);
+      }
+    };
+  }
   function convertRadix(data, from, to) {
     if (from < 2)
       throw new Error(`convertRadix: invalid from=${from}, base cannot be less than 2`);
@@ -3742,7 +3772,7 @@
       res.push(2 ** i3);
     return res;
   })();
-  function convertRadix2(data, from, to, padding) {
+  function convertRadix2(data, from, to, padding2) {
     aArr(data);
     if (from <= 0 || from > 32)
       throw new Error(`convertRadix2: wrong from=${from}`);
@@ -3772,11 +3802,11 @@
       carry &= pow - 1;
     }
     carry = carry << to - pos & mask;
-    if (!padding && pos >= from)
+    if (!padding2 && pos >= from)
       throw new Error("Excess padding");
-    if (!padding && carry > 0)
+    if (!padding2 && carry > 0)
       throw new Error(`Non-zero padding: ${carry}`);
-    if (padding && pos > 0)
+    if (padding2 && pos > 0)
       res.push(carry >>> 0);
     return res;
   }
@@ -3850,6 +3880,24 @@
       }
     };
   }
+  var hasBase64Builtin = /* @__PURE__ */ (() => typeof Uint8Array.from([]).toBase64 === "function" && typeof Uint8Array.fromBase64 === "function")();
+  var decodeBase64Builtin = (s, isUrl) => {
+    astr("base64", s);
+    const re = isUrl ? /^[A-Za-z0-9=_-]+$/ : /^[A-Za-z0-9=+/]+$/;
+    const alphabet2 = isUrl ? "base64url" : "base64";
+    if (s.length > 0 && !re.test(s))
+      throw new Error("invalid base64");
+    return Uint8Array.fromBase64(s, { alphabet: alphabet2, lastChunkHandling: "strict" });
+  };
+  var base64 = hasBase64Builtin ? {
+    encode(b) {
+      abytes2(b);
+      return b.toBase64();
+    },
+    decode(s) {
+      return decodeBase64Builtin(s, false);
+    }
+  } : /* @__PURE__ */ chain(/* @__PURE__ */ radix2(6), /* @__PURE__ */ alphabet("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"), /* @__PURE__ */ padding(6), /* @__PURE__ */ join(""));
   var genBase58 = /* @__NO_SIDE_EFFECTS__ */ (abc) => /* @__PURE__ */ chain(/* @__PURE__ */ radix(58), /* @__PURE__ */ alphabet(abc), /* @__PURE__ */ join(""));
   var base58 = /* @__PURE__ */ genBase58("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz");
   var createBase58check = (sha2562) => /* @__PURE__ */ chain(checksum(4, (data) => sha2562(sha2562(data))), base58);
@@ -4415,6 +4463,484 @@
     return result;
   }
 
+  // node_modules/@noble/ciphers/utils.js
+  function isBytes3(a) {
+    return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
+  }
+  function abytes3(value, length, title = "") {
+    const bytes = isBytes3(value);
+    const len = value?.length;
+    const needsLen = length !== void 0;
+    if (!bytes || needsLen && len !== length) {
+      const prefix = title && `"${title}" `;
+      const ofLen = needsLen ? ` of length ${length}` : "";
+      const got = bytes ? `length=${len}` : `type=${typeof value}`;
+      throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
+    }
+    return value;
+  }
+  function u32(arr) {
+    return new Uint32Array(arr.buffer, arr.byteOffset, Math.floor(arr.byteLength / 4));
+  }
+  function clean2(...arrays) {
+    for (let i3 = 0; i3 < arrays.length; i3++) {
+      arrays[i3].fill(0);
+    }
+  }
+  var isLE = /* @__PURE__ */ (() => new Uint8Array(new Uint32Array([287454020]).buffer)[0] === 68)();
+  function overlapBytes(a, b) {
+    return a.buffer === b.buffer && // best we can do, may fail with an obscure Proxy
+    a.byteOffset < b.byteOffset + b.byteLength && // a starts before b end
+    b.byteOffset < a.byteOffset + a.byteLength;
+  }
+  function complexOverlapBytes(input, output) {
+    if (overlapBytes(input, output) && input.byteOffset < output.byteOffset)
+      throw new Error("complex overlap of input and output is not supported");
+  }
+  var wrapCipher = /* @__NO_SIDE_EFFECTS__ */ (params, constructor) => {
+    function wrappedCipher(key, ...args) {
+      abytes3(key, void 0, "key");
+      if (!isLE)
+        throw new Error("Non little-endian hardware is not yet supported");
+      if (params.nonceLength !== void 0) {
+        const nonce = args[0];
+        abytes3(nonce, params.varSizeNonce ? void 0 : params.nonceLength, "nonce");
+      }
+      const tagl = params.tagLength;
+      if (tagl && args[1] !== void 0)
+        abytes3(args[1], void 0, "AAD");
+      const cipher = constructor(key, ...args);
+      const checkOutput = (fnLength, output) => {
+        if (output !== void 0) {
+          if (fnLength !== 2)
+            throw new Error("cipher output not supported");
+          abytes3(output, void 0, "output");
+        }
+      };
+      let called = false;
+      const wrCipher = {
+        encrypt(data, output) {
+          if (called)
+            throw new Error("cannot encrypt() twice with same key + nonce");
+          called = true;
+          abytes3(data);
+          checkOutput(cipher.encrypt.length, output);
+          return cipher.encrypt(data, output);
+        },
+        decrypt(data, output) {
+          abytes3(data);
+          if (tagl && data.length < tagl)
+            throw new Error('"ciphertext" expected length bigger than tagLength=' + tagl);
+          checkOutput(cipher.decrypt.length, output);
+          return cipher.decrypt(data, output);
+        }
+      };
+      return wrCipher;
+    }
+    Object.assign(wrappedCipher, params);
+    return wrappedCipher;
+  };
+  function getOutput(expectedLength, out, onlyAligned = true) {
+    if (out === void 0)
+      return new Uint8Array(expectedLength);
+    if (out.length !== expectedLength)
+      throw new Error('"output" expected Uint8Array of length ' + expectedLength + ", got: " + out.length);
+    if (onlyAligned && !isAligned32(out))
+      throw new Error("invalid output, must be aligned");
+    return out;
+  }
+  function isAligned32(bytes) {
+    return bytes.byteOffset % 4 === 0;
+  }
+  function copyBytes2(bytes) {
+    return Uint8Array.from(bytes);
+  }
+
+  // node_modules/@noble/ciphers/aes.js
+  var BLOCK_SIZE = 16;
+  var POLY = 283;
+  function validateKeyLength(key) {
+    if (![16, 24, 32].includes(key.length))
+      throw new Error('"aes key" expected Uint8Array of length 16/24/32, got length=' + key.length);
+  }
+  function mul2(n) {
+    return n << 1 ^ POLY & -(n >> 7);
+  }
+  function mul(a, b) {
+    let res = 0;
+    for (; b > 0; b >>= 1) {
+      res ^= a & -(b & 1);
+      a = mul2(a);
+    }
+    return res;
+  }
+  var sbox = /* @__PURE__ */ (() => {
+    const t = new Uint8Array(256);
+    for (let i3 = 0, x = 1; i3 < 256; i3++, x ^= mul2(x))
+      t[i3] = x;
+    const box = new Uint8Array(256);
+    box[0] = 99;
+    for (let i3 = 0; i3 < 255; i3++) {
+      let x = t[255 - i3];
+      x |= x << 8;
+      box[t[i3]] = (x ^ x >> 4 ^ x >> 5 ^ x >> 6 ^ x >> 7 ^ 99) & 255;
+    }
+    clean2(t);
+    return box;
+  })();
+  var invSbox = /* @__PURE__ */ sbox.map((_, j) => sbox.indexOf(j));
+  var rotr32_8 = (n) => n << 24 | n >>> 8;
+  var rotl32_8 = (n) => n << 8 | n >>> 24;
+  function genTtable(sbox2, fn) {
+    if (sbox2.length !== 256)
+      throw new Error("Wrong sbox length");
+    const T0 = new Uint32Array(256).map((_, j) => fn(sbox2[j]));
+    const T1 = T0.map(rotl32_8);
+    const T2 = T1.map(rotl32_8);
+    const T3 = T2.map(rotl32_8);
+    const T01 = new Uint32Array(256 * 256);
+    const T23 = new Uint32Array(256 * 256);
+    const sbox22 = new Uint16Array(256 * 256);
+    for (let i3 = 0; i3 < 256; i3++) {
+      for (let j = 0; j < 256; j++) {
+        const idx = i3 * 256 + j;
+        T01[idx] = T0[i3] ^ T1[j];
+        T23[idx] = T2[i3] ^ T3[j];
+        sbox22[idx] = sbox2[i3] << 8 | sbox2[j];
+      }
+    }
+    return { sbox: sbox2, sbox2: sbox22, T0, T1, T2, T3, T01, T23 };
+  }
+  var tableEncoding = /* @__PURE__ */ genTtable(sbox, (s) => mul(s, 3) << 24 | s << 16 | s << 8 | mul(s, 2));
+  var tableDecoding = /* @__PURE__ */ genTtable(invSbox, (s) => mul(s, 11) << 24 | mul(s, 13) << 16 | mul(s, 9) << 8 | mul(s, 14));
+  var xPowers = /* @__PURE__ */ (() => {
+    const p = new Uint8Array(16);
+    for (let i3 = 0, x = 1; i3 < 16; i3++, x = mul2(x))
+      p[i3] = x;
+    return p;
+  })();
+  function expandKeyLE(key) {
+    abytes3(key);
+    const len = key.length;
+    validateKeyLength(key);
+    const { sbox2 } = tableEncoding;
+    const toClean = [];
+    if (!isAligned32(key))
+      toClean.push(key = copyBytes2(key));
+    const k32 = u32(key);
+    const Nk = k32.length;
+    const subByte = (n) => applySbox(sbox2, n, n, n, n);
+    const xk = new Uint32Array(len + 28);
+    xk.set(k32);
+    for (let i3 = Nk; i3 < xk.length; i3++) {
+      let t = xk[i3 - 1];
+      if (i3 % Nk === 0)
+        t = subByte(rotr32_8(t)) ^ xPowers[i3 / Nk - 1];
+      else if (Nk > 6 && i3 % Nk === 4)
+        t = subByte(t);
+      xk[i3] = xk[i3 - Nk] ^ t;
+    }
+    clean2(...toClean);
+    return xk;
+  }
+  function expandKeyDecLE(key) {
+    const encKey = expandKeyLE(key);
+    const xk = encKey.slice();
+    const Nk = encKey.length;
+    const { sbox2 } = tableEncoding;
+    const { T0, T1, T2, T3 } = tableDecoding;
+    for (let i3 = 0; i3 < Nk; i3 += 4) {
+      for (let j = 0; j < 4; j++)
+        xk[i3 + j] = encKey[Nk - i3 - 4 + j];
+    }
+    clean2(encKey);
+    for (let i3 = 4; i3 < Nk - 4; i3++) {
+      const x = xk[i3];
+      const w = applySbox(sbox2, x, x, x, x);
+      xk[i3] = T0[w & 255] ^ T1[w >>> 8 & 255] ^ T2[w >>> 16 & 255] ^ T3[w >>> 24];
+    }
+    return xk;
+  }
+  function apply0123(T01, T23, s0, s1, s2, s3) {
+    return T01[s0 << 8 & 65280 | s1 >>> 8 & 255] ^ T23[s2 >>> 8 & 65280 | s3 >>> 24 & 255];
+  }
+  function applySbox(sbox2, s0, s1, s2, s3) {
+    return sbox2[s0 & 255 | s1 & 65280] | sbox2[s2 >>> 16 & 255 | s3 >>> 16 & 65280] << 16;
+  }
+  function encrypt(xk, s0, s1, s2, s3) {
+    const { sbox2, T01, T23 } = tableEncoding;
+    let k = 0;
+    s0 ^= xk[k++], s1 ^= xk[k++], s2 ^= xk[k++], s3 ^= xk[k++];
+    const rounds = xk.length / 4 - 2;
+    for (let i3 = 0; i3 < rounds; i3++) {
+      const t02 = xk[k++] ^ apply0123(T01, T23, s0, s1, s2, s3);
+      const t12 = xk[k++] ^ apply0123(T01, T23, s1, s2, s3, s0);
+      const t22 = xk[k++] ^ apply0123(T01, T23, s2, s3, s0, s1);
+      const t32 = xk[k++] ^ apply0123(T01, T23, s3, s0, s1, s2);
+      s0 = t02, s1 = t12, s2 = t22, s3 = t32;
+    }
+    const t0 = xk[k++] ^ applySbox(sbox2, s0, s1, s2, s3);
+    const t1 = xk[k++] ^ applySbox(sbox2, s1, s2, s3, s0);
+    const t2 = xk[k++] ^ applySbox(sbox2, s2, s3, s0, s1);
+    const t3 = xk[k++] ^ applySbox(sbox2, s3, s0, s1, s2);
+    return { s0: t0, s1: t1, s2: t2, s3: t3 };
+  }
+  function decrypt(xk, s0, s1, s2, s3) {
+    const { sbox2, T01, T23 } = tableDecoding;
+    let k = 0;
+    s0 ^= xk[k++], s1 ^= xk[k++], s2 ^= xk[k++], s3 ^= xk[k++];
+    const rounds = xk.length / 4 - 2;
+    for (let i3 = 0; i3 < rounds; i3++) {
+      const t02 = xk[k++] ^ apply0123(T01, T23, s0, s3, s2, s1);
+      const t12 = xk[k++] ^ apply0123(T01, T23, s1, s0, s3, s2);
+      const t22 = xk[k++] ^ apply0123(T01, T23, s2, s1, s0, s3);
+      const t32 = xk[k++] ^ apply0123(T01, T23, s3, s2, s1, s0);
+      s0 = t02, s1 = t12, s2 = t22, s3 = t32;
+    }
+    const t0 = xk[k++] ^ applySbox(sbox2, s0, s3, s2, s1);
+    const t1 = xk[k++] ^ applySbox(sbox2, s1, s0, s3, s2);
+    const t2 = xk[k++] ^ applySbox(sbox2, s2, s1, s0, s3);
+    const t3 = xk[k++] ^ applySbox(sbox2, s3, s2, s1, s0);
+    return { s0: t0, s1: t1, s2: t2, s3: t3 };
+  }
+  function validateBlockDecrypt(data) {
+    abytes3(data);
+    if (data.length % BLOCK_SIZE !== 0) {
+      throw new Error("aes-(cbc/ecb).decrypt ciphertext should consist of blocks with size " + BLOCK_SIZE);
+    }
+  }
+  function validateBlockEncrypt(plaintext, pcks5, dst) {
+    abytes3(plaintext);
+    let outLen = plaintext.length;
+    const remaining = outLen % BLOCK_SIZE;
+    if (!pcks5 && remaining !== 0)
+      throw new Error("aec/(cbc-ecb): unpadded plaintext with disabled padding");
+    if (!isAligned32(plaintext))
+      plaintext = copyBytes2(plaintext);
+    const b = u32(plaintext);
+    if (pcks5) {
+      let left = BLOCK_SIZE - remaining;
+      if (!left)
+        left = BLOCK_SIZE;
+      outLen = outLen + left;
+    }
+    dst = getOutput(outLen, dst);
+    complexOverlapBytes(plaintext, dst);
+    const o = u32(dst);
+    return { b, o, out: dst };
+  }
+  function validatePCKS(data, pcks5) {
+    if (!pcks5)
+      return data;
+    const len = data.length;
+    if (!len)
+      throw new Error("aes/pcks5: empty ciphertext not allowed");
+    const lastByte = data[len - 1];
+    if (lastByte <= 0 || lastByte > 16)
+      throw new Error("aes/pcks5: wrong padding");
+    const out = data.subarray(0, -lastByte);
+    for (let i3 = 0; i3 < lastByte; i3++)
+      if (data[len - i3 - 1] !== lastByte)
+        throw new Error("aes/pcks5: wrong padding");
+    return out;
+  }
+  function padPCKS(left) {
+    const tmp = new Uint8Array(16);
+    const tmp32 = u32(tmp);
+    tmp.set(left);
+    const paddingByte = BLOCK_SIZE - left.length;
+    for (let i3 = BLOCK_SIZE - paddingByte; i3 < BLOCK_SIZE; i3++)
+      tmp[i3] = paddingByte;
+    return tmp32;
+  }
+  var cbc = /* @__PURE__ */ wrapCipher({ blockSize: 16, nonceLength: 16 }, function aescbc(key, iv, opts = {}) {
+    const pcks5 = !opts.disablePadding;
+    return {
+      encrypt(plaintext, dst) {
+        const xk = expandKeyLE(key);
+        const { b, o, out: _out } = validateBlockEncrypt(plaintext, pcks5, dst);
+        let _iv = iv;
+        const toClean = [xk];
+        if (!isAligned32(_iv))
+          toClean.push(_iv = copyBytes2(_iv));
+        const n32 = u32(_iv);
+        let s0 = n32[0], s1 = n32[1], s2 = n32[2], s3 = n32[3];
+        let i3 = 0;
+        for (; i3 + 4 <= b.length; ) {
+          s0 ^= b[i3 + 0], s1 ^= b[i3 + 1], s2 ^= b[i3 + 2], s3 ^= b[i3 + 3];
+          ({ s0, s1, s2, s3 } = encrypt(xk, s0, s1, s2, s3));
+          o[i3++] = s0, o[i3++] = s1, o[i3++] = s2, o[i3++] = s3;
+        }
+        if (pcks5) {
+          const tmp32 = padPCKS(plaintext.subarray(i3 * 4));
+          s0 ^= tmp32[0], s1 ^= tmp32[1], s2 ^= tmp32[2], s3 ^= tmp32[3];
+          ({ s0, s1, s2, s3 } = encrypt(xk, s0, s1, s2, s3));
+          o[i3++] = s0, o[i3++] = s1, o[i3++] = s2, o[i3++] = s3;
+        }
+        clean2(...toClean);
+        return _out;
+      },
+      decrypt(ciphertext, dst) {
+        validateBlockDecrypt(ciphertext);
+        const xk = expandKeyDecLE(key);
+        let _iv = iv;
+        const toClean = [xk];
+        if (!isAligned32(_iv))
+          toClean.push(_iv = copyBytes2(_iv));
+        const n32 = u32(_iv);
+        dst = getOutput(ciphertext.length, dst);
+        if (!isAligned32(ciphertext))
+          toClean.push(ciphertext = copyBytes2(ciphertext));
+        complexOverlapBytes(ciphertext, dst);
+        const b = u32(ciphertext);
+        const o = u32(dst);
+        let s0 = n32[0], s1 = n32[1], s2 = n32[2], s3 = n32[3];
+        for (let i3 = 0; i3 + 4 <= b.length; ) {
+          const ps0 = s0, ps1 = s1, ps2 = s2, ps3 = s3;
+          s0 = b[i3 + 0], s1 = b[i3 + 1], s2 = b[i3 + 2], s3 = b[i3 + 3];
+          const { s0: o0, s1: o1, s2: o2, s3: o3 } = decrypt(xk, s0, s1, s2, s3);
+          o[i3++] = o0 ^ ps0, o[i3++] = o1 ^ ps1, o[i3++] = o2 ^ ps2, o[i3++] = o3 ^ ps3;
+        }
+        clean2(...toClean);
+        return validatePCKS(dst, pcks5);
+      }
+    };
+  });
+  function isBytes32(a) {
+    return a instanceof Uint32Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint32Array";
+  }
+  function encryptBlock(xk, block) {
+    abytes3(block, 16, "block");
+    if (!isBytes32(xk))
+      throw new Error("_encryptBlock accepts result of expandKeyLE");
+    const b32 = u32(block);
+    let { s0, s1, s2, s3 } = encrypt(xk, b32[0], b32[1], b32[2], b32[3]);
+    b32[0] = s0, b32[1] = s1, b32[2] = s2, b32[3] = s3;
+    return block;
+  }
+  function dbl(block) {
+    let carry = 0;
+    for (let i3 = BLOCK_SIZE - 1; i3 >= 0; i3--) {
+      const newCarry = (block[i3] & 128) >>> 7;
+      block[i3] = block[i3] << 1 | carry;
+      carry = newCarry;
+    }
+    if (carry) {
+      block[BLOCK_SIZE - 1] ^= 135;
+    }
+    return block;
+  }
+  function xorBlock(a, b) {
+    if (a.length !== b.length)
+      throw new Error("xorBlock: blocks must have same length");
+    for (let i3 = 0; i3 < a.length; i3++) {
+      a[i3] = a[i3] ^ b[i3];
+    }
+    return a;
+  }
+  var _CMAC = class {
+    constructor(key) {
+      __publicField(this, "buffer");
+      __publicField(this, "destroyed");
+      __publicField(this, "k1");
+      __publicField(this, "k2");
+      __publicField(this, "xk");
+      abytes3(key);
+      validateKeyLength(key);
+      this.xk = expandKeyLE(key);
+      this.buffer = new Uint8Array(0);
+      this.destroyed = false;
+      const L = new Uint8Array(BLOCK_SIZE);
+      encryptBlock(this.xk, L);
+      this.k1 = dbl(L);
+      this.k2 = dbl(new Uint8Array(this.k1));
+    }
+    update(data) {
+      const { destroyed, buffer } = this;
+      if (destroyed)
+        throw new Error("CMAC instance was destroyed");
+      abytes3(data);
+      const newBuffer = new Uint8Array(buffer.length + data.length);
+      newBuffer.set(buffer);
+      newBuffer.set(data, buffer.length);
+      this.buffer = newBuffer;
+      return this;
+    }
+    // see https://www.rfc-editor.org/rfc/rfc4493.html#section-2.4
+    digest() {
+      if (this.destroyed)
+        throw new Error("CMAC instance was destroyed");
+      const { buffer } = this;
+      const msgLen = buffer.length;
+      let n = Math.ceil(msgLen / BLOCK_SIZE);
+      let flag;
+      if (n === 0) {
+        n = 1;
+        flag = false;
+      } else {
+        flag = msgLen % BLOCK_SIZE === 0;
+      }
+      const lastBlockStart = (n - 1) * BLOCK_SIZE;
+      const lastBlockData = buffer.subarray(lastBlockStart);
+      let m_last;
+      if (flag) {
+        m_last = xorBlock(new Uint8Array(lastBlockData), this.k1);
+      } else {
+        const padded = new Uint8Array(BLOCK_SIZE);
+        padded.set(lastBlockData);
+        padded[lastBlockData.length] = 128;
+        m_last = xorBlock(padded, this.k2);
+      }
+      let x = new Uint8Array(BLOCK_SIZE);
+      for (let i3 = 0; i3 < n - 1; i3++) {
+        const m_i = buffer.subarray(i3 * BLOCK_SIZE, (i3 + 1) * BLOCK_SIZE);
+        xorBlock(x, m_i);
+        encryptBlock(this.xk, x);
+      }
+      xorBlock(x, m_last);
+      encryptBlock(this.xk, x);
+      clean2(m_last);
+      return x;
+    }
+    destroy() {
+      const { buffer, destroyed, xk, k1, k2 } = this;
+      if (destroyed)
+        return;
+      this.destroyed = true;
+      clean2(buffer, xk, k1, k2);
+    }
+  };
+  var cmac = (key, message) => new _CMAC(key).update(message).digest();
+  cmac.create = (key) => new _CMAC(key);
+
+  // node_modules/nostr-tools/lib/esm/nip04.js
+  var utf8Decoder4 = new TextDecoder("utf-8");
+  var utf8Encoder4 = new TextEncoder();
+  function encrypt2(secretKey, pubkey, text) {
+    const privkey = secretKey instanceof Uint8Array ? secretKey : hexToBytes(secretKey);
+    const key = secp256k1.getSharedSecret(privkey, hexToBytes("02" + pubkey));
+    const normalizedKey = getNormalizedX(key);
+    let iv = Uint8Array.from(randomBytes(16));
+    let plaintext = utf8Encoder4.encode(text);
+    let ciphertext = cbc(normalizedKey, iv).encrypt(plaintext);
+    let ctb64 = base64.encode(new Uint8Array(ciphertext));
+    let ivb64 = base64.encode(new Uint8Array(iv.buffer));
+    return `${ctb64}?iv=${ivb64}`;
+  }
+  function decrypt2(secretKey, pubkey, data) {
+    const privkey = secretKey instanceof Uint8Array ? secretKey : hexToBytes(secretKey);
+    let [ctb64, ivb64] = data.split("?iv=");
+    let key = secp256k1.getSharedSecret(privkey, hexToBytes("02" + pubkey));
+    let normalizedKey = getNormalizedX(key);
+    let iv = base64.decode(ivb64);
+    let ciphertext = base64.decode(ctb64);
+    let plaintext = cbc(normalizedKey, iv).decrypt(ciphertext);
+    return utf8Decoder4.decode(plaintext);
+  }
+  function getNormalizedX(key) {
+    return key.slice(1, 33);
+  }
+
   // src/fellowship.src.js
   function toPub(npubOrHex) {
     if (!npubOrHex) return null;
@@ -4631,6 +5157,96 @@
         console.warn("[fellowship] publish failed", e);
       }
       return evt;
+    },
+    // ── direct messages (1:1, encrypted) ──
+    // NIP-04 encrypted kind-4: the content is private to the two parties; the relay sees only that two
+    // pubkeys are talking (full metadata privacy = NIP-17, a later/Stage-6 upgrade). Peer = a hex pubkey.
+    async sendDM(peerPub, content) {
+      if (!sk) await window.Fellowship.ready;
+      let ciphertext;
+      try {
+        ciphertext = await encrypt2(sk, peerPub, content);
+      } catch (e) {
+        console.warn("[fellowship] DM encrypt failed", e);
+        return null;
+      }
+      const evt = finalizeEvent2({ kind: 4, created_at: Math.floor(Date.now() / 1e3), tags: [["p", peerPub]], content: ciphertext }, sk);
+      try {
+        await Promise.any(pool.publish(window.Fellowship.relays, evt));
+      } catch (e) {
+        console.warn("[fellowship] DM publish failed", e);
+      }
+      return evt;
+    },
+    // a 1:1 thread with one peer; onMsg({ id, mine, content, ts, pubkey }). Returns an unsubscribe fn.
+    subscribeThread(peerPub, onMsg) {
+      if (!pub) return () => {
+      };
+      const seen = /* @__PURE__ */ new Set();
+      const deliver = async (e) => {
+        if (seen.has(e.id)) return;
+        seen.add(e.id);
+        const mine = e.pubkey === pub;
+        let content = "";
+        try {
+          content = await decrypt2(sk, peerPub, e.content);
+        } catch (err) {
+          content = "\u{1F512} (could not decrypt)";
+        }
+        try {
+          onMsg({ id: e.id, mine, content, ts: e.created_at, pubkey: e.pubkey });
+        } catch (err) {
+        }
+      };
+      const sub = pool.subscribeMany(window.Fellowship.relays, [
+        { kinds: [4], authors: [pub], "#p": [peerPub] },
+        // sent by me to peer
+        { kinds: [4], authors: [peerPub], "#p": [pub] }
+        // sent by peer to me
+      ], { onevent: deliver, oneose() {
+      } });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // inbox: every DM involving me, grouped by peer; onConvos([{ peer, lastTs, preview }]). Unsub fn.
+    subscribeDMs(onConvos) {
+      if (!pub) {
+        onConvos([]);
+        return () => {
+        };
+      }
+      const byPeer = /* @__PURE__ */ new Map();
+      const emit = () => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0)));
+      const handle = async (e) => {
+        const peer = e.pubkey === pub ? (e.tags.find((t) => t[0] === "p") || [])[1] : e.pubkey;
+        if (!peer) return;
+        const prev = byPeer.get(peer);
+        if (prev && prev.lastTs >= e.created_at) return;
+        let preview = "";
+        try {
+          preview = await decrypt2(sk, peer, e.content);
+        } catch (err) {
+          preview = "\u{1F512}";
+        }
+        byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? "You: " : "") + preview });
+        emit();
+      };
+      const sub = pool.subscribeMany(window.Fellowship.relays, [
+        { kinds: [4], authors: [pub] },
+        { kinds: [4], "#p": [pub] }
+      ], { onevent: handle, oneose() {
+        emit();
+      } });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
     },
     // live connection status of each configured relay (throwaway WS probe)
     async relayStatus() {
