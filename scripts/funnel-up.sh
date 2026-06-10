@@ -16,12 +16,20 @@ PORT="${1:-8000}"
 URL="https://$(tailscale status --json | sed -n 's/.*"DNSName": "\([^"]*\)\.".*/\1/p' | head -1)"
 
 echo "Pointing Tailscale Funnel at the gateway on port ${PORT}…"
-# needs sudo unless 'tailscale set --operator=$USER' has been run
+# reset first: a rename / repeated re-applies can leave funnel "on" locally but NOT published in
+# public DNS (external users get NXDOMAIN). A clean reset + re-apply re-publishes the public record.
+# (needs sudo unless 'tailscale set --operator=$USER' has been run.)
+tailscale funnel reset 2>/dev/null || true
 tailscale funnel --bg "${PORT}"
 
 echo ""
 echo "Funnel status:"
 tailscale funnel status
+echo ""
+echo "Verifying it's actually PUBLIC (external DNS must resolve — not just MagicDNS)…"
+HOST="$(tailscale status --json | sed -n 's/.*"DNSName": "\([^"]*\)\.".*/\1/p' | head -1)"
+ST=$(curl -s --max-time 12 "https://dns.google/resolve?name=${HOST}&type=A" | grep -o '"Status":[0-9]*' | head -1)
+if echo "$ST" | grep -q '"Status":0'; then echo "  OK — public DNS resolves (${HOST})"; else echo "  WARNING — public DNS NOT resolving yet (${ST:-no answer}); external users can't reach it. Re-run, or wait for propagation."; fi
 echo ""
 echo "TrinityOne is live at:  ${URL}"
 echo "  member app : ${URL}/"
