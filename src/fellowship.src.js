@@ -361,24 +361,83 @@ window.Fellowship = {
     return () => { try { sub.close(); } catch {} };
   },
 
-  // ── rotas the church publishes (one per team) — who serves when ──
-  subscribeChurchRotas(churchNpub, onRotas) {
+  // ── generic reader for the church's own addressable docs with a given d-prefix ──
+  _subChurchAddr(churchNpub, prefix, map, onItems) {
     const pubk = toPub(churchNpub);
-    if (!pubk) { onRotas([]); return () => {}; }
-    const ROTA_D = 'trinityone/rota:';
-    const byTeam = new Map();
-    const emit = () => onRotas([...byTeam.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    if (!pubk) { onItems([]); return () => {}; }
+    const byId = new Map();
+    const emit = () => onItems([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (!d.startsWith(ROTA_D)) return;
-        const team = d.slice(ROTA_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byTeam.delete(team); emit(); return; }
-        try { const c = JSON.parse(e.content); byTeam.set(team, { id: team, team, title: c.title, slots: c.slots || [], ts: e.created_at }); emit(); } catch {}
+        if (!d.startsWith(prefix)) return;
+        const id = d.slice(prefix.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        try { byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  // ── serving: services, per-service rotas, rosters, events the church publishes ──
+  subscribeChurchServices(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/service:', (c) => ({ date: c.date, time: c.time, name: c.name }), cb); },
+  subscribeChurchRotas(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/rota:', (c, id) => ({ service: id, published: !!c.published, assign: c.assign || {} }), cb); },
+  subscribeChurchRosters(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/roster:', (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [] }), cb); },
+  subscribeChurchEvents(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/event:', (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent }), cb); },
+
+  // ── serving requests the church p-tagged to ME ("can you serve?") ──
+  subscribeMyServingRequests(onReqs) {
+    const me = window.Fellowship.myPubkey;
+    if (!me) { onReqs([]); return () => {}; }
+    const REQUEST_D = 'trinityone/request:';
+    const byId = new Map();
+    const emit = () => onReqs([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], '#p': [me], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d.startsWith(REQUEST_D)) return;
+        const id = d.slice(REQUEST_D.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        try { byId.set(id, { id, church: e.pubkey, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // member -> church: reply to a serving request (accept/decline/swap) — p-tagged to the church
+  async respondToServingRequest(churchNpub, requestId, verdict, swapTo) {
+    const cp = toPub(churchNpub); if (!cp || !sk) return;
+    const content = JSON.stringify({ request: requestId, v: verdict, swapTo: swapTo || '' });
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/reqreply:' + requestId], ['t', NET], ['p', cp]], content }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch {}
+    return evt;
+  },
+  // member RSVP to a calendar event — one addressable doc per (member,event), p-tagged to church
+  async setEventRsvp(churchNpub, eventId, verdict) {
+    const cp = toPub(churchNpub); if (!cp || !sk) return;
+    const content = JSON.stringify({ event: eventId, v: verdict });
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch {}
+    return evt;
+  },
+  subscribeMyRsvps(onRsvps) {
+    const me = window.Fellowship.myPubkey;
+    if (!me) { onRsvps({}); return () => {}; }
+    const RSVP_D = 'trinityone/rsvp:'; const byEvent = {};
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [me], '#t': [NET] }], {
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(RSVP_D)) return; try { byEvent[d.slice(RSVP_D.length)] = JSON.parse(e.content).v; onRsvps({ ...byEvent }); } catch {} },
+      oneose() { onRsvps({ ...byEvent }); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // member sets the Sundays they're unavailable (own addressable doc, p-tagged to church)
+  async setUnavailable(churchNpub, dates) {
+    const cp = toPub(churchNpub); if (!cp || !sk) return;
+    const me = window.Fellowship.myPubkey;
+    const content = JSON.stringify({ dates: dates || [] });
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/unavail:' + me], ['t', NET], ['p', cp]], content }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch {}
+    return evt;
   },
 
   // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──

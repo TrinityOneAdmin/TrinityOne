@@ -39,6 +39,48 @@ function useStewardRotas() {
 }
 window.useStewardRotas = useStewardRotas;
 
+function useStewardRosters() {
+  const [rosters, setRosters] = useSt([]);
+  useStE(() => window.Steward.subscribeRosters(setRosters), []);
+  return rosters;
+}
+window.useStewardRosters = useStewardRosters;
+
+function useStewardServices() {
+  const [services, setServices] = useSt([]);
+  useStE(() => window.Steward.subscribeServices(setServices), []);
+  return services;
+}
+window.useStewardServices = useStewardServices;
+
+function useStewardEvents() {
+  const [events, setEvents] = useSt([]);
+  useStE(() => window.Steward.subscribeEvents(setEvents), []);
+  return events;
+}
+window.useStewardEvents = useStewardEvents;
+
+function useStewardUnavail() {
+  const [unavail, setUnavail] = useSt({});
+  useStE(() => window.Steward.subscribeUnavail(setUnavail), []);
+  return unavail;
+}
+window.useStewardUnavail = useStewardUnavail;
+
+function useStewardRsvps() {
+  const [rsvps, setRsvps] = useSt({});
+  useStE(() => window.Steward.subscribeRsvps(setRsvps), []);
+  return rsvps;
+}
+window.useStewardRsvps = useStewardRsvps;
+
+function useStewardRequestReplies() {
+  const [replies, setReplies] = useSt([]);
+  useStE(() => window.Steward.subscribeRequestReplies(setReplies), []);
+  return replies;
+}
+window.useStewardRequestReplies = useStewardRequestReplies;
+
 // people participating in this church's chat (derived from messages addressed to the church)
 function useStewardMembers() {
   const [members, setMembers] = useSt([]);

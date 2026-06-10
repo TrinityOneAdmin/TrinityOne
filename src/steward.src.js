@@ -24,7 +24,12 @@ const FUND_D = 'trinityone/fund:';
 const GROUP_D = 'trinityone/group:';
 const PLAN_D = 'trinityone/plan:';
 const DEVO_D = 'trinityone/devotional:';
-const ROTA_D = 'trinityone/rota:';
+const ROSTER_D = 'trinityone/roster:';      // per-team roles + people (church)
+const SERVICE_D = 'trinityone/service:';    // a dated gathering (church)
+const ROTA_D = 'trinityone/rota:';          // per-service assignments (church)
+const EVENT_D = 'trinityone/event:';        // calendar event (church)
+const REQUEST_D = 'trinityone/request:';    // steward -> member "can you serve?" (church, p=member)
+const REQREPLY_D = 'trinityone/reqreply:';  // member -> steward accept/decline/swap (member, p=church)
 const now = () => Math.floor(Date.now() / 1000);
 
 function relays() {
@@ -115,7 +120,7 @@ window.Steward = {
   publishGroup(group) {
     if (!sk) return Promise.resolve(null);
     const id = group.id || ('grp' + Date.now());
-    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '' });
+    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '' });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET]], content }, sk))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },
@@ -198,33 +203,119 @@ window.Steward = {
     return () => { try { sub.close(); } catch {} };
   },
 
-  // ---- rotas: who serves when, for a team (the scheduling layer on Teams) ----
-  // One rota doc per team (addressable, latest wins). d = rota:<teamId>.
-  // rota = { team:<teamGroupId>, title, slots:[{ id, date:'YYYY-MM-DD', role, name, pub? }] }.
-  // pub (member hex) is set when assigned from the member list, so members see "you're serving".
-  publishRota(rota) {
-    if (!sk || !rota || !rota.team) return Promise.resolve(null);
-    const slots = (rota.slots || []).map(s => ({ id: s.id || ('s' + Math.random().toString(36).slice(2, 8)), date: s.date || '', role: s.role || '', name: s.name || '', pub: s.pub || '' }));
-    const content = JSON.stringify({ team: rota.team, title: rota.title || 'Rota', slots });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.team], ['t', NET]], content }, sk))
-      .then(e => ({ id: rota.team, team: rota.team, title: rota.title || 'Rota', slots, ts: e && e.created_at }));
-  },
-  removeRota(teamId) {
-    if (!sk) return Promise.resolve(null);
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + teamId], ['t', NET], ['deleted', '1']], content: '' }, sk));
-  },
-  subscribeRotas(onRotas) {
-    const byTeam = new Map();
-    const emit = () => onRotas([...byTeam.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+  // ════════════ SERVING / ROTA / CALENDAR (the coverage board) ════════════
+  // A generic addressable-doc subscription over the church's own kind-30078 with a given d-prefix.
+  _subAddr(prefix, map, onItems) {
+    const byId = new Map();
+    const emit = () => onItems([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (!d.startsWith(ROTA_D)) return;
-        const team = d.slice(ROTA_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byTeam.delete(team); emit(); return; }
-        try { const c = JSON.parse(e.content); byTeam.set(team, { id: team, team, title: c.title, slots: c.slots || [], ts: e.created_at }); emit(); } catch {}
+        if (!d.startsWith(prefix)) return;
+        const id = d.slice(prefix.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        try { byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+
+  // ---- team rosters: the roles a team needs + the people who can serve ----
+  // roster = { roles:[{id,name}], people:[{id,name,pub?}] }, keyed by team(group) id.
+  publishRoster(teamId, roster) {
+    if (!sk || !teamId) return Promise.resolve(null);
+    const roles = (roster.roles || []).map(r => ({ id: r.id || ('r' + Math.random().toString(36).slice(2, 7)), name: r.name || 'Role' }));
+    const people = (roster.people || []).map(p => ({ id: p.id || ('p' + Math.random().toString(36).slice(2, 7)), name: p.name || '', pub: p.pub || '' }));
+    const content = JSON.stringify({ roles, people });
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ROSTER_D + teamId], ['t', NET]], content }, sk))
+      .then(() => ({ id: teamId, roles, people }));
+  },
+  subscribeRosters(onRosters) { return this._subAddr(ROSTER_D, (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [] }), onRosters); },
+
+  // ---- services: a dated gathering people serve at ----
+  // service = { id?, date:'YYYY-MM-DD', time:'10:30', name }
+  publishService(svc) {
+    if (!sk) return Promise.resolve(null);
+    const id = svc.id || ('svc' + Date.now());
+    const content = JSON.stringify({ date: svc.date || '', time: svc.time || '10:30', name: svc.name || 'Sunday Gathering' });
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', SERVICE_D + id], ['t', NET]], content }, sk))
+      .then(() => ({ id, ...JSON.parse(content) }));
+  },
+  removeService(id) {
+    if (!sk) return Promise.resolve(null);
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', SERVICE_D + id], ['t', NET], ['deleted', '1']], content: '' }, sk));
+  },
+  subscribeServices(onServices) { return this._subAddr(SERVICE_D, (c) => ({ date: c.date, time: c.time, name: c.name }), onServices); },
+
+  // ---- rota: assignments for one service (latest wins; published flag) ----
+  // rota = { service:<serviceId>, published:bool, assign:{ '<teamId>::<roleId>': {name, pub} } }
+  publishRota(rota) {
+    if (!sk || !rota || !rota.service) return Promise.resolve(null);
+    const content = JSON.stringify({ service: rota.service, published: !!rota.published, assign: rota.assign || {} });
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.service], ['t', NET]], content }, sk))
+      .then(() => ({ id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} }));
+  },
+  removeRota(serviceId) {
+    if (!sk) return Promise.resolve(null);
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + serviceId], ['t', NET], ['deleted', '1']], content: '' }, sk));
+  },
+  subscribeRotas(onRotas) { return this._subAddr(ROTA_D, (c, id) => ({ service: id, published: !!c.published, assign: c.assign || {} }), onRotas); },
+
+  // ---- calendar events (non-serving: workdays, lunches, prayer evenings…) ----
+  // event = { id?, date, time, title, where, blurb, accent }
+  publishEvent(ev) {
+    if (!sk) return Promise.resolve(null);
+    const id = ev.id || ('evt' + Date.now());
+    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)' });
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET]], content }, sk))
+      .then(() => ({ id, ...JSON.parse(content) }));
+  },
+  removeEvent(id) {
+    if (!sk) return Promise.resolve(null);
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }, sk));
+  },
+  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent }), onEvents); },
+
+  // ---- serving requests: steward -> a member "can you serve?" (p-tagged to the member) ----
+  sendServingRequest(req) {
+    if (!sk || !req || !req.memberPub) return Promise.resolve(null);
+    const id = req.id || ('req' + Date.now());
+    const content = JSON.stringify({ serviceId: req.serviceId || '', teamId: req.teamId || '', roleId: req.roleId || '', role: req.role || '', teamName: req.teamName || '', icon: req.icon || 'hand', accent: req.accent || 'var(--clay)', date: req.date || '', time: req.time || '', service: req.service || '', from: req.from || 'Your church', note: req.note || '' });
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', REQUEST_D + id], ['t', NET], ['p', req.memberPub]], content }, sk))
+      .then(() => ({ id, ...JSON.parse(content), memberPub: req.memberPub }));
+  },
+  // the steward's view of replies members sent back (reqreply docs p-tagged to the church)
+  subscribeRequestReplies(onReplies) {
+    const byId = new Map();
+    const emit = () => onReplies([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#p': [pub], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d.startsWith(REQREPLY_D)) return;
+        const id = d.slice(REQREPLY_D.length);
+        if (!e.content) { byId.delete(id); emit(); return; }
+        try { byId.set(id, { id, by: e.pubkey, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // member unavailability docs p-tagged to the church -> { memberPub: [dates] } (for "Away" + Auto-fill)
+  subscribeUnavail(onUnavail) {
+    const UNAVAIL_D = 'trinityone/unavail:'; const byMember = {};
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#p': [pub], '#t': [NET] }], {
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(UNAVAIL_D)) return; try { byMember[e.pubkey] = JSON.parse(e.content).dates || []; onUnavail({ ...byMember }); } catch {} },
+      oneose() { onUnavail({ ...byMember }); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // member RSVPs p-tagged to the church -> { eventId: { memberPub: v } } (for "going" counts)
+  subscribeRsvps(onRsvps) {
+    const RSVP_D = 'trinityone/rsvp:'; const byEvent = {};
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#p': [pub], '#t': [NET] }], {
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(RSVP_D)) return; const ev = d.slice(RSVP_D.length); try { (byEvent[ev] = byEvent[ev] || {})[e.pubkey] = JSON.parse(e.content).v; onRsvps({ ...byEvent }); } catch {} },
+      oneose() { onRsvps({ ...byEvent }); },
     });
     return () => { try { sub.close(); } catch {} };
   },

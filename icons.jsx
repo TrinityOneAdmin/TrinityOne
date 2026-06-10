@@ -69,6 +69,18 @@ function Icon({ name, size = 22, stroke = 1.8, fill = false, style = {}, color =
     qr: <><rect x="4" y="4" width="6" height="6" rx="1.2" {...p} /><rect x="14" y="4" width="6" height="6" rx="1.2" {...p} /><rect x="4" y="14" width="6" height="6" rx="1.2" {...p} /><path d="M14 14h2.5v2.5M20 14v.01M14 20h.01M17 17v3M20 17v.01M20 20v.01" {...p} /></>,
     gift: <><rect x="4" y="9" width="16" height="11" rx="2" {...p} /><path d="M4 13h16M12 9v11" {...p} /><path d="M12 9C12 6.5 10.5 5 8.8 5 7.5 5 7 6 7 6.8 7 8.2 8.6 9 12 9ZM12 9c0-2.5 1.5-4 3.2-4C16.5 5 17 6 17 6.8 17 8.2 15.4 9 12 9Z" {...p} /></>,
     receipt: <><path d="M6 3.5h12v17l-2.5-1.6L13 20.5l-2.5-1.6L8 20.5l-2-1.6Z" {...p} /><path d="M9 8h6M9 11.5h6M9 15h3.5" {...p} /></>,
+    // serving / rota / calendar
+    calendar: <><rect x="3.6" y="5" width="16.8" height="15" rx="2.6" {...p} /><path d="M3.6 9.4h16.8M8 3.2v3.4M16 3.2v3.4" {...p} /></>,
+    calCheck: <><rect x="3.6" y="5" width="16.8" height="15" rx="2.6" {...p} /><path d="M3.6 9.4h16.8M8 3.2v3.4M16 3.2v3.4M8.6 14.5l2.2 2.2 4-4.3" {...p} /></>,
+    calPlus: <><rect x="3.6" y="5" width="16.8" height="15" rx="2.6" {...p} /><path d="M3.6 9.4h16.8M8 3.2v3.4M16 3.2v3.4M12 12.4v4.4M9.8 14.6h4.4" {...p} /></>,
+    clock: <><circle cx="12" cy="12" r="8" {...p} /><path d="M12 7.4V12l3 1.8" {...p} /></>,
+    users: <><circle cx="9" cy="8.4" r="3.2" {...p} /><path d="M3.8 19c0-3 2.3-5.2 5.2-5.2s5.2 2.2 5.2 5.2" {...p} /><path d="M16 5.4a3.2 3.2 0 0 1 0 6.1M17.6 14.1c2.1.5 3.6 2.3 3.6 4.9" {...p} /></>,
+    swap: <><path d="M6 9h12l-3.4-3.4" {...p} /><path d="M18 15H6l3.4 3.4" {...p} /></>,
+    hand: <><path d="M8 13.5V7a1.4 1.4 0 0 1 2.8 0v4.6M10.8 11.6V5.6a1.4 1.4 0 0 1 2.8 0v5.6M13.6 11.4V6.9a1.4 1.4 0 0 1 2.8 0V14c0 3.1-2.1 5.6-5.5 5.6-2 0-3.4-.9-4.5-2.6L5 14.3a1.4 1.4 0 0 1 2.3-1.5l.7 1" {...p} /></>,
+    music: <><path d="M9 18V6.4l9-2.1v9.4" {...p} /><circle cx="6.6" cy="18" r="2.4" {...p} /><circle cx="15.6" cy="15.8" r="2.4" {...p} /></>,
+    coffee: <><path d="M5 8h11v5.4a3.6 3.6 0 0 1-3.6 3.6H8.6A3.6 3.6 0 0 1 5 13.4Z" {...p} /><path d="M16 9.2h1.4a2.4 2.4 0 0 1 0 4.8H16" {...p} /><path d="M8 3.4c-.5.7-.5 1.3 0 2M11.5 3.4c-.5.7-.5 1.3 0 2" {...p} /></>,
+    child: <><circle cx="12" cy="5.8" r="2.4" {...p} /><path d="M12 8.4v6.2M8 11h8M9 20l3-5.6 3 5.6" {...p} /></>,
+    pin: <><path d="M12 21c4-4.2 6-7.3 6-10.2A6 6 0 0 0 6 10.8C6 13.7 8 16.8 12 21Z" {...p} /><circle cx="12" cy="10.8" r="2.2" {...p} /></>,
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" style={style} aria-hidden="true">

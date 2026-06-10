@@ -1,0 +1,469 @@
+// stew-schedule.jsx — Steward Rota board + Calendar (the coverage board).
+// The anti-ChurchSuite centerpiece: pick a service -> teams-as-cards with filled chips vs gold gaps
+// -> tap a gap for smart suggestions (free first) -> one-tap assign; Auto-fill, Copy last week, Publish.
+// Wired to window.Steward (services/rotas/rosters/events on the church relay). Exports DashRota, DashCalendar.
+const { useState: useSch, useEffect: useSchE, useRef: useSchR } = React;
+
+const SCH_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SCH_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
+function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
+function teamMeta(t) { return { name: t.name, icon: t.icon || 'hand', accent: t.accent || 'var(--clay)' }; }
+function memDisplay(m) { return (m && m.name && m.name.trim()) || ('Anon · ' + ((m && (m.npub || m.pubkey)) || '').slice(-6)); }
+function sameAssign(a, b) { const k = o => Object.keys(o || {}).filter(x => (o[x] && o[x].name)).sort().map(x => x + '=' + o[x].name + '/' + (o[x].pub || '')).join('|'); return k(a) === k(b); }
+
+// small date block used across the board
+function SchDateBlock({ dateStr, accent = 'var(--clay)' }) {
+  const p = schParts(dateStr);
+  return (
+    <div style={{ width: 50, flexShrink: 0, textAlign: 'center', borderRadius: 12, padding: '6px 0', background: `color-mix(in oklab, ${accent} 13%, var(--surface))`, border: `1px solid color-mix(in oklab, ${accent} 26%, transparent)` }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: accent }}>{p.dow}</div>
+      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, lineHeight: 1, color: 'var(--ink)' }}>{p.day}</div>
+      <div style={{ fontSize: 9.5, fontWeight: 600, color: 'var(--ink-3)', textTransform: 'uppercase' }}>{p.mon}</div>
+    </div>
+  );
+}
+
+const schFld = { width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
+const schLbl = { fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '14px 0 6px' };
+function SchModal({ title, children, onClose, width = 480 }) {
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width, maxWidth: '94%', maxHeight: '90%', overflow: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, marginBottom: 4 }}>{title}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ── manage a team's roster: the roles it needs + the people who can serve ──
+function RosterModal({ team, roster, members, onClose }) {
+  const [roles, setRoles] = useSch(() => (roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []));
+  const [people, setPeople] = useSch(() => (roster && roster.people ? roster.people.map(p => ({ ...p })) : []));
+  const [newRole, setNewRole] = useSch('');
+  const [newPerson, setNewPerson] = useSch('');
+  const [linkPub, setLinkPub] = useSch('');
+  const rid = () => 'r' + Math.random().toString(36).slice(2, 7);
+  const pid = () => 'p' + Math.random().toString(36).slice(2, 7);
+  const addRole = () => { if (!newRole.trim()) return; setRoles(r => [...r, { id: rid(), name: newRole.trim() }]); setNewRole(''); };
+  const addPerson = () => {
+    let name = newPerson.trim(), pub = '';
+    if (linkPub) { const m = (members || []).find(x => x.pubkey === linkPub); if (m) { name = memDisplay(m); pub = m.pubkey; } }
+    if (!name) return;
+    setPeople(p => [...p, { id: pid(), name, pub }]); setNewPerson(''); setLinkPub('');
+  };
+  const save = () => { window.Steward.publishRoster(team.id, { roles, people }); onClose(); };
+  const m = teamMeta(team);
+  return (
+    <SchModal title={`${team.name} · roster`} onClose={onClose} width={520}>
+      <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '6px 0 2px' }}>The roles this team fills each service, and the people who can be put on. Linking a person to a member lets them get reminders and accept on their phone.</p>
+      <div style={schLbl}>Roles</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 9 }}>
+        {roles.map(r => (
+          <span key={r.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 8px 6px 11px', borderRadius: 999, background: `color-mix(in oklab, ${m.accent} 12%, var(--surface))`, border: `1px solid color-mix(in oklab, ${m.accent} 26%, transparent)`, fontSize: 13, fontWeight: 700 }}>
+            {r.name}<button onClick={() => setRoles(x => x.filter(y => y.id !== r.id))} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={13} /></button></span>
+        ))}
+        {roles.length === 0 ? <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>No roles yet.</span> : null}
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input value={newRole} onChange={e => setNewRole(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addRole(); }} placeholder="Add a role — e.g. Sound" style={schFld} />
+        <button onClick={addRole} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', flexShrink: 0 }}><Icon name="plus" size={15} color="currentColor" /></button>
+      </div>
+      <div style={schLbl}>People who can serve</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 9 }}>
+        {people.map(pp => (
+          <div key={pp.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            <div style={{ width: 30, height: 30, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{(pp.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{pp.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{pp.pub ? 'On the app · gets reminders' : 'Off-app'}</div></div>
+            <button onClick={() => setPeople(x => x.filter(y => y.id !== pp.id))} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} /></button>
+          </div>
+        ))}
+        {people.length === 0 ? <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>No one added yet.</span> : null}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8 }}>
+        <input value={newPerson} onChange={e => setNewPerson(e.target.value)} placeholder="Name" style={schFld} disabled={!!linkPub} />
+        <select value={linkPub} onChange={e => setLinkPub(e.target.value)} style={schFld}>
+          <option value="">…or link a member</option>
+          {(members || []).map(mm => <option key={mm.pubkey} value={mm.pubkey}>{memDisplay(mm)}</option>)}
+        </select>
+        <button onClick={addPerson} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px' }}><Icon name="plus" size={15} color="currentColor" /></button>
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+        <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+        <button onClick={save} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14 }}><Icon name="check" size={16} color="#fff" /> Save roster</button>
+      </div>
+    </SchModal>
+  );
+}
+
+// ── the assign picker: suggestions for a gap, free-first ──
+function AssignModal({ slot, roster, assign, unavail, onAssign, onClear, onClose }) {
+  const m = teamMeta(slot.team);
+  const date = slot.service.date;
+  // who's already on the rota this service (by pub or name)
+  const taken = new Set();
+  Object.values(assign || {}).forEach(a => { if (a && a.name) { taken.add('n:' + a.name); if (a.pub) taken.add('p:' + a.pub); } });
+  const cur = assign[slot.key];
+  const ranked = (roster && roster.people ? roster.people : []).map(p => {
+    const away = p.pub && (unavail[p.pub] || []).includes(date);
+    const onRota = taken.has('n:' + p.name) || (p.pub && taken.has('p:' + p.pub));
+    const isThis = cur && ((cur.pub && cur.pub === p.pub) || cur.name === p.name);
+    return { ...p, away, onRota: onRota && !isThis, isThis, rank: (away ? 2 : (onRota && !isThis) ? 1 : 0) };
+  }).sort((a, b) => a.rank - b.rank);
+  return (
+    <SchModal title={`Assign · ${slot.role.name}`} onClose={onClose} width={460}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--ink-2)', margin: '4px 0 14px' }}>
+        <div style={{ width: 24, height: 24, borderRadius: 7, background: `color-mix(in oklab, ${m.accent} 15%, var(--surface))`, color: m.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={m.icon} size={14} /></div>
+        {m.name} · {schParts(date).dow} {schParts(date).day} {schParts(date).mon} · {slot.service.time}
+      </div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 9 }}>SUGGESTED — FREE FIRST</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {ranked.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', padding: '6px 2px' }}>No one in this team's roster yet — add people via “Roster”.</div> : null}
+        {ranked.map(p => {
+          const stTxt = p.isThis ? 'Assigned here' : p.away ? 'Away' : p.onRota ? 'On rota' : 'Free';
+          const stCol = p.isThis ? 'var(--clay)' : p.away ? 'var(--ink-3)' : p.onRota ? '#8a6717' : 'var(--sage)';
+          return (
+            <button key={p.id} onClick={() => onAssign(p)} disabled={p.away} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 11, borderRadius: 13, cursor: p.away ? 'not-allowed' : 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', opacity: p.away ? 0.6 : 1,
+              border: p.isThis ? '2px solid var(--clay)' : '1px solid var(--line)', background: 'var(--surface)' }}>
+              <div style={{ width: 34, height: 34, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12 }}>{(p.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{p.pub ? 'On the app' : 'Off-app'}</div></div>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: stCol }}>{stTxt}</span>
+            </button>
+          );
+        })}
+      </div>
+      {cur && cur.name ? <button onClick={onClear} className="sk-btn sk-btn--ghost" style={{ width: '100%', padding: 12, marginTop: 16, fontSize: 14 }}><Icon name="x" size={15} color="currentColor" /> Clear this slot</button> : null}
+    </SchModal>
+  );
+}
+
+function SchAddServiceModal({ onClose }) {
+  const [name, setName] = useSch('Sunday Gathering');
+  const [date, setDate] = useSch('');
+  const [time, setTime] = useSch('10:30');
+  const save = () => { if (!date) return; window.Steward.publishService({ name: name.trim() || 'Service', date, time }); onClose(); };
+  return (
+    <SchModal title="Add a service" onClose={onClose} width={420}>
+      <div style={schLbl}>Name</div>
+      <input value={name} onChange={e => setName(e.target.value)} style={schFld} />
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
+        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+        <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+        <button onClick={save} disabled={!date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: date ? 1 : 0.55 }}><Icon name="plus" size={16} color="#fff" /> Add service</button>
+      </div>
+    </SchModal>
+  );
+}
+
+// ════════════════════════ ROTA BOARD ════════════════════════
+function DashRota({ onNewTeam }) {
+  const teams = window.useStewardGroups().filter(g => g.kind === 'team');
+  const rosters = window.useStewardRosters();
+  const services = window.useStewardServices();
+  const rotas = window.useStewardRotas();
+  const members = window.useStewardMembers();
+  const unavail = window.useStewardUnavail();
+
+  const rosterFor = (id) => rosters.find(r => r.team === id) || { roles: [], people: [] };
+  const persisted = (svcId) => rotas.find(r => r.service === svcId) || null;
+  const sortedSvcs = services.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const todayStr = schKey(new Date());
+  const defaultSvc = (sortedSvcs.find(s => (s.date || '') >= todayStr) || sortedSvcs[sortedSvcs.length - 1] || {}).id;
+
+  const [sel, setSel] = useSch(null);
+  const [draft, setDraft] = useSch({});         // { svcId: assignMap } — local unsaved edits
+  const seeded = useSchR(new Set());
+  const [assignSlot, setAssignSlot] = useSch(null);
+  const [rosterTeam, setRosterTeam] = useSch(null);
+  const [adding, setAdding] = useSch(false);
+  const [flash, setFlash] = useSch('');
+
+  // seed each service's draft from its published rota the first time we see it
+  useSchE(() => {
+    let changed = false; const next = { ...draft };
+    rotas.forEach(r => { if (!seeded.current.has(r.service)) { seeded.current.add(r.service); next[r.service] = { ...(r.assign || {}) }; changed = true; } });
+    if (changed) setDraft(next);
+  }, [rotas]);
+
+  const svcId = sel || defaultSvc;
+  const svc = sortedSvcs.find(s => s.id === svcId);
+  const assign = (svcId && draft[svcId] !== undefined) ? draft[svcId] : (persisted(svcId) ? persisted(svcId).assign : {});
+  const setAssign = (next) => setDraft(d => ({ ...d, [svcId]: next }));
+
+  // coverage across all teams for this service
+  let total = 0, filled = 0;
+  teams.forEach(t => { const rs = rosterFor(t.id).roles; total += rs.length; rs.forEach(role => { if (assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name) filled++; }); });
+  const gaps = total - filled;
+
+  const pers = persisted(svcId);
+  const isPublished = pers && pers.published && sameAssign(assign, pers.assign);
+
+  const doAssign = (slot, person) => {
+    const next = { ...assign, [slot.key]: { name: person.name, pub: person.pub || '' } };
+    setAssign(next); setAssignSlot(null);
+    if (person.pub) {
+      const m = teamMeta(slot.team);
+      window.Steward.sendServingRequest({ memberPub: person.pub, serviceId: svc.id, teamId: slot.team.id, roleId: slot.role.id, role: slot.role.name, teamName: m.name, icon: m.icon, accent: m.accent, date: svc.date, time: svc.time, service: svc.name, note: `Can you serve on ${m.name} (${slot.role.name})?` });
+    }
+  };
+  const clearSlot = (slot) => { const next = { ...assign }; delete next[slot.key]; setAssign(next); setAssignSlot(null); };
+  const autoFill = () => {
+    const next = { ...assign }; const used = new Set(Object.values(next).filter(a => a && a.name).map(a => 'n:' + a.name));
+    teams.forEach(t => { const r = rosterFor(t.id); r.roles.forEach(role => {
+      const key = t.id + '::' + role.id; if (next[key] && next[key].name) return;
+      const pick = r.people.find(p => !used.has('n:' + p.name) && !(p.pub && (unavail[p.pub] || []).includes(svc.date)));
+      if (pick) { next[key] = { name: pick.name, pub: pick.pub || '' }; used.add('n:' + pick.name); }
+    }); });
+    setAssign(next); setFlash('Filled what I could from who’s free'); setTimeout(() => setFlash(''), 2200);
+  };
+  const copyLastWeek = () => {
+    const prev = sortedSvcs.filter(s => s.id !== svcId && (s.date || '') < (svc.date || '')).sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+    const pr = prev && persisted(prev.id);
+    if (!pr) { setFlash('No earlier rota to copy'); setTimeout(() => setFlash(''), 2200); return; }
+    setAssign({ ...pr.assign }); setFlash(`Copied ${schParts(prev.date).day} ${schParts(prev.date).mon}`); setTimeout(() => setFlash(''), 2200);
+  };
+  const publish = () => { window.Steward.publishRota({ service: svcId, published: true, assign }); setFlash('Published — your church can see it'); setTimeout(() => setFlash(''), 2400); };
+
+  if (teams.length === 0) {
+    return (
+      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center', maxWidth: 380 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="hand" size={28} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 6 }}>Build your first team</div>
+          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 16 }}>Create a ministry team (Welcome, Worship, Kids…) with the roles it fills. Then add a service and put people on — gaps glow gold so coverage reads at a glance.</p>
+          <button onClick={onNewTeam} className="sk-btn sk-btn--clay" style={{ padding: '11px 18px' }}><Icon name="plus" size={16} color="#fff" /> New team</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* service strip */}
+      <div className="no-scrollbar" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 14, flexShrink: 0 }}>
+        {sortedSvcs.map(s => {
+          const on = s.id === svcId; const p = schParts(s.date);
+          return (
+            <button key={s.id} onClick={() => setSel(s.id)} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
+              border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)' }}>
+              <div style={{ textAlign: 'center', lineHeight: 1 }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--clay)', textTransform: 'uppercase' }}>{p.dow}</div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{p.day}</div></div>
+              <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{s.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{p.mon} · {s.time}</div></div>
+            </button>
+          );
+        })}
+        <button onClick={() => setAdding(true)} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', border: '1px dashed var(--line)', background: 'transparent', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}><Icon name="plus" size={15} color="currentColor" /> Service</button>
+      </div>
+
+      {!svc ? (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)', fontSize: 14 }}>Add a service to start building a rota.</div>
+      ) : (
+        <React.Fragment>
+          {/* coverage bar + actions */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 16px', borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', flexShrink: 0 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18 }}>{filled}/{total} <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--ink-3)' }}>roles filled</span></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, marginTop: 2, color: gaps ? '#8a6717' : 'var(--sage)' }}>{gaps ? <><Icon name="sparkle" size={13} color="var(--gold)" /> {gaps} gap{gaps > 1 ? 's' : ''} to fill</> : <><Icon name="check" size={13} stroke={2.6} color="var(--sage)" /> Fully covered</>}</div>
+            </div>
+            <div style={{ flex: 1, height: 8, borderRadius: 999, background: 'var(--surface-2)', overflow: 'hidden', minWidth: 80 }}><div style={{ width: `${total ? (filled / total) * 100 : 0}%`, height: '100%', background: gaps ? 'linear-gradient(90deg, var(--sage), var(--gold))' : 'var(--sage)', borderRadius: 999, transition: 'width .3s' }} /></div>
+            <button onClick={copyLastWeek} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="copy" size={15} color="currentColor" /> Copy last week</button>
+            <button onClick={autoFill} disabled={!gaps} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, opacity: gaps ? 1 : 0.5 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill</button>
+            <button onClick={publish} className={isPublished ? 'sk-btn' : 'sk-btn sk-btn--clay'} style={{ padding: '9px 15px', fontSize: 13, background: isPublished ? 'var(--sage)' : undefined, color: '#fff' }}>
+              <Icon name={isPublished ? 'check' : 'send'} size={15} color="#fff" /> {isPublished ? 'Published' : (pers && pers.published ? 'Publish changes' : 'Publish rota')}</button>
+          </div>
+
+          {/* team cards */}
+          <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14, alignContent: 'start' }}>
+            {teams.map(t => {
+              const m = teamMeta(t); const r = rosterFor(t.id);
+              const tFilled = r.roles.filter(role => assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name).length;
+              return (
+                <div key={t.id} style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
+                    <div style={{ width: 34, height: 34, borderRadius: 11, background: `color-mix(in oklab, ${m.accent} 16%, var(--surface))`, color: m.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={m.icon} size={19} /></div>
+                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{m.name}</div><div style={{ fontSize: 11.5, color: r.roles.length && tFilled === r.roles.length ? 'var(--sage)' : 'var(--ink-3)', fontWeight: 600 }}>{tFilled}/{r.roles.length} filled</div></div>
+                    <button onClick={() => setRosterTeam(t)} title="Manage roster" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 10px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={14} /> Roster</button>
+                  </div>
+                  <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {r.roles.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '4px 2px' }}>No roles — add some via <b>Roster</b>.</div> : null}
+                    {r.roles.map(role => {
+                      const key = t.id + '::' + role.id; const a = assign[key];
+                      const slot = { key, service: svc, team: t, role };
+                      if (a && a.name) {
+                        return (
+                          <button key={role.id} onClick={() => setAssignSlot(slot)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: '1px solid color-mix(in oklab, var(--sage) 32%, var(--line))', background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))' }}>
+                            <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 10.5 }}>{a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
+                            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}</div><div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.name}</div></div>
+                            <Icon name="check" size={15} stroke={2.4} color="var(--sage)" />
+                          </button>
+                        );
+                      }
+                      return (
+                        <button key={role.id} onClick={() => setAssignSlot(slot)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: '1.5px dashed color-mix(in oklab, var(--gold) 55%, var(--line))', background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))' }}>
+                          <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: 'color-mix(in oklab, var(--gold) 20%, var(--surface))', color: '#8a6717', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="plus" size={15} /></div>
+                          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}</div><div style={{ fontWeight: 700, fontSize: 13.5, color: '#8a6717' }}>Assign</div></div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      )}
+
+      {flash ? <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, boxShadow: 'var(--shadow-lg)', zIndex: 80 }}>{flash}</div> : null}
+      {assignSlot ? <AssignModal slot={assignSlot} roster={rosterFor(assignSlot.team.id)} assign={assign} unavail={unavail} onAssign={(p) => doAssign(assignSlot, p)} onClear={() => clearSlot(assignSlot)} onClose={() => setAssignSlot(null)} /> : null}
+      {rosterTeam ? <RosterModal team={rosterTeam} roster={rosterFor(rosterTeam.id)} members={members} onClose={() => setRosterTeam(null)} /> : null}
+      {adding ? <SchAddServiceModal onClose={() => setAdding(false)} /> : null}
+    </div>
+  );
+}
+window.DashRota = DashRota;
+
+// ════════════════════════ CALENDAR ════════════════════════
+function SchEventModal({ day, onClose }) {
+  const ACCENTS = [['var(--clay)', 'Gathering'], ['var(--sage)', 'Prayer'], ['var(--gold)', 'Social'], ['#5360D6', 'Youth']];
+  const [title, setTitle] = useSch('');
+  const [date, setDate] = useSch(day || '');
+  const [time, setTime] = useSch('19:30');
+  const [where, setWhere] = useSch('');
+  const [blurb, setBlurb] = useSch('');
+  const [accent, setAccent] = useSch('var(--clay)');
+  const save = () => { if (!title.trim() || !date) return; window.Steward.publishEvent({ title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent }); onClose(); };
+  return (
+    <SchModal title="New event" onClose={onClose} width={460}>
+      <div style={schLbl}>Title</div>
+      <input value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
+        <div style={{ width: 130 }}><div style={schLbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
+      </div>
+      <div style={schLbl}>Where</div>
+      <input value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" style={schFld} />
+      <div style={schLbl}>Type</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
+      </div>
+      <div style={schLbl}>Note (optional)</div>
+      <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
+      <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+        <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+        <button onClick={save} disabled={!title.trim() || !date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="#fff" /> Add event</button>
+      </div>
+    </SchModal>
+  );
+}
+
+function DashCalendar() {
+  const services = window.useStewardServices();
+  const events = window.useStewardEvents();
+  const rotas = window.useStewardRotas();
+  const rosters = window.useStewardRosters();
+  const teams = window.useStewardGroups().filter(g => g.kind === 'team');
+  const today = new Date();
+  const [view, setView] = useSch({ y: today.getFullYear(), m: today.getMonth() });
+  const [pickedDay, setPickedDay] = useSch(null);
+  const [adding, setAdding] = useSch(null);   // day string for new event, or '' for generic
+
+  const coverageFor = (svcId) => {
+    const rota = rotas.find(r => r.service === svcId); const assign = rota ? rota.assign : {};
+    let total = 0, filled = 0;
+    teams.forEach(t => { const r = rosters.find(x => x.team === t.id) || { roles: [] }; total += r.roles.length; r.roles.forEach(role => { if (assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name) filled++; }); });
+    return { total, filled, published: rota && rota.published };
+  };
+  const dayItems = (key) => ({
+    services: services.filter(s => s.date === key),
+    events: events.filter(e => e.date === key),
+  });
+  const first = new Date(view.y, view.m, 1);
+  const startPad = first.getDay();
+  const daysIn = new Date(view.y, view.m + 1, 0).getDate();
+  const cells = []; for (let i = 0; i < startPad; i++) cells.push(null); for (let d = 1; d <= daysIn; d++) cells.push(d);
+  const monKey = (d) => `${view.y}-${String(view.m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const upcoming = services.slice().filter(s => (s.date || '') >= schKey(today)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 6);
+
+  return (
+    <div style={{ position: 'relative', height: '100%', display: 'flex', gap: 16 }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexShrink: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][view.m]} {view.y}</div>
+          <button onClick={() => setView(v => ({ y: v.m === 0 ? v.y - 1 : v.y, m: v.m === 0 ? 11 : v.m - 1 }))} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="chevL" size={16} /></button>
+          <button onClick={() => setView(v => ({ y: v.m === 11 ? v.y + 1 : v.y, m: v.m === 11 ? 0 : v.m + 1 }))} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="chevR" size={16} /></button>
+          <div style={{ flex: 1 }} />
+          <button onClick={() => setAdding('')} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="calPlus" size={15} color="currentColor" /> New event</button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 5, marginBottom: 5, flexShrink: 0 }}>
+          {SCH_DOW.map(d => <div key={d} style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.4px' }}>{d.toUpperCase()}</div>)}
+        </div>
+        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridAutoRows: 'minmax(74px, 1fr)', gap: 5 }}>
+          {cells.map((d, i) => {
+            if (!d) return <div key={i} />;
+            const key = monKey(d); const it = dayItems(key); const isToday = key === schKey(today);
+            const has = it.services.length || it.events.length;
+            return (
+              <button key={i} onClick={() => setPickedDay(key)} style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
+                border: pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay)' : 'var(--ink-2)' }}>{d}</div>
+                {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 5, height: 5, borderRadius: 999, background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} />{s.name}</div>; })}
+                {it.events.map(e => <div key={e.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: `color-mix(in oklab, ${e.accent} 13%, var(--surface))`, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.title}</div>)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* side panel: picked-day detail OR upcoming services */}
+      <div style={{ width: 300, flexShrink: 0, borderLeft: '1px solid var(--line)', paddingLeft: 16, overflow: 'auto' }} className="no-scrollbar">
+        {pickedDay ? (() => {
+          const it = dayItems(pickedDay); const p = schParts(pickedDay);
+          return (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                <SchDateBlock dateStr={pickedDay} />
+                <div style={{ flex: 1 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{p.dow} {p.day} {p.mon}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{it.services.length + it.events.length} on this day</div></div>
+                <button onClick={() => setPickedDay(null)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
+              </div>
+              {it.services.map(s => { const c = coverageFor(s.id); return (
+                <div key={s.id} style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{s.name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 7 }}>{s.time} · {c.filled}/{c.total} filled {c.published ? '· published' : ''}</div>
+                  <div style={{ height: 6, borderRadius: 999, background: 'var(--surface-2)', overflow: 'hidden' }}><div style={{ width: `${c.total ? (c.filled / c.total) * 100 : 0}%`, height: '100%', background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} /></div>
+                </div>
+              ); })}
+              {it.events.map(e => (
+                <div key={e.id} style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div></div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{e.time}{e.where ? ' · ' + e.where : ''}</div>
+                  {e.blurb ? <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '7px 0 0' }}>{e.blurb}</p> : null}
+                  <button onClick={() => window.Steward.removeEvent(e.id)} style={{ border: 'none', background: 'none', color: 'var(--ink-3)', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginTop: 6, padding: 0 }}>Remove</button>
+                </div>
+              ))}
+              {it.services.length + it.events.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 12 }}>Nothing on this day yet.</div> : null}
+              <button onClick={() => setAdding(pickedDay)} className="sk-btn sk-btn--ghost" style={{ width: '100%', padding: 11, fontSize: 13.5 }}><Icon name="calPlus" size={15} color="currentColor" /> Add event on this day</button>
+            </div>
+          );
+        })() : (
+          <div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, marginBottom: 12 }}>Upcoming services</div>
+            {upcoming.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>No upcoming services. Add one on the Rota page.</div> : null}
+            {upcoming.map(s => { const c = coverageFor(s.id); return (
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 11, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
+                <SchDateBlock dateStr={s.date} />
+                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{s.name}</div><div style={{ fontSize: 12, color: c.total && c.filled === c.total ? 'var(--sage)' : '#8a6717', fontWeight: 600 }}>{c.filled}/{c.total} filled</div></div>
+              </div>
+            ); })}
+          </div>
+        )}
+      </div>
+
+      {adding !== null ? <SchEventModal day={adding} onClose={() => setAdding(null)} /> : null}
+    </div>
+  );
+}
+window.DashCalendar = DashCalendar;

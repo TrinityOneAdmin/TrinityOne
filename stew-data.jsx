@@ -65,6 +65,16 @@ const SK_TINT = {
   ink:  { bg: 'var(--surface-2)', fg: 'var(--ink-2)' },
 };
 
+// ── ministry-team presets: icon + accent + a starter role list (for New team) ──
+const TEAM_PRESETS = [
+  { id: 'welcome', name: 'Welcome', icon: 'hand',   accent: '#C25A38', roles: 'Welcome desk\nDoor · North\nDoor · South\nNewcomer host' },
+  { id: 'worship', name: 'Worship', icon: 'music',  accent: '#5360D6', roles: 'Lead\nVocals\nKeys\nGuitar\nDrums' },
+  { id: 'kids',    name: 'Kids',    icon: 'child',  accent: '#1F9488', roles: 'Lead\nToddlers\nJuniors\nCheck-in' },
+  { id: 'av',      name: 'AV / Tech', icon: 'sliders', accent: '#8a6717', roles: 'Sound\nSlides\nStream' },
+  { id: 'coffee',  name: 'Coffee',  icon: 'coffee', accent: '#C24B7A', roles: 'Barista\nServe\nWash up' },
+  { id: 'prayer',  name: 'Prayer',  icon: 'pray',   accent: '#5E8C6A', roles: 'Lead\nMinistry team\nMinistry team' },
+];
+
 // ── pill ──
 function SkPill({ children, tint = 'clay', style = {} }) {
   const t = SK_TINT[tint] || SK_TINT.clay;

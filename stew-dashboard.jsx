@@ -3,7 +3,8 @@
 const NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
   { key: 'groups', label: 'Groups', ic: 'chat' },
-  { key: 'teams', label: 'Teams', ic: 'shield' },
+  { key: 'rota', label: 'Rota', ic: 'calCheck' },
+  { key: 'calendar', label: 'Calendar', ic: 'calendar' },
   { key: 'resources', label: 'Resources', ic: 'read' },
   { key: 'members', label: 'Members', ic: 'pray' },
   { key: 'relays', label: 'Relays', ic: 'globe' },
@@ -15,6 +16,7 @@ function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
+  const [addingTeam, setAddingTeam] = React.useState(false);
   const church = window.useStewardChurch();   // real church profile + npub from the relay
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -26,6 +28,7 @@ function StewDashboard({ initial = 'overview' }) {
     <ConsoleChrome>
       {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
       {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
+      <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
         {/* sidebar */}
         <div style={{ width: 232, flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', padding: '22px 16px' }}>
@@ -67,7 +70,9 @@ function StewDashboard({ initial = 'overview' }) {
             <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20 }}>{NAV.find(n => n.key === tab).label}</div></div>
             <div style={{ flex: 1 }} />
             <button onClick={() => setInvite(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> Invite code</button>
-            <button onClick={() => setPosting(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> New post</button>
+            {tab === 'rota'
+              ? <button onClick={() => setAddingTeam(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New team</button>
+              : <button onClick={() => setPosting(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> New post</button>}
             <SkBadge initials="PJ" size={36} radius={11} accent="var(--sage)" />
           </div>
           {/* content */}
@@ -75,7 +80,8 @@ function StewDashboard({ initial = 'overview' }) {
             {tab === 'overview' && <DashOverview onTab={setTab} />}
             {tab === 'giving' && <DashGiving />}
             {tab === 'groups' && <DashGroups />}
-            {tab === 'teams' && <DashTeams />}
+            {tab === 'rota' && <DashRota onNewTeam={() => setAddingTeam(true)} />}
+            {tab === 'calendar' && <DashCalendar />}
             {tab === 'resources' && <DashResources />}
             {tab === 'members' && <DashMembers />}
             {tab === 'relays' && <DashRelays />}
@@ -365,24 +371,49 @@ function DashGroups() {
   );
 }
 
-// Teams = private channels for ministry/rota teams (Worship, Welcome, Tech…). A team is a group with
-// kind 'team', so it reuses all the group chat + relay scoping; it's surfaced separately to members.
+// New team — a ministry/rota team with an icon, accent and a starter role list. Creates a kind:'team'
+// group (so it's also a chat channel) + a roster doc (its roles + people). Lives on the Rota page.
 function NewTeamModal({ open, onClose }) {
   const [name, setName] = React.useState('');
   const [desc, setDesc] = React.useState('');
-  React.useEffect(() => { if (open) { setName(''); setDesc(''); } }, [open]);
+  const [icon, setIcon] = React.useState('hand');
+  const [accent, setAccent] = React.useState('#C25A38');
+  const [roles, setRoles] = React.useState('');
+  React.useEffect(() => { if (open) { setName(''); setDesc(''); setIcon('hand'); setAccent('#C25A38'); setRoles(''); } }, [open]);
   if (!open) return null;
-  const create = () => { if (!name.trim()) return; window.Steward.publishGroup({ name: name.trim(), kind: 'team', sub: desc.trim() }); onClose(); };
+  const applyPreset = (p) => { setIcon(p.icon); setAccent(p.accent); if (!name.trim()) setName(p.name); if (!roles.trim()) setRoles(p.roles); };
+  const create = () => {
+    if (!name.trim()) return;
+    const roleList = roles.split('\n').map(s => s.trim()).filter(Boolean).map(n => ({ name: n }));
+    Promise.resolve(window.Steward.publishGroup({ name: name.trim(), kind: 'team', sub: desc.trim(), icon, accent }))
+      .then(g => { if (g && g.id) window.Steward.publishRoster(g.id, { roles: roleList, people: [] }); });
+    onClose();
+  };
+  const fld = { width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
+  const lbl = { fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '14px 0 6px' };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '93%', maxHeight: '90%', overflow: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>New team</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A private channel for a ministry/rota team. The people serving in it chat here.</p>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Name</div>
-        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Worship Team" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>What's it for (optional)</div>
-        <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
-        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 4px' }}>Pick a kind to start from, then tweak. The team is a private chat channel and its people fill rota slots.</p>
+        <div style={lbl}>Kind</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {(window.TEAM_PRESETS || []).map(p => {
+            const on = icon === p.icon && accent === p.accent;
+            return (
+              <button key={p.id} onClick={() => applyPreset(p)} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13,
+                border: on ? `2px solid ${p.accent}` : '1px solid var(--line)', background: on ? `color-mix(in oklab, ${p.accent} 10%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>
+                <div style={{ width: 26, height: 26, borderRadius: 8, background: `color-mix(in oklab, ${p.accent} 16%, var(--surface))`, color: p.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={p.icon} size={15} /></div>{p.name}</button>
+            );
+          })}
+        </div>
+        <div style={lbl}>Name</div>
+        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Worship Team" style={fld} />
+        <div style={lbl}>Roles to fill (one per line)</div>
+        <textarea value={roles} onChange={e => setRoles(e.target.value)} rows={5} placeholder={'Lead\nVocals\nKeys\nSound'} style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
+        <div style={lbl}>What's it for (optional)</div>
+        <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={fld} />
+        <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
           <button onClick={create} disabled={!name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: name.trim() ? 1 : 0.55 }}><Icon name="plus" size={16} color="#fff" /> Create team</button>
         </div>
@@ -390,99 +421,7 @@ function NewTeamModal({ open, onClose }) {
     </div>
   );
 }
-
-// Manage a team's rota — who serves when. Slots = { id, date, role, name, pub? }.
-// Assigning from the member list stores the member's pubkey so they see "you're serving" in-app.
-function RotaModal({ team, rota, members, onClose }) {
-  const [slots, setSlots] = React.useState(() => (rota && rota.slots ? rota.slots.slice() : []));
-  const [date, setDate] = React.useState('');
-  const [role, setRole] = React.useState('');
-  const [who, setWho] = React.useState('');        // '' = pick, member pubkey, or '__other'
-  const [otherName, setOtherName] = React.useState('');
-  const [busy, setBusy] = React.useState(false);
-  const memberName = (m) => (m.name && m.name.trim()) || ('Anon · ' + (m.npub || m.pubkey || '').slice(-6));
-  const addSlot = () => {
-    if (!date || !role.trim()) return;
-    let name = '', pub = '';
-    if (who === '__other') { name = otherName.trim(); if (!name) return; }
-    else if (who) { const m = (members || []).find(x => x.pubkey === who); if (m) { name = memberName(m); pub = m.pubkey; } }
-    setSlots(s => [...s, { id: 's' + Math.random().toString(36).slice(2, 8), date, role: role.trim(), name, pub }]);
-    setDate(''); setRole(''); setWho(''); setOtherName('');
-  };
-  const removeSlot = (id) => setSlots(s => s.filter(x => x.id !== id));
-  const save = () => { setBusy(true); Promise.resolve(window.Steward.publishRota({ team: team.id, title: team.name, slots })).then(() => onClose()); };
-  const sorted = slots.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const fmtDate = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }); } catch { return d; } };
-  const fld = { boxSizing: 'border-box', height: 42, border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface-2)', padding: '0 12px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
-  return (
-    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '94%', maxHeight: '88%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{team.name} · Rota</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>Who serves when. People assigned from your members see “You’re serving” in their app; you can also type a name for anyone not on the app yet.</p>
-        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', marginBottom: 14 }}>
-          {sorted.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: 'var(--ink-3)', padding: '4px 2px 12px' }}>No slots yet — add the first below.</div>
-          ) : sorted.map(s => (
-            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 8 }}>
-              <div style={{ width: 64, fontSize: 12.5, fontWeight: 700, color: 'var(--clay)' }}>{fmtDate(s.date)}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>{s.role}</div>
-                <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{s.name || '— unassigned'}{s.pub ? '' : (s.name ? ' · off-app' : '')}</div>
-              </div>
-              <button onClick={() => removeSlot(s.id)} title="Remove slot" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
-            </div>
-          ))}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 8, padding: 12, borderRadius: 12, border: '1px dashed var(--line)', background: 'var(--surface-2)' }}>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={fld} />
-          <input value={role} onChange={e => setRole(e.target.value)} placeholder="Role — e.g. Lead, Sound, Coffee" style={fld} />
-          <select value={who} onChange={e => setWho(e.target.value)} style={{ ...fld, gridColumn: who === '__other' ? 'auto' : '1 / -1' }}>
-            <option value="">Assign to… (optional)</option>
-            {(members || []).map(m => <option key={m.pubkey} value={m.pubkey}>{memberName(m)}</option>)}
-            <option value="__other">Someone else (type a name)…</option>
-          </select>
-          {who === '__other' ? <input value={otherName} onChange={e => setOtherName(e.target.value)} autoFocus placeholder="Name" style={fld} /> : null}
-          <button onClick={addSlot} disabled={!date || !role.trim()} className="sk-btn sk-btn--ghost" style={{ gridColumn: '1 / -1', padding: 10, fontSize: 13.5, opacity: (!date || !role.trim()) ? 0.55 : 1 }}><Icon name="plus" size={15} color="currentColor" /> Add slot</button>
-        </div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name="send" size={16} color="#fff" /> {busy ? 'Saving…' : 'Save & share rota'}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DashTeams() {
-  const teams = window.useStewardGroups().filter(g => g.kind === 'team');
-  const rotas = window.useStewardRotas();
-  const members = window.useStewardMembers();
-  const [adding, setAdding] = React.useState(false);
-  const [rotaTeam, setRotaTeam] = React.useState(null);   // team whose rota is being edited
-  const rotaFor = (id) => rotas.find(r => r.team === id) || null;
-  const items = teams.map(t => ({ ...t, ic: 'pray', fg: 'var(--clay)' }));
-  return (
-    <div style={{ position: 'relative', height: '100%' }}>
-      <ListPanel title="Teams" addLabel="New team" onAdd={() => setAdding(true)} items={items}
-        empty="No teams yet — create one per ministry/rota team (Worship, Welcome, Tech, Kids…)."
-        renderRight={(it) => {
-          const r = rotaFor(it.id); const n = r ? (r.slots || []).length : 0;
-          return (
-            <div style={{ display: 'flex', gap: 7 }}>
-              <button onClick={() => setRotaTeam(it)} title="Manage rota" style={{ border: '1px solid var(--line)', background: n ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 10px', cursor: 'pointer', color: n ? 'var(--clay)' : 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}><Icon name="today" size={14} color="currentColor" /> Rota{n ? ` · ${n}` : ''}</button>
-              <button onClick={() => window.Steward.removeGroup(it.id)} title="Remove team" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
-            </div>
-          );
-        }} />
-      <div style={{ display: 'flex', gap: 9, marginTop: 14, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
-        <Icon name="pray" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Teams are private channels for the people serving in a rota slot — they show up under <b style={{ color: 'var(--ink)' }}>Teams</b> in the member app. Tap <b style={{ color: 'var(--ink)' }}>Rota</b> on a team to schedule who serves when; the team sees the schedule and each person is reminded they’re on.</div>
-      </div>
-      <NewTeamModal open={adding} onClose={() => setAdding(false)} />
-      {rotaTeam ? <RotaModal team={rotaTeam} rota={rotaFor(rotaTeam.id)} members={members} onClose={() => setRotaTeam(null)} /> : null}
-    </div>
-  );
-}
-window.DashTeams = DashTeams;
+window.NewTeamModal = NewTeamModal;
 
 function DashRelays() {
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
