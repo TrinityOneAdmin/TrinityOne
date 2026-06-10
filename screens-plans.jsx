@@ -96,7 +96,7 @@ function PlansScreen({ ctx }) {
                 <div style={{ width: 46, height: 46, borderRadius: 14, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={23} stroke={1.8} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[d.ref, (d.type || '').toUpperCase() + ' devotional'].filter(Boolean).join(' · ')}</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[d.ref, 'Devotional'].filter(Boolean).join(' · ')}</div>
                 </div>
                 <Icon name="chevR" size={18} color="var(--ink-3)" />
               </div>
@@ -177,11 +177,40 @@ function PlanDetail({ plan, open, onClose, ctx }) {
   );
 }
 
-// ── church devotional reader (renders an uploaded TXT inline, or a PDF embedded) ──
+// minimal Markdown → React for .md devotionals (headings, bold/italic, lists, blockquote, paragraphs).
+function renderMarkdown(src) {
+  const inline = (t, key) => {
+    // split on **bold** and *italic* / _italic_, keep delimiters
+    const parts = t.split(/(\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_)/g).filter(Boolean);
+    return parts.map((p, i) => {
+      if (/^\*\*[^*]+\*\*$/.test(p)) return <strong key={i}>{p.slice(2, -2)}</strong>;
+      if (/^\*[^*]+\*$/.test(p) || /^_[^_]+_$/.test(p)) return <em key={i}>{p.slice(1, -1)}</em>;
+      return <React.Fragment key={i}>{p}</React.Fragment>;
+    });
+  };
+  const lines = String(src || '').replace(/\r\n/g, '\n').split('\n');
+  const out = []; let list = null;
+  const flush = () => { if (list) { out.push(<ul key={'ul' + out.length} style={{ margin: '8px 0 8px 4px', paddingLeft: 22 }}>{list}</ul>); list = null; } };
+  lines.forEach((ln, i) => {
+    const h = ln.match(/^(#{1,3})\s+(.*)$/);
+    const li = ln.match(/^\s*[-*+]\s+(.*)$/);
+    if (h) { flush(); const lv = h[1].length; const sz = lv === 1 ? 24 : lv === 2 ? 20 : 17;
+      out.push(<div key={i} style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: sz, lineHeight: 1.25, margin: '18px 0 6px' }}>{inline(h[2])}</div>); return; }
+    if (li) { (list = list || []).push(<li key={i} style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.6, color: 'var(--ink)', marginBottom: 4 }}>{inline(li[1])}</li>); return; }
+    if (!ln.trim()) { flush(); return; }
+    const bq = ln.match(/^>\s?(.*)$/);
+    flush();
+    if (bq) { out.push(<blockquote key={i} style={{ borderLeft: '3px solid var(--clay)', margin: '10px 0', padding: '2px 0 2px 14px', color: 'var(--ink-2)', fontStyle: 'italic', fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.6 }}>{inline(bq[1])}</blockquote>); return; }
+    out.push(<p key={i} style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.65, color: 'var(--ink)', margin: '0 0 12px', textWrap: 'pretty' }}>{inline(ln)}</p>);
+  });
+  flush();
+  return out;
+}
+
+// ── church devotional reader (renders an uploaded .txt inline, or .md formatted) ──
 function ChurchDevoView({ devo, open, onClose, ctx }) {
   if (!devo) return null;
-  const isPdf = devo.type === 'pdf' && devo.data;
-  const openPdf = () => { try { window.open(devo.data, '_blank'); } catch (e) {} };
+  const isMd = devo.type === 'md';
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
@@ -191,22 +220,16 @@ function ChurchDevoView({ devo, open, onClose, ctx }) {
             <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, lineHeight: 1.15 }}>{devo.title}</h1>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[devo.ref, 'Devotional'].filter(Boolean).join(' · ')}</div>
           </div>
-          {isPdf ? <IconBtn name="share" onClick={openPdf} /> : null}
         </div>
       </div>
-      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', background: isPdf ? '#525659' : 'var(--paper)' }}>
-        {isPdf ? (
-          <object data={devo.data} type="application/pdf" style={{ width: '100%', height: '100%', minHeight: 480, border: 'none' }}>
-            <div style={{ padding: 40, textAlign: 'center', color: '#fff' }}>
-              <p style={{ fontSize: 15, lineHeight: 1.6 }}>This devotional is a PDF. Tap below to open it.</p>
-              <button onClick={openPdf} style={{ marginTop: 12, padding: '12px 22px', borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Open PDF</button>
-            </div>
-          </object>
-        ) : (
-          <div style={{ maxWidth: 640, margin: '0 auto', padding: '24px 22px 60px' }}>
-            <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.65, color: 'var(--ink)', whiteSpace: 'pre-wrap', margin: 0, textWrap: 'pretty' }}>{devo.text || 'This devotional has no text.'}</p>
-          </div>
-        )}
+      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--paper)' }}>
+        <div style={{ maxWidth: 640, margin: '0 auto', padding: '24px 22px 60px' }}>
+          {devo.text
+            ? (isMd
+              ? renderMarkdown(devo.text)
+              : <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.65, color: 'var(--ink)', whiteSpace: 'pre-wrap', margin: 0, textWrap: 'pretty' }}>{devo.text}</p>)
+            : <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.65, color: 'var(--ink)', margin: 0 }}>This devotional has no text.</p>}
+        </div>
       </div>
     </Overlay>
   );

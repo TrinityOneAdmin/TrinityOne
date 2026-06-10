@@ -391,21 +391,94 @@ function NewTeamModal({ open, onClose }) {
   );
 }
 
+// Manage a team's rota — who serves when. Slots = { id, date, role, name, pub? }.
+// Assigning from the member list stores the member's pubkey so they see "you're serving" in-app.
+function RotaModal({ team, rota, members, onClose }) {
+  const [slots, setSlots] = React.useState(() => (rota && rota.slots ? rota.slots.slice() : []));
+  const [date, setDate] = React.useState('');
+  const [role, setRole] = React.useState('');
+  const [who, setWho] = React.useState('');        // '' = pick, member pubkey, or '__other'
+  const [otherName, setOtherName] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const memberName = (m) => (m.name && m.name.trim()) || ('Anon · ' + (m.npub || m.pubkey || '').slice(-6));
+  const addSlot = () => {
+    if (!date || !role.trim()) return;
+    let name = '', pub = '';
+    if (who === '__other') { name = otherName.trim(); if (!name) return; }
+    else if (who) { const m = (members || []).find(x => x.pubkey === who); if (m) { name = memberName(m); pub = m.pubkey; } }
+    setSlots(s => [...s, { id: 's' + Math.random().toString(36).slice(2, 8), date, role: role.trim(), name, pub }]);
+    setDate(''); setRole(''); setWho(''); setOtherName('');
+  };
+  const removeSlot = (id) => setSlots(s => s.filter(x => x.id !== id));
+  const save = () => { setBusy(true); Promise.resolve(window.Steward.publishRota({ team: team.id, title: team.name, slots })).then(() => onClose()); };
+  const sorted = slots.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const fmtDate = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }); } catch { return d; } };
+  const fld = { boxSizing: 'border-box', height: 42, border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface-2)', padding: '0 12px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '94%', maxHeight: '88%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{team.name} · Rota</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>Who serves when. People assigned from your members see “You’re serving” in their app; you can also type a name for anyone not on the app yet.</p>
+        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', marginBottom: 14 }}>
+          {sorted.length === 0 ? (
+            <div style={{ fontSize: 13.5, color: 'var(--ink-3)', padding: '4px 2px 12px' }}>No slots yet — add the first below.</div>
+          ) : sorted.map(s => (
+            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 8 }}>
+              <div style={{ width: 64, fontSize: 12.5, fontWeight: 700, color: 'var(--clay)' }}>{fmtDate(s.date)}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{s.role}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{s.name || '— unassigned'}{s.pub ? '' : (s.name ? ' · off-app' : '')}</div>
+              </div>
+              <button onClick={() => removeSlot(s.id)} title="Remove slot" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 8, padding: 12, borderRadius: 12, border: '1px dashed var(--line)', background: 'var(--surface-2)' }}>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={fld} />
+          <input value={role} onChange={e => setRole(e.target.value)} placeholder="Role — e.g. Lead, Sound, Coffee" style={fld} />
+          <select value={who} onChange={e => setWho(e.target.value)} style={{ ...fld, gridColumn: who === '__other' ? 'auto' : '1 / -1' }}>
+            <option value="">Assign to… (optional)</option>
+            {(members || []).map(m => <option key={m.pubkey} value={m.pubkey}>{memberName(m)}</option>)}
+            <option value="__other">Someone else (type a name)…</option>
+          </select>
+          {who === '__other' ? <input value={otherName} onChange={e => setOtherName(e.target.value)} autoFocus placeholder="Name" style={fld} /> : null}
+          <button onClick={addSlot} disabled={!date || !role.trim()} className="sk-btn sk-btn--ghost" style={{ gridColumn: '1 / -1', padding: 10, fontSize: 13.5, opacity: (!date || !role.trim()) ? 0.55 : 1 }}><Icon name="plus" size={15} color="currentColor" /> Add slot</button>
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+          <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name="send" size={16} color="#fff" /> {busy ? 'Saving…' : 'Save & share rota'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashTeams() {
   const teams = window.useStewardGroups().filter(g => g.kind === 'team');
+  const rotas = window.useStewardRotas();
+  const members = window.useStewardMembers();
   const [adding, setAdding] = React.useState(false);
+  const [rotaTeam, setRotaTeam] = React.useState(null);   // team whose rota is being edited
+  const rotaFor = (id) => rotas.find(r => r.team === id) || null;
   const items = teams.map(t => ({ ...t, ic: 'pray', fg: 'var(--clay)' }));
   return (
     <div style={{ position: 'relative', height: '100%' }}>
       <ListPanel title="Teams" addLabel="New team" onAdd={() => setAdding(true)} items={items}
         empty="No teams yet — create one per ministry/rota team (Worship, Welcome, Tech, Kids…)."
-        renderRight={(it) => (
-          <button onClick={() => window.Steward.removeGroup(it.id)} title="Remove team" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
-        )} />
+        renderRight={(it) => {
+          const r = rotaFor(it.id); const n = r ? (r.slots || []).length : 0;
+          return (
+            <div style={{ display: 'flex', gap: 7 }}>
+              <button onClick={() => setRotaTeam(it)} title="Manage rota" style={{ border: '1px solid var(--line)', background: n ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 10px', cursor: 'pointer', color: n ? 'var(--clay)' : 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}><Icon name="today" size={14} color="currentColor" /> Rota{n ? ` · ${n}` : ''}</button>
+              <button onClick={() => window.Steward.removeGroup(it.id)} title="Remove team" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+            </div>
+          );
+        }} />
       <div style={{ display: 'flex', gap: 9, marginTop: 14, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
-        <Icon name="pray" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Teams are private channels for the people serving in a rota slot — they show up under <b style={{ color: 'var(--ink)' }}>Teams</b> in the member app. A rota (who serves when) is the next step.</div>
+        <Icon name="pray" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Teams are private channels for the people serving in a rota slot — they show up under <b style={{ color: 'var(--ink)' }}>Teams</b> in the member app. Tap <b style={{ color: 'var(--ink)' }}>Rota</b> on a team to schedule who serves when; the team sees the schedule and each person is reminded they’re on.</div>
       </div>
       <NewTeamModal open={adding} onClose={() => setAdding(false)} />
+      {rotaTeam ? <RotaModal team={rotaTeam} rota={rotaFor(rotaTeam.id)} members={members} onClose={() => setRotaTeam(null)} /> : null}
     </div>
   );
 }
@@ -531,31 +604,33 @@ function DashPlans() {
 }
 window.DashPlans = DashPlans;
 
-// Upload a devotional — a reflection on a passage as a PDF or TXT file.
+// Upload a devotional — a reflection on a passage as a text (.txt) or Markdown (.md) file.
 function NewDevotionalModal({ onClose }) {
   const [title, setTitle] = React.useState('');
   const [ref, setRef] = React.useState('');
-  const [file, setFile] = React.useState(null);   // { type, name, text?, data? }
+  const [file, setFile] = React.useState(null);   // { type, name, text? }
   const [busy, setBusy] = React.useState(false);
   const pick = (f) => {
     if (!f) return;
-    const isPdf = /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name);
-    if (f.size > 4 * 1024 * 1024) { setFile({ error: 'File is over 4 MB — please use a smaller PDF or a text file.' }); return; }
+    const isText = /\.(txt|md|markdown)$/i.test(f.name) || /^text\//i.test(f.type) || f.type === '';
+    if (!isText) { setFile({ error: 'Only .txt or .md files — please pick a text file.' }); return; }
+    if (f.size > 2 * 1024 * 1024) { setFile({ error: 'File is over 2 MB — please use a smaller text file.' }); return; }
+    const isMd = /\.(md|markdown)$/i.test(f.name);
     const r = new FileReader();
-    if (isPdf) { r.onload = () => setFile({ type: 'pdf', name: f.name, data: r.result }); r.readAsDataURL(f); }
-    else { r.onload = () => setFile({ type: 'txt', name: f.name, text: r.result }); r.readAsText(f); }
-    if (!title.trim()) setTitle(f.name.replace(/\.(pdf|txt)$/i, ''));
+    r.onload = () => setFile({ type: isMd ? 'md' : 'txt', name: f.name, text: r.result });
+    r.readAsText(f);
+    if (!title.trim()) setTitle(f.name.replace(/\.(txt|md|markdown)$/i, ''));
   };
   const create = () => {
     if (!title.trim() || !file || file.error || busy) return;
     setBusy(true);
-    Promise.resolve(window.Steward.publishDevotional({ title: title.trim(), ref: ref.trim(), type: file.type, text: file.text || '', data: file.data || '' })).then(() => onClose());
+    Promise.resolve(window.Steward.publishDevotional({ title: title.trim(), ref: ref.trim(), type: file.type, text: file.text || '' })).then(() => onClose());
   };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Upload a devotional</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A reflection on a passage, as a PDF or text file. Your congregation reads it in their app.</p>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A reflection on a passage, as a text (.txt) or Markdown (.md) file. Your congregation reads it in their app.</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Resting in Psalm 23" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Passage (optional)</div>
@@ -563,10 +638,10 @@ function NewDevotionalModal({ onClose }) {
         <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer' }}>
           <Icon name="read" size={20} color="var(--clay)" />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14, color: file && !file.error ? 'var(--ink)' : 'var(--ink-2)' }}>{file && file.name ? file.name : 'Choose a PDF or TXT file'}</div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: file && !file.error ? 'var(--ink)' : 'var(--ink-2)' }}>{file && file.name ? file.name : 'Choose a .txt or .md file'}</div>
             <div style={{ fontSize: 12, color: file && file.error ? 'var(--clay)' : 'var(--ink-3)' }}>{file && file.error ? file.error : (file && file.type ? file.type.toUpperCase() + ' ready' : 'Tap to pick a file')}</div>
           </div>
-          <input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={e => pick(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
+          <input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" onChange={e => pick(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
         </label>
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
@@ -586,7 +661,7 @@ function DashDevotionals() {
       <Panel title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
         action={<button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Upload devotional</button>} style={{ height: '100%' }}>
         {devos.length === 0 ? (
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Upload a PDF or text reflection on a passage — your congregation reads it in their app.</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Upload a .txt or .md reflection on a passage — your congregation reads it in their app.</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {devos.map(d => (

@@ -8180,6 +8180,7 @@ zoo`.split("\n");
   var GROUP_D = "trinityone/group:";
   var PLAN_D = "trinityone/plan:";
   var DEVO_D = "trinityone/devotional:";
+  var ROTA_D = "trinityone/rota:";
   var now = () => Math.floor(Date.now() / 1e3);
   function relays() {
     const l = typeof location !== "undefined" ? location : null;
@@ -8386,12 +8387,12 @@ zoo`.split("\n");
         }
       };
     },
-    // ---- devotionals the church shares (an uploaded PDF or text reflection on a passage) ----
-    // devo = { id?, title, ref, type:'txt'|'pdf', text?, data?(data: URL for pdf) }. Stored in the event.
+    // ---- devotionals the church shares (an uploaded text/Markdown reflection on a passage) ----
+    // devo = { id?, title, ref, text }. The file (.txt or .md) is read client-side; its text is stored in the event.
     publishDevotional(devo) {
       if (!sk) return Promise.resolve(null);
       const id = devo.id || "devo" + Date.now();
-      const content = JSON.stringify({ id, title: devo.title || "Devotional", ref: devo.ref || "", type: devo.type || "txt", text: devo.text || "", data: devo.data || "" });
+      const content = JSON.stringify({ id, title: devo.title || "Devotional", ref: devo.ref || "", type: devo.type || "txt", text: devo.text || "" });
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", DEVO_D + id], ["t", NET]], content }, sk)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
     removeDevotional(id) {
@@ -8413,7 +8414,52 @@ zoo`.split("\n");
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, hasFile: !!(c.text || c.data), ts: e.created_at });
+            byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, hasFile: !!c.text, ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ---- rotas: who serves when, for a team (the scheduling layer on Teams) ----
+    // One rota doc per team (addressable, latest wins). d = rota:<teamId>.
+    // rota = { team:<teamGroupId>, title, slots:[{ id, date:'YYYY-MM-DD', role, name, pub? }] }.
+    // pub (member hex) is set when assigned from the member list, so members see "you're serving".
+    publishRota(rota) {
+      if (!sk || !rota || !rota.team) return Promise.resolve(null);
+      const slots = (rota.slots || []).map((s) => ({ id: s.id || "s" + Math.random().toString(36).slice(2, 8), date: s.date || "", role: s.role || "", name: s.name || "", pub: s.pub || "" }));
+      const content = JSON.stringify({ team: rota.team, title: rota.title || "Rota", slots });
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.team], ["t", NET]], content }, sk)).then((e) => ({ id: rota.team, team: rota.team, title: rota.title || "Rota", slots, ts: e && e.created_at }));
+    },
+    removeRota(teamId) {
+      if (!sk) return Promise.resolve(null);
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + teamId], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+    },
+    subscribeRotas(onRotas) {
+      const byTeam = /* @__PURE__ */ new Map();
+      const emit = () => onRotas([...byTeam.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(ROTA_D)) return;
+          const team = d.slice(ROTA_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byTeam.delete(team);
+            emit();
+            return;
+          }
+          try {
+            const c = JSON.parse(e.content);
+            byTeam.set(team, { id: team, team, title: c.title, slots: c.slots || [], ts: e.created_at });
             emit();
           } catch {
           }

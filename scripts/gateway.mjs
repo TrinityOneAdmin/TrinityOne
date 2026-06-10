@@ -20,7 +20,7 @@ const MAX_EVENTS = 20000;
 // enforces: only the church key defines groups/funds and posts to BROADCAST groups; only joined
 // members (or the church) may post messages / reactions / DMs / their own data. Unset = open (dev).
 const NET = 'trinityone';
-const GROUP_D = 'trinityone/group:', FUND_D = 'trinityone/fund:', MEMBER_D = 'trinityone/member:', PLAN_D = 'trinityone/plan:', DEVO_D = 'trinityone/devotional:';
+const GROUP_D = 'trinityone/group:', FUND_D = 'trinityone/fund:', MEMBER_D = 'trinityone/member:', PLAN_D = 'trinityone/plan:', DEVO_D = 'trinityone/devotional:', ROTA_D = 'trinityone/rota:';
 function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch { return null; } }
 let CHURCH_PUB = toHexPub(process.env.CHURCH_NPUB);
 if (!CHURCH_PUB) { try { CHURCH_PUB = toHexPub(JSON.parse(readFileSync(join(ROOT, 'relay', 'church.json'), 'utf8')).npub); } catch {} }
@@ -44,7 +44,7 @@ function accept(e) {
   if (k === 0) return true;                                      // profiles (replaceable, low risk)
   if (k === 30078) {
     const d = dtag(e);
-    if (d.startsWith(GROUP_D) || d.startsWith(FUND_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D)) return isChurch;   // church definitions only
+    if (d.startsWith(GROUP_D) || d.startsWith(FUND_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)) return isChurch;   // church definitions only
     if (d.startsWith(MEMBER_D)) return true;                    // joining (self-declared membership)
     return isMember;                                            // member's own data (MyData)
   }

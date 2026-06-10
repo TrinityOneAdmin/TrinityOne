@@ -334,13 +334,20 @@ function App() {
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchPlans)) { setChurchPlans([]); return; }
     return window.Fellowship.subscribeChurchPlans(np, setChurchPlans);
   }, [activeChurch, churches]);
-  // devotionals the active church shares (PDF/TXT reflections)
+  // devotionals the active church shares (text/Markdown reflections)
   const [churchDevos, setChurchDevos] = useA([]);
   const [openDevo, setOpenDevo] = useA(null);   // a church devotional opened for reading
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchDevotionals)) { setChurchDevos([]); return; }
     return window.Fellowship.subscribeChurchDevotionals(np, setChurchDevos);
+  }, [activeChurch, churches]);
+  // rotas the active church publishes (one per team) -> "You're serving" + team schedules
+  const [churchRotas, setChurchRotas] = useA([]);
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchRotas)) { setChurchRotas([]); return; }
+    return window.Fellowship.subscribeChurchRotas(np, setChurchRotas);
   }, [activeChurch, churches]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
@@ -476,6 +483,8 @@ function App() {
     planProgress,
     churchPlans,
     churchDevos,
+    churchRotas,
+    myPubkey: (window.Fellowship && window.Fellowship.myPubkey) || null,
     openChurchDevo: (d) => setOpenDevo(d),
     togglePlanDay: (pid, day) => {
       const prev = MD.settings.get('plans', {});

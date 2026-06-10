@@ -5482,6 +5482,45 @@
         }
       };
     },
+    // ── rotas the church publishes (one per team) — who serves when ──
+    subscribeChurchRotas(churchNpub, onRotas) {
+      const pubk = toPub(churchNpub);
+      if (!pubk) {
+        onRotas([]);
+        return () => {
+        };
+      }
+      const ROTA_D = "trinityone/rota:";
+      const byTeam = /* @__PURE__ */ new Map();
+      const emit = () => onRotas([...byTeam.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(ROTA_D)) return;
+          const team = d.slice(ROTA_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byTeam.delete(team);
+            emit();
+            return;
+          }
+          try {
+            const c = JSON.parse(e.content);
+            byTeam.set(team, { id: team, team, title: c.title, slots: c.slots || [], ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
     // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──
     subscribeChurchProfile(churchNpub, onProfile) {
       const pubk = toPub(churchNpub);

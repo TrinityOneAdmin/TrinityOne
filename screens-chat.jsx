@@ -636,6 +636,40 @@ function evtToMsg(e) {
 }
 
 // ── conversation room (overlay) ──
+// the team's rota, shown at the top of a team channel. Upcoming slots; "you" highlighted.
+function RotaBanner({ group, ctx, myPub }) {
+  const [openAll, setOpenAll] = useC(false);
+  const rota = (ctx.churchRotas || []).find(r => r.team === group.id);
+  if (!rota || !(rota.slots || []).length) return null;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const upcoming = rota.slots.filter(s => (s.date || '') >= todayStr).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  if (!upcoming.length) return null;
+  const shown = openAll ? upcoming : upcoming.slice(0, 3);
+  const fmt = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }); } catch { return d; } };
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: '12px 14px', boxShadow: 'var(--shadow)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9 }}>
+        <Icon name="today" size={16} color="var(--clay)" />
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14 }}>Rota</div>
+        <div style={{ flex: 1 }} />
+        {upcoming.length > 3 ? <button onClick={() => setOpenAll(v => !v)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)' }}>{openAll ? 'Show less' : `All ${upcoming.length}`}</button> : null}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {shown.map(s => {
+          const mine = s.pub && s.pub === myPub;
+          return (
+            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '7px 9px', borderRadius: 11, background: mine ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface-2)', border: mine ? '1px solid color-mix(in oklab, var(--clay) 30%, transparent)' : '1px solid transparent' }}>
+              <div style={{ width: 58, fontSize: 11.5, fontWeight: 700, color: 'var(--clay)' }}>{fmt(s.date)}</div>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}><b>{s.role}</b>{s.name ? <span style={{ color: 'var(--ink-3)' }}> · {s.name}</span> : null}</div>
+              {mine ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.4px', color: 'var(--clay)', background: 'color-mix(in oklab, var(--clay) 18%, var(--surface))', padding: '2px 7px', borderRadius: 999 }}>YOU</span> : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ChatRoom({ group, open, onClose, ctx }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
@@ -723,6 +757,7 @@ function ChatRoom({ group, open, onClose, ctx }) {
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
             <Icon name="lock" size={13} /> Messages are anonymous & relayed over Nostr</span>
         </div>
+        <RotaBanner group={group} ctx={ctx} myPub={myPub} />
         {msgs.map(m => <Bubble key={m.id} m={m} ctx={ctx}
           summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
           pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}

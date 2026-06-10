@@ -69,6 +69,13 @@ function TodayScreen({ ctx }) {
   const pDoneSet = new Set(ctx.planProgress[plan.id] || []);
   const pNext = plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1];
 
+  // rota: the member's own upcoming serving slots, across all teams
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const myServing = (ctx.churchRotas || [])
+    .flatMap(r => (r.slots || []).filter(s => s.pub && s.pub === ctx.myPubkey && (s.date || '') >= todayStr).map(s => ({ ...s, team: r.title })))
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);
+  const fmtServe = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' }); } catch { return d; } };
+
   return (
     <ScreenScroll>
       {/* greeting */}
@@ -141,6 +148,24 @@ function TodayScreen({ ctx }) {
           </div>
         </div>
       </div>
+
+      {/* You're serving (rota) */}
+      {myServing.length ? (
+        <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
+          <SectionLabel>You're serving</SectionLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+            {myServing.map(s => (
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', boxShadow: 'var(--shadow)' }}>
+                <div style={{ width: 46, height: 46, borderRadius: 14, background: 'color-mix(in oklab, var(--clay) 16%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="today" size={22} stroke={1.8} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{s.role}<span style={{ color: 'var(--ink-3)', fontWeight: 600 }}> · {s.team}</span></div>
+                  <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600 }}>{fmtServe(s.date)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {/* Continue reading */}
       <SectionLabel>Continue reading</SectionLabel>
