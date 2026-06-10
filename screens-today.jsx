@@ -69,11 +69,9 @@ function TodayScreen({ ctx }) {
   const pDoneSet = new Set(ctx.planProgress[plan.id] || []);
   const pNext = plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1];
 
-  // rota: the member's own upcoming serving slots, across all teams
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const myServing = (ctx.churchRotas || [])
-    .flatMap(r => (r.slots || []).filter(s => s.pub && s.pub === ctx.myPubkey && (s.date || '') >= todayStr).map(s => ({ ...s, team: r.title })))
-    .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);
+  // serving: the member's next confirmed slot + any pending "can you serve?" asks
+  const servNext = ctx.servNext;
+  const servPendingN = (ctx.servPending || []).length;
   const fmtServe = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' }); } catch { return d; } };
 
   return (
@@ -149,21 +147,27 @@ function TodayScreen({ ctx }) {
         </div>
       </div>
 
-      {/* You're serving (rota) */}
-      {myServing.length ? (
-        <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
-          <SectionLabel>You're serving</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-            {myServing.map(s => (
-              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', boxShadow: 'var(--shadow)' }}>
-                <div style={{ width: 46, height: 46, borderRadius: 14, background: 'color-mix(in oklab, var(--clay) 16%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="today" size={22} stroke={1.8} /></div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{s.role}<span style={{ color: 'var(--ink-3)', fontWeight: 600 }}> · {s.team}</span></div>
-                  <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600 }}>{fmtServe(s.date)}</div>
-                </div>
-              </div>
-            ))}
+      {/* Serving (next slot / pending ask) -> opens the Serving overlay */}
+      {(servNext || servPendingN) ? (
+        <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 22, cursor: 'pointer', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both',
+          background: servPendingN ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 9%, var(--surface))',
+          border: servPendingN ? '1px solid color-mix(in oklab, var(--gold) 32%, var(--line))' : '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))' }}>
+          <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: servPendingN ? 'color-mix(in oklab, var(--gold) 18%, var(--surface))' : 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: servPendingN ? '#8a6717' : 'var(--sage)' }}><Icon name={servPendingN ? 'sparkle' : 'calCheck'} size={22} stroke={1.8} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {servPendingN ? (
+              <React.Fragment>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Can you serve?</div>
+                <div style={{ fontSize: 12.5, color: '#8a6717', fontWeight: 600 }}>{servPendingN} request{servPendingN > 1 ? 's' : ''} waiting for your reply</div>
+              </React.Fragment>
+            ) : (
+              <React.Fragment>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>You’re serving · {servNext.teamName}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 600 }}>{servNext.role} · {fmtServe(servNext.date)}</div>
+              </React.Fragment>
+            )}
           </div>
+          <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
       ) : null}
 

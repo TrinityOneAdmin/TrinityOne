@@ -260,7 +260,8 @@ function App() {
   const followParam = new URLSearchParams(location.search).get('follow');   // follow a church by its npub
   const churchParam = new URLSearchParams(location.search).get('church');   // '1' / 'follow' opens the switcher
   const dmParam = new URLSearchParams(location.search).get('dm');   // inbox | <peer pubkey> (verification deep-link)
-  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam || dmParam;   // any deep-link skips splash/onboarding
+  const servingParam = new URLSearchParams(location.search).get('serving');   // '1' opens the Serving overlay
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam || dmParam || servingParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
@@ -342,13 +343,27 @@ function App() {
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchDevotionals)) { setChurchDevos([]); return; }
     return window.Fellowship.subscribeChurchDevotionals(np, setChurchDevos);
   }, [activeChurch, churches]);
-  // rotas the active church publishes (one per team) -> "You're serving" + team schedules
-  const [churchRotas, setChurchRotas] = useA([]);
+  // ── serving & events: the member is driven by the requests the church p-tags to them ──
+  const [servReqs, setServReqs] = useA([]);     // serving requests addressed to me ("can you serve?")
+  const [servReplies, setServReplies] = useA({}); // my replies: { requestId: 'accept'|'decline'|'swap' }
+  const [churchEvents, setChurchEvents] = useA([]);
+  const [myRsvps, setMyRsvps] = useA({});       // { eventId: 'going'|'maybe'|'no' }
+  const [openServing, setOpenServing] = useA(servingParam === '1');
+  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyServingRequests) return window.Fellowship.subscribeMyServingRequests(setServReqs); }, [activeChurch]);
+  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyReqReplies) return window.Fellowship.subscribeMyReqReplies(setServReplies); }, [activeChurch]);
+  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyRsvps) return window.Fellowship.subscribeMyRsvps(setMyRsvps); }, [activeChurch]);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchRotas)) { setChurchRotas([]); return; }
-    return window.Fellowship.subscribeChurchRotas(np, setChurchRotas);
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchEvents)) { setChurchEvents([]); return; }
+    return window.Fellowship.subscribeChurchEvents(np, setChurchEvents);
   }, [activeChurch, churches]);
+  // derive serving items from requests + my replies
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const servPending = servReqs.filter(r => !servReplies[r.id]);
+  const servConfirmed = servReqs.filter(r => servReplies[r.id] === 'accept' && (r.date || '') >= todayStr).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const servNext = servConfirmed[0] || null;
+  // schedule local reminders for confirmed slots (the day before)
+  useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servReqs, servReplies]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
   const [dmPeer, setDmPeer] = useA(null);   // direct-message thread with a pubkey
@@ -483,9 +498,26 @@ function App() {
     planProgress,
     churchPlans,
     churchDevos,
-    churchRotas,
     myPubkey: (window.Fellowship && window.Fellowship.myPubkey) || null,
     openChurchDevo: (d) => setOpenDevo(d),
+    // serving & events
+    servPending, servConfirmed, servNext, churchEvents, myRsvps,
+    openServing: () => setOpenServing(true),
+    respondServing: (req, verdict, swapTo) => {
+      const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+      if (window.Fellowship && window.Fellowship.respondToServingRequest) window.Fellowship.respondToServingRequest(np, req.id, verdict, swapTo);
+      setServReplies(m => ({ ...m, [req.id]: verdict }));
+    },
+    setRsvp: (eventId, verdict) => {
+      const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+      const next = myRsvps[eventId] === verdict ? null : verdict;
+      if (window.Fellowship && window.Fellowship.setEventRsvp) window.Fellowship.setEventRsvp(np, eventId, next || 'none');
+      setMyRsvps(m => ({ ...m, [eventId]: next }));
+    },
+    setUnavailableDates: (dates) => {
+      const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+      if (window.Fellowship && window.Fellowship.setUnavailable) window.Fellowship.setUnavailable(np, dates);
+    },
     togglePlanDay: (pid, day) => {
       const prev = MD.settings.get('plans', {});
       const set = new Set(prev[pid] || []); set.has(day) ? set.delete(day) : set.add(day);
@@ -522,6 +554,7 @@ function App() {
             <DevotionalView open={devo} onClose={() => setDevo(false)} ctx={ctx} />
             <PlanDetail plan={plan} open={!!plan} onClose={() => setPlan(null)} ctx={ctx} />
             <ChurchDevoView devo={openDevo} open={!!openDevo} onClose={() => setOpenDevo(null)} ctx={ctx} />
+            <ServingScreen open={openServing} onClose={() => setOpenServing(false)} ctx={ctx} />
             <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} ctx={ctx} />
             <JournalEditor entry={journalEditor} open={!!journalEditor} onClose={() => setJournalEditor(null)} ctx={ctx} />
             <ModuleView module={module} open={!!module} onClose={() => setModule(null)} ctx={ctx} />

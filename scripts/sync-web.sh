@@ -41,5 +41,5 @@ echo "www/ populated:"; du -sh "$WWW"
 
 # if the native project exists, copy assets in
 if [ -d "$ROOT/android" ]; then
-  npx cap copy android
+  npx cap sync android
 fi

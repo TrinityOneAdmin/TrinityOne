@@ -5582,6 +5582,37 @@
       }
       return evt;
     },
+    // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
+    subscribeMyReqReplies(onReplies) {
+      const me = window.Fellowship.myPubkey;
+      if (!me) {
+        onReplies({});
+        return () => {
+        };
+      }
+      const RR = "trinityone/reqreply:";
+      const byReq = {};
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [me], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(RR)) return;
+          try {
+            byReq[d.slice(RR.length)] = JSON.parse(e.content).v;
+            onReplies({ ...byReq });
+          } catch {
+          }
+        },
+        oneose() {
+          onReplies({ ...byReq });
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
     // member RSVP to a calendar event — one addressable doc per (member,event), p-tagged to church
     async setEventRsvp(churchNpub, eventId, verdict) {
       const cp = toPub(churchNpub);
