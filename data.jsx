@@ -194,31 +194,8 @@ const CROSSREFS = {
   ],
 };
 
-const COMMENTARY = {
-  source: "TrinityOne Study Notes",
-  blocks: [
-    { v: '1', title: 'The Word before time',
-      text: 'John opens not with a manger but with eternity. Where Genesis says "In the beginning God created," John reaches further back: in the beginning the Word already was. Three short clauses set the whole Gospel in motion — the Word existed, the Word was in relationship ("with God"), and the Word was himself fully God.' },
-    { v: '3', title: 'Everything through him',
-      text: 'Nothing that exists stands outside his making. The created order is not an accident or a rival power; it is spoken into being through the Word. This frames the rest of the chapter — the one who made the world is the one who steps into it.' },
-    { v: '4–5', title: 'Light the darkness cannot hold',
-      text: 'Life and light belong together. The image is of a single lamp in a vast dark room: the darkness is real, but it has no power to put the light out. The verb is deliberately ambiguous — the darkness neither understood nor overcame the light.' },
-  ],
-};
-
-const DEVOTIONAL = {
-  series: 'Mornings in John',
-  day: 'Day 4',
-  title: 'A Light the Dark Can’t Hold',
-  ref: 'John 1:5',
-  read: '2 min',
-  body: [
-    'There is a particular kind of darkness that arrives quietly — not dramatic, just heavy. The kind that makes the morning feel like a thing to survive rather than receive.',
-    'John does not pretend the darkness isn’t real. He simply insists it isn’t final. “The light shines in the darkness, and the darkness has not overcome it.” Notice the tense: the light *shines*, present and ongoing. It is shining now, in whatever room you are reading this.',
-    'You do not have to manufacture the light today. You only have to turn toward it.',
-  ],
-  prompt: 'Where do you most need light to shine today? Name one place, honestly.',
-};
+const COMMENTARY = { source: '', blocks: [] };   // no seeded commentary — a real .cmt.mybible module would populate it
+const DEVOTIONAL = { series: '', day: '', title: '', ref: '', read: '', body: [], prompt: '' };   // no built-in sample devotional (church devotionals come from the steward)
 
 const VOTD = {
   ref: 'John 1:5',
@@ -293,55 +270,20 @@ const COLLECTIONS = [
 // 'prayer' type + CollectionView handling stay in place for a future Community-page home.
 
 // sample personal prayer list (seeds MyData on first run; then user-owned + private)
-const PRAYER_SEED = [
-  { id: 'pr1', who: 'Mum', text: 'Surgery on Tuesday — for steady hands and quick healing.', answered: false, date: 'Today' },
-  { id: 'pr2', who: 'Tuesday group', text: 'That we’d keep showing up for each other.', answered: false, date: 'Yesterday' },
-  { id: 'pr3', who: 'Myself', text: 'Patience this week. Less hurry, more presence.', answered: true, date: 'May 28' },
-];
+const PRAYER_SEED = [];   // no seeded prayers — the member's own come from MyData
 
 const JOURNAL = [];   // no seed data — the member's own journal entries come from MyData
 
-const SEARCH_SEED = ['light', 'grace', 'shepherd', 'love', 'peace'];
-const SEARCH_RESULTS = {
-  light: {
-    scripture: [
-      { ref: 'John 1:5', text: 'The light shines in the darkness, and the darkness has not overcome it.' },
-      { ref: 'John 8:12', text: 'I am the light of the world: he that followeth me shall not walk in darkness.' },
-      { ref: 'Psalm 119:105', text: 'Thy word is a lamp unto my feet, and a light unto my path.' },
-      { ref: 'Matthew 5:14', text: 'Ye are the light of the world. A city that is set on an hill cannot be hid.' },
-    ],
-    lexicon: ['G5457'],
-    count: 274,
-  },
-};
+const SEARCH_SEED = [];   // no seeded recent searches
+const SEARCH_RESULTS = {};   // search uses the live engine; no seeded results
 
 // ── Watch / video ──
-const VIDEO_CATS = ['All', 'Sermons', 'Worship', 'Teaching', 'Kids'];
+const VIDEO_CATS = ['All'];   // no seeded video content
 
-const CHANNELS = [
-  { id: 'grace', name: 'Grace Chapel', handle: '@gracechapel', subs: '48.2K', accent: 'var(--clay)' },
-  { id: 'hillside', name: 'Hillside Community', handle: '@hillside', subs: '12.7K', accent: 'var(--sage)' },
-  { id: 'wellspring', name: 'Wellspring Worship', handle: '@wellspring', subs: '210K', accent: 'var(--gold)' },
-];
+const CHANNELS = [];   // no seeded channels
 
 // ytId left null = curated placeholder poster (paste a link to play in-app).
-const VIDEOS = [
-  { id: 'v1', title: 'In the Beginning Was the Word — John 1', channel: 'Grace Chapel', cat: 'Sermons',
-    dur: '42:18', when: '2 days ago', views: '8.1K', accent: 'var(--clay)', icon: 'read', live: true, ytId: null,
-    desc: 'Pastor opens the Gospel of John, walking through the prologue and what it means that the Word became flesh and dwelt among us.' },
-  { id: 'v2', title: 'Oceans (Sunday Worship Set)', channel: 'Wellspring Worship', cat: 'Worship',
-    dur: '11:54', when: '5 days ago', views: '63K', accent: 'var(--gold)', icon: 'headphones', ytId: null,
-    desc: 'Full worship set from Sunday morning — gather, breathe, and sing along.' },
-  { id: 'v3', title: 'How to Study a Whole Book of the Bible', channel: 'Hillside Community', cat: 'Teaching',
-    dur: '23:07', when: '1 week ago', views: '3.4K', accent: 'var(--sage)', icon: 'lex', ytId: null,
-    desc: 'A practical walkthrough of reading Scripture in context — themes, structure, and study tools.' },
-  { id: 'v4', title: 'The Parable of the Lost Sheep (for Kids)', channel: 'Grace Chapel', cat: 'Kids',
-    dur: '6:42', when: '2 weeks ago', views: '15K', accent: 'var(--clay)', icon: 'sun', ytId: null,
-    desc: 'A short, gentle retelling of the lost sheep for little ones and family devotions.' },
-  { id: 'v5', title: 'Abide — Evening Prayer & Reflection', channel: 'Hillside Community', cat: 'Worship',
-    dur: '18:30', when: '3 weeks ago', views: '9.2K', accent: 'var(--sage)', icon: 'moon', ytId: null,
-    desc: 'A quiet, candle-lit evening liturgy to close the day in peace.' },
-];
+const VIDEOS = [];   // no seeded videos
 
 // ── Fellowship: anonymous chat (Nostr) ──
 // HANDLE_POOL + CHAT_IDENTITY are the mock fallback; once the real identity layer
@@ -366,49 +308,18 @@ const RELAYS = [
 ];
 
 // Churches the member follows; groups + giving funds are scoped to the active one.
-const CHURCHES = [
-  { id: 'grace', name: 'Grace Chapel', sub: 'Riverside · main campus', tagline: 'Helping people find and follow Jesus', initials: 'GC', accent: 'var(--clay)',
-    npub: 'npub1grace8s7v3x2k9m4f7p0r6t1y5w8n2c4j6h3l9', nip05: 'grace.org', relays: 3, verified: true, members: 312, funds: 4, groups: 5 },
-  { id: 'cornerstone', name: 'Cornerstone Fellowship', sub: 'Tuesday house church', tagline: 'A small family, gathered around the table', initials: 'CF', accent: 'var(--sage)',
-    npub: 'npub1corner4f7p0r6t1y5w8n2c4j6h3l9d0a7grace', nip05: 'cornerstone.faith', relays: 2, verified: true, members: 28, funds: 1, groups: 2 },
-];
+const CHURCHES = [];   // no sample churches — the member follows their real church by npub (scan/paste)
 
-const GROUPS = [
-  { id: 'sunday', church: 'grace', name: 'Sunday Life Group', kind: 'Life Group', members: 14, accent: 'var(--clay)',
-    unread: 3, last: 'Anonymous River: see you all at 6 — bringing the chili 🌶 minus the emoji', when: '2m' },
-  { id: 'mens', church: 'grace', name: "Men's Bible Study", kind: 'Ministry', members: 9, accent: 'var(--sage)',
-    unread: 0, last: 'You: Reading John 1 again this week', when: '1h' },
-  { id: 'prayer', church: 'grace', name: 'Prayer Requests', kind: 'Whole Church', members: 132, accent: 'var(--gold)',
-    unread: 7, last: 'Anonymous Wren: please pray for my mom’s surgery tomorrow', when: '12m', prayer: true },
-  { id: 'youth', church: 'grace', name: 'Youth Group', kind: 'Ministry', members: 28, accent: 'var(--clay)',
-    unread: 0, last: 'Anonymous Sparrow: who’s in for the lock-in?', when: '3h' },
-  { id: 'church', church: 'grace', name: 'Grace Chapel — All', kind: 'Whole Church', members: 312, accent: 'var(--sage)',
-    unread: 0, last: 'Anonymous Maple: thank you for a beautiful service', when: 'Yesterday' },
-  { id: 'cf-table', church: 'cornerstone', name: 'Around the Table', kind: 'House Church', members: 28, accent: 'var(--sage)',
-    unread: 2, last: 'Anonymous Olive: bringing soup on Tuesday', when: '20m' },
-  { id: 'cf-prayer', church: 'cornerstone', name: 'Prayer Chain', kind: 'Whole Church', members: 28, accent: 'var(--gold)',
-    unread: 0, last: 'Anonymous Reed: praying for you all this week', when: '2h', prayer: true },
-];
+const GROUPS = [];   // no sample groups — real groups come from the church over the relay
 
 const GROUP_MESSAGES = {};   // no seeded chat — real messages arrive over the relay (Fellowship)
 
 // ── Fellowship: Lightning giving (mock — no real funds move yet) ──
 const SATS_PER_USD = 1075; // mock spot rate (~$93k/BTC)
-const WALLET = { sats: 48250, address: 'cedar@trinity.faith', node: 'Strike' };
-const FUNDS = [
-  { id: 'tithe', church: 'grace', name: 'Tithe & Offering', desc: 'General fund — wherever needed most', icon: 'heart', accent: 'var(--clay)' },
-  { id: 'missions', church: 'grace', name: 'Missions', desc: 'Supporting partners around the world', icon: 'globe', accent: 'var(--sage)' },
-  { id: 'building', church: 'grace', name: 'Building Fund', desc: 'The new youth & community space', icon: 'library', accent: 'var(--gold)' },
-  { id: 'benevolence', church: 'grace', name: 'Benevolence', desc: 'Helping families in hard seasons', icon: 'pray', accent: 'var(--clay)' },
-  { id: 'cf-general', church: 'cornerstone', name: 'House Church Fund', desc: 'Supporting our little family', icon: 'heart', accent: 'var(--sage)' },
-];
+const WALLET = { sats: 0, address: '', node: '' };   // giving parked — no mock balance
+const FUNDS = [];   // giving parked for the pilot — no sample funds
 const STRIKE_PRESETS = [10, 25, 50, 100];
-const GIVING_HISTORY = [
-  { id: 'g1', fund: 'Tithe & Offering', sats: 10750, usd: 10, when: 'Today · 8:14', anon: true, status: 'settled' },
-  { id: 'g2', fund: 'Missions', sats: 26875, usd: 25, when: 'May 28', anon: true, status: 'settled' },
-  { id: 'g3', fund: 'Benevolence', sats: 5375, usd: 5, when: 'May 21', anon: false, status: 'settled', zap: true, to: 'Anonymous Wren’s prayer' },
-  { id: 'g4', fund: 'Building Fund', sats: 53750, usd: 50, when: 'May 4', anon: true, status: 'settled' },
-];
+const GIVING_HISTORY = [];   // no sample giving history
 
 // ── Library: items inside each module + collection, and book full-text ──
 // resources inside each module — the bookshelf you drill into
@@ -644,28 +555,12 @@ const BOOK_TEXT = {
 };
 
 // members for the "view a member" card (tapped from a chat bubble)
-const MEMBERS = {
-  River:   { name: 'River', anon: true, avatar: { kind: 'symbol', color: '#46708C', symbol: 'fish' },     bio: 'Sunday Life Group. Always bringing the chili.', verses: ['John 1:5', 'Psalm 23:4'] },
-  Wren:    { name: 'Wren',  anon: true, avatar: { kind: 'symbol', color: '#C24B7A', symbol: 'dove' },      bio: 'New here — learning to pray out loud.', verses: ['Philippians 4:6'] },
-  Olive:   { name: 'Olive', anon: true, avatar: { kind: 'symbol', color: '#5E8C6A', symbol: 'olive' },     bio: '', verses: ['Romans 8:28'] },
-  Maple:   { name: 'Maple', anon: true, avatar: { kind: 'monogram', color: '#C8962E' },                   bio: 'Worship team. Coffee first, then grace.', verses: ['Psalm 96:1'] },
-  Reed:    { name: 'Reed',  anon: true, avatar: { kind: 'symbol', color: '#C25A38', symbol: 'flame' },     bio: '', verses: [] },
-  Sparrow: { name: 'Sparrow', anon: true, avatar: { kind: 'symbol', color: '#9C5BB8', symbol: 'wheat' },   bio: 'Mum of three. Tired but grateful.', verses: ['Matthew 6:26'] },
-};
+const MEMBERS = {};   // no sample member directory — real members come from chat participation
 
 // ── Notifications + Listen (audio) ──
 const NOTIFICATIONS = [];   // no seeded notifications
 
-const LISTEN = {
-  now: { id: 'a1', title: 'John 1 · The Word', sub: 'The Gospel of John · WEB', reader: 'Narrated by David Cochran Heath',
-    color: 'linear-gradient(160deg,#3c6e57,#2c5141)', tag: 'John', pos: 0.32, len: '6:48', at: '2:10' },
-  queue: [
-    { id: 'a2', title: 'A Light the Dark Can’t Hold', sub: 'Devotional · 2 min', kind: 'Devotional', dur: '2:04', accent: 'var(--sage)', ic: 'sun' },
-    { id: 'a3', title: 'John 2 · Water Into Wine', sub: 'The Gospel of John · WEB', kind: 'Scripture', dur: '5:31', accent: 'var(--clay)', ic: 'read' },
-    { id: 'a4', title: 'Be Still — Evening Prayer', sub: 'Guided prayer · 8 min', kind: 'Prayer', dur: '8:12', accent: 'var(--gold)', ic: 'pray' },
-    { id: 'a5', title: 'Psalms for a Heavy Day', sub: 'Audio collection · 5 readings', kind: 'Collection', dur: '21:40', accent: 'var(--clay)', ic: 'books' },
-  ],
-};
+const LISTEN = { now: null, queue: [] };   // no seeded audio
 
 window.TrinityData = {
   BOOKS, LEXICON, CONCORDANCE, TAGS, CROSSREFS, COMMENTARY, DEVOTIONAL, VOTD, VOTD_POOL,

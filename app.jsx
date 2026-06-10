@@ -280,7 +280,7 @@ function App() {
     return () => { window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-profiles', h); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
-  const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', window.TrinityData.CHURCHES[0].id));
+  const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
   // churches the member follows persist across reloads (a scanned QR / pasted npub should stick).
   // Stored set = the real followed churches (npub ids); merged with the built-in sample churches.
   const [churches, setChurches] = useA(() => {
@@ -479,7 +479,7 @@ function App() {
     openBook: (b) => setBook(b),
     // multi-church
     churches, activeChurch,
-    church: churches.find(c => c.id === activeChurch) || churches[0],
+    church: churches.find(c => c.id === activeChurch) || churches[0] || null,
     openChurchSwitcher: (mode) => { setChurchSwitcherMode(mode === 'follow' ? 'follow' : 'list'); setChurchSwitcher(true); },
     setActiveChurch: (id) => { setActiveChurch(id); lsSet('trinityone.activeChurch', id); },
     addChurch: (c) => { setChurches(cs => cs.find(x => x.id === c.id) ? cs : [...cs, c]); setActiveChurch(c.id); lsSet('trinityone.activeChurch', c.id); },
