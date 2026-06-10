@@ -801,6 +801,20 @@ function DashSettings({ onTab }) {
       }
     } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
   };
+  const backupToFile = async () => {
+    const p = window.prompt('Choose a passphrase to encrypt this backup (you’ll need it to restore):');
+    if (p == null) return; if (p.length < 6) { window.alert('Use a passphrase of at least 6 characters.'); return; }
+    try { const obj = window.TrinityBackup.collectSteward(); const text = await window.TrinityBackup.encryptObj(obj, p); await window.TrinityBackup.saveFile('trinityone-church-' + new Date().toISOString().slice(0, 10) + '.json', text); }
+    catch (e) { window.alert('Backup failed: ' + (e.message || e)); }
+  };
+  const restoreFromFile = (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    const p = window.prompt('Enter the passphrase for this backup file:'); if (p == null) return;
+    window.TrinityBackup.readFile(f).then(t => window.TrinityBackup.decryptStr(t, p)).then(obj => {
+      window.TrinityBackup.applySteward(obj);
+      if (window.confirm('Restore this church key from the file? The console will reload.')) window.location.reload();
+    }).catch(err => window.alert('Restore failed: ' + (err.message || err)));
+  };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
       <Panel title="Church identity" action={<button onClick={editName} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
@@ -832,9 +846,13 @@ function DashSettings({ onTab }) {
             </div>
           </div>
         )}
-        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={backupToFile} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="share" size={15} color="currentColor" /> Back up to a file</button>
+          <label className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="refresh" size={15} color="currentColor" /> Restore from a file<input type="file" accept=".json,application/json" onChange={restoreFromFile} style={{ display: 'none' }} /></label>
+        </div>
+        <div style={{ marginTop: 12 }}>
           {!restoreOpen ? (
-            <button onClick={() => setRestoreOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13 }}><Icon name="refresh" size={15} color="currentColor" /> Restore a different key</button>
+            <button onClick={() => setRestoreOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Restore from a recovery phrase</button>
           ) : (
             <div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Paste a church’s 12-word recovery phrase to make <b>this</b> device that church. Use this if the console lost its key, or to move a church to a new machine.</div>

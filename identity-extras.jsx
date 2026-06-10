@@ -71,6 +71,32 @@ window.MemberCard = MemberCard;
 function RecoverySheet({ open, onClose, ctx }) {
   const [words, setWords] = useIx([]);   // REAL 12 words from the OS secure store / identity layer
   const [shown, setShown] = useIx(false);
+  const [bk, setBk] = useIx(null);       // null | 'export' | 'restore'
+  const [pass, setPass] = useIx('');
+  const [busy, setBusy] = useIx('');
+  const [bkErr, setBkErr] = useIx('');
+  const [file, setFile] = useIx(null);
+  useIxE(() => { if (!open) { setBk(null); setPass(''); setBkErr(''); setFile(null); } }, [open]);
+  const doExport = async () => {
+    if (pass.length < 6) { setBkErr('Use a passphrase of at least 6 characters.'); return; }
+    setBusy('export'); setBkErr('');
+    try {
+      const obj = await window.TrinityBackup.collectMember();
+      const text = await window.TrinityBackup.encryptObj(obj, pass);
+      await window.TrinityBackup.saveFile('trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.json', text);
+      ctx.toast('Backup created — save it somewhere safe'); setBk(null); setPass('');
+    } catch (e) { setBkErr(e.message || 'Backup failed.'); } finally { setBusy(''); }
+  };
+  const doRestore = async () => {
+    if (!file) { setBkErr('Choose your backup file first.'); return; }
+    setBusy('restore'); setBkErr('');
+    try {
+      const text = await window.TrinityBackup.readFile(file);
+      const obj = await window.TrinityBackup.decryptStr(text, pass);
+      await window.TrinityBackup.applyMember(obj);
+      ctx.toast('Restored — reloading…'); setTimeout(() => window.location.reload(), 800);
+    } catch (e) { setBkErr(e.message || 'Restore failed.'); setBusy(''); }
+  };
   useIxE(() => {
     if (!open) return;
     setShown(false);
@@ -112,6 +138,30 @@ function RecoverySheet({ open, onClose, ctx }) {
           <Icon name="copy" size={16} /> Copy</button>
         <button onClick={() => { onClose(); ctx.toast('Backed up'); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
           <Icon name="check" size={16} stroke={2.4} color="#fff" /> I’ve saved it</button>
+      </div>
+
+      {/* full encrypted backup file (key + your highlights, notes, journal, plans) */}
+      <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Encrypted backup file</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 12px' }}>One file with your identity <i>and</i> your highlights, notes, journal and plans — protected by a passphrase. Save it to Drive, OneDrive or Files; restore it on a new phone.</p>
+        {!bk ? (
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={() => { setBk('export'); setPass(''); setBkErr(''); }} style={{ flex: 1, padding: 12, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: 'var(--shadow)' }}><Icon name="share" size={15} /> Back up</button>
+            <button onClick={() => { setBk('restore'); setPass(''); setBkErr(''); setFile(null); }} style={{ flex: 1, padding: 12, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: 'var(--shadow)' }}><Icon name="refresh" size={15} /> Restore</button>
+          </div>
+        ) : (
+          <div style={{ padding: 13, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            {bk === 'restore' ? (
+              <input type="file" accept=".json,application/json" onChange={e => setFile(e.target.files && e.target.files[0])} style={{ width: '100%', fontSize: 13, marginBottom: 10, fontFamily: 'var(--font-ui)' }} />
+            ) : null}
+            <input type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? 'Choose a passphrase' : 'Your backup passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+            {bkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{bkErr}</div> : null}
+            <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
+              <button onClick={() => { setBk(null); setBkErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
+              <button onClick={bk === 'export' ? doExport : doRestore} disabled={!!busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: bk === 'restore' ? 'var(--clay)' : 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : (bk === 'export' ? 'Create backup' : 'Restore')}</button>
+            </div>
+          </div>
+        )}
       </div>
     </BottomSheet>
   );

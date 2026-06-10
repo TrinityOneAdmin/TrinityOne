@@ -1,7 +1,7 @@
 // TrinityOne service worker — makes the app boot offline.
 // The app SHELL (html/jsx/libs/fonts) is cached here; Bible MODULES live in IndexedDB (engine.js)
 // and chat goes over the relay WebSocket — neither is touched by this worker.
-const CACHE = 'trinity-shell-v12';   // bump on each app deploy so installed PWAs refresh the shell
+const CACHE = 'trinity-shell-v13';   // bump on each app deploy so installed PWAs refresh the shell
 
 // Precache the boot-critical core. Everything else same-origin is cached on first fetch, so one
 // online visit (to install / join) makes every screen available offline afterwards.
@@ -14,7 +14,7 @@ const CORE = [
   './data.jsx', './icons.jsx', './ui.jsx', './identity-avatar.jsx', './identity.jsx', './identity-extras.jsx',
   './screens-today.jsx', './screens-read.jsx', './screens-plans.jsx', './screens-library.jsx', './screens-bookreader.jsx',
   './screens-watch.jsx', './screens-search.jsx', './screens-concordance.jsx', './screens-extras.jsx', './screens-giving.jsx',
-  './screens-church.jsx', './screens-serving.jsx', './reminders.jsx', './screens-chat.jsx', './screens-onboarding.jsx', './help-illustrations.jsx', './help-data.jsx',
+  './screens-church.jsx', './screens-serving.jsx', './reminders.jsx', './backup.jsx', './screens-chat.jsx', './screens-onboarding.jsx', './help-illustrations.jsx', './help-data.jsx',
   './screens-help.jsx', './screens-help-main.jsx', './app.jsx',
   './catalog.json', './manifest.json',
 ];
