@@ -211,7 +211,7 @@ function CrossRefSheet({ loc, v, label, open, onClose, ctx }) {
 // ── commentary (built-in study notes; seeded for John 1) ──
 function CommentarySheet({ loc, label, open, onClose }) {
   const C = window.TrinityData.COMMENTARY;
-  const seeded = loc && loc.book === 43 && loc.chap === 1;
+  const seeded = false;   // no seeded sample commentary — a real .cmt.mybible module would populate this
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="82%">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>

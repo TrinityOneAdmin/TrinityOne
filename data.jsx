@@ -299,17 +299,7 @@ const PRAYER_SEED = [
   { id: 'pr3', who: 'Myself', text: 'Patience this week. Less hurry, more presence.', answered: true, date: 'May 28' },
 ];
 
-const JOURNAL = [
-  { id: 'j1', date: 'Today', ref: 'John 1:4', color: 'var(--hl-yellow)',
-    title: 'In him was life',
-    body: 'Life and light keep showing up together in John. I want to remember that the life comes first — the light is what the life looks like when it spills out.' },
-  { id: 'j2', date: 'Yesterday', ref: 'Psalm 23:4', color: 'var(--hl-blue)',
-    title: 'Through the valley',
-    body: 'Through, not around. He doesn’t promise no valley. He promises company in it.' },
-  { id: 'j3', date: 'May 28', ref: 'Philippians 4:6', color: 'var(--hl-green)',
-    title: 'Anxious for nothing',
-    body: 'The antidote to anxiety here isn’t certainty — it’s prayer with thanksgiving. Gratitude as a doorway out of worry.' },
-];
+const JOURNAL = [];   // no seed data — the member's own journal entries come from MyData
 
 const SEARCH_SEED = ['light', 'grace', 'shepherd', 'love', 'peace'];
 const SEARCH_RESULTS = {
@@ -400,38 +390,7 @@ const GROUPS = [
     unread: 0, last: 'Anonymous Reed: praying for you all this week', when: '2h', prayer: true },
 ];
 
-const GROUP_MESSAGES = {
-  sunday: [
-    { id: 'm1', handle: 'Anonymous Olive', color: '#C2913A', text: 'Morning everyone! Did the reading hit anyone else hard this week?', when: '8:02' },
-    { id: 'm2', handle: 'Anonymous River', color: '#5E8C6A', text: 'Yeah. The “light shines in the darkness” line has been with me all week.', when: '8:05' },
-    { id: 'm3', me: true, handle: 'Anonymous Cedar', color: '#5E8C6A', text: 'Same. I keep coming back to how the darkness can’t overcome it — present tense.', when: '8:07' },
-    { id: 'm4', handle: 'Anonymous River', color: '#5E8C6A', kind: 'verse',
-      verse: { ref: 'John 1:5', text: 'The light shines in the darkness, and the darkness has not overcome it.', version: 'WEB' }, when: '8:08' },
-    { id: 'm5', handle: 'Anonymous Wren', color: '#C25A38', text: 'Sharing this on my lock screen today. Thank you 🙏', when: '8:11' },
-    { id: 'm6', handle: 'Anonymous Olive', color: '#C2913A', kind: 'prayer', amens: 4,
-      text: 'Quick prayer request — job interview at 2pm today. Nervous but trusting.', when: '8:14' },
-    { id: 'm7', me: true, handle: 'Anonymous Cedar', color: '#5E8C6A', text: 'Praying right now. You’ve got this.', when: '8:15' },
-  ],
-  prayer: [
-    { id: 'p1', handle: 'Anonymous Wren', color: '#C25A38', kind: 'prayer', amens: 23,
-      text: 'Please pray for my mom’s surgery tomorrow morning. Anxious but hopeful.', when: '12m' },
-    { id: 'p2', handle: 'Anonymous Heron', color: '#5E8C6A', kind: 'prayer', amens: 11,
-      text: 'Grieving a friend this week. Just need to feel held.', when: '40m' },
-    { id: 'p3', handle: 'Anonymous Reed', color: '#C2913A', kind: 'prayer', amens: 8,
-      text: 'Praising — six months sober today. Thank you for carrying me here.', when: '1h' },
-  ],
-  mens: [
-    { id: 'x1', handle: 'Anonymous Ash', color: '#C2913A', text: 'Reading John 1 again this week — who’s leading?', when: 'Mon' },
-    { id: 'x2', me: true, handle: 'Anonymous Cedar', color: '#5E8C6A', text: 'I can take it. Let’s meet at the usual spot.', when: 'Mon' },
-  ],
-  youth: [
-    { id: 'y1', handle: 'Anonymous Sparrow', color: '#C25A38', text: 'who’s in for the lock-in?? 🙌', when: '3h' },
-    { id: 'y2', handle: 'Anonymous Linden', color: '#5E8C6A', text: 'meee bringing snacks', when: '3h' },
-  ],
-  church: [
-    { id: 'c1', handle: 'Anonymous Maple', color: '#5E8C6A', text: 'Thank you for a beautiful service today. Felt like home.', when: 'Yesterday' },
-  ],
-};
+const GROUP_MESSAGES = {};   // no seeded chat — real messages arrive over the relay (Fellowship)
 
 // ── Fellowship: Lightning giving (mock — no real funds move yet) ──
 const SATS_PER_USD = 1075; // mock spot rate (~$93k/BTC)
@@ -695,20 +654,7 @@ const MEMBERS = {
 };
 
 // ── Notifications + Listen (audio) ──
-const NOTIFICATIONS = [
-  { id: 'n1', kind: 'message', group: 'Tuesday Life Group', who: 'Steady Cedar',
-    text: 'The “light shines in the darkness” line has been with me all week.', time: '2m', unread: true, accent: 'var(--clay)' },
-  { id: 'n2', kind: 'prayer', group: 'Prayer Wall', who: 'Quiet Harbor',
-    text: 'asked for prayer before a job interview today.', time: '18m', unread: true, accent: 'var(--sage)' },
-  { id: 'n3', kind: 'giving', group: 'Building Fund', who: 'Grace Chapel',
-    text: 'Your gift of 5,000 sats was received. Thank you!', time: '1h', unread: true, accent: 'var(--gold)' },
-  { id: 'n4', kind: 'amen', group: 'Tuesday Life Group', who: '23 people',
-    text: 'said Amen to your prayer request.', time: '3h', unread: false, accent: 'var(--clay)' },
-  { id: 'n5', kind: 'notice', group: 'Grace Chapel', who: 'Pastor’s notice',
-    text: 'Sunday service moves to 10:30am this week — see you there.', time: 'Yesterday', unread: false, accent: 'var(--sage)' },
-  { id: 'n6', kind: 'plan', group: 'Gospel of John', who: 'Reading plan',
-    text: 'Day 4 is ready — Water into wine (John 2).', time: 'Yesterday', unread: false, accent: 'var(--gold)' },
-];
+const NOTIFICATIONS = [];   // no seeded notifications
 
 const LISTEN = {
   now: { id: 'a1', title: 'John 1 · The Word', sub: 'The Gospel of John · WEB', reader: 'Narrated by David Cochran Heath',

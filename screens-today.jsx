@@ -69,6 +69,7 @@ function TodayScreen({ ctx }) {
   const pDoneSet = new Set(ctx.planProgress[plan.id] || []);
   const pNext = plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1];
 
+  const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
   const servNext = ctx.servNext;
   const servPendingN = (ctx.servPending || []).length;
@@ -194,7 +195,7 @@ function TodayScreen({ ctx }) {
         </div>
       </div>
 
-      {/* Plan + devotional cards */}
+      {/* Plan + (real) devotional cards */}
       <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel>
       <div style={{ display: 'flex', gap: 12, marginBottom: 14, animation: 'trinityFade .5s ease .15s both' }}>
         <div onClick={() => ctx.openPlan(plan)} style={{
@@ -206,17 +207,19 @@ function TodayScreen({ ctx }) {
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, lineHeight: 1.15, marginTop: 2 }}>{plan.title}</div>
           <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 4 }}>Day {pNext.d} of {plan.len}</div>
         </div>
-        <div onClick={ctx.openDevotional} style={{
-          flex: 1, padding: 16, borderRadius: 20, background: 'var(--sage)', cursor: 'pointer',
-          color: '#fff', position: 'relative', overflow: 'hidden', boxShadow: 'var(--shadow)',
-        }}>
-          <div style={{ position: 'absolute', right: -20, top: -16, opacity: .18 }}><Icon name="sun" size={110} stroke={1.4} color="#fff" /></div>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(255,255,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Icon name="sun" size={22} stroke={2} color="#fff" />
+        {churchDevo ? (
+          <div onClick={() => ctx.openChurchDevo(churchDevo)} style={{
+            flex: 1, padding: 16, borderRadius: 20, background: 'var(--sage)', cursor: 'pointer',
+            color: '#fff', position: 'relative', overflow: 'hidden', boxShadow: 'var(--shadow)',
+          }}>
+            <div style={{ position: 'absolute', right: -20, top: -16, opacity: .18 }}><Icon name="sun" size={110} stroke={1.4} color="#fff" /></div>
+            <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(255,255,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="sun" size={22} stroke={2} color="#fff" />
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginTop: 10, opacity: .9 }}>Devotional{churchDevo.ref ? ' · ' + churchDevo.ref : ''}</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, lineHeight: 1.15, marginTop: 2, position: 'relative' }}>{churchDevo.title}</div>
           </div>
-          <div style={{ fontSize: 12, fontWeight: 600, marginTop: 10, opacity: .9 }}>Devotional · {D.DEVOTIONAL.read}</div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, lineHeight: 1.15, marginTop: 2, position: 'relative' }}>{D.DEVOTIONAL.title}</div>
-        </div>
+        ) : null}
       </div>
 
       {/* Quick row */}

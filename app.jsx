@@ -526,6 +526,23 @@ function App() {
     },
   };
 
+  // back button: close the topmost open overlay/sheet (returns true if it closed one). Kept current
+  // each render so the popstate handler always sees live state. Order ~ visual z (most modal first).
+  window.trinityGoBack = () => {
+    const layers = [
+      [wordOv, () => setWordOv(null)], [member, () => setMember(null)], [profile, () => setProfile(false)],
+      [idSheet, () => setIdSheet(null)], [searchOpen, () => setSearchOpen(false)], [listen, () => setListen(false)],
+      [notif, () => setNotif(false)], [allUses, () => setAllUses(null)], [concord, () => setConcord(false)],
+      [video, () => setVideo(null)], [book, () => setBook(null)], [collection, () => setCollection(null)],
+      [module, () => setModule(null)], [journalEditor, () => setJournalEditor(null)], [journal, () => setJournal(null)],
+      [openServing, () => setOpenServing(false)], [openDevo, () => setOpenDevo(null)], [plan, () => setPlan(null)],
+      [devo, () => setDevo(false)], [shareSheet, () => setShareSheet(null)], [share, () => setShare(null)],
+      [dmPeer, () => setDmPeer(null)], [dmInbox, () => setDmInbox(false)], [group, () => setGroup(null)],
+    ];
+    for (const [open, close] of layers) { if (open) { close(); return true; } }
+    return false;
+  };
+
   // apply accent vars
   const acc = ACCENTS[t.accent] || ACCENTS.clay;
   const ap = t.dark ? acc.dark : acc.light;

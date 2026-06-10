@@ -108,6 +108,57 @@ function copyText(t) {
   } catch (e) { return false; }
 }
 
+// Open a print-friendly paper invite: church QR + link, the steps to join, and blank lines for the
+// member to write down their own 12-word recovery phrase (the only way to restore their account).
+function printInvite(churchName, url, svg) {
+  const w = window.open('', '_blank', 'width=820,height=1040');
+  if (!w) { alert('Allow pop-ups to print the invite.'); return; }
+  const name = churchName || 'Your church';
+  const words = Array.from({ length: 12 }, (_, i) => `<div class="w"><span class="n">${i + 1}.</span><span class="line"></span></div>`).join('');
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${name} — TrinityOne invite</title>
+  <style>
+    @page { margin: 18mm; }
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #2a2018; margin: 0; }
+    .wrap { max-width: 640px; margin: 0 auto; }
+    .head { text-align: center; border-bottom: 2px solid #C25A38; padding-bottom: 14px; margin-bottom: 18px; }
+    .brand { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #C25A38; font-weight: 800; }
+    h1 { font-size: 26px; margin: 6px 0 2px; }
+    .sub { color: #6b5d4f; font-size: 14px; }
+    .qrrow { display: flex; gap: 22px; align-items: center; margin: 4px 0 20px; }
+    .qr { width: 168px; height: 168px; border: 1px solid #e7ddcf; border-radius: 12px; padding: 8px; flex-shrink: 0; }
+    .qr svg { width: 100%; height: 100%; }
+    .link { font-family: monospace; font-size: 11px; word-break: break-all; background: #faf5ec; border: 1px solid #e7ddcf; border-radius: 8px; padding: 8px 10px; color: #4a3f33; }
+    ol { padding-left: 20px; line-height: 1.55; font-size: 14px; }
+    ol li { margin-bottom: 7px; }
+    .warn { background: #fdf3e3; border: 1px solid #e8c98c; border-radius: 10px; padding: 12px 14px; font-size: 13px; margin: 16px 0; }
+    .phrase { border: 1px solid #e7ddcf; border-radius: 12px; padding: 16px 18px; margin-top: 8px; }
+    .phrase h3 { margin: 0 0 4px; font-size: 15px; }
+    .phrase p { margin: 0 0 14px; font-size: 12.5px; color: #6b5d4f; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 26px; }
+    .w { display: flex; align-items: flex-end; gap: 8px; }
+    .n { color: #a8957f; font-size: 13px; width: 22px; }
+    .line { flex: 1; border-bottom: 1.5px solid #c9bca9; height: 20px; }
+    .foot { text-align: center; color: #a8957f; font-size: 11px; margin-top: 22px; }
+  </style></head><body><div class="wrap">
+    <div class="head"><div class="brand">TrinityOne</div><h1>Join ${name}</h1><div class="sub">A private, offline-first place to read and belong — no sign-up, no tracking.</div></div>
+    <div class="qrrow">
+      <div class="qr">${svg || ''}</div>
+      <div><p style="margin:0 0 8px;font-size:14px;">Scan this with your phone camera, or go to:</p><div class="link">${url || ''}</div></div>
+    </div>
+    <ol>
+      <li>Open your phone camera and point it at the code above (or type the link into your browser).</li>
+      <li>Tap <b>Add to Home Screen / Install</b> so TrinityOne lives on your phone and works offline.</li>
+      <li>It opens already following <b>${name}</b>. Pick a display name, or stay anonymous.</li>
+      <li>When asked, <b>write down your 12-word recovery phrase</b> in the boxes below.</li>
+    </ol>
+    <div class="warn"><b>Keep your recovery phrase safe.</b> It is the <u>only</u> way to restore your account on a new phone. No one — not even your church — can recover it for you. Don’t share it with anyone.</div>
+    <div class="phrase"><h3>My 12-word recovery phrase</h3><p>Write each word exactly as the app shows it, in order.</p><div class="grid">${words}</div></div>
+    <div class="foot">TrinityOne · self-custodial fellowship</div>
+  </div><script>setTimeout(function(){window.print();},250);</script></body></html>`);
+  w.document.close();
+}
+
 function JoinCard({ qrSize = 92, center = false }) {
   const church = window.useStewardChurch();   // re-renders once the npub is ready
   const np = church.npub || '';
@@ -128,6 +179,7 @@ function JoinCard({ qrSize = 92, center = false }) {
         <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: center ? 'center' : 'flex-start' }}>
           <button onClick={() => doCopy('code', np)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'code' ? 'check' : 'receipt'} size={14} color="#fff" /> {copied === 'code' ? 'Copied' : 'Copy code'}</button>
           <button onClick={() => doCopy('link', url)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'link' ? 'check' : 'link'} size={14} color="currentColor" /> {copied === 'link' ? 'Copied' : 'Copy link'}</button>
+          <button onClick={() => printInvite(church.name, url, svg)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Print a paper invite with space for the recovery phrase"><Icon name="receipt" size={14} color="currentColor" /> Print invite</button>
         </div>
       </div>
     </div>
