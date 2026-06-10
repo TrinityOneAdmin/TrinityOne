@@ -3,6 +3,7 @@
 const NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
   { key: 'groups', label: 'Groups', ic: 'chat' },
+  { key: 'teams', label: 'Teams', ic: 'shield' },
   { key: 'plans', label: 'Plans', ic: 'read' },
   { key: 'members', label: 'Members', ic: 'pray' },
   { key: 'relays', label: 'Relays', ic: 'globe' },
@@ -74,6 +75,7 @@ function StewDashboard({ initial = 'overview' }) {
             {tab === 'overview' && <DashOverview onTab={setTab} />}
             {tab === 'giving' && <DashGiving />}
             {tab === 'groups' && <DashGroups />}
+            {tab === 'teams' && <DashTeams />}
             {tab === 'plans' && <DashPlans />}
             {tab === 'members' && <DashMembers />}
             {tab === 'relays' && <DashRelays />}
@@ -345,7 +347,7 @@ function NewGroupModal({ open, onClose }) {
 }
 
 function DashGroups() {
-  const groups = window.useStewardGroups();   // REAL chat groups the church has published
+  const groups = window.useStewardGroups().filter(g => g.kind !== 'team');   // teams have their own tab
   const [adding, setAdding] = React.useState(new URLSearchParams(location.search).get('newgroup') === '1');
   const items = groups.map(g => ({ ...g, ic: g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   return (
@@ -362,6 +364,52 @@ function DashGroups() {
     </div>
   );
 }
+
+// Teams = private channels for ministry/rota teams (Worship, Welcome, Tech…). A team is a group with
+// kind 'team', so it reuses all the group chat + relay scoping; it's surfaced separately to members.
+function NewTeamModal({ open, onClose }) {
+  const [name, setName] = React.useState('');
+  const [desc, setDesc] = React.useState('');
+  React.useEffect(() => { if (open) { setName(''); setDesc(''); } }, [open]);
+  if (!open) return null;
+  const create = () => { if (!name.trim()) return; window.Steward.publishGroup({ name: name.trim(), kind: 'team', sub: desc.trim() }); onClose(); };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>New team</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A private channel for a ministry/rota team. The people serving in it chat here.</p>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Name</div>
+        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Worship Team" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>What's it for (optional)</div>
+        <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+          <button onClick={create} disabled={!name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: name.trim() ? 1 : 0.55 }}><Icon name="plus" size={16} color="#fff" /> Create team</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashTeams() {
+  const teams = window.useStewardGroups().filter(g => g.kind === 'team');
+  const [adding, setAdding] = React.useState(false);
+  const items = teams.map(t => ({ ...t, ic: 'pray', fg: 'var(--clay)' }));
+  return (
+    <div style={{ position: 'relative', height: '100%' }}>
+      <ListPanel title="Teams" addLabel="New team" onAdd={() => setAdding(true)} items={items}
+        empty="No teams yet — create one per ministry/rota team (Worship, Welcome, Tech, Kids…)."
+        renderRight={(it) => (
+          <button onClick={() => window.Steward.removeGroup(it.id)} title="Remove team" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+        )} />
+      <div style={{ display: 'flex', gap: 9, marginTop: 14, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
+        <Icon name="pray" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Teams are private channels for the people serving in a rota slot — they show up under <b style={{ color: 'var(--ink)' }}>Teams</b> in the member app. A rota (who serves when) is the next step.</div>
+      </div>
+      <NewTeamModal open={adding} onClose={() => setAdding(false)} />
+    </div>
+  );
+}
+window.DashTeams = DashTeams;
 
 function DashRelays() {
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
@@ -414,8 +462,40 @@ function ago(ts) {
   return new Date(ts * 1000).toLocaleDateString();
 }
 
+function NewPlanModal({ onClose }) {
+  const [name, setName] = React.useState('');
+  const [tag, setTag] = React.useState('');
+  const [text, setText] = React.useState('');
+  const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+  const create = () => {
+    if (!name.trim() || !lines.length) return;
+    const days = lines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
+    window.Steward.publishPlan({ id: 'custom-' + Date.now().toString(36), title: name.trim(), sub: days.length + ' day' + (days.length === 1 ? '' : 's'), tag: tag.trim() || 'Custom', accent: 'var(--clay)', blurb: '', days });
+    onClose();
+  };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '92%', maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>Your own plan — a sermon series, a season's readings, anything. One reading per line; each line is a day.</p>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Name</div>
+        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Advent — Light Has Come" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Tag (optional)</div>
+        <input value={tag} onChange={e => setTag(e.target.value)} placeholder="e.g. Advent" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings — one per line {lines.length ? `· ${lines.length} day${lines.length === 1 ? '' : 's'}` : ''}</div>
+        <textarea value={text} onChange={e => setText(e.target.value)} rows={7} placeholder={'John 1\nJohn 2\nIsaiah 53\nPsalm 22'} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 14.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
+        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+          <button onClick={create} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }}><Icon name="check" size={16} color="#fff" /> Create &amp; share</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashPlans() {
   const shared = window.useStewardPlans();          // plans currently shared with the church
+  const [creating, setCreating] = React.useState(false);
   const sharedIds = new Set(shared.map(p => p.id));
   const library = (window.SK && window.SK.planLibrary) || [];
   const available = library.filter(p => !sharedIds.has(p.id));
@@ -432,10 +512,12 @@ function DashPlans() {
     </div>
   );
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
-      <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}>
+    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
+      {creating ? <NewPlanModal onClose={() => setCreating(false)} /> : null}
+      <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}
+        action={<button onClick={() => setCreating(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New plan</button>}>
         {shared.length === 0
-          ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>No plans shared yet — pick one from the library below and your congregation can follow along.</div>
+          ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>No plans shared yet — make your own with “New plan”, or pick one from the library below.</div>
           : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{shared.map(p => <PlanRow key={p.id} p={p} isShared />)}</div>}
       </Panel>
       <Panel title="Plan library" style={{ flex: 1 }}>

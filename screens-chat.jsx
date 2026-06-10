@@ -265,8 +265,10 @@ function ChatScreen({ ctx }) {
   const accentFor = (s) => { const cs = ['var(--clay)', 'var(--sage)', 'var(--gold)', '#5360D6', '#C24B7A']; let h = 0; for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return cs[h % cs.length]; };
   // real, steward-defined groups when the church has them; otherwise the sample set for this church
   const churchGroups = realGroups.length
-    ? realGroups.map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : 'Group', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || '') }))
+    ? realGroups.map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || '') }))
     : D.GROUPS.filter(g => g.church === ctx.church.id);
+  const teamGroups = churchGroups.filter(g => g.team);
+  const plainGroups = churchGroups.filter(g => !g.team);
   const groupIdsKey = churchGroups.map(g => g.id).join(',');
 
   // watch every group for last-message previews + unread badges
@@ -296,6 +298,33 @@ function ChatScreen({ ctx }) {
     setUnread(prev => ({ ...prev, [g.id]: 0 }));
     ctx.openGroup(g);
   };
+  const groupCard = (g) => (
+    <div key={g.id} onClick={() => openGroup(g)} style={{
+      display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
+      background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)',
+    }}>
+      <div style={{ position: 'relative', flexShrink: 0 }}>
+        <div style={{ width: 50, height: 50, borderRadius: 16, background: `color-mix(in oklab, ${g.accent} 16%, var(--surface))`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', color: g.accent }}>
+          <Icon name={g.team ? 'shield' : g.prayer ? 'pray' : 'chat'} size={25} stroke={1.8} />
+        </div>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</span>
+          <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{live ? (activity[g.id] ? relTime(activity[g.id].ts) : '') : g.when}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
+          <span style={{ fontSize: 13, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{live ? (activity[g.id] ? activity[g.id].text : 'No messages yet') : g.last}</span>
+          {(live ? unread[g.id] : g.unread) ? <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 11.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{live ? unread[g.id] : g.unread}</span> : null}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{g.kind}</span>
+          {g.members != null ? ` · ${g.members} members` : (g.sub ? ` · ${g.sub}` : '')}
+        </div>
+      </div>
+    </div>
+  );
 
   const ql = q.trim().toLowerCase();
   const groupHits = ql ? churchGroups.filter(g => g.name.toLowerCase().includes(ql) || g.kind.toLowerCase().includes(ql)) : [];
@@ -413,43 +442,27 @@ function ChatScreen({ ctx }) {
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
 
+      {teamGroups.length ? (
+        <React.Fragment>
+          <SectionLabel>Teams</SectionLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .08s both' }}>
+            {teamGroups.map(groupCard)}
+          </div>
+        </React.Fragment>
+      ) : null}
+
       <SectionLabel>Your groups</SectionLabel>
-      {churchGroups.length === 0 ? (
+      {plainGroups.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '38px 24px', color: 'var(--ink-3)', animation: 'trinityFade .4s ease both' }}>
           <div style={{ width: 56, height: 56, borderRadius: 18, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="chat" size={28} color="var(--ink-3)" /></div>
           <p style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink-2)', margin: '0 0 4px' }}>No groups yet</p>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, margin: 0, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto' }}>{ctx.church && ctx.church.name ? `${ctx.church.name} hasn’t opened any chat rooms yet — they’ll appear here when it does.` : 'Chat rooms will appear here once your church opens them.'}</p>
         </div>
-      ) : null}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, animation: 'trinityFade .5s ease .1s both' }}>
-        {churchGroups.map(g => (
-          <div key={g.id} onClick={() => openGroup(g)} style={{
-            display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
-            background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)',
-          }}>
-            <div style={{ position: 'relative', flexShrink: 0 }}>
-              <div style={{ width: 50, height: 50, borderRadius: 16, background: `color-mix(in oklab, ${g.accent} 16%, var(--surface))`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', color: g.accent }}>
-                <Icon name={g.prayer ? 'pray' : 'chat'} size={25} stroke={1.8} />
-              </div>
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</span>
-                <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{live ? (activity[g.id] ? relTime(activity[g.id].ts) : '') : g.when}</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
-                <span style={{ fontSize: 13, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{live ? (activity[g.id] ? activity[g.id].text : 'No messages yet') : g.last}</span>
-                {(live ? unread[g.id] : g.unread) ? <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 11.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{live ? unread[g.id] : g.unread}</span> : null}
-              </div>
-              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{g.kind}</span>
-                {g.members != null ? ` · ${g.members} members` : (g.sub ? ` · ${g.sub}` : '')}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, animation: 'trinityFade .5s ease .1s both' }}>
+          {plainGroups.map(groupCard)}
+        </div>
+      )}
       </React.Fragment>
       )}
       </React.Fragment>
