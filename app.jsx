@@ -327,6 +327,13 @@ function App() {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (window.Fellowship && window.Fellowship.setChurch) window.Fellowship.setChurch(np || null);
   }, [activeChurch, churches]);
+  // reading plans the active church shares (steward console publishes them) -> shown in Plans
+  const [churchPlans, setChurchPlans] = useA([]);
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchPlans)) { setChurchPlans([]); return; }
+    return window.Fellowship.subscribeChurchPlans(np, setChurchPlans);
+  }, [activeChurch, churches]);
   // fellowship (chat + giving)
   const [group, setGroup] = useA(null);
   const [dmPeer, setDmPeer] = useA(null);   // direct-message thread with a pubkey
@@ -459,6 +466,7 @@ function App() {
     notes, setNote: (k, txt) => { if (txt) MD.put('notes', { id: k, ref: k, text: txt }); else MD.remove('notes', k); },
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
+    churchPlans,
     togglePlanDay: (pid, day) => {
       const prev = MD.settings.get('plans', {});
       const set = new Set(prev[pid] || []); set.has(day) ? set.delete(day) : set.add(day);

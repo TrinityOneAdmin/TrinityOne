@@ -21,6 +21,18 @@ const SK = {
     { id: 'youth', name: 'Youth', sub: '31 members · 2 stewards', kind: 'group' },
     { id: 'prayer', name: 'Prayer Wall', sub: 'open · 140 requests', kind: 'group' },
   ],
+  // reading plans the steward can share with the congregation (public-domain, chapter-a-day structure)
+  planLibrary: (function () {
+    const chapters = (book, n) => Array.from({ length: n }, (_, i) => ({ d: i + 1, ref: book + ' ' + (i + 1), label: 'Chapter ' + (i + 1) }));
+    const psalms = (list) => list.map((p, i) => ({ d: i + 1, ref: 'Psalm ' + p, label: 'Psalm ' + p }));
+    return [
+      { id: 'john21', title: 'The Gospel of John', sub: '21 days · a chapter a morning', tag: 'Gospels', accent: 'var(--clay)', blurb: 'Walk slowly through John, one chapter a day.', days: chapters('John', 21) },
+      { id: 'mark', title: 'The Gospel of Mark', sub: '16 days', tag: 'Gospels', accent: '#5360D6', blurb: 'The fast-paced gospel, a chapter a day.', days: chapters('Mark', 16) },
+      { id: 'proverbs', title: 'A Proverb a Day', sub: '31 days', tag: 'Wisdom', accent: 'var(--gold)', blurb: 'Daily wisdom — one chapter of Proverbs each day.', days: chapters('Proverbs', 31) },
+      { id: 'romans', title: 'Romans', sub: '16 days', tag: 'Epistles', accent: 'var(--sage)', blurb: "Paul's gospel laid out, a chapter a day.", days: chapters('Romans', 16) },
+      { id: 'psalms-comfort', title: 'Psalms of Comfort', sub: '7 days', tag: 'Devotional', accent: 'var(--sage)', blurb: 'A week in the Psalms for anxious seasons.', days: psalms([23, 27, 34, 42, 91, 121, 139]) },
+    ];
+  })(),
   relays: [
     { url: 'relay.trinityone.app', label: 'TrinityOne shared', status: 'on', kind: 'shared' },
     { url: 'relay.damus.io', label: 'Public relay', status: 'on', kind: 'shared' },

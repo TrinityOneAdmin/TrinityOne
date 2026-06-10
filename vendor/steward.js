@@ -8178,6 +8178,7 @@ zoo`.split("\n");
   var KEY_LS = "trinityone.steward.church-key";
   var FUND_D = "trinityone/fund:";
   var GROUP_D = "trinityone/group:";
+  var PLAN_D = "trinityone/plan:";
   var now = () => Math.floor(Date.now() / 1e3);
   function relays() {
     const l = typeof location !== "undefined" ? location : null;
@@ -8319,6 +8320,49 @@ zoo`.split("\n");
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(GROUP_D)) return;
           const id = d.slice(GROUP_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byId.delete(id);
+            emit();
+            return;
+          }
+          try {
+            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ---- reading plans the church shares with the congregation ----
+    // Published as a signed kind-30078 (d=plan:<id>) with the full plan (days included) so member apps
+    // render it without needing the plan built in. Members then start/track it locally.
+    publishPlan(plan) {
+      if (!sk) return Promise.resolve(null);
+      const id = plan.id || "plan" + Date.now();
+      const content = JSON.stringify({ id, title: plan.title || "Plan", sub: plan.sub || "", tag: plan.tag || "", accent: plan.accent || "var(--clay)", blurb: plan.blurb || "", days: plan.days || [] });
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", PLAN_D + id], ["t", NET]], content }, sk)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
+    },
+    removePlan(id) {
+      if (!sk) return Promise.resolve(null);
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", PLAN_D + id], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+    },
+    subscribePlans(onPlans) {
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => onPlans([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(PLAN_D)) return;
+          const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             byId.delete(id);
             emit();

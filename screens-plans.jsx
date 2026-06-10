@@ -38,9 +38,12 @@ function PlanCard({ p, ctx, onClick }) {
 
 function PlansScreen({ ctx }) {
   const D = window.TrinityData;
+  const churchPlans = ctx.churchPlans || [];           // plans the church's steward shared
+  const churchName = (ctx.church && ctx.church.name) || 'your church';
+  const allPlans = [...churchPlans, ...D.PLANS];
   // active = most-progressed started plan, else the first
-  const started = D.PLANS.filter(p => doneDays(ctx, p.id).length > 0);
-  const active = (started.sort((a, b) => doneDays(ctx, b.id).length - doneDays(ctx, a.id).length)[0]) || D.PLANS[0];
+  const started = allPlans.filter(p => doneDays(ctx, p.id).length > 0);
+  const active = (started.sort((a, b) => doneDays(ctx, b.id).length - doneDays(ctx, a.id).length)[0]) || allPlans[0];
   const aDone = doneDays(ctx, active.id).length;
   const aPct = active.len ? aDone / active.len : 0;
   const aNext = nextDay(active, new Set(doneDays(ctx, active.id)));
@@ -74,6 +77,15 @@ function PlansScreen({ ctx }) {
           </button>
         </div>
       </div>
+
+      {churchPlans.length ? (
+        <React.Fragment>
+          <SectionLabel>Shared by {churchName}</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22, animation: 'trinityFade .5s ease .08s both' }}>
+            {churchPlans.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} />)}
+          </div>
+        </React.Fragment>
+      ) : null}
 
       <SectionLabel>Discover plans</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'trinityFade .5s ease .1s both' }}>

@@ -3,6 +3,7 @@
 const NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
   { key: 'groups', label: 'Groups', ic: 'chat' },
+  { key: 'plans', label: 'Plans', ic: 'read' },
   { key: 'members', label: 'Members', ic: 'pray' },
   { key: 'relays', label: 'Relays', ic: 'globe' },
   { key: 'settings', label: 'Settings', ic: 'sliders' },
@@ -73,6 +74,7 @@ function StewDashboard({ initial = 'overview' }) {
             {tab === 'overview' && <DashOverview onTab={setTab} />}
             {tab === 'giving' && <DashGiving />}
             {tab === 'groups' && <DashGroups />}
+            {tab === 'plans' && <DashPlans />}
             {tab === 'members' && <DashMembers />}
             {tab === 'relays' && <DashRelays />}
             {tab === 'settings' && <DashSettings onTab={setTab} />}
@@ -411,6 +413,41 @@ function ago(ts) {
   if (s < 86400 * 14) return Math.floor(s / 86400) + 'd ago';
   return new Date(ts * 1000).toLocaleDateString();
 }
+
+function DashPlans() {
+  const shared = window.useStewardPlans();          // plans currently shared with the church
+  const sharedIds = new Set(shared.map(p => p.id));
+  const library = (window.SK && window.SK.planLibrary) || [];
+  const available = library.filter(p => !sharedIds.has(p.id));
+  const PlanRow = ({ p, isShared }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: p.accent || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.title}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{p.sub || (p.days ? p.days.length + ' days' : '')}{p.tag ? ' · ' + p.tag : ''}</div>
+      </div>
+      {isShared
+        ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
+        : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="#fff" /> Share</button>}
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
+      <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}>
+        {shared.length === 0
+          ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>No plans shared yet — pick one from the library below and your congregation can follow along.</div>
+          : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{shared.map(p => <PlanRow key={p.id} p={p} isShared />)}</div>}
+      </Panel>
+      <Panel title="Plan library" style={{ flex: 1 }}>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 14 }}>Share a reading plan and the whole church sees it in their app — members start it and track their own progress.</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {available.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Every plan is shared.</div> : available.map(p => <PlanRow key={p.id} p={p} />)}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+window.DashPlans = DashPlans;
 
 function DashMembers() {
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
