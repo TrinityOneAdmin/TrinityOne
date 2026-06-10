@@ -9,6 +9,14 @@ const SCH_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
 function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
+function schAddDays(iso, n) { const d = schDate(iso); d.setDate(d.getDate() + n); return schKey(d); }
+function schAddMonths(iso, n) { const d = schDate(iso); d.setMonth(d.getMonth() + n); return schKey(d); }
+// dates from start (inclusive) stepping weekly/monthly up to and including untilIso
+function schGenDates(startIso, cadence, untilIso) {
+  if (!startIso) return []; const out = [startIso]; let cur = startIso, guard = 0;
+  while (guard++ < 400) { cur = cadence === 'monthly' ? schAddMonths(cur, 1) : schAddDays(cur, 7); if (!untilIso || cur > untilIso) break; out.push(cur); }
+  return out;
+}
 function teamMeta(t) { return { name: t.name, icon: t.icon || 'hand', accent: t.accent || 'var(--clay)' }; }
 function memDisplay(m) { return (m && m.name && m.name.trim()) || ('Anon · ' + ((m && (m.npub || m.pubkey)) || '').slice(-6)); }
 function sameAssign(a, b) { const k = o => Object.keys(o || {}).filter(x => (o[x] && o[x].name)).sort().map(x => x + '=' + o[x].name + '/' + (o[x].pub || '')).join('|'); return k(a) === k(b); }
@@ -139,11 +147,32 @@ function AssignModal({ slot, roster, assign, unavail, onAssign, onClear, onClose
   );
 }
 
+function SchRepeatRow({ repeat, setRepeat, until, setUntil }) {
+  return (
+    <React.Fragment>
+      <div style={schLbl}>Repeat</div>
+      <div style={{ display: 'flex', gap: 7 }}>
+        {[['none', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(([v, l]) => (
+          <button key={v} onClick={() => setRepeat(v)} style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: repeat === v ? '2px solid var(--clay)' : '1px solid var(--line)', background: repeat === v ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: 'var(--ink)' }}>{l}</button>
+        ))}
+      </div>
+      {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
+    </React.Fragment>
+  );
+}
+
 function SchAddServiceModal({ onClose }) {
   const [name, setName] = useSch('Sunday Gathering');
   const [date, setDate] = useSch('');
   const [time, setTime] = useSch('10:30');
-  const save = () => { if (!date) return; window.Steward.publishService({ name: name.trim() || 'Service', date, time }); onClose(); };
+  const [repeat, setRepeat] = useSch('none');
+  const [until, setUntil] = useSch('');
+  const save = () => {
+    if (!date) return;
+    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
+    dates.forEach(d => window.Steward.publishService({ name: name.trim() || 'Service', date: d, time }));
+    onClose();
+  };
   return (
     <SchModal title="Add a service" onClose={onClose} width={420}>
       <div style={schLbl}>Name</div>
@@ -152,9 +181,10 @@ function SchAddServiceModal({ onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} disabled={!date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: date ? 1 : 0.55 }}><Icon name="plus" size={16} color="#fff" /> Add service</button>
+        <button onClick={save} disabled={!date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: date ? 1 : 0.55 }}><Icon name="plus" size={16} color="#fff" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
       </div>
     </SchModal>
   );
@@ -181,6 +211,7 @@ function DashRota({ onNewTeam }) {
   const [assignSlot, setAssignSlot] = useSch(null);
   const [rosterTeam, setRosterTeam] = useSch(null);
   const [adding, setAdding] = useSch(false);
+  const [fillMenu, setFillMenu] = useSch(false);
   const [flash, setFlash] = useSch('');
 
   // seed each service's draft from its published rota the first time we see it
@@ -212,20 +243,35 @@ function DashRota({ onNewTeam }) {
     }
   };
   const clearSlot = (slot) => { const next = { ...assign }; delete next[slot.key]; setAssign(next); setAssignSlot(null); };
-  const autoFill = () => {
-    const next = { ...assign }; const used = new Set(Object.values(next).filter(a => a && a.name).map(a => 'n:' + a.name));
+  // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
+  const fillAssign = (base, date) => {
+    const next = { ...base }; const used = new Set(Object.values(next).filter(a => a && a.name).map(a => 'n:' + a.name));
     teams.forEach(t => { const r = rosterFor(t.id); r.roles.forEach(role => {
       const key = t.id + '::' + role.id; if (next[key] && next[key].name) return;
-      const pick = r.people.find(p => !used.has('n:' + p.name) && !(p.pub && (unavail[p.pub] || []).includes(svc.date)));
+      const pick = r.people.find(p => !used.has('n:' + p.name) && !(p.pub && (unavail[p.pub] || []).includes(date)));
       if (pick) { next[key] = { name: pick.name, pub: pick.pub || '' }; used.add('n:' + pick.name); }
     }); });
-    setAssign(next); setFlash('Filled what I could from who’s free'); setTimeout(() => setFlash(''), 2200);
+    return next;
   };
+  const autoFill = () => { setAssign(fillAssign(assign, svc.date)); setFlash('Filled what I could from who’s free'); setTimeout(() => setFlash(''), 2200); };
+  // create + fill: generate weekly services for the period (if missing), then auto-fill & publish each
+  const autoFillAhead = async (months) => {
+    setFillMenu(false);
+    const until = schAddMonths(svc.date, months);
+    const dates = schGenDates(svc.date, 'weekly', until);
+    const byDate = {}; sortedSvcs.forEach(s => { byDate[s.date] = s; });
+    const ensured = [];
+    for (const dt of dates) { if (byDate[dt]) ensured.push(byDate[dt]); else { const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time }); if (ns) ensured.push(ns); } }
+    for (const s of ensured) { const filled = fillAssign(assignFor(s.id) || {}, s.date); await window.Steward.publishRota({ service: s.id, published: true, assign: filled }); if (s.id === svcId) setAssign(filled); }
+    setFlash(`Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`); setTimeout(() => setFlash(''), 2800);
+  };
+  const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
   const copyLastWeek = () => {
-    const prev = sortedSvcs.filter(s => s.id !== svcId && (s.date || '') < (svc.date || '')).sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
-    const pr = prev && persisted(prev.id);
-    if (!pr) { setFlash('No earlier rota to copy'); setTimeout(() => setFlash(''), 2200); return; }
-    setAssign({ ...pr.assign }); setFlash(`Copied ${schParts(prev.date).day} ${schParts(prev.date).mon}`); setTimeout(() => setFlash(''), 2200);
+    // most recent earlier service that has any assignments (published OR draft)
+    const earlier = sortedSvcs.filter(s => s.id !== svcId && (s.date || '') < (svc.date || '')).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const src = earlier.find(s => { const a = assignFor(s.id); return a && Object.values(a).some(x => x && x.name); });
+    if (!src) { setFlash('No earlier rota with people to copy'); setTimeout(() => setFlash(''), 2400); return; }
+    setAssign({ ...assignFor(src.id) }); setFlash(`Copied ${schParts(src.date).day} ${schParts(src.date).mon}`); setTimeout(() => setFlash(''), 2200);
   };
   const publish = () => { window.Steward.publishRota({ service: svcId, published: true, assign }); setFlash('Published — your church can see it'); setTimeout(() => setFlash(''), 2400); };
 
@@ -271,7 +317,24 @@ function DashRota({ onNewTeam }) {
             </div>
             <div style={{ flex: 1, height: 8, borderRadius: 999, background: 'var(--surface-2)', overflow: 'hidden', minWidth: 80 }}><div style={{ width: `${total ? (filled / total) * 100 : 0}%`, height: '100%', background: gaps ? 'linear-gradient(90deg, var(--sage), var(--gold))' : 'var(--sage)', borderRadius: 999, transition: 'width .3s' }} /></div>
             <button onClick={copyLastWeek} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="copy" size={15} color="currentColor" /> Copy last week</button>
-            <button onClick={autoFill} disabled={!gaps} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, opacity: gaps ? 1 : 0.5 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill</button>
+            <div style={{ position: 'relative' }}>
+              <button onClick={() => setFillMenu(v => !v)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill <Icon name="chevD" size={13} color="currentColor" /></button>
+              {fillMenu ? (
+                <React.Fragment>
+                  <div onClick={() => setFillMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                  <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 232, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
+                    {[['This service', () => { setFillMenu(false); autoFill(); }, 'Fill the gaps on this service only'],
+                      ['Create + fill this month', () => autoFillAhead(1), 'Add weekly services for ~4 weeks and fill them'],
+                      ['Create + fill this quarter', () => autoFillAhead(3), 'Add weekly services for ~3 months and fill them']].map(([t, go, s]) => (
+                      <button key={t} onClick={go} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
+                        <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
+                      </button>
+                    ))}
+                  </div>
+                </React.Fragment>
+              ) : null}
+            </div>
             <button onClick={publish} className={isPublished ? 'sk-btn' : 'sk-btn sk-btn--clay'} style={{ padding: '9px 15px', fontSize: 13, background: isPublished ? 'var(--sage)' : undefined, color: '#fff' }}>
               <Icon name={isPublished ? 'check' : 'send'} size={15} color="#fff" /> {isPublished ? 'Published' : (pers && pers.published ? 'Publish changes' : 'Publish rota')}</button>
           </div>
@@ -335,7 +398,14 @@ function SchEventModal({ day, onClose }) {
   const [where, setWhere] = useSch('');
   const [blurb, setBlurb] = useSch('');
   const [accent, setAccent] = useSch('var(--clay)');
-  const save = () => { if (!title.trim() || !date) return; window.Steward.publishEvent({ title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent }); onClose(); };
+  const [repeat, setRepeat] = useSch('none');
+  const [until, setUntil] = useSch('');
+  const save = () => {
+    if (!title.trim() || !date) return;
+    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
+    dates.forEach(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent }));
+    onClose();
+  };
   return (
     <SchModal title="New event" onClose={onClose} width={460}>
       <div style={schLbl}>Title</div>
@@ -352,9 +422,10 @@ function SchEventModal({ day, onClose }) {
       </div>
       <div style={schLbl}>Note (optional)</div>
       <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} disabled={!title.trim() || !date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="#fff" /> Add event</button>
+        <button onClick={save} disabled={!title.trim() || !date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="#fff" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
       </div>
     </SchModal>
   );

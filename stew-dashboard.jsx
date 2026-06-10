@@ -29,6 +29,7 @@ function StewDashboard({ initial = 'overview' }) {
       {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
       {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
+      <MemberChatDock />
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
         {/* sidebar */}
         <div style={{ width: 232, flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', padding: '22px 16px' }}>
@@ -202,9 +203,10 @@ function JoinModal({ onClose }) {
 // post a signed announcement to the church (kind-1), targeting a broadcast room
 function NewPostModal({ onClose }) {
   const groups = window.useStewardGroups();
-  const targets = groups.filter(g => g.kind === 'broadcast');
+  const targets = groups;   // post to any chat group or team (not only Announcements)
+  const broadcast = groups.find(g => g.kind === 'broadcast');
   const [text, setText] = React.useState('');
-  const [target, setTarget] = React.useState(targets[0] ? targets[0].id : 'announce');
+  const [target, setTarget] = React.useState(broadcast ? broadcast.id : (groups[0] ? groups[0].id : 'announce'));
   const [sending, setSending] = React.useState(false);
   const post = async () => {
     if (!text.trim() || sending) return;
@@ -215,14 +217,15 @@ function NewPostModal({ onClose }) {
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>New announcement</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A signed message from your church. Everyone who joined sees it in the chosen room.</p>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>New post</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A signed message from your church. Members see it in the chosen group or team.</p>
         {targets.length ? (
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 8 }}>Post to</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {targets.map(g => (
-                <button key={g.id} onClick={() => setTarget(g.id)} style={{ padding: '7px 13px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: '1px solid ' + (target === g.id ? 'var(--clay)' : 'var(--line)'), background: target === g.id ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: target === g.id ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{g.name}</button>
+                <button key={g.id} onClick={() => setTarget(g.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: '1px solid ' + (target === g.id ? 'var(--clay)' : 'var(--line)'), background: target === g.id ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: target === g.id ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
+                  <Icon name={g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat'} size={13} color="currentColor" />{g.name}{g.kind === 'team' ? <span style={{ fontSize: 10, fontWeight: 800, opacity: .6, letterSpacing: '.4px' }}>TEAM</span> : null}</button>
               ))}
             </div>
           </div>
@@ -298,9 +301,9 @@ function DashOverview({ onTab }) {
           <Panel title="Joining code">
             <JoinCard qrSize={92} />
           </Panel>
-          <Panel title="Recent activity" style={{ flex: 1 }}>
+          <Panel title="Recent activity" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
               {activity.map((a) => {
                 const t = SK_TINT[a.tint] || SK_TINT.ink;
                 return (
@@ -404,21 +407,61 @@ function NewGroupModal({ open, onClose }) {
   );
 }
 
+// Console chat view for one group/team — read the scrollback + post as the church.
+function GroupChatModal({ group, onClose }) {
+  const [msgs, setMsgs] = React.useState([]);
+  const [text, setText] = React.useState('');
+  const scRef = React.useRef(null);
+  React.useEffect(() => window.Steward.subscribeGroupChat(group.id, setMsgs), [group.id]);
+  React.useEffect(() => { if (scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs]);
+  const send = () => { if (!text.trim()) return; window.Steward.publishPost(text.trim(), group.id); setText(''); };
+  const isTeam = group.kind === 'team';
+  const accent = isTeam ? (group.accent || 'var(--clay)') : group.kind === 'broadcast' ? '#8a6717' : 'var(--sage)';
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 92, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 540, maxWidth: '94%', height: '78%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 18px', borderBottom: '1px solid var(--line)' }}>
+          <div style={{ width: 36, height: 36, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={isTeam ? (group.icon || 'shield') : group.kind === 'broadcast' ? 'send' : 'chat'} size={19} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{group.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{isTeam ? 'Team chat' : group.kind === 'broadcast' ? 'Broadcast' : 'Group chat'} · you post as the church</div></div>
+          <button onClick={onClose} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
+        </div>
+        <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 9 }}>
+          {msgs.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto' }}>No messages yet. Say hello to your church.</div> : null}
+          {msgs.map(m => (
+            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%' }}>
+              {!m.mine ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontFamily: 'var(--mono)', marginBottom: 2, paddingLeft: 4 }}>{'member …' + (m.by || '').slice(-8)}</div> : null}
+              <div style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)' }}>{m.kind === 'prayer' ? '🙏 ' : ''}{m.text}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 9, padding: '12px 14px', borderTop: '1px solid var(--line)' }}>
+          <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="Message your church…" style={{ flex: 1, height: 42, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+          <button onClick={send} disabled={!text.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: text.trim() ? 1 : 0.55 }}><Icon name="send" size={16} color="#fff" /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashGroups() {
-  const groups = window.useStewardGroups().filter(g => g.kind !== 'team');   // teams have their own tab
+  const all = window.useStewardGroups();   // groups AND teams (teams are chat channels too)
   const [adding, setAdding] = React.useState(new URLSearchParams(location.search).get('newgroup') === '1');
-  const items = groups.map(g => ({ ...g, ic: g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
+  const [chatGroup, setChatGroup] = React.useState(null);
+  const items = all.map(g => ({ ...g, ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   return (
     <div style={{ position: 'relative', height: '100%' }}>
-      <ListPanel title="Groups & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items}
-        empty="No groups yet — create your church's first chat room."
+      <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items}
+        empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         renderRight={(it) => (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
-            <button onClick={() => window.Steward.removeGroup(it.id)} title="Remove group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+            {it.kind === 'team' ? <SkPill tint="clay">Team</SkPill> : null}
+            <button onClick={() => setChatGroup(it)} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
+            <button onClick={() => window.Steward.removeGroup(it.id)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
           </div>
         )} />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
+      {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}
     </div>
   );
 }
@@ -719,6 +762,8 @@ function DashMembers() {
                 </div>
                 {m.count === 0 ? <SkPill tint="ink">joined</SkPill> : null}
                 {!named ? <SkPill tint="sage">anonymous</SkPill> : null}
+                <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+                  <Icon name="chat" size={15} color="currentColor" /> Chat</button>
                 <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
                   <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
               </div>
@@ -783,6 +828,58 @@ function DashSettings({ onTab }) {
           <Icon name="pray" size={14} color="var(--ink-3)" /> See who’s joined in the <button onClick={() => onTab && onTab('members')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Members list</button>.
         </div>
       </Panel>
+    </div>
+  );
+}
+
+// ── Facebook-style docked DM window: the church <-> one member, encrypted ──
+function StewDmWindow({ peer, offset, onClose }) {
+  const [msgs, setMsgs] = React.useState([]);
+  const [text, setText] = React.useState('');
+  const [min, setMin] = React.useState(false);
+  const scRef = React.useRef(null);
+  React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey]);
+  React.useEffect(() => { if (!min && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, min]);
+  const send = () => { if (!text.trim()) return; window.Steward.sendDM(peer.pubkey, text.trim()); setText(''); };
+  const initials = (peer.name && peer.name !== 'Anonymous' ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+  return (
+    <div style={{ width: 316, background: 'var(--surface)', borderRadius: '14px 14px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: min ? 48 : 420, transition: 'height .18s' }}>
+      <div onClick={() => setMin(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', cursor: 'pointer', background: 'var(--surface)', borderBottom: min ? 'none' : '1px solid var(--line)', flexShrink: 0 }}>
+        <SkBadge initials={initials} size={28} radius={9} accent={SK_TINT.gold.fg} />
+        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{peer.name || 'Member'}</div><div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontFamily: 'var(--mono)' }}>{shortNpub(peer.npub)}</div></div>
+        <button onClick={(e) => { e.stopPropagation(); setMin(v => !v); }} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3 }}><Icon name={min ? 'chevU' : 'chevD'} size={16} /></button>
+        <button onClick={(e) => { e.stopPropagation(); onClose(); }} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3 }}><Icon name="x" size={16} /></button>
+      </div>
+      {!min ? (
+        <React.Fragment>
+          <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
+            <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}><Icon name="lock" size={12} /> Encrypted · only you two can read this</div>
+            {msgs.map(m => (
+              <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)' }}>{m.text}</div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 8, padding: '10px 11px', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
+            <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} autoFocus placeholder="Message…" style={{ flex: 1, height: 38, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 12px', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+            <button onClick={send} disabled={!text.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 13px', opacity: text.trim() ? 1 : 0.5 }}><Icon name="send" size={15} color="#fff" /></button>
+          </div>
+        </React.Fragment>
+      ) : null}
+    </div>
+  );
+}
+
+function MemberChatDock() {
+  const [peers, setPeers] = React.useState([]);
+  React.useEffect(() => {
+    const onOpen = (e) => { const p = e.detail; if (!p || !p.pubkey) return; setPeers(ps => ps.some(x => x.pubkey === p.pubkey) ? ps : [...ps, p].slice(-3)); };
+    window.addEventListener('steward-open-dm', onOpen);
+    return () => window.removeEventListener('steward-open-dm', onOpen);
+  }, []);
+  const close = (pk) => setPeers(ps => ps.filter(x => x.pubkey !== pk));
+  if (!peers.length) return null;
+  return (
+    <div style={{ position: 'absolute', right: 20, bottom: 0, zIndex: 130, display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+      {peers.map(p => <StewDmWindow key={p.pubkey} peer={p} onClose={() => close(p.pubkey)} />)}
     </div>
   );
 }

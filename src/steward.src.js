@@ -16,6 +16,7 @@ import { SimplePool } from 'nostr-tools/pool';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { npubEncode } from 'nostr-tools/nip19';
+import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
 import qrcode from 'qrcode-generator';
 
 const NET = 'trinityone';
@@ -92,9 +93,64 @@ window.Steward = {
     // tombstone: republish the addressable event with empty content (a real relay would honor NIP-09 too)
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', FUND_D + id], ['t', NET], ['deleted', '1']], content: '' }, sk));
   },
+  // Post a kind-1 message into a group as the church. MUST carry ['p', churchPub] — the member's
+  // subscribeGroup scopes by it, so without it the post is invisible to members (was the bug).
   publishPost(content, group) {
     if (!sk) return Promise.resolve(null);
-    return publish(finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce']], content: content || '' }, sk));
+    return publish(finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub]], content: content || '' }, sk));
+  },
+  // read a group/team's chat (kind-1 tagged with the group id, scoped to this church) — for the console chat view
+  subscribeGroupChat(groupId, onMsgs) {
+    const byId = new Map();
+    const emit = () => onMsgs([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+    const sub = pool.subscribeMany(relays(), [{ kinds: [1], '#t': [groupId], limit: 300 }], {
+      onevent(e) {
+        if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
+        if (!e.tags.some(t => t[0] === 'p' && t[1] === pub)) return;   // this church's scope
+        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text: e.content, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '' });
+        emit();
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+
+  // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
+  async sendDM(peerHex, content) {
+    if (!sk || !peerHex) return null;
+    let enc = ''; try { enc = await nip04encrypt(sk, peerHex, content); } catch { return null; }
+    const evt = finalizeEvent({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }, sk);
+    return publish(evt);
+  },
+  // the 1:1 thread with one member (decrypts both directions)
+  subscribeDMThread(peerHex, onMsgs) {
+    const byId = new Map();
+    const emit = () => onMsgs([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+    const take = async (e) => {
+      if (byId.has(e.id)) return;
+      const mine = e.pubkey === pub; const other = mine ? peerHex : e.pubkey;
+      let text = ''; try { text = await nip04decrypt(sk, other, e.content); } catch { return; }
+      byId.set(e.id, { id: e.id, mine, text, ts: e.created_at }); emit();
+    };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [4], authors: [pub], '#p': [peerHex] }, { kinds: [4], authors: [peerHex], '#p': [pub] }], {
+      onevent(e) { take(e); }, oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // list of members who have a DM thread with the church (most recent first)
+  subscribeDMConvos(onConvos) {
+    const byPeer = new Map();
+    const emit = () => onConvos([...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const sub = pool.subscribeMany(relays(), [{ kinds: [4], authors: [pub] }, { kinds: [4], '#p': [pub] }], {
+      onevent(e) {
+        const mine = e.pubkey === pub; const peer = mine ? (e.tags.find(t => t[0] === 'p') || [])[1] : e.pubkey;
+        if (!peer || peer === pub) return;
+        const prev = byPeer.get(peer);
+        if (!prev || e.created_at > prev.ts) { byPeer.set(peer, { peer, npub: npubEncode(peer), ts: e.created_at }); emit(); }
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
   },
 
   // ---- read the church's own data (live) ----
