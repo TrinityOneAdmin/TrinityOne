@@ -789,6 +789,18 @@ function DashSettings({ onTab }) {
     if (n != null && n.trim()) window.Steward.publishProfile({ name: n.trim(), nip05: church.nip05 });
   };
   const reveal = () => { try { setPhrase(window.Steward.exportMnemonic() || ''); } catch {} setRevealed(true); };
+  const [restoreOpen, setRestoreOpen] = React.useState(false);
+  const [restorePhrase, setRestorePhrase] = React.useState('');
+  const [restoreErr, setRestoreErr] = React.useState('');
+  const doRestore = () => {
+    setRestoreErr('');
+    try {
+      const { npub } = window.Steward.restoreKey(restorePhrase);
+      if (window.confirm('Restore church to ' + npub.slice(0, 18) + '…?\n\nThis replaces the key held on this device. The console will reload.')) {
+        window.location.reload();
+      }
+    } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
+  };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
       <Panel title="Church identity" action={<button onClick={editName} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
@@ -820,6 +832,21 @@ function DashSettings({ onTab }) {
             </div>
           </div>
         )}
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+          {!restoreOpen ? (
+            <button onClick={() => setRestoreOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13 }}><Icon name="refresh" size={15} color="currentColor" /> Restore a different key</button>
+          ) : (
+            <div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Paste a church’s 12-word recovery phrase to make <b>this</b> device that church. Use this if the console lost its key, or to move a church to a new machine.</div>
+              <textarea value={restorePhrase} onChange={e => setRestorePhrase(e.target.value)} rows={3} placeholder="word one  word two  word three …" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
+              {restoreErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>{restoreErr}</div> : null}
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button onClick={doRestore} disabled={!restorePhrase.trim()} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13, opacity: restorePhrase.trim() ? 1 : 0.5 }}><Icon name="refresh" size={14} color="#fff" /> Restore church</button>
+                <button onClick={() => { setRestoreOpen(false); setRestorePhrase(''); setRestoreErr(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
       </Panel>
 
       <Panel title="Stewards">

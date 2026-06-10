@@ -8743,11 +8743,24 @@ zoo`.split("\n");
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
       return { npub: window.Steward.npub };
     },
+    // load the persisted church key if there is one; only generate a NEW key when none exists.
+    // (Bug fix: previously this always created+OVERWROTE the stored key on a normal load, so the church
+    // identity changed on every reload — members vanished because they're tagged to the old pubkey.)
     ensureKey() {
-      return window.Steward.hasKey ? { npub: window.Steward.npub } : window.Steward.createKey();
+      if (window.Steward.hasKey) return { npub: window.Steward.npub };
+      if (window.Steward.init()) return { npub: window.Steward.npub };
+      return window.Steward.createKey();
     },
     exportMnemonic() {
       return lsGet(KEY_LS);
+    },
+    // restore/import a church key from its 12-word recovery phrase (replaces the current key on this device)
+    restoreKey(mnemonic) {
+      const m = (mnemonic || "").trim().toLowerCase().replace(/\s+/g, " ");
+      if (m.split(" ").length < 12) throw new Error("Enter the full 12-word recovery phrase.");
+      setKey(m);
+      lsSet(KEY_LS, m);
+      return { npub: window.Steward.npub };
     },
     // ---- publish (signed by the church) ----
     publishProfile(meta) {
