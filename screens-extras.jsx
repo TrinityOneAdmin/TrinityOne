@@ -80,7 +80,15 @@ function ListenScreen({ open, onClose, ctx }) {
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '10px 16px 30px' }}>
+        {!now ? (
+          <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--ink-3)' }}>
+            <div style={{ width: 56, height: 56, borderRadius: 16, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="headphones" size={26} color="var(--ink-3)" /></div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink-2)' }}>Nothing to listen to yet</div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '6px auto 0' }}>Narrated scripture and audio devotionals will appear here.</p>
+          </div>
+        ) : null}
         {/* now playing */}
+        {now ? (<React.Fragment>
         <div style={{ borderRadius: 26, overflow: 'hidden', background: now.color, color: '#fff', padding: 22, marginBottom: 24, boxShadow: 'var(--shadow-lg)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>
             <Icon name="headphones" size={16} stroke={2} color="#fff" /> Now playing
@@ -135,6 +143,7 @@ function ListenScreen({ open, onClose, ctx }) {
             </button>
           ))}
         </div>
+        </React.Fragment>) : null}
       </div>
     </Overlay>
   );
