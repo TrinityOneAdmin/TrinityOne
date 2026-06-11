@@ -15,7 +15,7 @@
 import { SimplePool } from 'nostr-tools/pool';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
-import { npubEncode } from 'nostr-tools/nip19';
+import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
 import qrcode from 'qrcode-generator';
 
@@ -31,7 +31,9 @@ const ROTA_D = 'trinityone/rota:';          // per-service assignments (church)
 const EVENT_D = 'trinityone/event:';        // calendar event (church)
 const REQUEST_D = 'trinityone/request:';    // steward -> member "can you serve?" (church, p=member)
 const REQREPLY_D = 'trinityone/reqreply:';  // member -> steward accept/decline/swap (member, p=church)
+const NETWORK_D = 'trinityone/network:';    // church -> network membership ("we belong to X"), p=network
 const now = () => Math.floor(Date.now() / 1000);
+function toPubHex(npubOrHex) { try { if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase(); const d = nip19decode(npubOrHex); return d && d.type === 'npub' ? d.data : null; } catch { return null; } }
 
 const RELAYS_LS = 'trinityone.steward.extra-relays';   // extra public relays the church also publishes to
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
@@ -477,6 +479,39 @@ window.Steward = {
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pub] }], {
       onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; onProfile(p); } catch {} },
       oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+
+  // ---- networks: a church declares it belongs to a wider group/network (its own npub) ----
+  // The church publishes network:<networkPub> (p-tagged to the network). Members of the church
+  // discover the network and can follow it — its groups/events/plans load like any church.
+  joinNetwork(input) {
+    if (!sk) return Promise.resolve(null);
+    const np = toPubHex(input); if (!np) return Promise.resolve(null);
+    const content = JSON.stringify({ joined: true });
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }, sk)).then(() => ({ networkPub: np, npub: npubEncode(np) }));
+  },
+  leaveNetwork(networkPub) {
+    if (!sk) return Promise.resolve(null);
+    const np = toPubHex(networkPub) || networkPub;
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['deleted', '1']], content: '' }, sk));
+  },
+  // this church's network memberships -> [{ networkPub, npub }]
+  subscribeNetworks(onNetworks) {
+    const byId = new Map();
+    const emit = () => onNetworks([...byId.values()]);
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(NETWORK_D)) return; const np = d.slice(NETWORK_D.length); if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(np); emit(); return; } byId.set(np, { networkPub: np, npub: npubEncode(np) }); emit(); },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // resolve a network's display name (its kind-0 profile)
+  subscribeNetworkProfile(networkPub, onProfile) {
+    const np = toPubHex(networkPub) || networkPub; let latest = 0;
+    const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [np] }], {
+      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { onProfile(JSON.parse(e.content)); } catch {} }, oneose() {},
     });
     return () => { try { sub.close(); } catch {} };
   },

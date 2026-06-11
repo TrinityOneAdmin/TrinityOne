@@ -443,6 +443,26 @@ function ChatScreen({ ctx }) {
 
       <ServingEntry ctx={ctx} />
 
+      {(ctx.churchNetworks || []).length ? (
+        <React.Fragment>
+          <SectionLabel>Part of</SectionLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .06s both' }}>
+            {ctx.churchNetworks.map(n => (
+              <div key={n.networkPub} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+                <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="globe" size={22} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name || 'A wider network'}</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>A network of churches</div>
+                </div>
+                {n.following
+                  ? <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="check" size={15} color="var(--sage)" /> Following</span>
+                  : <button onClick={() => { ctx.followChurch(n.npub); ctx.toast('Following ' + (n.name || 'the network')); }} style={{ flexShrink: 0, padding: '9px 15px', borderRadius: 12, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>Follow</button>}
+              </div>
+            ))}
+          </div>
+        </React.Fragment>
+      ) : null}
+
       {teamGroups.length ? (
         <React.Fragment>
           <SectionLabel>Teams</SectionLabel>

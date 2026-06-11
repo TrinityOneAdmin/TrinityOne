@@ -1497,14 +1497,14 @@
               } else if (c.match(/^\s$/)) {
                 continue;
               }
-              _buffer = _buffer << 6 | decode(c.charCodeAt(0));
+              _buffer = _buffer << 6 | decode2(c.charCodeAt(0));
               _buflen += 6;
             }
             var n = _buffer >>> _buflen - 8 & 255;
             _buflen -= 8;
             return n;
           };
-          var decode = function(c) {
+          var decode2 = function(c) {
             if (65 <= c && c <= 90) {
               return c - 65;
             } else if (97 <= c && c <= 122) {
@@ -7407,8 +7407,8 @@ zoo`.split("\n");
     const id = (a) => a;
     const wrap = (a, b) => (c) => a(b(c));
     const encode = args.map((x) => x.encode).reduceRight(wrap, id);
-    const decode = args.map((x) => x.decode).reduce(wrap, id);
-    return { encode, decode };
+    const decode2 = args.map((x) => x.decode).reduce(wrap, id);
+    return { encode, decode: decode2 };
   }
   // @__NO_SIDE_EFFECTS__
   function alphabet(letters) {
@@ -7725,7 +7725,7 @@ zoo`.split("\n");
       const sum = bechChecksum(lowered, words, ENCODING_CONST);
       return `${lowered}1${BECH_ALPHABET.encode(words)}${sum}`;
     }
-    function decode(str, limit = 90) {
+    function decode2(str, limit = 90) {
       astr("bech32.decode input", str);
       const slen = str.length;
       if (slen < 8 || limit !== false && slen > limit)
@@ -7746,9 +7746,9 @@ zoo`.split("\n");
         throw new Error(`Invalid checksum in ${str}: expected "${sum}"`);
       return { prefix, words };
     }
-    const decodeUnsafe = unsafeWrapper(decode);
+    const decodeUnsafe = unsafeWrapper(decode2);
     function decodeToBytes(str) {
-      const { prefix, words } = decode(str, false);
+      const { prefix, words } = decode2(str, false);
       return { prefix, words, bytes: fromWords(words) };
     }
     function encodeFromBytes(prefix, bytes) {
@@ -7756,7 +7756,7 @@ zoo`.split("\n");
     }
     return {
       encode,
-      decode,
+      decode: decode2,
       encodeFromBytes,
       decodeToBytes,
       decodeUnsafe,
@@ -8183,6 +8183,90 @@ zoo`.split("\n");
   var utf8Decoder3 = new TextDecoder("utf-8");
   var utf8Encoder3 = new TextEncoder();
   var Bech32MaxSize = 5e3;
+  function decode(code) {
+    let { prefix, words } = bech32.decode(code, Bech32MaxSize);
+    let data = new Uint8Array(bech32.fromWords(words));
+    switch (prefix) {
+      case "nprofile": {
+        let tlv = parseTLV(data);
+        if (!tlv[0]?.[0])
+          throw new Error("missing TLV 0 for nprofile");
+        if (tlv[0][0].length !== 32)
+          throw new Error("TLV 0 should be 32 bytes");
+        return {
+          type: "nprofile",
+          data: {
+            pubkey: bytesToHex(tlv[0][0]),
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder3.decode(d)) : []
+          }
+        };
+      }
+      case "nevent": {
+        let tlv = parseTLV(data);
+        if (!tlv[0]?.[0])
+          throw new Error("missing TLV 0 for nevent");
+        if (tlv[0][0].length !== 32)
+          throw new Error("TLV 0 should be 32 bytes");
+        if (tlv[2] && tlv[2][0].length !== 32)
+          throw new Error("TLV 2 should be 32 bytes");
+        if (tlv[3] && tlv[3][0].length !== 4)
+          throw new Error("TLV 3 should be 4 bytes");
+        return {
+          type: "nevent",
+          data: {
+            id: bytesToHex(tlv[0][0]),
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder3.decode(d)) : [],
+            author: tlv[2]?.[0] ? bytesToHex(tlv[2][0]) : void 0,
+            kind: tlv[3]?.[0] ? parseInt(bytesToHex(tlv[3][0]), 16) : void 0
+          }
+        };
+      }
+      case "naddr": {
+        let tlv = parseTLV(data);
+        if (!tlv[0]?.[0])
+          throw new Error("missing TLV 0 for naddr");
+        if (!tlv[2]?.[0])
+          throw new Error("missing TLV 2 for naddr");
+        if (tlv[2][0].length !== 32)
+          throw new Error("TLV 2 should be 32 bytes");
+        if (!tlv[3]?.[0])
+          throw new Error("missing TLV 3 for naddr");
+        if (tlv[3][0].length !== 4)
+          throw new Error("TLV 3 should be 4 bytes");
+        return {
+          type: "naddr",
+          data: {
+            identifier: utf8Decoder3.decode(tlv[0][0]),
+            pubkey: bytesToHex(tlv[2][0]),
+            kind: parseInt(bytesToHex(tlv[3][0]), 16),
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder3.decode(d)) : []
+          }
+        };
+      }
+      case "nsec":
+        return { type: prefix, data };
+      case "npub":
+      case "note":
+        return { type: prefix, data: bytesToHex(data) };
+      default:
+        throw new Error(`unknown prefix ${prefix}`);
+    }
+  }
+  function parseTLV(data) {
+    let result = {};
+    let rest = data;
+    while (rest.length > 0) {
+      let t = rest[0];
+      let l = rest[1];
+      let v = rest.slice(2, 2 + l);
+      rest = rest.slice(2 + l);
+      if (v.length < l)
+        throw new Error(`not enough data to read on TLV ${t}`);
+      result[t] = result[t] || [];
+      result[t].push(v);
+    }
+    return result;
+  }
   function npubEncode(hex) {
     return encodeBytes("npub", hexToBytes(hex));
   }
@@ -8686,7 +8770,17 @@ zoo`.split("\n");
   var EVENT_D = "trinityone/event:";
   var REQUEST_D = "trinityone/request:";
   var REQREPLY_D = "trinityone/reqreply:";
+  var NETWORK_D = "trinityone/network:";
   var now = () => Math.floor(Date.now() / 1e3);
+  function toPubHex(npubOrHex) {
+    try {
+      if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase();
+      const d = decode(npubOrHex);
+      return d && d.type === "npub" ? d.data : null;
+    } catch {
+      return null;
+    }
+  }
   var RELAYS_LS = "trinityone.steward.extra-relays";
   function lsGet(k) {
     try {
@@ -9375,6 +9469,72 @@ zoo`.split("\n");
             const p = JSON.parse(e.content);
             lastProfile = { ...lastProfile, ...p };
             onProfile(p);
+          } catch {
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ---- networks: a church declares it belongs to a wider group/network (its own npub) ----
+    // The church publishes network:<networkPub> (p-tagged to the network). Members of the church
+    // discover the network and can follow it — its groups/events/plans load like any church.
+    joinNetwork(input) {
+      if (!sk) return Promise.resolve(null);
+      const np = toPubHex(input);
+      if (!np) return Promise.resolve(null);
+      const content = JSON.stringify({ joined: true });
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }, sk)).then(() => ({ networkPub: np, npub: npubEncode(np) }));
+    },
+    leaveNetwork(networkPub) {
+      if (!sk) return Promise.resolve(null);
+      const np = toPubHex(networkPub) || networkPub;
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+    },
+    // this church's network memberships -> [{ networkPub, npub }]
+    subscribeNetworks(onNetworks) {
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => onNetworks([...byId.values()]);
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(NETWORK_D)) return;
+          const np = d.slice(NETWORK_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byId.delete(np);
+            emit();
+            return;
+          }
+          byId.set(np, { networkPub: np, npub: npubEncode(np) });
+          emit();
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // resolve a network's display name (its kind-0 profile)
+    subscribeNetworkProfile(networkPub, onProfile) {
+      const np = toPubHex(networkPub) || networkPub;
+      let latest = 0;
+      const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [np] }], {
+        onevent(e) {
+          if (e.created_at < latest) return;
+          latest = e.created_at;
+          try {
+            onProfile(JSON.parse(e.content));
           } catch {
           }
         },

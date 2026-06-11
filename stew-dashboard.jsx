@@ -854,6 +854,47 @@ function StewBackupModal({ church, onClose }) {
   );
 }
 
+// a single joined-network row that resolves its name from the network's profile
+function NetworkRow({ net, onLeave }) {
+  const [name, setName] = React.useState('');
+  React.useEffect(() => window.Steward.subscribeNetworkProfile(net.networkPub, (p) => { if (p && p.name) setName(p.name); }), [net.networkPub]);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+      <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={18} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: name ? 'var(--ink)' : 'var(--ink-3)' }}>{name || 'Resolving…'}</div>
+        <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{net.npub.slice(0, 22)}…</div>
+      </div>
+      <button onClick={() => onLeave(net)} className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5 }}>Leave</button>
+    </div>
+  );
+}
+
+// the wider networks this church belongs to (a network is its own npub; members can follow it)
+function DashNetworksPanel() {
+  const networks = window.useStewardNetworks();
+  const [draft, setDraft] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const join = () => { const r = window.Steward.joinNetwork && window.Steward.joinNetwork(draft.trim()); if (!r) { setErr('Paste the network’s code (npub1…).'); return; } Promise.resolve(r).then(() => { setDraft(''); setErr(''); }); };
+  const leave = (net) => { if (window.confirm('Leave this network? Your members will stop seeing its shared content.')) window.Steward.leaveNetwork(net.networkPub); };
+  return (
+    <Panel title="Networks">
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Belong to a wider group of churches — a region, a denomination, or a family of churches. Paste the network’s <b>code</b> (it has its own npub, set up like a church). Your members can follow it and see its shared groups, events and plans.</div>
+      {networks.length ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 14 }}>
+          {networks.map(n => <NetworkRow key={n.networkPub} net={n} onLeave={leave} />)}
+        </div>
+      ) : null}
+      <div style={{ display: 'flex', gap: 9 }}>
+        <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') join(); }} spellCheck={false} autoCapitalize="none"
+          placeholder="npub1… (the network’s code)" style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)', outline: 'none' }} />
+        <button onClick={join} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Join</button>
+      </div>
+      {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+    </Panel>
+  );
+}
+
 // church video channel — members' Watch tab auto-fills from this on follow (via the gateway feed proxy)
 function DashChannelPanel({ church }) {
   const [draft, setDraft] = React.useState('');
@@ -920,6 +961,8 @@ function DashSettings({ onTab }) {
       </Panel>
 
       <DashChannelPanel church={church} />
+
+      <DashNetworksPanel />
 
       <Panel title="Church key">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>

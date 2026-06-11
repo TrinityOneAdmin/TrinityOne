@@ -375,6 +375,19 @@ function App() {
     if (F.subscribeChurchServices) subs.push(F.subscribeChurchServices(np, setChurchServices));
     return () => subs.forEach(u => { try { u && u(); } catch {} });
   }, [activeChurch, churches]);
+  // the wider networks the active church belongs to (+ resolve their names) — members can follow them
+  const [churchNetworks, setChurchNetworks] = useA([]);
+  const [networkNames, setNetworkNames] = useA({});
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { setChurchNetworks([]); return; }
+    return window.Fellowship.subscribeChurchNetworks(np, setChurchNetworks);
+  }, [activeChurch, churches]);
+  useAE(() => {
+    if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
+    const offs = churchNetworks.map(n => window.Fellowship.subscribeChurchProfile(n.npub, (p) => { if (p && p.name) setNetworkNames(m => ({ ...m, [n.networkPub]: p.name })); }));
+    return () => offs.forEach(o => { try { o && o(); } catch {} });
+  }, [churchNetworks]);
   // derive serving items from requests + my replies (local date, not UTC)
   const _now = new Date();
   const todayStr = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
@@ -541,6 +554,7 @@ function App() {
     // serving & events
     servPending, servConfirmed, servDeclined, servNext, churchEvents, myRsvps,
     churchRotas, churchRosters, churchServices,
+    churchNetworks: churchNetworks.map(n => ({ ...n, name: networkNames[n.networkPub] || '', following: !!churches.find(c => c.id === n.npub) })),
     openServing: () => setOpenServing(true),
     respondServing: (req, verdict, swapTo) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;

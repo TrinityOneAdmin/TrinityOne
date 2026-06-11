@@ -4462,6 +4462,16 @@
     }
     return result;
   }
+  function npubEncode(hex) {
+    return encodeBytes("npub", hexToBytes(hex));
+  }
+  function encodeBech32(prefix, data) {
+    let words = bech32.toWords(data);
+    return bech32.encode(prefix, words, Bech32MaxSize);
+  }
+  function encodeBytes(prefix, bytes) {
+    return encodeBech32(prefix, bytes);
+  }
 
   // node_modules/@noble/ciphers/utils.js
   function isBytes3(a) {
@@ -5545,6 +5555,16 @@
     },
     subscribeChurchEvents(churchNpub, cb) {
       return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "" }), cb);
+    },
+    // the wider networks/groups-of-churches this church belongs to (it publishes network:<networkPub>)
+    subscribeChurchNetworks(churchNpub, cb) {
+      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/network:", (c, id) => ({ networkPub: id, npub: (() => {
+        try {
+          return npubEncode(id);
+        } catch {
+          return "";
+        }
+      })() }), cb);
     },
     // ── serving requests the church p-tagged to ME ("can you serve?") ──
     subscribeMyServingRequests(onReqs) {

@@ -88,6 +88,13 @@ function useStewardRequests() {
 }
 window.useStewardRequests = useStewardRequests;
 
+function useStewardNetworks() {
+  const [networks, setNetworks] = useSt([]);
+  useStE(() => window.Steward.subscribeNetworks(setNetworks), []);
+  return networks;
+}
+window.useStewardNetworks = useStewardNetworks;
+
 // people participating in this church's chat (derived from messages addressed to the church)
 function useStewardMembers() {
   const [members, setMembers] = useSt([]);
