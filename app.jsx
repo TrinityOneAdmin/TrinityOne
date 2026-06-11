@@ -378,7 +378,9 @@ function App() {
   const todayStr = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
   const servPending = servReqs.filter(r => !servReplies[r.id] && (r.date || '') >= todayStr);
   const servConfirmed = servReqs.filter(r => servReplies[r.id] === 'accept' && (r.date || '') >= todayStr).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const servDeclined = servReqs.filter(r => (servReplies[r.id] === 'decline' || servReplies[r.id] === 'swap') && (r.date || '') >= todayStr).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const servDeclined = servReqs.filter(r => (servReplies[r.id] === 'decline' || servReplies[r.id] === 'swap') && (r.date || '') >= todayStr)
+    .map(r => ({ ...r, _verdict: servReplies[r.id] }))
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const servNext = servConfirmed[0] || null;
   // schedule local reminders for confirmed slots (the day before) + register web-push (PWA)
   useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servReqs, servReplies]);

@@ -9144,7 +9144,7 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now();
       const groupId = ev.groupId || "";
-      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", groupId });
+      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId });
       const tags = [["d", EVENT_D + id], ["t", NET]];
       if (groupId) tags.push(["t", groupId]);
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags, content }, sk)).then(() => ({ id, ...JSON.parse(content) }));

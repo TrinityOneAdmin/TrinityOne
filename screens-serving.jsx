@@ -457,21 +457,29 @@ function ServingScreen({ open, onClose, ctx }) {
               )}
             </div>
 
-            {/* declined / swap-asked — with an undo */}
+            {/* your replies (declined / swap-asked) — each with an undo, labelled to match the steward */}
             {declined.length ? (
               <React.Fragment>
-                <div style={{ marginTop: 22 }}><SectionLabel>You said no</SectionLabel></div>
+                <div style={{ marginTop: 22 }}><SectionLabel>Your responses</SectionLabel></div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {declined.map(it => (
-                    <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
-                      <ServDateBlock iso={it.date} accent="var(--ink-3)" />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink-2)' }}>{it.teamName}</div>
-                        <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1 }}>{it.role} · {svParts(it.date).dow} {svParts(it.date).day} {svParts(it.date).mon}</div>
+                  {declined.map(it => {
+                    const isSwap = it._verdict === 'swap';
+                    const statusFg = isSwap ? '#8a6717' : 'var(--ink-3)';
+                    const statusBg = isSwap ? 'var(--gold-tint)' : 'var(--surface-2)';
+                    return (
+                      <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+                        <ServDateBlock iso={it.date} accent={isSwap ? 'var(--gold)' : 'var(--ink-3)'} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink-2)' }}>{it.teamName}</span>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, color: statusFg, background: statusBg, borderRadius: 999, padding: '2px 8px' }}>{isSwap ? 'Swap asked' : 'Can’t make it'}</span>
+                          </div>
+                          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1 }}>{it.role} · {svParts(it.date).dow} {svParts(it.date).day} {svParts(it.date).mon}</div>
+                        </div>
+                        <button onClick={() => { ctx.respondServing(it, 'accept'); ctx.toast('Great — you’re back on'); }} style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> {isSwap ? 'I’ll serve' : 'I can serve'}</button>
                       </div>
-                      <button onClick={() => { ctx.respondServing(it, 'accept'); ctx.toast('Great — you’re back on'); }} style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> I can serve</button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </React.Fragment>
             ) : null}
@@ -506,6 +514,7 @@ function ServingScreen({ open, onClose, ctx }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {events.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => (
                 <div key={e.id} style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+                  {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 150, objectFit: 'cover', display: 'block' }} /> : null}
                   <div style={{ display: 'flex', gap: 13, padding: 16 }}>
                     <ServDateBlock iso={e.date} accent={e.accent || 'var(--clay)'} />
                     <div style={{ flex: 1, minWidth: 0 }}>

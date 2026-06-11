@@ -5534,7 +5534,7 @@
       return window.Fellowship._subChurchAddr(churchNpub, "trinityone/roster:", (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [] }), cb);
     },
     subscribeChurchEvents(churchNpub, cb) {
-      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, groupId: c.groupId || "" }), cb);
+      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "" }), cb);
     },
     // ── serving requests the church p-tagged to ME ("can you serve?") ──
     subscribeMyServingRequests(onReqs) {

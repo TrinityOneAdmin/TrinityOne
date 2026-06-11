@@ -423,12 +423,23 @@ function SchEventModal({ day, onClose }) {
   const [blurb, setBlurb] = useSch('');
   const [accent, setAccent] = useSch('var(--clay)');
   const [group, setGroup] = useSch('');          // '' = whole church; else a group/team id
+  const [image, setImage] = useSch('');          // optional cover image (resized data-URL)
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
+  const onImage = (file) => {
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = () => { const img = new Image(); img.onload = () => {
+      const max = 720; let w = img.width, h = img.height; if (w > max) { h = Math.round(h * max / w); w = max; }
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h);
+      try { setImage(cv.toDataURL('image/jpeg', 0.72)); } catch (e) {}
+    }; img.src = r.result; };
+    r.readAsDataURL(file);
+  };
   const save = () => {
     if (!title.trim() || !date) return;
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
-    dates.forEach(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, groupId: group }));
+    dates.forEach(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: group }));
     onClose();
   };
   return (
@@ -456,6 +467,18 @@ function SchEventModal({ day, onClose }) {
         })}
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '6px 2px 0', lineHeight: 1.4 }}>Group events still show on everyone’s calendar, and appear inside that group’s chat too.</div>
+      <div style={schLbl}>Cover image (optional)</div>
+      {image ? (
+        <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 4, border: '1px solid var(--line)' }}>
+          <img src={image} alt="" style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block' }} />
+          <button onClick={() => setImage('')} style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 999, border: 'none', background: 'rgba(20,15,10,.6)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="x" size={16} color="#fff" /></button>
+        </div>
+      ) : (
+        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 64, borderRadius: 12, border: '1.5px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>
+          <Icon name="plus" size={18} color="var(--ink-3)" /> Add a photo
+          <input type="file" accept="image/*" onChange={e => onImage(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
+        </label>
+      )}
       <div style={schLbl}>Note (optional)</div>
       <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
@@ -473,6 +496,14 @@ function DashCalendar() {
   const rotas = window.useStewardRotas();
   const rosters = window.useStewardRosters();
   const teams = window.useStewardGroups().filter(g => g.kind === 'team');
+  const rsvps = window.useStewardRsvps();              // { eventId: { memberPub: 'going'|'maybe'|'no' } }
+  const members = window.useStewardMembers();
+  const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
+  const rsvpSummary = (eventId) => {
+    const map = rsvps[eventId] || {}; const out = { going: [], maybe: [], no: [] };
+    for (const pub in map) { if (out[map[pub]]) out[map[pub]].push(nameFor(pub)); }
+    return out;
+  };
   const today = new Date();
   const [view, setView] = useSch({ y: today.getFullYear(), m: today.getMonth() });
   const [pickedDay, setPickedDay] = useSch(null);
@@ -548,6 +579,20 @@ function DashCalendar() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div></div>
                   <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{e.time}{e.where ? ' · ' + e.where : ''}</div>
                   {e.blurb ? <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '7px 0 0' }}>{e.blurb}</p> : null}
+                  {(() => {
+                    const rs = rsvpSummary(e.id); const total = rs.going.length + rs.maybe.length + rs.no.length;
+                    if (!total) return <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 7 }}>No RSVPs yet</div>;
+                    return (
+                      <div style={{ marginTop: 8, borderTop: '1px solid var(--line-2)', paddingTop: 8 }}>
+                        <div style={{ display: 'flex', gap: 12, fontSize: 12, fontWeight: 700 }}>
+                          <span style={{ color: 'var(--sage)' }}>{rs.going.length} going</span>
+                          {rs.maybe.length ? <span style={{ color: '#8a6717' }}>{rs.maybe.length} maybe</span> : null}
+                          {rs.no.length ? <span style={{ color: 'var(--ink-3)' }}>{rs.no.length} can’t</span> : null}
+                        </div>
+                        {rs.going.length ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 4, lineHeight: 1.45 }}>{rs.going.slice(0, 8).join(', ')}{rs.going.length > 8 ? ` +${rs.going.length - 8}` : ''}</div> : null}
+                      </div>
+                    );
+                  })()}
                   <button onClick={() => window.Steward.removeEvent(e.id)} style={{ border: 'none', background: 'none', color: 'var(--ink-3)', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginTop: 6, padding: 0 }}>Remove</button>
                 </div>
               ))}
