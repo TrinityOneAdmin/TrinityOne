@@ -470,6 +470,62 @@ function BookPicker({ open, onClose, onPick, version }) {
 }
 
 // ── main read screen ──
+// ── commentary slide-out: a tab pinned to the right edge of the reader that swipes/taps in ──
+function CommentaryEdge({ open, onToggle }) {
+  if (open) return null;
+  return (
+    <button onClick={onToggle} aria-label="Open commentary" style={{
+      position: 'absolute', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
+      background: 'var(--clay)', color: '#fff', padding: '13px 5px 13px 7px', borderRadius: '13px 0 0 13px',
+      boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
+    }}>
+      <Icon name="comment" size={17} color="#fff" />
+      <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 10, fontWeight: 800, letterSpacing: '1px', fontFamily: 'var(--font-ui)' }}>NOTES</span>
+    </button>
+  );
+}
+function CommentaryPanel({ loc, label, open, onClose }) {
+  const C = window.TrinityData.COMMENTARY;
+  const seeded = false;   // populated once a MySword commentary (.cmt.mybible) module is installed
+  const sx = useR(0);
+  return (
+    <React.Fragment>
+      {open ? <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 24, background: 'rgba(20,15,10,.32)', animation: 'trinityFade .25s ease both' }} /> : null}
+      <div
+        onTouchStart={(e) => { sx.current = e.touches[0].clientX; }}
+        onTouchEnd={(e) => { if (e.changedTouches[0].clientX - sx.current > 56) onClose(); }}
+        style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 25, width: 'min(440px, 88%)', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', transform: open ? 'translateX(0)' : 'translateX(101%)', transition: 'transform .32s cubic-bezier(.32,.72,0,1)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ paddingTop: 50, flexShrink: 0, borderBottom: '1px solid var(--line)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 12px' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Commentary</div>
+              <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700, lineHeight: 1.1 }}>{label}</div>
+            </div>
+            <IconBtn name="chevR" onClick={onClose} />
+          </div>
+        </div>
+        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
+          {seeded ? C.blocks.map((b, i) => (
+            <div key={i} style={{ marginBottom: 18 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginBottom: 5 }}>
+                <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: '#fff', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8 }}>v{b.v}</span>
+                <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{b.title}</span>
+              </div>
+              <p style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.62, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>{b.text}</p>
+            </div>
+          )) : (
+            <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
+              <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="comment" size={26} /></div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>No commentary installed</div>
+              <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 280, margin: '0 auto' }}>Add a commentary from the library (a MySword <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>.cmt.mybible</span> set) and study notes for this passage appear here.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </React.Fragment>
+  );
+}
+
 function ReadScreen({ ctx }) {
   const Bible = window.Bible;
   const loc = ctx.loc || Bible.defaultLoc() || { book: 43, chap: 1 };
@@ -481,6 +537,7 @@ function ReadScreen({ ctx }) {
   const [sel, setSel] = useS(null);
   const [sheet, setSheet] = useS(new URLSearchParams(location.search).get('sheet') || null);
   const [wordId, setWordId] = useS(new URLSearchParams(location.search).get('word') || null);
+  const [commentaryOpen, setCommentaryOpen] = useS(false);
   const scrollRef = useR();
   useE(() => { lsSet('trinityone.readerScale', scale); }, [scale]);
   useE(() => { lsSet('trinityone.readerSerif', serif); }, [serif]);
@@ -579,10 +636,11 @@ function ReadScreen({ ctx }) {
       <ActionSheet label={labelOf(sel)} ctx={sheetCtx} open={sheet === 'action'} onClose={close}
         curColor={ctx.highlights[keyOf(sel)]} onColor={(c) => { ctx.setHighlight(keyOf(sel), c); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel))} hasNote={!!ctx.notes[keyOf(sel)]}
-        onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => setSheet('commentary')} />
+        onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} />
       <CrossRefSheet loc={loc} v={sel} label={labelOf(sel)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
-      <CommentarySheet loc={loc} label={bname + ' ' + loc.chap} open={sheet === 'commentary'} onClose={() => setSheet('action')} />
+      <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />
+      <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} />
       <NoteEditor label={labelOf(sel)} open={sheet === 'note'} value={ctx.notes[keyOf(sel)]} onClose={() => setSheet('action')}
         onSave={(t) => { ctx.setNote(keyOf(sel), t); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />

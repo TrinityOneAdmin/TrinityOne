@@ -5030,6 +5030,16 @@
     ready: null,
     profile,
     displayFor,
+    // http(s) base of the church's gateway (derived from its relay) — for the /feed video proxy
+    gatewayBase() {
+      const r = (window.Fellowship.relays || [])[0] || "";
+      try {
+        const u = new URL(r);
+        return (u.protocol === "wss:" ? "https:" : "http:") + "//" + u.host;
+      } catch {
+        return "";
+      }
+    },
     // scope outgoing messages to a church (so its steward can see who's participating). The member
     // app calls this with the active church's npub whenever it changes; null clears the scope.
     setChurch(npubOrHex) {

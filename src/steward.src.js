@@ -60,6 +60,7 @@ function relays() {
 
 const pool = new SimplePool();
 let sk = null, pub = null;
+let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
 
 function setKey(mnemonic) {
   sk = privateKeyFromSeedWords(mnemonic);
@@ -108,7 +109,9 @@ window.Steward = {
   // ---- publish (signed by the church) ----
   publishProfile(meta) {
     if (!sk) return Promise.resolve(null);
-    const content = JSON.stringify({ name: meta.name || '', about: meta.about || '', nip05: meta.nip05 || '', picture: meta.picture || '' });
+    lastProfile = { ...lastProfile, ...meta };   // merge so a partial edit (e.g. name) keeps channel etc.
+    const m = lastProfile;
+    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05: m.nip05 || '', picture: m.picture || '', channel: m.channel || '' });
     return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
   },
   publishFund(fund) {
@@ -472,7 +475,7 @@ window.Steward = {
   subscribeProfile(onProfile) {
     let latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pub] }], {
-      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { onProfile(JSON.parse(e.content)); } catch {} },
+      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; onProfile(p); } catch {} },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };

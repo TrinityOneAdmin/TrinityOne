@@ -8731,6 +8731,7 @@ zoo`.split("\n");
   var pool = new SimplePool();
   var sk = null;
   var pub = null;
+  var lastProfile = {};
   function setKey(mnemonic) {
     sk = privateKeyFromSeedWords(mnemonic);
     pub = getPublicKey2(sk);
@@ -8788,7 +8789,9 @@ zoo`.split("\n");
     // ---- publish (signed by the church) ----
     publishProfile(meta) {
       if (!sk) return Promise.resolve(null);
-      const content = JSON.stringify({ name: meta.name || "", about: meta.about || "", nip05: meta.nip05 || "", picture: meta.picture || "" });
+      lastProfile = { ...lastProfile, ...meta };
+      const m = lastProfile;
+      const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05: m.nip05 || "", picture: m.picture || "", channel: m.channel || "" });
       return publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content }, sk));
     },
     publishFund(fund) {
@@ -9369,7 +9372,9 @@ zoo`.split("\n");
           if (e.created_at < latest) return;
           latest = e.created_at;
           try {
-            onProfile(JSON.parse(e.content));
+            const p = JSON.parse(e.content);
+            lastProfile = { ...lastProfile, ...p };
+            onProfile(p);
           } catch {
           }
         },

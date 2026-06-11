@@ -95,8 +95,59 @@ const MIME = {
   '.ico': 'image/x-icon', '.map': 'application/json',
   '.apk': 'application/vnd.android.package-archive', '.webmanifest': 'application/manifest+json',
 };
+// ---- video feed proxy: fetch a church's YouTube/Rumble channel feed server-side (browsers can't,
+// the RSS has no CORS). Returns { channel:{name,url,platform}, videos:[{id,ytId,title,published,thumb}] }.
+const feedCache = new Map();            // channelUrl -> { ts, data }
+const FEED_TTL = 30 * 60 * 1000;
+const decodeXml = (s) => String(s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
+async function fetchText(url) { const r = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; TrinityOne/1.0)' }, redirect: 'follow' }); if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }
+async function resolveYouTube(input) {
+  let channelId = (input.match(/channel\/(UC[\w-]+)/) || input.match(/^(UC[\w-]+)$/) || [])[1] || null;
+  if (!channelId) {
+    let pageUrl = input;
+    if (/^@[\w.\-]+$/.test(input)) pageUrl = 'https://www.youtube.com/' + input;
+    else if (!/^https?:/i.test(input)) pageUrl = 'https://www.youtube.com/' + input.replace(/^\/+/, '');
+    const html = await fetchText(pageUrl);
+    channelId = (html.match(/"channelId":"(UC[\w-]+)"/) || html.match(/channel\/(UC[\w-]+)/) || [])[1] || null;
+  }
+  if (!channelId) throw new Error('could not resolve YouTube channel');
+  const xml = await fetchText('https://www.youtube.com/feeds/videos.xml?channel_id=' + channelId);
+  const chName = decodeXml((xml.match(/<title>([^<]+)<\/title>/) || [])[1] || 'Channel');
+  const videos = [];
+  for (const e of xml.split('<entry>').slice(1)) {
+    const vid = (e.match(/<yt:videoId>([^<]+)</) || [])[1]; if (!vid) continue;
+    videos.push({ id: vid, ytId: vid, title: decodeXml((e.match(/<title>([^<]+)</) || [])[1] || ''), published: (e.match(/<published>([^<]+)</) || [])[1] || '', thumb: 'https://i.ytimg.com/vi/' + vid + '/hqdefault.jpg' });
+  }
+  return { channel: { name: chName, url: 'https://www.youtube.com/channel/' + channelId, platform: 'youtube' }, videos };
+}
+async function resolveRumble(input) {
+  // Rumble has no clean public feed; best-effort scrape of the channel page for video links.
+  const html = await fetchText(input);
+  const name = decodeXml((html.match(/<title>([^<]+)<\/title>/) || [])[1] || 'Channel').replace(/\s*-\s*Rumble.*$/i, '');
+  const videos = []; const seen = new Set(); const re = /href="(\/v[a-z0-9]+-[^"]+\.html)"/gi; let m;
+  while ((m = re.exec(html)) && videos.length < 15) { if (seen.has(m[1])) continue; seen.add(m[1]); videos.push({ id: m[1], rumbleUrl: 'https://rumble.com' + m[1], title: '', published: '', thumb: '' }); }
+  return { channel: { name, url: input, platform: 'rumble' }, videos };
+}
+async function getFeed(url) {
+  const cached = feedCache.get(url); if (cached && Date.now() - cached.ts < FEED_TTL) return cached.data;
+  let data;
+  if (/youtu\.?be|youtube\.com/.test(url) || /^@[\w.\-]+$/.test(url) || /^UC[\w-]+$/.test(url)) data = await resolveYouTube(url);
+  else if (/rumble\.com/.test(url)) data = await resolveRumble(url);
+  else data = { channel: { url, platform: 'link' }, videos: [] };
+  feedCache.set(url, { ts: Date.now(), data });
+  return data;
+}
+
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
+  // video feed proxy
+  if (route === '/feed') {
+    let u = ''; try { u = new URL(req.url, 'http://x').searchParams.get('url') || ''; } catch {}
+    const json = (obj) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=600' }); res.end(JSON.stringify(obj)); };
+    if (!u) { res.writeHead(400, { 'Access-Control-Allow-Origin': '*' }); res.end('{"error":"no url"}'); return; }
+    getFeed(u).then(json).catch(e => json({ channel: { url: u, platform: 'link' }, videos: [], error: String((e && e.message) || e) }));
+    return;
+  }
   // web-push: hand out the VAPID public key + accept member push subscriptions
   if (route === '/push/vapid') { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify({ publicKey: VAPID.publicKey })); return; }
   if (route === '/push/subscribe') {

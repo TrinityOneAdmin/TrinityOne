@@ -297,7 +297,8 @@ function App() {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
     const offs = churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0).map(c =>
       window.Fellowship.subscribeChurchProfile(c.npub || c.id, (p) => {
-        if (p && p.name) setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name, initials: p.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
+        if (!p) return;
+        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
       }));
     return () => offs.forEach(o => { try { o && o(); } catch (e) {} });
   }, []);

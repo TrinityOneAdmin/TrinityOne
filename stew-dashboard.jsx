@@ -751,6 +751,90 @@ function DashMembers() {
 }
 window.DashMembers = DashMembers;
 
+// full backup dialog: what's included + a passphrase OR PIN + download the encrypted file
+function StewBackupModal({ church, onClose }) {
+  const [pass, setPass] = React.useState('');
+  const [show, setShow] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [done, setDone] = React.useState(false);
+  const strength = pass.length === 0 ? null
+    : pass.length < 4 ? { t: 'Too short', c: 'var(--ink-3)' }
+    : /^\d+$/.test(pass) && pass.length < 6 ? { t: 'PIN — easy to use, easier to guess', c: 'var(--clay)' }
+    : pass.length < 8 ? { t: 'OK', c: 'var(--gold)' }
+    : { t: 'Strong', c: 'var(--sage)' };
+  const make = async () => {
+    if (pass.length < 4) { setErr('Use at least 4 characters (a numeric PIN is fine).'); return; }
+    setBusy(true); setErr('');
+    try {
+      const obj = window.TrinityBackup.collectSteward();
+      const text = await window.TrinityBackup.encryptObj(obj, pass);
+      await window.TrinityBackup.saveFile('trinityone-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '-' + new Date().toISOString().slice(0, 10) + '.json', text);
+      setDone(true); setTimeout(onClose, 1300);
+    } catch (e) { setErr('Backup failed: ' + (e.message || e)); setBusy(false); }
+  };
+  const incl = [
+    ['key', 'Your church recovery key', 'The one irreplaceable thing — restores the church anywhere'],
+    ['chat', 'Console settings', 'Relays, video channel, preferences'],
+    ['globe', 'Your groups, rota & members', 'Live on the relay — they return when you restore the key'],
+  ];
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 470, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, maxHeight: '92%', overflowY: 'auto', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="lock" size={21} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Back up your church</div>
+        </div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 18px' }}>One encrypted file you can keep safe (cloud drive, USB stick). You’ll need your passphrase or PIN to restore it.</p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 18 }}>
+          {incl.map(([ic, t, s]) => (
+            <div key={t} style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <div style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--surface)', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={ic} size={16} /></div>
+              <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{t}</div><div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>{s}</div></div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Passphrase or PIN</div>
+        <div style={{ display: 'flex', gap: 9 }}>
+          <input value={pass} onChange={e => { setPass(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') make(); }} type={show ? 'text' : 'password'} autoFocus inputMode="text" placeholder="a memorable passphrase, or a PIN" style={{ flex: 1, height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+          <button onClick={() => setShow(s => !s)} className="sk-btn sk-btn--ghost" style={{ padding: '0 14px' }}>{show ? 'Hide' : 'Show'}</button>
+        </div>
+        {strength ? <div style={{ fontSize: 12, color: strength.c, fontWeight: 600, marginTop: 7 }}>{strength.t}{strength.c === 'var(--clay)' ? ' · longer is safer' : ''}</div> : null}
+        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+        <div style={{ display: 'flex', gap: 9, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', margin: '16px 0 18px' }}>
+          <Icon name="shield" size={16} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>If you forget this, the backup can’t be opened — not even by us. Store it with the file.</div>
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
+          <button onClick={make} disabled={busy || done || pass.length < 4} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4) ? 0.6 : 1 }}>
+            <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? 'Saved' : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// church video channel — members' Watch tab auto-fills from this on follow (via the gateway feed proxy)
+function DashChannelPanel({ church }) {
+  const [draft, setDraft] = React.useState('');
+  const [saved, setSaved] = React.useState(false);
+  React.useEffect(() => { setDraft(church.channel || ''); }, [church.channel]);
+  const save = () => { window.Steward.publishProfile({ channel: draft.trim() }); setSaved(true); setTimeout(() => setSaved(false), 1700); };
+  return (
+    <Panel title="Video channel">
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Paste your church’s <b>YouTube</b> or <b>Rumble</b> channel. Members who follow you get its videos right inside the app’s Watch tab — kept up to date automatically.</div>
+      <div style={{ display: 'flex', gap: 9 }}>
+        <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} spellCheck={false} autoCapitalize="none"
+          placeholder="youtube.com/@yourchurch  ·  @yourchurch  ·  rumble.com/c/yourchurch"
+          style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' }} />
+        <button onClick={save} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="#fff" /> {saved ? 'Saved' : 'Save'}</button>
+      </div>
+      {church.channel ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.channel}</span></div> : null}
+    </Panel>
+  );
+}
+
 function DashSettings({ onTab }) {
   const church = window.useStewardChurch();   // real church name + npub
   const [revealed, setRevealed] = React.useState(false);
@@ -762,6 +846,7 @@ function DashSettings({ onTab }) {
   };
   const reveal = () => { try { setPhrase(window.Steward.exportMnemonic() || ''); } catch {} setRevealed(true); };
   const [restoreOpen, setRestoreOpen] = React.useState(false);
+  const [backupOpen, setBackupOpen] = React.useState(false);
   const [restorePhrase, setRestorePhrase] = React.useState('');
   const [restoreErr, setRestoreErr] = React.useState('');
   const doRestore = () => {
@@ -773,12 +858,6 @@ function DashSettings({ onTab }) {
       }
     } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
   };
-  const backupToFile = async () => {
-    const p = window.prompt('Choose a passphrase to encrypt this backup (you’ll need it to restore):');
-    if (p == null) return; if (p.length < 6) { window.alert('Use a passphrase of at least 6 characters.'); return; }
-    try { const obj = window.TrinityBackup.collectSteward(); const text = await window.TrinityBackup.encryptObj(obj, p); await window.TrinityBackup.saveFile('trinityone-church-' + new Date().toISOString().slice(0, 10) + '.json', text); }
-    catch (e) { window.alert('Backup failed: ' + (e.message || e)); }
-  };
   const restoreFromFile = (e) => {
     const f = e.target.files && e.target.files[0]; if (!f) return;
     const p = window.prompt('Enter the passphrase for this backup file:'); if (p == null) return;
@@ -789,6 +868,7 @@ function DashSettings({ onTab }) {
   };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
+      {backupOpen ? <StewBackupModal church={church} onClose={() => setBackupOpen(false)} /> : null}
       <Panel title="Church identity" action={<button onClick={editName} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
           <SkBadge initials={(church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase()} size={44} radius={13} />
@@ -799,6 +879,8 @@ function DashSettings({ onTab }) {
         </div>
         <SkKey value={church.npub || '—'} label="npub" />
       </Panel>
+
+      <DashChannelPanel church={church} />
 
       <Panel title="Church key">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>
@@ -819,7 +901,7 @@ function DashSettings({ onTab }) {
           </div>
         )}
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={backupToFile} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="share" size={15} color="currentColor" /> Back up to a file</button>
+          <button onClick={() => setBackupOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="share" size={15} color="currentColor" /> Back up to a file</button>
           <label className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="refresh" size={15} color="currentColor" /> Restore from a file<input type="file" accept=".json,application/json" onChange={restoreFromFile} style={{ display: 'none' }} /></label>
         </div>
         <div style={{ marginTop: 12 }}>

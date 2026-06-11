@@ -128,7 +128,7 @@ window.useStewardActivity = useStewardActivity;
 function useStewardChurch() {
   const [p, setP] = useSt({});
   useStE(() => window.Steward.subscribeProfile(setP), []);
-  return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', npub: window.Steward.npub || '' };
+  return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', channel: (p && p.channel) || '', npub: window.Steward.npub || '' };
 }
 window.useStewardChurch = useStewardChurch;
 

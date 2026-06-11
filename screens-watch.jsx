@@ -81,7 +81,20 @@ function ChannelAvatar({ ch, size = 56 }) {
 function WatchView({ ctx }) {
   const [data, setData] = useW(null);
   const [paste, setPaste] = useW('');
-  React.useEffect(() => { window.Bible.getVideos().then(d => setData(d || { channel: null, videos: [] })); }, []);
+  const channelUrl = (ctx.church && ctx.church.channel) || '';
+  React.useEffect(() => {
+    let alive = true; setData(null);
+    const done = (d) => { if (alive) setData(d || { channel: null, videos: [] }); };
+    const FS = window.Fellowship;
+    if (channelUrl && FS && FS.gatewayBase && FS.gatewayBase()) {
+      // the church set a YouTube/Rumble channel — the gateway fetches its feed for us (CORS-free)
+      fetch(FS.gatewayBase() + '/feed?url=' + encodeURIComponent(channelUrl))
+        .then(r => r.json()).then(done).catch(() => done({ channel: null, videos: [] }));
+    } else {
+      window.Bible.getVideos().then(done);
+    }
+    return () => { alive = false; };
+  }, [channelUrl]);
 
   const add = () => {
     const id = parseYT(paste);
