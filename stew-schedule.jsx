@@ -464,6 +464,9 @@ function SchEventModal({ day, onClose }) {
   const [image, setImage] = useSch('');          // optional cover image (resized data-URL)
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
+  const ownedNets = React.useMemo(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);
+  const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
+  const asNetwork = !!asPub;
   const onImage = (file) => {
     if (!file) return;
     const r = new FileReader();
@@ -477,11 +480,28 @@ function SchEventModal({ day, onClose }) {
   const save = () => {
     if (!title.trim() || !date) return;
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
-    dates.forEach(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: group }));
+    // a group is church-scoped, so a network-wide event never belongs to a church group
+    const gid = asNetwork ? '' : group;
+    dates.forEach(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub));
     onClose();
   };
   return (
     <SchModal title="New event" onClose={onClose} width={460}>
+      {ownedNets.length ? (
+        <React.Fragment>
+          <div style={schLbl}>Publish as</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {[{ pub: '', name: 'This church', kind: 'church' }, ...ownedNets.map(n => ({ pub: n.pub, name: n.name, kind: 'network' }))].map(idn => {
+              const on = asPub === idn.pub;
+              return (
+                <button key={idn.pub || 'church'} onClick={() => setAsPub(idn.pub)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
+                  <Icon name={idn.kind === 'network' ? 'globe' : 'bank'} size={13} color="currentColor" />{idn.name}</button>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '6px 2px 0', lineHeight: 1.4 }}>{asNetwork ? 'Reaches every church in the network.' : 'Only your own congregation sees this.'}</div>
+        </React.Fragment>
+      ) : null}
       <div style={schLbl}>Title</div>
       <input value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
       <div style={{ display: 'flex', gap: 10 }}>
@@ -494,17 +514,21 @@ function SchEventModal({ day, onClose }) {
       <div style={{ display: 'flex', gap: 8 }}>
         {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
       </div>
-      <div style={schLbl}>Belongs to</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-        {[{ id: '', name: 'Whole church', icon: 'send' }, ...allGroups].map(g => {
-          const on = group === g.id;
-          return (
-            <button key={g.id || 'all'} onClick={() => setGroup(g.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
-              <Icon name={g.id ? (g.kind === 'team' ? (g.icon || 'shield') : 'chat') : 'send'} size={13} color="currentColor" />{g.name}</button>
-          );
-        })}
-      </div>
-      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '6px 2px 0', lineHeight: 1.4 }}>Group events still show on everyone’s calendar, and appear inside that group’s chat too.</div>
+      {!asNetwork ? (
+        <React.Fragment>
+          <div style={schLbl}>Belongs to</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {[{ id: '', name: 'Whole church', icon: 'send' }, ...allGroups].map(g => {
+              const on = group === g.id;
+              return (
+                <button key={g.id || 'all'} onClick={() => setGroup(g.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
+                  <Icon name={g.id ? (g.kind === 'team' ? (g.icon || 'shield') : 'chat') : 'send'} size={13} color="currentColor" />{g.name}</button>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '6px 2px 0', lineHeight: 1.4 }}>Group events still show on everyone’s calendar, and appear inside that group’s chat too.</div>
+        </React.Fragment>
+      ) : null}
       <div style={schLbl}>Cover image (optional)</div>
       {image ? (
         <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 4, border: '1px solid var(--line)' }}>

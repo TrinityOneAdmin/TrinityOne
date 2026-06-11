@@ -169,6 +169,17 @@ function RecoverySheet({ open, onClose, ctx }) {
 window.RecoverySheet = RecoverySheet;
 
 // ════════ Steward invite ════════
+// Builds a real, scannable invite: <base>/?invite=<fresh-identity>&follow=<church>&relay=<relay>.
+// Scanning it (any camera or the in-app scanner) opens TrinityOne, adopts the ready-made anonymous
+// identity, and joins the church — one scan, no email/phone.
+function inviteUrlFor(mnemonic, ctx) {
+  const o = (typeof location !== 'undefined' && location.origin) || '';
+  const base = o.startsWith('https://') ? o : 'https://trinityone.tailbeaac0.ts.net';
+  const relay = base.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:') + '/relay';
+  const np = (ctx.church && /^npub1[0-9a-z]+$/.test(ctx.church.npub || '')) ? ctx.church.npub : '';
+  return base + '/?invite=' + encodeURIComponent(mnemonic) + (np ? '&follow=' + np : '') + '&relay=' + encodeURIComponent(relay);
+}
+
 function InviteSheet({ open, onClose, identity, ctx }) {
   // generate a REAL invite (a fresh anonymous key for someone to import) when the sheet opens
   const [invite, setInvite] = useIx(null);
@@ -176,9 +187,17 @@ function InviteSheet({ open, onClose, identity, ctx }) {
     const ID = window.TrinityIdentity;
     if (open && ID && ID.makeInvite) setInvite(ID.makeInvite()); else if (open) setInvite(null);
   }, [open]);
-  const shareInvite = () => {
-    if (invite && navigator.clipboard) navigator.clipboard.writeText(invite.mnemonic).catch(() => {});
-    ctx.toast(invite ? 'Invite phrase copied — share it securely' : 'Invite link copied');
+  const url = invite ? inviteUrlFor(invite.mnemonic, ctx) : '';
+  const qrSvg = (invite && window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(url) : '';
+  const shareInvite = async () => {
+    if (!url) return;
+    const Cap = window.Capacitor, P = Cap && Cap.Plugins;
+    try {
+      if (P && P.Share && Cap.isNativePlatform && Cap.isNativePlatform()) { await P.Share.share({ title: 'Join ' + ((ctx.church && ctx.church.name) || 'our church') + ' on TrinityOne', text: 'Tap to join — no email or phone needed:', url }); return; }
+      if (navigator.share) { await navigator.share({ title: 'TrinityOne invite', text: 'Tap to join our church:', url }); return; }
+    } catch (e) {}
+    try { if (navigator.clipboard) await navigator.clipboard.writeText(url); } catch (e) {}
+    ctx.toast('Invite link copied');
   };
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="84%" z={60}>
@@ -187,15 +206,17 @@ function InviteSheet({ open, onClose, identity, ctx }) {
         <IconBtn name="x" onClick={onClose} />
       </div>
       <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '4px 0 18px', textWrap: 'pretty' }}>
-        Have a new member scan this to join your church’s groups — no email or phone needed.</p>
+        Have a new member scan this to join {(ctx.church && ctx.church.name) || 'your church'} — no email or phone needed.</p>
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
-        <div style={{ padding: 16, borderRadius: 22, background: '#fff', boxShadow: 'var(--shadow-lg)', position: 'relative' }}>
-          <MiniQR seed={'invite' + identity.npub} size={172} />
-          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 44, height: 44, borderRadius: 999, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 6px rgba(0,0,0,.15)' }}>
-            <Halo size={30} color="var(--ink)" spark="var(--gold)" />
-          </div>
-        </div>
+        <div style={{ padding: 16, borderRadius: 22, background: '#fff', boxShadow: 'var(--shadow-lg)', width: 196, height: 196, boxSizing: 'border-box', display: 'flex' }}
+          dangerouslySetInnerHTML={{ __html: qrSvg }} />
       </div>
+      {invite ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, justifyContent: 'center', marginBottom: 16 }}>
+          <Avatar handle={invite.profile.handle} color={invite.profile.color} size={26} />
+          <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>They’ll join as <b style={{ color: 'var(--ink-2)' }}>{invite.profile.handle}</b></span>
+        </div>
+      ) : null}
       <button onClick={shareInvite} style={{ width: '100%', padding: 15, borderRadius: 15, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
         <Icon name="share" size={17} color="#fff" /> Share invite link</button>
     </BottomSheet>
@@ -265,60 +286,25 @@ function RelaysSheet({ open, onClose, ctx }) {
         <IconBtn name="x" onClick={onClose} />
       </div>
       <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 16px' }}>
-        Relays carry your group’s messages across Nostr. Connect to more for resilience — if one goes down, the others keep you in sync.</p>
+        Relays carry your church’s messages across Nostr. They’re set up by the churches you join — you connect to a church’s relay automatically when you scan its invite.</p>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
-        {rows.map(r => (
-          <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-            <Icon name="globe" size={17} color={r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)'} />
-            <span style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bare(r.url)}</span>
-            <button onClick={() => toggle(r.url)} aria-label={r.status === 'on' ? 'Disconnect' : 'Connect'} style={{
-              display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, cursor: 'pointer',
-              border: 'none', background: 'none', fontFamily: 'var(--font-ui)', padding: '4px 2px',
-              color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
-              <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />
-              {r.status === 'on' ? 'Connected' : 'Off'}</button>
-            <button onClick={() => remove(r.url)} aria-label="Remove relay" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, marginRight: -4 }}>
-              <Icon name="x" size={15} /></button>
-          </div>
-        ))}
-      </div>
-
-      {adding ? (
-        <div style={{ animation: 'trinityFade .2s ease both', borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface)', padding: 14, marginTop: 4 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.4px', marginBottom: 8 }}>RELAY ADDRESS</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 46, padding: '0 6px 0 13px', borderRadius: 12,
-            border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), background: 'var(--surface-2)' }}>
-            <span style={{ fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink-3)' }}>wss://</span>
-            <input autoFocus value={url} onChange={e => { setUrl(e.target.value); setErr(''); }}
-              onKeyDown={e => { if (e.key === 'Enter') commitAdd(url); }}
-              placeholder="relay.example.com" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
-              style={{ flex: 1, minWidth: 0, border: 'none', background: 'none', outline: 'none', fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)' }} />
-            <button onClick={() => commitAdd(url)} disabled={!url.trim()} style={{
-              flexShrink: 0, height: 34, padding: '0 14px', borderRadius: 9, border: 'none', cursor: url.trim() ? 'pointer' : 'default',
-              background: url.trim() ? 'var(--clay)' : 'var(--line)', color: url.trim() ? '#fff' : 'var(--ink-3)',
-              fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Connect</button>
-          </div>
-          {err ? <div style={{ fontSize: 12, color: 'var(--clay)', marginTop: 8, lineHeight: 1.4 }}>{err}</div> : null}
-
-          {remaining.length ? (
-            <React.Fragment>
-              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.4px', margin: '15px 0 9px' }}>SUGGESTED</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                {remaining.slice(0, 5).map(s => (
-                  <button key={s} onClick={() => commitAdd(s)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 999,
-                    border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12.5, color: 'var(--ink-2)' }}>
-                    <Icon name="plus" size={13} color="var(--sage)" stroke={2.4} />{s}</button>
-                ))}
-              </div>
-            </React.Fragment>
-          ) : null}
-
-          <button onClick={() => { setAdding(false); setUrl(''); setErr(''); }} style={{ width: '100%', marginTop: 14, padding: 10, borderRadius: 11, border: 'none', background: 'none', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
+      {!rows.length ? (
+        <div style={{ display: 'flex', gap: 10, padding: '14px 15px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <Icon name="globe" size={18} color="var(--ink-3)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <span style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>No relay yet. Join a church — scan its invite QR — and you’ll connect to its relay here automatically.</span>
         </div>
       ) : (
-        <button onClick={() => setAdding(true)} style={{ width: '100%', marginTop: 4, padding: 13, borderRadius: 14, border: '1px dashed var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
-          <Icon name="plus" size={16} /> Add relay</button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rows.map(r => (
+            <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <Icon name="globe" size={17} color={r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)'} />
+              <span style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bare(r.url)}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />
+                {r.status === 'on' ? 'Connected' : 'Off'}</span>
+            </div>
+          ))}
+        </div>
       )}
     </BottomSheet>
   );

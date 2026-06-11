@@ -28,18 +28,16 @@ const NET = 'trinityone';                       // network-wide tag
 // with no hardcoded host and over a single tunnel. ws on http, wss on https (a tunnel).
 const _loc = (typeof location !== 'undefined') ? location : null;
 const RELAY_BASE = _loc && _loc.host ? _loc.host : '127.0.0.1:8090';
-// The packaged app (Capacitor) runs from localhost inside the webview, so it can't derive the
-// church relay from its own origin like the web build does. Ship the church's relay as the DEFAULT
-// (still changeable in the in-app Relays settings + persisted to localStorage). Pilot = Trinity
-// Littlehampton's stable Funnel.
-const CHURCH_RELAY = 'wss://trinityone.tailbeaac0.ts.net/relay';
+// No built-in default relay: a member has NO relay until they join a church, at which point the
+// church's relay is added from its invite (?relay=…). Relays are church-managed, not user-managed —
+// the in-app list is read-only. (The web build served from a church's own gateway is the one
+// exception: it can derive its relay from its origin, since it's literally served by that church.)
 const _native = !!(typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-const DEFAULT_RELAYS = _native
-  ? [CHURCH_RELAY]
-  : [((_loc && _loc.protocol === 'https:') ? 'wss://' : 'ws://') + RELAY_BASE + '/relay'];
+const _originRelay = (!_native && _loc && _loc.host) ? (((_loc.protocol === 'https:') ? 'wss://' : 'ws://') + RELAY_BASE + '/relay') : null;
+const DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];   // native = blank until a church is joined
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
-  try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r) && r.length) return r; } catch {}
+  try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r)) return r; } catch {}
   return DEFAULT_RELAYS.slice();
 }
 const HANDLE_POOL = ['Cedar', 'River', 'Sparrow', 'Olive', 'Wren', 'Maple', 'Reed', 'Dove', 'Ash', 'Linden', 'Heron', 'Bramble'];
@@ -205,21 +203,45 @@ window.Fellowship = {
     try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] DM publish failed', e); }
     return evt;
   },
-  // a 1:1 thread with one peer; onMsg({ id, mine, content, ts, pubkey }). Returns an unsubscribe fn.
+  // a 1:1 thread with one peer; onMsg({ id, mine, content, ts, pubkey, reactions, myReaction }).
+  // kind-7 reactions on either side are folded in and re-emitted against their target message.
   subscribeThread(peerPub, onMsg) {
     if (!pub) return () => {};
     const seen = new Set();
+    const msgs = new Map();          // id -> message
+    const rx = new Map();            // msgId -> Map(reactorPub -> emoji)
+    const push = (m) => {
+      const r = rx.get(m.id); const reactions = r ? [...r.values()].filter(Boolean) : [];
+      try { onMsg({ ...m, reactions, myReaction: r ? r.get(pub) || '' : '' }); } catch (err) {}
+    };
     const deliver = async (e) => {
       if (seen.has(e.id)) return; seen.add(e.id);
       const mine = e.pubkey === pub;
       let content = ''; try { content = await nip04decrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
-      try { onMsg({ id: e.id, mine, content, ts: e.created_at, pubkey: e.pubkey }); } catch (err) {}
+      const m = { id: e.id, mine, content, ts: e.created_at, pubkey: e.pubkey };
+      msgs.set(e.id, m); push(m);
+    };
+    const deliverRx = (e) => {
+      const tid = (e.tags.find(t => t[0] === 'e') || [])[1]; if (!tid) return;
+      let m = rx.get(tid); if (!m) { m = new Map(); rx.set(tid, m); }
+      if (e.content === '-' || e.content === '') m.delete(e.pubkey); else m.set(e.pubkey, e.content);
+      const msg = msgs.get(tid); if (msg) push(msg);
     };
     const sub = pool.subscribeMany(window.Fellowship.relays, [
       { kinds: [4], authors: [pub], '#p': [peerPub] },   // sent by me to peer
       { kinds: [4], authors: [peerPub], '#p': [pub] },   // sent by peer to me
-    ], { onevent: deliver, oneose() {} });
+      { kinds: [7], authors: [pub], '#p': [peerPub] },   // my reactions to their DMs
+      { kinds: [7], authors: [peerPub], '#p': [pub] },   // their reactions to my DMs
+    ], { onevent(e) { if (e.kind === 7) deliverRx(e); else deliver(e); }, oneose() {} });
     return () => { try { sub.close(); } catch {} };
+  },
+  // react to a DM from a peer (NIP-25 kind-7). emoji '' or '-' retracts.
+  async reactDM(peerPub, msgId, emoji) {
+    if (!sk) await window.Fellowship.ready;
+    if (!peerPub || !msgId) return null;
+    const evt = finalizeEvent({ kind: 7, created_at: Math.floor(Date.now() / 1000), tags: [['e', msgId], ['p', peerPub], ['t', NET], ['k', '4']], content: emoji || '-' }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] reactDM failed', e); }
+    return evt;
   },
   // inbox: every DM involving me, grouped by peer; onConvos([{ peer, lastTs, preview }]). Unsub fn.
   subscribeDMs(onConvos) {
@@ -356,7 +378,9 @@ window.Fellowship = {
     if (!pubk) { onDevos([]); return () => {}; }
     const DEVO_D = 'trinityone/devotional:';
     const byId = new Map();
-    const emit = () => onDevos([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    // honour the steward's explicit order (lower = first); unordered devotionals fall back to newest-first
+    const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
+    const emit = () => onDevos([...byId.values()].sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -389,12 +413,56 @@ window.Fellowship = {
     return () => { try { sub.close(); } catch {} };
   },
   // ── serving: services, per-service rotas, rosters, events the church publishes ──
-  subscribeChurchServices(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/service:', (c) => ({ date: c.date, time: c.time, name: c.name }), cb); },
+  subscribeChurchServices(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/service:', (c, id) => ({ id, date: c.date, time: c.time, name: c.name }), cb); },
   subscribeChurchRotas(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/rota:', (c, id) => ({ service: id, published: !!c.published, assign: c.assign || {} }), cb); },
   subscribeChurchRosters(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/roster:', (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [] }), cb); },
   subscribeChurchEvents(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/event:', (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '' }), cb); },
+  // events posted by a GROUP'S leaders (members the church empowered) — authored by the member, scoped
+  // to a group + p-tagged to the church. The relay only accepts these from authorised group leaders,
+  // so anything that lands here is trustworthy. onEvents([{ id, ...fields, byMember }]). Unsub fn.
+  subscribeGroupEvents(churchNpub, groupIds, onEvents) {
+    const cp = toPub(churchNpub); const groups = (groupIds || []).filter(Boolean);
+    if (!cp || !groups.length) { onEvents([]); return () => {}; }
+    const byId = new Map();
+    const emit = () => onEvents([...byId.values()].sort((a, b) => (a.date || '').localeCompare(b.date || '')));
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], '#t': groups }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d.startsWith('trinityone/event:')) return;
+        // scope to this church (authored by it, or p-tagged to it by a group leader)
+        if (e.pubkey !== cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
+        const id = d.slice('trinityone/event:'.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        try { const c = JSON.parse(e.content); byId.set(id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at }); emit(); } catch {}
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // a group leader posts an event for their group: signed by ME, scoped to the group, p-tagged to the church.
+  async publishGroupEvent(churchNpub, groupId, ev) {
+    if (!sk) await window.Fellowship.ready;
+    const cp = toPub(churchNpub); if (!cp || !groupId) return null;
+    const id = ev.id || ('evt' + Date.now() + Math.random().toString(36).slice(2, 6));
+    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId });
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/event:' + id], ['t', NET], ['t', groupId], ['p', cp]], content }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] publishGroupEvent failed', e); return null; }
+    return { id, ...JSON.parse(content) };
+  },
   // the wider networks/groups-of-churches this church belongs to (it publishes network:<networkPub>)
   subscribeChurchNetworks(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/network:', (c, id) => ({ networkPub: id, npub: (() => { try { return npubEncode(id); } catch { return ''; } })() }), cb); },
+  // a network's broadcast announcements (kind-1 authored by the network, tagged net-announce); newest first
+  subscribeNetworkAnnouncements(networkNpub, onPosts) {
+    const pubk = toPub(networkNpub);
+    if (!pubk) { onPosts([]); return () => {}; }
+    const byId = new Map();
+    const emit = () => onPosts([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], authors: [pubk], '#t': ['net-announce'] }], {
+      onevent(e) { byId.set(e.id, { id: e.id, text: e.content, ts: e.created_at, networkPub: pubk }); emit(); },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
 
   // ── serving requests the church p-tagged to ME ("can you serve?") ──
   subscribeMyServingRequests(onReqs) {

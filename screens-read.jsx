@@ -10,7 +10,7 @@ const HL_COLORS = [
 ];
 
 // ── one verse: real markup HTML, tappable Strong's superscripts, highlight + selection ──
-function VerseRow({ n, html, hl, note, bookmarked, selected, onSelect, onWord }) {
+function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, onWord }) {
   return (
     <span id={'rv-' + n} style={{ position: 'relative' }}>
       <span
@@ -22,7 +22,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, onSelect, onWord })
         style={{
           cursor: 'pointer', borderRadius: 6,
           outline: selected ? '2px solid var(--clay)' : 'none', outlineOffset: 3,
-          background: selected ? 'color-mix(in oklab, var(--clay) 8%, transparent)' : 'transparent',
+          background: reading ? 'color-mix(in oklab, var(--clay) 16%, transparent)' : (selected ? 'color-mix(in oklab, var(--clay) 8%, transparent)' : 'transparent'),
           transition: 'background .2s',
         }}>
         <sup style={{
@@ -41,7 +41,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, onSelect, onWord })
 }
 
 // ── header ──
-function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare, onCompare }) {
+function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare, onCompare, onListen, narrating, canListen }) {
   return (
     <div style={{
       position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, paddingTop: 50,
@@ -65,6 +65,7 @@ function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare,
         }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{version}</span><Icon name="chevD" size={13} stroke={2.2} color="var(--clay)" style={{ flexShrink: 0 }} /></button>
         <div style={{ flex: 1, minWidth: 4 }} />
         <IconBtn name="study" size={18} onClick={() => ctx.openSearch()} style={{ width: 38, height: 38 }} />
+        {canListen ? <IconBtn name="headphones" size={18} onClick={onListen} style={narrating ? { width: 38, height: 38, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 38, height: 38 }} /> : null}
         <IconBtn name="compare" size={18} onClick={onCompare} style={compare ? { width: 38, height: 38, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 38, height: 38 }} />
         <IconBtn name="sliders" size={18} onClick={onSettings} style={{ width: 38, height: 38 }} />
       </div>
@@ -487,6 +488,8 @@ function CommentaryEdge({ open, onToggle }) {
 function CommentaryPanel({ loc, label, open, onClose, ctx }) {
   const [view, setView] = useS('commentary');   // 'commentary' | 'notes'
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
+  const [composing, setComposing] = useS(false); const [cText, setCText] = useS(''); const [cVerse, setCVerse] = useS('1');
+  const saveNewNote = () => { const v = Math.max(1, parseInt(cVerse, 10) || 1); if (cText.trim()) ctx.setNote(label + ':' + v, cText.trim()); setComposing(false); setCText(''); };
   useE(() => { if (!open) return; try { setComm(window.Bible.getCommentary ? window.Bible.getCommentary(loc.book, loc.chap) : []); } catch (e) { setComm([]); } }, [open, loc.book, loc.chap, ctx.version]);
   const sx = useR(0);
   // the reader's own notes for this chapter (keys look like "John 1:4")
@@ -518,7 +521,24 @@ function CommentaryPanel({ loc, label, open, onClose, ctx }) {
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
           {view === 'notes' ? (
-            myNotes.length ? myNotes.map(n => (
+            <React.Fragment>
+              {composing ? (
+                <div style={{ marginBottom: 14, padding: 13, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid var(--clay)', boxShadow: 'var(--shadow)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay)' }}>{label}:</span>
+                    <input value={cVerse} onChange={e => setCVerse(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={{ width: 52, height: 34, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', textAlign: 'center', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+                    <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>verse</span>
+                  </div>
+                  <textarea value={cText} onChange={e => setCText(e.target.value)} autoFocus placeholder="Your note…" rows={4} style={{ width: '100%', boxSizing: 'border-box', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '10px 12px', fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.5, color: 'var(--ink)', outline: 'none', resize: 'vertical' }} />
+                  <div style={{ display: 'flex', gap: 9, marginTop: 9 }}>
+                    <button onClick={() => { setComposing(false); setCText(''); }} style={{ flex: 1, padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
+                    <button onClick={saveNewNote} disabled={!cText.trim()} style={{ flex: 1, padding: 10, borderRadius: 11, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: cText.trim() ? 1 : 0.55 }}>Save note</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => { setComposing(true); setCVerse(String((sel || 1))); }} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '11px', borderRadius: 12, border: '1px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 5%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14 }}><Icon name="plus" size={16} color="var(--clay)" /> New note</button>
+              )}
+            {myNotes.length ? myNotes.map(n => (
               <div key={n.ref} onClick={() => { onClose(); ctx.gotoRef && (() => { const l = window.Bible.parseRef(n.ref); if (l) ctx.gotoRef(l.book, l.chap, l.verse); })(); }} style={{ marginBottom: 12, padding: 13, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer' }}>
                 <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay)', marginBottom: 4 }}>{n.ref}</div>
                 <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>{n.text}</p>
@@ -529,7 +549,8 @@ function CommentaryPanel({ loc, label, open, onClose, ctx }) {
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>No notes here yet</div>
                 <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 270, margin: '0 auto' }}>Tap a verse → <b>Note</b> to jot a thought. Your notes for {label} gather here.</p>
               </div>
-            )
+            )}
+            </React.Fragment>
           ) : comm.length ? comm.map((srcBlk, si) => (
             <div key={si} style={{ marginBottom: 22 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--line)' }}>
@@ -568,7 +589,14 @@ function ReadScreen({ ctx }) {
   const [sheet, setSheet] = useS(new URLSearchParams(location.search).get('sheet') || null);
   const [wordId, setWordId] = useS(new URLSearchParams(location.search).get('word') || null);
   const [commentaryOpen, setCommentaryOpen] = useS(false);
+  // ── narration (Listen): read the chapter aloud with the device's speech engine (offline, no audio files) ──
+  const [narrateState, setNarrateState] = useS('idle');   // idle | playing | paused
+  const [narrateV, setNarrateV] = useS(null);              // verse number currently being spoken
   const scrollRef = useR();
+  const synth = (typeof window !== 'undefined' && window.speechSynthesis) || null;
+  const stopNarration = () => { if (synth) try { synth.cancel(); } catch (e) {} setNarrateState('idle'); setNarrateV(null); };
+  // stop speaking when the passage changes or the screen unmounts
+  useE(() => () => { if (synth) try { synth.cancel(); } catch (e) {} }, []);
   useE(() => { lsSet('trinityone.readerScale', scale); }, [scale]);
   useE(() => { lsSet('trinityone.readerSerif', serif); }, [serif]);
   // arriving on a specific verse (from Today / Search / Book picker): select it + scroll it into view
@@ -602,6 +630,34 @@ function ReadScreen({ ctx }) {
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel), text: selRow ? selRow.text : '', version, note: ctx.notes[keyOf(sel)] || '' }); },
   };
 
+  // speak the whole chapter, verse by verse — highlights + scrolls to each verse as it's read
+  const startNarration = () => {
+    if (!synth) { ctx.toast('Your device can’t read aloud here'); return; }
+    try { synth.cancel(); } catch (e) {}
+    const list = verses || [];
+    if (!list.length) return;
+    setNarrateState('playing');
+    list.forEach((row, i) => {
+      const u = new SpeechSynthesisUtterance(String(row.text || '').replace(/\s+/g, ' ').trim());
+      u.rate = 0.95; u.lang = 'en-US';
+      u.onstart = () => {
+        setNarrateV(row.v);
+        const el = scrollRef.current && scrollRef.current.querySelector('#rv-' + row.v);
+        if (el && el.scrollIntoView) try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
+      };
+      if (i === list.length - 1) u.onend = () => { setNarrateState('idle'); setNarrateV(null); };
+      try { synth.speak(u); } catch (e) {}
+    });
+  };
+  const toggleNarration = () => {
+    if (!synth) { ctx.toast('Your device can’t read aloud here'); return; }
+    if (narrateState === 'idle') startNarration();
+    else if (narrateState === 'playing') { try { synth.pause(); } catch (e) {} setNarrateState('paused'); }
+    else { try { synth.resume(); } catch (e) {} setNarrateState('playing'); }
+  };
+  // a fresh passage cancels any in-progress narration
+  useE(() => { stopNarration(); }, [loc.book, loc.chap, version]);
+
   const prev = Bible.step(loc, -1), next = Bible.step(loc, 1);
   const readFont = serif ? 'var(--font-read)' : 'var(--font-ui)';
   const rs = ctx.readScale || 1;
@@ -611,7 +667,8 @@ function ReadScreen({ ctx }) {
     <div style={{ position: 'absolute', inset: 0 }}>
       <ReadHeader ctx={ctx} loc={{ book: bname, ch: loc.chap }} version={version}
         onBook={() => setSheet('book')} onVersion={() => setSheet('version')}
-        onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)} />
+        onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)}
+        onListen={toggleNarration} narrating={narrateState !== 'idle'} canListen={!!synth} />
 
       <div ref={scrollRef} className="no-scrollbar" style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: '164px 18px 116px' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
@@ -629,7 +686,7 @@ function ReadScreen({ ctx }) {
                 return (
                   <VerseRow key={row.v} n={row.v} html={row.html}
                     hl={ctx.highlights[k]} note={ctx.notes[k]} bookmarked={ctx.bookmarks.includes(k)}
-                    selected={String(sel) === String(row.v)} onSelect={selectVerse} onWord={openWord} />
+                    selected={String(sel) === String(row.v)} reading={narrateState !== 'idle' && String(narrateV) === String(row.v)} onSelect={selectVerse} onWord={openWord} />
                 );
               })}
             </p>
@@ -678,6 +735,21 @@ function ReadScreen({ ctx }) {
         serif={serif} setSerif={setSerif} showStrongs={showStrongs} setShowStrongs={setShowStrongs} ctx={ctx} />
       <BookPicker open={sheet === 'book'} onClose={close} version={version}
         onPick={(book, c, v) => { close(); ctx.setLoc({ book, chap: c, verse: v || undefined }); }} />
+
+      {/* narration control bar — appears while the chapter is being read aloud */}
+      {narrateState !== 'idle' ? (
+        <div style={{ position: 'absolute', left: 0, right: 0, bottom: 64, zIndex: 30, display: 'flex', justifyContent: 'center', padding: '0 16px', pointerEvents: 'none' }}>
+          <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 999, background: 'var(--clay)', color: '#fff', boxShadow: 'var(--shadow-lg)', animation: 'trinityRise .24s ease both', maxWidth: '100%' }}>
+            <Icon name="headphones" size={18} color="#fff" />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 11, opacity: .85, fontWeight: 600 }}>Reading aloud</div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{bname} {loc.chap}{narrateV ? ':' + narrateV : ''}</div>
+            </div>
+            <button onClick={toggleNarration} aria-label={narrateState === 'playing' ? 'Pause' : 'Resume'} style={{ width: 40, height: 40, borderRadius: 999, border: 'none', background: 'rgba(255,255,255,.22)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={narrateState === 'playing' ? 'pause' : 'play'} size={18} color="#fff" /></button>
+            <button onClick={stopNarration} aria-label="Stop" style={{ width: 40, height: 40, borderRadius: 999, border: 'none', background: 'rgba(255,255,255,.22)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="x" size={18} color="#fff" /></button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

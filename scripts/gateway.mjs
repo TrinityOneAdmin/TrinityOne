@@ -25,11 +25,19 @@ const GROUP_D = 'trinityone/group:', FUND_D = 'trinityone/fund:', MEMBER_D = 'tr
 const ROSTER_D = 'trinityone/roster:', SERVICE_D = 'trinityone/service:', EVENT_D = 'trinityone/event:', REQUEST_D = 'trinityone/request:';
 const NETWORK_D = 'trinityone/network:';   // the church declares it belongs to a network (the network's pubkey)
 function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch { return null; } }
-let CHURCH_PUB = toHexPub(process.env.CHURCH_NPUB);
-if (!CHURCH_PUB) { try { CHURCH_PUB = toHexPub(JSON.parse(readFileSync(join(ROOT, 'relay', 'church.json'), 'utf8')).npub); } catch {} }
+// the relay can host MULTIPLE churches — each manages its own data, scoped by author. Configure via
+// CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
+const CHURCH_PUBS = new Set();
+const addChurch = (s) => { const h = toHexPub(s); if (h) CHURCH_PUBS.add(h); };
+(process.env.CHURCH_NPUB || '').split(',').forEach(addChurch);
+try {
+  const cj = JSON.parse(readFileSync(join(ROOT, 'relay', 'church.json'), 'utf8'));
+  if (cj) { if (cj.npub) addChurch(cj.npub); (cj.npubs || []).forEach(addChurch); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c))); }
+} catch {}
 const MEMBERS = new Set();     // pubkeys that announced membership (minus those removed)
 const BROADCAST = new Set();   // group ids the church marked broadcast
 const NETWORKS = new Set();    // network pubkeys this church joined — allowed to publish church-style content here
+const GROUP_LEADERS = new Map(); // groupId -> Set(pubkey) — members a leader empowered to post events for that group
 
 // ---- web push (VAPID): notify members of serving requests in real time (PWA) ----
 const VAPID_PATH = join(ROOT, 'relay', 'vapid.json');
@@ -50,7 +58,7 @@ function pushTo(memberHex, payload) {
 // fire a push when the church sends a member a serving request (p-tagged to them)
 function maybePush(evt) {
   try {
-    if (evt.kind !== 30078 || evt.pubkey !== CHURCH_PUB) return;
+    if (evt.kind !== 30078 || !CHURCH_PUBS.has(evt.pubkey)) return;
     const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
     if (!d.startsWith(REQUEST_D)) return;
     const target = (evt.tags.find(t => t[0] === 'p') || [])[1]; if (!target) return;
@@ -75,27 +83,37 @@ function dedupEvents(arr) {
 }
 const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
-  if (!CHURCH_PUB || e.kind !== 30078) return;
+  if (!CHURCH_PUBS.size || e.kind !== 30078) return;
   const d = dtag(e), removed = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
-  if (d === MEMBER_D + CHURCH_PUB) { if (removed) MEMBERS.delete(e.pubkey); else MEMBERS.add(e.pubkey); }   // membership for THIS church
-  else if (d.startsWith(NETWORK_D) && e.pubkey === CHURCH_PUB) {   // this church joined/left a network
+  if (d.startsWith(MEMBER_D) && CHURCH_PUBS.has(d.slice(MEMBER_D.length))) { if (removed) MEMBERS.delete(e.pubkey); else MEMBERS.add(e.pubkey); }   // joined one of our churches
+  else if (d.startsWith(NETWORK_D) && CHURCH_PUBS.has(e.pubkey)) {   // a church joined/left a network
     const np = d.slice(NETWORK_D.length); if (removed) NETWORKS.delete(np); else NETWORKS.add(np);
   }
-  else if (d.startsWith(GROUP_D) && (e.pubkey === CHURCH_PUB || NETWORKS.has(e.pubkey))) {
-    const id = d.slice(GROUP_D.length); let kind = ''; try { kind = JSON.parse(e.content).kind; } catch {}
-    if (kind === 'broadcast' && !removed) BROADCAST.add(id); else BROADCAST.delete(id);
+  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey))) {
+    const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
+    if (c.kind === 'broadcast' && !removed) BROADCAST.add(id); else BROADCAST.delete(id);
+    // a group def may name member leaders who can post events for that group
+    if (removed) GROUP_LEADERS.delete(id);
+    else GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : []));
   }
 }
+// the group id an event-doc is scoped to (its non-NET 't' tag), or '' for a whole-church event
+const eventGroup = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 function accept(e) {
-  if (!CHURCH_PUB) return true;                                  // unconfigured = open
-  // a network this church belongs to may publish church-style content here (groups/events/plans/posts)
-  const isChurch = e.pubkey === CHURCH_PUB, isNetwork = NETWORKS.has(e.pubkey), isLeader = isChurch || isNetwork, isMember = isLeader || MEMBERS.has(e.pubkey);
+  if (!CHURCH_PUBS.size) return true;                            // unconfigured = open
+  // a network a church belongs to may publish church-style content here (groups/events/plans/posts)
+  const isChurch = CHURCH_PUBS.has(e.pubkey), isNetwork = NETWORKS.has(e.pubkey), isLeader = isChurch || isNetwork, isMember = isLeader || MEMBERS.has(e.pubkey);
   const k = e.kind;
   if (k === 0) return true;                                      // profiles (replaceable, low risk)
   if (k === 30078) {
     const d = dtag(e);
+    if (d.startsWith(EVENT_D)) {   // a group's leader may post an event for that one group
+      if (isLeader) return true;
+      const g = eventGroup(e); const leaders = g && GROUP_LEADERS.get(g);
+      return !!(leaders && leaders.has(e.pubkey));
+    }
     if (d.startsWith(GROUP_D) || d.startsWith(FUND_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
-      || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(EVENT_D) || d.startsWith(REQUEST_D)) return isLeader;   // church/network definitions
+      || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(REQUEST_D)) return isLeader;   // church/network definitions
     if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
     return isMember;                                            // member's own data (MyData)
   }
@@ -158,8 +176,49 @@ async function getFeed(url) {
   return data;
 }
 
+// ---- audio feed proxy: a church's podcast RSS -> episodes the Listen tab streams (CORS-free) ----
+const audioCache = new Map();
+const pickTag = (block, tag) => { const m = block.match(new RegExp('<' + tag + '[^>]*>([\\s\\S]*?)<\\/' + tag + '>', 'i')); return m ? decodeXml(m[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim()) : ''; };
+async function resolvePodcast(url) {
+  const xml = await fetchText(url);
+  const head = xml.split('<item')[0];
+  const chName = pickTag(head, 'title') || 'Podcast';
+  const chImg = (head.match(/<itunes:image[^>]*href="([^"]+)"/i) || head.match(/<image>[\s\S]*?<url>([^<]+)<\/url>/i) || [])[1] || '';
+  const episodes = [];
+  for (const part of xml.split('<item').slice(1)) {
+    const block = '<item' + part.split('</item>')[0];
+    const enc = block.match(/<enclosure[^>]*url="([^"]+)"[^>]*>/i);
+    const audio = enc ? enc[1] : '';
+    const type = (block.match(/<enclosure[^>]*type="([^"]+)"/i) || [])[1] || '';
+    if (!audio || (type && !/audio/i.test(type) && !/\.(mp3|m4a|aac|ogg|wav)(\?|$)/i.test(audio))) continue;
+    episodes.push({
+      id: pickTag(block, 'guid') || audio,
+      title: pickTag(block, 'title') || 'Episode',
+      audio, published: pickTag(block, 'pubDate'),
+      duration: pickTag(block, 'itunes:duration'),
+      image: (block.match(/<itunes:image[^>]*href="([^"]+)"/i) || [])[1] || chImg,
+    });
+    if (episodes.length >= 50) break;
+  }
+  return { channel: { name: chName, image: chImg, url, platform: 'podcast' }, episodes };
+}
+async function getAudioFeed(url) {
+  const c = audioCache.get(url); if (c && Date.now() - c.ts < FEED_TTL) return c.data;
+  const data = await resolvePodcast(url);
+  audioCache.set(url, { ts: Date.now(), data });
+  return data;
+}
+
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
+  // audio (podcast) feed proxy
+  if (route === '/audiofeed') {
+    let u = ''; try { u = new URL(req.url, 'http://x').searchParams.get('url') || ''; } catch {}
+    const json = (obj) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=600' }); res.end(JSON.stringify(obj)); };
+    if (!u) { res.writeHead(400, { 'Access-Control-Allow-Origin': '*' }); res.end('{"error":"no url"}'); return; }
+    getAudioFeed(u).then(json).catch(e => json({ channel: { url: u, platform: 'podcast' }, episodes: [], error: String((e && e.message) || e) }));
+    return;
+  }
   // video feed proxy
   if (route === '/feed') {
     let u = ''; try { u = new URL(req.url, 'http://x').searchParams.get('url') || ''; } catch {}
@@ -192,7 +251,7 @@ function serveStatic(req, res) {
 // ---- relay (NIP-01, persisted) ----
 let events = [];
 try { const d = JSON.parse(readFileSync(DB, 'utf8')); if (Array.isArray(d)) events = dedupEvents(d).slice(-MAX_EVENTS); } catch {}
-if (CHURCH_PUB) events.forEach(note);   // rebuild member/broadcast state from stored events
+if (CHURCH_PUBS.size) events.forEach(note);   // rebuild member/broadcast state from stored events
 let saveTimer = null;
 function scheduleSave() {
   if (saveTimer) return;
@@ -225,6 +284,8 @@ server.on('upgrade', (req, socket, head) => {
 });
 wss.on('connection', ws => {
   subs.set(ws, new Map());
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', raw => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     const [type, ...rest] = msg;
@@ -259,6 +320,15 @@ wss.on('connection', ws => {
   });
   ws.on('close', () => subs.delete(ws));
 });
+// keepalive: ping every 25s so idle relay sockets stay open through the Tailscale Funnel / mobile NAT
+// (otherwise live pushes silently stop until the client reconnects). Terminate sockets that miss a pong.
+const wsHeartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) { try { ws.terminate(); } catch {} continue; }
+    ws.isAlive = false; try { ws.ping(); } catch {}
+  }
+}, 25000);
+wss.on('close', () => clearInterval(wsHeartbeat));
 server.listen(PORT, '0.0.0.0', () =>
   console.log(`TrinityOne gateway on http://0.0.0.0:${PORT}  (app + relay at /relay, ${events.length} events loaded)` +
-    (CHURCH_PUB ? `\n  write policy ON — church ${CHURCH_PUB.slice(0, 12)}…, ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set CHURCH_NPUB to enforce)`)));
+    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set CHURCH_NPUB to enforce)`)));

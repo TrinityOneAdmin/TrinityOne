@@ -7,11 +7,13 @@ function QRScanner({ onResult, onCancel }) {
   const vref = useChR();
   const [status, setStatus] = useCh('starting');   // starting | scanning | unsupported | error
   useChE(() => {
-    let stream, raf, stopped = false, detector;
+    let stream, raf, stopped = false, detector = null, canvas = null, cctx = null;
+    const hasBD = ('BarcodeDetector' in window);
+    const hasJsQR = (typeof window.jsQR === 'function');   // pure-JS fallback (Android WebView has no BarcodeDetector)
     (async () => {
       try {
-        if (!('BarcodeDetector' in window) || !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) { setStatus('unsupported'); return; }
-        detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || (!hasBD && !hasJsQR)) { setStatus('unsupported'); return; }
+        if (hasBD) { try { detector = new window.BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; } }
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
         if (stopped) { stream.getTracks().forEach(t => t.stop()); return; }
         const v = vref.current; if (!v) return;
@@ -19,7 +21,19 @@ function QRScanner({ onResult, onCancel }) {
         setStatus('scanning');
         const tick = async () => {
           if (stopped) return;
-          try { const codes = await detector.detect(v); if (codes && codes.length && codes[0].rawValue) { onResult(codes[0].rawValue); return; } } catch (e) {}
+          try {
+            if (detector) {
+              const codes = await detector.detect(v);
+              if (codes && codes.length && codes[0].rawValue) { onResult(codes[0].rawValue); return; }
+            } else if (v.videoWidth) {
+              if (!canvas) { canvas = document.createElement('canvas'); cctx = canvas.getContext('2d', { willReadFrequently: true }); }
+              canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+              cctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+              const img = cctx.getImageData(0, 0, canvas.width, canvas.height);
+              const res = window.jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+              if (res && res.data) { onResult(res.data); return; }
+            }
+          } catch (e) {}
           raf = requestAnimationFrame(tick);
         };
         tick();
@@ -68,13 +82,16 @@ function ChurchPill({ ctx }) {
   if (!c) return null;
   return (
     <button onClick={ctx.openChurchSwitcher} style={{
-      display: 'inline-flex', alignItems: 'center', gap: 9, border: '1px solid var(--line)',
-      background: 'var(--surface)', borderRadius: 999, padding: '5px 12px 5px 5px', cursor: 'pointer',
-      boxShadow: 'var(--shadow)', maxWidth: 200,
+      display: 'flex', alignItems: 'center', gap: 12, width: '100%', border: '1px solid var(--line)',
+      background: 'var(--surface)', borderRadius: 18, padding: '12px 14px', cursor: 'pointer',
+      boxShadow: 'var(--shadow)', textAlign: 'left',
     }}>
-      <ChurchBadge church={c} size={28} radius={9} />
-      <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
-      <Icon name="chevD" size={15} stroke={2.2} color="var(--ink-3)" />
+      <ChurchBadge church={c} size={44} radius={13} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600 }}>Your church</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.15 }}>{c.name}</div>
+      </div>
+      <Icon name="chevD" size={20} stroke={2.2} color="var(--ink-3)" />
     </button>
   );
 }

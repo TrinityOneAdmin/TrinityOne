@@ -12,6 +12,93 @@ const NAV = [
   // { key: 'giving', label: 'Giving', ic: 'gift' },   // parked for the pilot (chat first)
 ];
 
+// sidebar identity control: switch the WHOLE console between the church and any network it owns.
+// With no owned networks it's just the church name button (tap to rename).
+function IdentitySwitcher({ church, churchName, initials, onEditName }) {
+  const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const [open, setOpen] = React.useState(false);
+  const [, force] = React.useState(0);
+  // owning a network (create/import) fires 'steward-networks' — re-render so the church/network switch appears live
+  React.useEffect(() => { const f = () => force(x => x + 1); window.addEventListener('steward-networks', f); return () => window.removeEventListener('steward-networks', f); }, []);
+  const ids = (window.Steward.identities ? window.Steward.identities() : []);
+  const activePub = window.Steward.activePub;
+  const networks = ids.filter(i => i.kind === 'network');
+  const viewingNetwork = window.Steward.isViewingNetwork && window.Steward.isViewingNetwork();
+  const pick = (pub) => { window.Steward.setActiveIdentity(pub); setOpen(false); };
+  // no networks owned → original behaviour (tap to set/rename the church)
+  if (!networks.length) {
+    return (
+      <button onClick={onEditName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: 18, textAlign: 'left' }}>
+        <SkBadge initials={initials} size={34} radius={10} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{churchName}</span>{church.name ? <Icon name="check" size={12} stroke={3} color="var(--sage)" /> : null}</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{church.npub ? church.npub.slice(0, 18) + '…' : 'no key'}</div>
+        </div>
+        <Icon name="pen" size={14} color="var(--ink-3)" />
+      </button>
+    );
+  }
+  return (
+    <div style={{ position: 'relative', marginBottom: 18 }}>
+      <button onClick={() => setOpen(o => !o)} title="Switch between your church and network" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, width: '100%', border: '1px solid ' + (viewingNetwork ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)'), background: viewingNetwork ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer', textAlign: 'left' }}>
+        <SkBadge initials={initials} size={34} radius={10} accent={viewingNetwork ? 'var(--clay)' : undefined} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchName}</span>
+            <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: '.5px', color: viewingNetwork ? 'var(--clay-ink)' : 'var(--ink-3)', background: viewingNetwork ? 'var(--clay-soft)' : 'var(--surface)', border: viewingNetwork ? 'none' : '1px solid var(--line)', borderRadius: 999, padding: '1px 5px', flexShrink: 0 }}>{viewingNetwork ? 'NETWORK' : 'CHURCH'}</span>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>Tap to switch view</div>
+        </div>
+        <Icon name={open ? 'chevU' : 'chevD'} size={14} color="var(--ink-3)" />
+      </button>
+      {open ? (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 6, zIndex: 60, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 13, boxShadow: 'var(--shadow-lg)', padding: 6, animation: 'lumenScale .16s ease both' }}>
+          {ids.map(idn => {
+            const on = idn.pub === activePub;
+            const label = idn.kind === 'church' ? (church.name || 'Your church') : (idn.name || 'Network');
+            return (
+              <button key={idn.pub} onClick={() => pick(idn.pub)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', fontFamily: 'var(--font-ui)' }}>
+                <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay)' }}><Icon name={idn.kind === 'network' ? 'globe' : 'bank'} size={15} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
+                  <div style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>{idn.kind === 'network' ? 'Network console' : 'Your church'}</div>
+                </div>
+                {on ? <Icon name="check" size={15} stroke={2.6} color="var(--clay)" /> : null}
+              </button>
+            );
+          })}
+          <div style={{ height: 1, background: 'var(--line)', margin: '5px 4px' }} />
+          <button onClick={() => { setOpen(false); onEditName(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)' }}><Icon name="pen" size={13} color="var(--ink-3)" /> Rename {viewingNetwork ? 'network' : 'church'}</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// surfaces a relay rejection (e.g. this console's church key isn't the one the relay enforces)
+function PublishErrorBanner() {
+  const [msg, setMsg] = React.useState('');
+  React.useEffect(() => {
+    const f = (e) => {
+      const reason = (e.detail && e.detail.reason) || '';
+      setMsg(/not a member|not permitted|blocked/i.test(reason)
+        ? 'Changes weren’t saved: this relay is set up for a different church. Restore this church’s key in Settings, or point the relay at this church.'
+        : 'Couldn’t save to the relay — check the connection and try again.');
+      clearTimeout(f._t); f._t = setTimeout(() => setMsg(''), 9000);
+    };
+    window.addEventListener('steward-publish-error', f);
+    return () => window.removeEventListener('steward-publish-error', f);
+  }, []);
+  if (!msg) return null;
+  return (
+    <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 140, maxWidth: 560, width: 'calc(100% - 32px)', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
+      <Icon name="bolt" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{msg}</div>
+      <button onClick={() => setMsg('')} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} /></button>
+    </div>
+  );
+}
+
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
@@ -20,16 +107,82 @@ function StewDashboard({ initial = 'overview' }) {
   const church = window.useStewardChurch();   // real church profile + npub from the relay
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
-  const editName = () => {
-    const n = window.prompt('Church name (members see this)', church.name || '');
-    if (n != null && n.trim()) window.Steward.publishProfile({ name: n.trim(), nip05: church.nip05 });
-  };
+  const [renaming, setRenaming] = React.useState(false);   // styled rename dialog (replaces window.prompt)
+  const editName = () => setRenaming(true);
+  // responsive: a phone/narrow window collapses the desktop sidebar into a top header + scrollable nav
+  const [vw, setVw] = React.useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  React.useEffect(() => { const f = () => setVw(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
+  const narrow = vw < 760;
+
+  // tab content + topbar actions, shared by both layouts
+  const content = (
+    <React.Fragment>
+      {tab === 'overview' && <DashOverview onTab={setTab} />}
+      {tab === 'giving' && <DashGiving />}
+      {tab === 'groups' && <DashGroups />}
+      {tab === 'rota' && <DashRota onNewTeam={() => setAddingTeam(true)} />}
+      {tab === 'calendar' && <DashCalendar />}
+      {tab === 'resources' && <DashResources />}
+      {tab === 'members' && <DashMembers />}
+      {tab === 'relays' && <DashRelays />}
+      {tab === 'settings' && <DashSettings onTab={setTab} />}
+    </React.Fragment>
+  );
+  const actions = (
+    <React.Fragment>
+      <button onClick={() => setInvite(true)} className="sk-btn sk-btn--ghost" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> {narrow ? '' : 'Invite code'}</button>
+      {tab === 'rota'
+        ? <button onClick={() => setAddingTeam(true)} className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {narrow ? '' : 'New team'}</button>
+        : <button onClick={() => setPosting(true)} className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> {narrow ? '' : 'New post'}</button>}
+      <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials="PJ" size={narrow ? 32 : 36} radius={11} accent="var(--sage)" /></button>
+    </React.Fragment>
+  );
+
+  if (narrow) {
+    return (
+      <ConsoleChrome>
+        {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
+        {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
+        <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
+        <MemberChatDock />
+        <PublishErrorBanner />
+        {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
+          <div style={{ flexShrink: 0, background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderBottom: '1px solid var(--line)', padding: '10px 12px 8px', display: 'flex', flexDirection: 'column', gap: 9 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Halo size={22} color="var(--ink)" spark="var(--clay)" />
+              <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
+              <div style={{ flex: 1 }} />
+              {actions}
+            </div>
+            <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
+            <div className="no-scrollbar" style={{ display: 'flex', gap: 6, overflowX: 'auto', margin: '0 -12px', padding: '2px 12px' }}>
+              {NAV.map(n => {
+                const on = n.key === tab;
+                return (
+                  <button key={n.key} onClick={() => setTab(n.key)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0, background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>
+                    <Icon name={n.ic} size={15} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
+            {content}
+          </div>
+        </div>
+      </ConsoleChrome>
+    );
+  }
+
   return (
     <ConsoleChrome>
       {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
       {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
+        <PublishErrorBanner />
+        {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
         {/* sidebar */}
         <div style={{ width: 232, flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', padding: '22px 16px' }}>
@@ -38,14 +191,7 @@ function StewDashboard({ initial = 'overview' }) {
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.5px', color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 6px', marginLeft: 'auto' }}>STEWARD</span>
           </div>
-          <button onClick={editName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: 18, textAlign: 'left' }}>
-            <SkBadge initials={initials} size={34} radius={10} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{churchName}</span>{church.name ? <Icon name="check" size={12} stroke={3} color="var(--sage)" /> : null}</div>
-              <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{church.npub ? church.npub.slice(0, 18) + '…' : 'no key'}</div>
-            </div>
-            <Icon name="pen" size={14} color="var(--ink-3)" />
-          </button>
+          <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {NAV.map(n => {
               const on = n.key === tab;
@@ -67,26 +213,15 @@ function StewDashboard({ initial = 'overview' }) {
         {/* main */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           {/* topbar */}
-          <div style={{ height: 64, flexShrink: 0, borderBottom: '1px solid var(--line)', background: 'var(--surface)', display: 'flex', alignItems: 'center', padding: '0 28px', gap: 16 }}>
+          <div style={{ height: 64, flexShrink: 0, borderBottom: '1px solid var(--line)', background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', display: 'flex', alignItems: 'center', padding: '0 28px', gap: 16 }}>
             <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20 }}>{NAV.find(n => n.key === tab).label}</div></div>
+            {church.isNetwork ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, letterSpacing: '.3px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '5px 11px' }}><Icon name="globe" size={13} color="var(--clay)" /> Network view · {churchName}</span> : null}
             <div style={{ flex: 1 }} />
-            <button onClick={() => setInvite(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> Invite code</button>
-            {tab === 'rota'
-              ? <button onClick={() => setAddingTeam(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New team</button>
-              : <button onClick={() => setPosting(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> New post</button>}
-            <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials="PJ" size={36} radius={11} accent="var(--sage)" /></button>
+            {actions}
           </div>
           {/* content */}
           <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: 28, background: 'var(--paper)' }}>
-            {tab === 'overview' && <DashOverview onTab={setTab} />}
-            {tab === 'giving' && <DashGiving />}
-            {tab === 'groups' && <DashGroups />}
-            {tab === 'rota' && <DashRota onNewTeam={() => setAddingTeam(true)} />}
-            {tab === 'calendar' && <DashCalendar />}
-            {tab === 'resources' && <DashResources />}
-            {tab === 'members' && <DashMembers />}
-            {tab === 'relays' && <DashRelays />}
-            {tab === 'settings' && <DashSettings onTab={setTab} />}
+            {content}
           </div>
         </div>
       </div>
@@ -206,15 +341,15 @@ function StatCard({ label, value, sub, ic, tint }) {
   );
 }
 
-function Panel({ title, action, children, style = {} }) {
+function Panel({ title, action, children, style = {}, scroll = false }) {
   return (
-    <div style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', padding: 22, ...style }}>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+    <div style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', padding: 22, ...(scroll ? { display: 'flex', flexDirection: 'column', minHeight: 0 } : {}), ...style }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, flexShrink: 0 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5 }}>{title}</div>
         <div style={{ flex: 1 }} />
         {action}
       </div>
-      {children}
+      {scroll ? <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{children}</div> : children}
     </div>
   );
 }
@@ -363,10 +498,13 @@ function NewGroupModal({ open, onClose }) {
 function GroupChatModal({ group, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const [text, setText] = React.useState('');
+  const [rxFor, setRxFor] = React.useState('');
   const scRef = React.useRef(null);
+  const GROUP_EMOJI = ['❤️', '🙏', '👍', '😂', '🔥', '🎉'];
   React.useEffect(() => window.Steward.subscribeGroupChat(group.id, setMsgs), [group.id]);
   React.useEffect(() => { if (scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs]);
   const send = () => { if (!text.trim()) return; window.Steward.publishPost(text.trim(), group.id); setText(''); };
+  const react = (m, emoji) => { window.Steward.reactGroup(group.id, m.id, m.by, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const isTeam = group.kind === 'team';
   const accent = isTeam ? (group.accent || 'var(--clay)') : group.kind === 'broadcast' ? '#8a6717' : 'var(--sage)';
   return (
@@ -379,9 +517,23 @@ function GroupChatModal({ group, onClose }) {
         <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 9 }}>
           {msgs.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto' }}>No messages yet. Say hello to your church.</div> : null}
           {msgs.map(m => (
-            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%' }}>
+            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
               {!m.mine ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontFamily: 'var(--mono)', marginBottom: 2, paddingLeft: 4 }}>{'member …' + (m.by || '').slice(-8)}</div> : null}
-              <div style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)' }}>{m.kind === 'prayer' ? '🙏 ' : ''}{m.text}</div>
+              <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.kind === 'prayer' ? '🙏 ' : ''}{m.text}</div>
+              {m.reactions && m.reactions.length ? (
+                <div style={{ display: 'flex', gap: 3, marginTop: 3, flexWrap: 'wrap' }}>
+                  {Object.entries(m.reactions.reduce((a, e) => (a[e] = (a[e] || 0) + 1, a), {})).map(([emo, n]) => (
+                    <button key={emo} onClick={() => react(m, emo)} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: '1px 6px', borderRadius: 999, fontSize: 11.5, border: '1px solid var(--line)', background: m.myReaction === emo ? 'color-mix(in oklab, var(--clay) 16%, var(--surface))' : 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{emo}{n > 1 ? <span style={{ color: 'var(--ink-3)', fontWeight: 700 }}>{n}</span> : null}</button>
+                  ))}
+                </div>
+              ) : null}
+              {rxFor === m.id ? (
+                <div style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
+                  {GROUP_EMOJI.map(emo => (
+                    <button key={emo} onClick={() => react(m, emo)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 3px', borderRadius: 7, opacity: m.myReaction === emo ? 1 : 0.85 }}>{emo}</button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
@@ -399,6 +551,7 @@ function DashGroups() {
   const [adding, setAdding] = React.useState(new URLSearchParams(location.search).get('newgroup') === '1');
   const [chatGroup, setChatGroup] = React.useState(null);
   const [teamMembers, setTeamMembers] = React.useState(null);   // { team, people }
+  const [leadersFor, setLeadersFor] = React.useState(null);     // group whose event-leaders we're editing
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
@@ -440,6 +593,8 @@ function DashGroups() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
+            {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
+            <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
             <button onClick={() => setChatGroup(it)} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
             <button onClick={() => setPendingDelete(it)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
           </div>
@@ -466,6 +621,56 @@ function DashGroups() {
           </div>
         </div>
       ) : null}
+      {leadersFor ? <GroupLeadersModal group={leadersFor} onClose={() => setLeadersFor(null)} /> : null}
+    </div>
+  );
+}
+
+// pick which members may post events for a group. The chosen pubkeys go into the group def's `leaders`;
+// the relay then lets exactly those members publish events scoped to this group.
+function GroupLeadersModal({ group, onClose }) {
+  const members = window.useStewardMembers().filter(m => m.pubkey);
+  const [sel, setSel] = React.useState(() => new Set(group.leaders || []));
+  const [saving, setSaving] = React.useState(false);
+  const toggle = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
+  const save = async () => {
+    setSaving(true);
+    const before = new Set(group.leaders || []);
+    await window.Steward.setGroupLeaders(group, [...sel]);
+    // tell newly-added leaders, so they know they can now manage this group
+    const added = [...sel].filter(pk => !before.has(pk));
+    for (const pk of added) {
+      try { await window.Steward.sendDM(pk, `You’re now a leader of “${group.name}”. You can post events for it from your app — open the group and tap “Event”.`); } catch {}
+    }
+    onClose();
+  };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', maxHeight: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="users" size={20} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>Group leaders</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{group.name}</div></div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 14px' }}>Leaders help run this group. They can create events for it from their app (shown on everyone’s calendar and in the group’s chat), and we’ll message them to let them know. You can change this anytime.</p>
+        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {members.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No app members yet. Once people join your church they’ll be selectable here.</div>
+            : members.map(m => {
+              const on = sel.has(m.pubkey);
+              const nm = m.name || ('Anon · ' + (m.npub || m.pubkey).slice(-6));
+              return (
+                <button key={m.pubkey} onClick={() => toggle(m.pubkey)} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 12, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+                  <SkBadge initials={(nm.replace(/^Anon · /, '').split(/\s+/).map(w => w[0]).join('').slice(0, 2) || 'AN').toUpperCase()} size={32} radius={9} accent={on ? 'var(--sage)' : undefined} />
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{nm}</div><div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)' }}>{(m.npub || '').slice(0, 16)}…</div></div>
+                  <div style={{ width: 22, height: 22, borderRadius: 7, flexShrink: 0, border: '1.5px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on ? <Icon name="check" size={14} stroke={3} color="#fff" /> : null}</div>
+                </button>
+              );
+            })}
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+          <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1 }}><Icon name="check" size={15} color="#fff" /> {saving ? 'Saving…' : 'Save leaders'}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -650,7 +855,7 @@ function DashPlans() {
           ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>No plans shared yet — make your own with “New plan”, or pick one from the library below.</div>
           : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{shared.map(p => <PlanRow key={p.id} p={p} isShared />)}</div>}
       </Panel>
-      <Panel title="Plan library" style={{ flex: 1 }}>
+      <Panel scroll title="Plan library" style={{ flex: 1, minHeight: 0 }}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 14 }}>Share a reading plan and the whole church sees it in their app — members start it and track their own progress.</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {available.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Every plan is shared.</div> : available.map(p => <PlanRow key={p.id} p={p} />)}
@@ -661,11 +866,13 @@ function DashPlans() {
 }
 window.DashPlans = DashPlans;
 
-// Upload a devotional — a reflection on a passage as a text (.txt) or Markdown (.md) file.
-function NewDevotionalModal({ onClose }) {
-  const [title, setTitle] = React.useState('');
-  const [ref, setRef] = React.useState('');
-  const [file, setFile] = React.useState(null);   // { type, name, text? }
+// Upload OR edit a devotional — a reflection on a passage as a text (.txt) or Markdown (.md) file.
+// Passing `editing` (an existing devo) pre-fills it and re-publishes under the same id; the file is
+// optional when editing (title/passage can change without re-uploading the text).
+function NewDevotionalModal({ onClose, editing }) {
+  const [title, setTitle] = React.useState(editing ? editing.title || '' : '');
+  const [ref, setRef] = React.useState(editing ? editing.ref || '' : '');
+  const [file, setFile] = React.useState(null);   // { type, name, text? } — a NEW replacement file
   const [busy, setBusy] = React.useState(false);
   const pick = (f) => {
     if (!f) return;
@@ -678,16 +885,19 @@ function NewDevotionalModal({ onClose }) {
     r.readAsText(f);
     if (!title.trim()) setTitle(f.name.replace(/\.(txt|md|markdown)$/i, ''));
   };
+  const canSave = title.trim() && (file ? !file.error : !!editing) && !busy;   // new needs a file; edit can reuse the old text
   const create = () => {
-    if (!title.trim() || !file || file.error || busy) return;
+    if (!canSave) return;
     setBusy(true);
-    Promise.resolve(window.Steward.publishDevotional({ title: title.trim(), ref: ref.trim(), type: file.type, text: file.text || '' })).then(() => onClose());
+    const text = file ? file.text : (editing ? editing.text : '');
+    const type = file ? file.type : (editing ? editing.type : 'txt');
+    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), type, text: text || '' })).then(() => onClose());
   };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Upload a devotional</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A reflection on a passage, as a text (.txt) or Markdown (.md) file. Your congregation reads it in their app.</p>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{editing ? 'Edit devotional' : 'Upload a devotional'}</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>{editing ? 'Update the title or passage, or replace the text file. Members see the change in their app.' : 'A reflection on a passage, as a text (.txt) or Markdown (.md) file. Your congregation reads it in their app.'}</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Resting in Psalm 23" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Passage (optional)</div>
@@ -695,14 +905,14 @@ function NewDevotionalModal({ onClose }) {
         <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer' }}>
           <Icon name="read" size={20} color="var(--clay)" />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14, color: file && !file.error ? 'var(--ink)' : 'var(--ink-2)' }}>{file && file.name ? file.name : 'Choose a .txt or .md file'}</div>
-            <div style={{ fontSize: 12, color: file && file.error ? 'var(--clay)' : 'var(--ink-3)' }}>{file && file.error ? file.error : (file && file.type ? file.type.toUpperCase() + ' ready' : 'Tap to pick a file')}</div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: file && !file.error ? 'var(--ink)' : 'var(--ink-2)' }}>{file && file.name ? file.name : (editing ? 'Replace the text file (optional)' : 'Choose a .txt or .md file')}</div>
+            <div style={{ fontSize: 12, color: file && file.error ? 'var(--clay)' : 'var(--ink-3)' }}>{file && file.error ? file.error : (file && file.type ? file.type.toUpperCase() + ' ready' : (editing ? 'Keeping the current text unless you pick a new file' : 'Tap to pick a file'))}</div>
           </div>
           <input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" onChange={e => pick(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
         </label>
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={create} disabled={!title.trim() || !file || file.error || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (!title.trim() || !file || file.error || busy) ? 0.55 : 1 }}><Icon name="send" size={16} color="#fff" /> {busy ? 'Sharing…' : 'Share devotional'}</button>
+          <button onClick={create} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: canSave ? 1 : 0.55 }}><Icon name={editing ? 'check' : 'send'} size={16} color="#fff" /> {busy ? 'Saving…' : (editing ? 'Save changes' : 'Share devotional')}</button>
         </div>
       </div>
     </div>
@@ -712,10 +922,32 @@ function NewDevotionalModal({ onClose }) {
 function DashDevotionals() {
   const devos = window.useStewardDevotionals();
   const [adding, setAdding] = React.useState(false);
+  const [editing, setEditing] = React.useState(null);
+  const [order, setOrder] = React.useState(null);   // local working order while dragging (array of devos)
+  const [dragId, setDragId] = React.useState(null);
+  const [overId, setOverId] = React.useState(null);
+  // the list to show: the live order, unless we're mid-drag with a local working order
+  const list = order || devos;
+  // persist a new order: number each devotional by position, re-publish only the ones that changed
+  const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: i }); }); };
+  // arrow fallback (accessibility): swap with a neighbour
+  const move = (idx, dir) => { const arr = devos.slice(); const j = idx + dir; if (j < 0 || j >= arr.length) return; const t = arr[idx]; arr[idx] = arr[j]; arr[j] = t; persist(arr); };
+  // drag: reorder the working copy live; commit on drop
+  const onDragOver = (e, id) => {
+    e.preventDefault();
+    if (!dragId || id === dragId) return;
+    const arr = (order || devos).slice();
+    const from = arr.findIndex(x => x.id === dragId), to = arr.findIndex(x => x.id === id);
+    if (from < 0 || to < 0) return;
+    const [m] = arr.splice(from, 1); arr.splice(to, 0, m);
+    setOrder(arr); setOverId(id);
+  };
+  const onDrop = () => { if (order) persist(order); setDragId(null); setOverId(null); setOrder(null); };
   return (
     <div style={{ position: 'relative', height: '100%' }}>
       {adding ? <NewDevotionalModal onClose={() => setAdding(false)} /> : null}
-      <Panel title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
+      {editing ? <NewDevotionalModal editing={editing} onClose={() => setEditing(null)} /> : null}
+      <Panel scroll title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
           <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Upload devotional</button>
@@ -723,18 +955,33 @@ function DashDevotionals() {
         {devos.length === 0 ? (
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Upload a .txt or .md reflection on a passage — your congregation reads it in their app.</div>
         ) : (
+          <React.Fragment>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 2px 10px', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="dots" size={13} color="var(--ink-3)" /> Drag to reorder — this is the order your members see.</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {devos.map(d => (
-              <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            {list.map((d, i) => {
+              const dragging = dragId === d.id;
+              return (
+              <div key={d.id} draggable
+                onDragStart={(e) => { setDragId(d.id); try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', d.id); } catch (err) {} }}
+                onDragOver={(e) => onDragOver(e, d.id)} onDrop={onDrop} onDragEnd={() => { setDragId(null); setOverId(null); setOrder(null); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid ' + (overId === d.id && !dragging ? 'var(--clay)' : 'var(--line)'), opacity: dragging ? 0.4 : 1, boxShadow: dragging ? 'var(--shadow-lg)' : 'none', transition: 'border-color .12s, opacity .12s' }}>
+                <div title="Drag to reorder" style={{ cursor: 'grab', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, touchAction: 'none' }}><Icon name="dots" size={18} color="currentColor" /></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+                  <button onClick={() => move(i, -1)} disabled={i === 0} title="Move up" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 7, padding: '0 4px', cursor: i === 0 ? 'default' : 'pointer', opacity: i === 0 ? 0.35 : 1, color: 'var(--ink-2)', display: 'flex' }}><Icon name="chevU" size={13} color="currentColor" /></button>
+                  <button onClick={() => move(i, 1)} disabled={i === devos.length - 1} title="Move down" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 7, padding: '0 4px', cursor: i === devos.length - 1 ? 'default' : 'pointer', opacity: i === devos.length - 1 ? 0.35 : 1, color: 'var(--ink-2)', display: 'flex' }}><Icon name="chevD" size={13} color="currentColor" /></button>
+                </div>
                 <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14.5 }}>{d.title}</div>
                   <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[d.ref, (d.type || '').toUpperCase()].filter(Boolean).join(' · ')}</div>
                 </div>
+                <button onClick={() => setEditing(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
                 <button onClick={() => window.Steward.removeDevotional(d.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
               </div>
-            ))}
+              );
+            })}
           </div>
+          </React.Fragment>
         )}
       </Panel>
     </div>
@@ -893,6 +1140,48 @@ function NetworkRow({ net, onLeave }) {
 }
 
 // the wider network this church belongs to (one for now). A network is its own npub.
+// compose & broadcast an announcement AS a network this console owns (the key lives here)
+function NetworkAnnounceComposer() {
+  const [owned, setOwned] = React.useState(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []));
+  const [text, setText] = React.useState('');
+  const [sent, setSent] = React.useState(false);
+  const [posts, setPosts] = React.useState([]);
+  React.useEffect(() => {
+    const refresh = () => setOwned(window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []);
+    window.addEventListener('steward-networks', refresh);
+    return () => window.removeEventListener('steward-networks', refresh);
+  }, []);
+  const net = owned[0] || null;           // one owned network for now
+  React.useEffect(() => { if (!net || !window.Steward.subscribeNetworkAnnouncements) return; return window.Steward.subscribeNetworkAnnouncements(net.pub, setPosts); }, [net && net.pub]);
+  if (!net) return null;
+  const post = async () => {
+    if (!text.trim()) return;
+    await window.Steward.publishNetworkAnnouncement(net.pub, text.trim());
+    setText(''); setSent(true); setTimeout(() => setSent(false), 1600);
+  };
+  return (
+    <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <Icon name="globe" size={16} color="var(--clay)" />
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Announce to <b>{net.name}</b></div>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 9 }}>Reaches every member of every church in the network.</div>
+      <textarea value={text} onChange={e => setText(e.target.value)} rows={3} placeholder="Share news with the whole network…" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '11px 13px', fontSize: 14, lineHeight: 1.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical', marginBottom: 9 }} />
+      <button onClick={post} disabled={!text.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13.5, opacity: text.trim() ? 1 : 0.55 }}><Icon name={sent ? 'check' : 'send'} size={15} color="#fff" /> {sent ? 'Sent' : 'Post announcement'}</button>
+      {posts.length ? (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Recent</div>
+          {posts.slice(0, 4).map(p => (
+            <div key={p.id} style={{ padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 7 }}>
+              <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{p.text}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function DashNetworksPanel() {
   const networks = window.useStewardNetworks();
   const net = networks[0] || null;        // a church belongs to one network for now
@@ -900,16 +1189,35 @@ function DashNetworksPanel() {
   const [err, setErr] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [created, setCreated] = React.useState(null);   // { npub, mnemonic } just-created — show to save
+  const [naming, setNaming] = React.useState(false);    // the create-network wizard
+  const [newName, setNewName] = React.useState('');
   const join = () => { const r = window.Steward.joinNetwork && window.Steward.joinNetwork(draft.trim()); if (!r) { setErr('Paste the network’s code (npub1…).'); return; } Promise.resolve(r).then(() => { setDraft(''); setErr(''); }); };
   const leave = (n) => { if (window.confirm('Leave this network? Your members will stop seeing its shared content.')) window.Steward.leaveNetwork(n.networkPub); };
-  const create = async () => {
-    const name = window.prompt('Name your network (e.g. Regions Beyond):'); if (!name || !name.trim()) return;
-    setBusy(true);
-    try { const r = await window.Steward.createNetwork(name.trim()); if (r) setCreated(r); } catch (e) { setErr('Couldn’t create the network.'); }
-    setBusy(false);
+  const doCreate = async () => {
+    if (!newName.trim()) return;
+    setBusy(true); setNaming(false);
+    try { const r = await window.Steward.createNetwork(newName.trim()); if (r) setCreated(r); } catch (e) { setErr('Couldn’t create the network.'); }
+    setBusy(false); setNewName('');
   };
   return (
     <Panel title="Network">
+      {naming ? (
+        <div onClick={() => setNaming(false)} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={21} /></div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Create a network</div>
+            </div>
+            <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Give it a name your churches will recognise — a region (“Sussex Gospel Partnership”), a family of churches (“Regions Beyond”), or a denomination. You can rename it later from its own console.</p>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Network name</div>
+            <input value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doCreate(); }} autoFocus placeholder="e.g. Regions Beyond" style={{ width: '100%', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => { setNaming(false); setNewName(''); }} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
+              <button onClick={doCreate} disabled={!newName.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: newName.trim() ? 1 : 0.55 }}><Icon name="globe" size={15} color="#fff" /> Create</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {created ? (
         <div style={{ borderRadius: 14, border: '1.5px solid color-mix(in oklab, var(--sage) 40%, var(--line))', background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', padding: 16, marginBottom: 14 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, marginBottom: 6 }}>Network created 🎉</div>
@@ -926,7 +1234,7 @@ function DashNetworksPanel() {
         <NetworkRow net={net} onLeave={leave} />
       ) : (
         <React.Fragment>
-          <button onClick={create} disabled={busy} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 12, fontSize: 14, marginBottom: 12, opacity: busy ? 0.6 : 1 }}><Icon name="globe" size={16} color="#fff" /> {busy ? 'Creating…' : 'Create a network'}</button>
+          <button onClick={() => setNaming(true)} disabled={busy} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 12, fontSize: 14, marginBottom: 12, opacity: busy ? 0.6 : 1 }}><Icon name="globe" size={16} color="#fff" /> {busy ? 'Creating…' : 'Create a network'}</button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink-3)', fontSize: 12, fontWeight: 700, margin: '4px 0 12px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} />OR JOIN ONE<div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
           <div style={{ display: 'flex', gap: 9 }}>
             <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') join(); }} spellCheck={false} autoCapitalize="none"
@@ -936,6 +1244,7 @@ function DashNetworksPanel() {
         </React.Fragment>
       )}
       {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+      <NetworkAnnounceComposer />
     </Panel>
   );
 }
@@ -960,15 +1269,58 @@ function DashChannelPanel({ church }) {
   );
 }
 
+// church audio — a podcast RSS feed whose episodes members stream in the app's Listen tab
+function DashAudioPanel({ church }) {
+  const [draft, setDraft] = React.useState('');
+  const [saved, setSaved] = React.useState(false);
+  React.useEffect(() => { setDraft(church.audioFeed || ''); }, [church.audioFeed]);
+  const save = () => { window.Steward.publishProfile({ audioFeed: draft.trim() }); setSaved(true); setTimeout(() => setSaved(false), 1700); };
+  return (
+    <Panel title="Audio / podcast">
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Paste a <b>podcast RSS feed</b> (sermons, audio devotionals). Members who follow you stream its episodes in the app’s <b>Listen</b> tab — most podcast hosts (Spotify for Podcasters, Buzzsprout, Podbean, Apple) give you an RSS link.</div>
+      <div style={{ display: 'flex', gap: 9 }}>
+        <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} spellCheck={false} autoCapitalize="none"
+          placeholder="https://feeds.yourhost.com/yourchurch.xml"
+          style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' }} />
+        <button onClick={save} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="#fff" /> {saved ? 'Saved' : 'Save'}</button>
+      </div>
+      {church.audioFeed ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.audioFeed}</span></div> : null}
+    </Panel>
+  );
+}
+
+// a real dialog for renaming the church (or a network) — replaces window.prompt
+function NameEditModal({ current, isNetwork, onSave, onClose }) {
+  const [name, setName] = React.useState(current || '');
+  const [busy, setBusy] = React.useState(false);
+  const label = isNetwork ? 'network' : 'church';
+  const save = async () => { if (!name.trim()) return; setBusy(true); await onSave(name.trim()); onClose(); };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isNetwork ? 'globe' : 'bank'} size={21} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{current ? `Rename ${label}` : `Name your ${label}`}</div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>This is the name your {isNetwork ? 'churches' : 'members'} see in the app. You can change it anytime.</p>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>{label} name</div>
+        <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder={isNetwork ? 'e.g. Regions Beyond' : 'e.g. Grace Community Church'} style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
+          <button onClick={save} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !name.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashSettings({ onTab }) {
   const church = window.useStewardChurch();   // real church name + npub
   const [revealed, setRevealed] = React.useState(false);
   const [phrase, setPhrase] = React.useState('');
   const [copied, setCopied] = React.useState(false);
-  const editName = () => {
-    const n = window.prompt('Church name (members see this)', church.name || '');
-    if (n != null && n.trim()) window.Steward.publishProfile({ name: n.trim(), nip05: church.nip05 });
-  };
+  const [editingName, setEditingName] = React.useState(false);
+  const saveName = (n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }));
   const reveal = () => { try { setPhrase(window.Steward.exportMnemonic() || ''); } catch {} setRevealed(true); };
   const [restoreOpen, setRestoreOpen] = React.useState(false);
   const [backupOpen, setBackupOpen] = React.useState(false);
@@ -992,9 +1344,10 @@ function DashSettings({ onTab }) {
     }).catch(err => window.alert('Restore failed: ' + (err.message || err)));
   };
   return (
-    <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640, height: '100%', overflowY: 'auto', paddingBottom: 20 }}>
+    <div className="no-scrollbar" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', alignItems: 'start', gap: 16, height: '100%', overflowY: 'auto', paddingBottom: 20 }}>
       {backupOpen ? <StewBackupModal church={church} onClose={() => setBackupOpen(false)} /> : null}
-      <Panel title="Church identity" action={<button onClick={editName} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
+      {editingName ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={saveName} onClose={() => setEditingName(false)} /> : null}
+      <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
           <SkBadge initials={(church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase()} size={44} radius={13} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1006,6 +1359,8 @@ function DashSettings({ onTab }) {
       </Panel>
 
       <DashChannelPanel church={church} />
+
+      <DashAudioPanel church={church} />
 
       <DashNetworksPanel />
 
@@ -1064,9 +1419,12 @@ function StewDmWindow({ peer, offset, onClose }) {
   const [text, setText] = React.useState('');
   const [min, setMin] = React.useState(false);
   const scRef = React.useRef(null);
+  const [rxFor, setRxFor] = React.useState('');   // msg id whose emoji picker is open
   React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey]);
   React.useEffect(() => { if (!min && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, min]);
   const send = () => { if (!text.trim()) return; window.Steward.sendDM(peer.pubkey, text.trim()); setText(''); };
+  const react = (m, emoji) => { window.Steward.reactDM(peer.pubkey, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
+  const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
   const initials = (peer.name && peer.name !== 'Anonymous' ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
   return (
     <div style={{ width: 316, background: 'var(--surface)', borderRadius: '14px 14px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: min ? 48 : 420, transition: 'height .18s' }}>
@@ -1081,7 +1439,23 @@ function StewDmWindow({ peer, offset, onClose }) {
           <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
             <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}><Icon name="lock" size={12} /> Encrypted · only you two can read this</div>
             {msgs.map(m => (
-              <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)' }}>{m.text}</div>
+              <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
+                <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
+                {m.reactions && m.reactions.length ? (
+                  <div style={{ display: 'flex', gap: 3, marginTop: 2, flexWrap: 'wrap' }}>
+                    {Object.entries(m.reactions.reduce((a, e) => (a[e] = (a[e] || 0) + 1, a), {})).map(([emo, n]) => (
+                      <button key={emo} onClick={() => react(m, emo)} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: '1px 6px', borderRadius: 999, fontSize: 11.5, border: '1px solid var(--line)', background: m.myReaction === emo ? 'color-mix(in oklab, var(--clay) 16%, var(--surface))' : 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{emo}{n > 1 ? <span style={{ color: 'var(--ink-3)', fontWeight: 700 }}>{n}</span> : null}</button>
+                    ))}
+                  </div>
+                ) : null}
+                {rxFor === m.id ? (
+                  <div style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
+                    {DM_EMOJI.map(emo => (
+                      <button key={emo} onClick={() => react(m, emo)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 3px', borderRadius: 7, opacity: m.myReaction === emo ? 1 : 0.85 }}>{emo}</button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             ))}
           </div>
           <div style={{ display: 'flex', gap: 8, padding: '10px 11px', borderTop: '1px solid var(--line)', flexShrink: 0 }}>

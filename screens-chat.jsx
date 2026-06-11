@@ -146,6 +146,12 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
         </div>
         <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 9px' }}>RELAYS</div>
         {relayList === null ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '4px 2px 8px' }}>Checking…</div> : null}
+        {relayList !== null && !(relayList || []).length ? (
+          <div style={{ display: 'flex', gap: 9, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 8 }}>
+            <Icon name="globe" size={17} color="var(--ink-3)" style={{ flexShrink: 0, marginTop: 1 }} />
+            <span style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>No relay yet — join a church (scan its invite) and you’ll connect to its relay automatically.</span>
+          </div>
+        ) : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
           {(relayList || []).map(r => (
             <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
@@ -153,17 +159,10 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
               <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.url}</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
                 <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />{r.status === 'on' ? 'Connected' : 'Off'}</span>
-              {FS && FS.removeRelay && (relayList || []).length > 1 ? <button onClick={() => FS.removeRelay(r.url)} title="Remove relay" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={15} /></button> : null}
             </div>
           ))}
         </div>
-        {FS && FS.addRelay ? (
-          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <input value={relayInput} onChange={e => setRelayInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
-              placeholder="wss://relay.yourchurch.org" style={{ flex: 1, minWidth: 0, height: 40, padding: '0 12px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontFamily: 'monospace', fontSize: 13, color: 'var(--ink)' }} />
-            <button onClick={addRelay} style={{ border: 'none', background: 'var(--clay)', color: '#fff', padding: '0 14px', borderRadius: 12, fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', flexShrink: 0 }}>Add</button>
-          </div>
-        ) : null}
+        {(relayList || []).length ? <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45, padding: '0 2px 8px' }}>Relays are managed by the churches you’ve joined.</div> : null}
       </React.Fragment>}
 
       {pane === 'profile' && <React.Fragment>
@@ -343,13 +342,31 @@ function ChatScreen({ ctx }) {
     <ScreenScroll>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, animation: 'trinityFade .5s ease both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
-        <div style={{ display: 'flex', gap: 9 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
+          <button onClick={() => ctx.openProfile()} title="Your anonymous identity" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 999, lineHeight: 0, position: 'relative' }}>
+            <UserAvatar av={myAvatar(id)} name={myName(id)} size={38} />
+            <span style={{ position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 999, background: 'var(--sage)', border: '2px solid var(--surface)' }} />
+          </button>
         </div>
       </div>
-      <div style={{ marginBottom: GIVING_ON ? 16 : 20, animation: 'trinityFade .5s ease .04s both' }}>
+      <div style={{ marginBottom: (ctx.churchNetworks || []).length ? 12 : (GIVING_ON ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
         <ChurchPill ctx={ctx} />
       </div>
+
+      {/* the wider network(s) this church belongs to — a small line right under the church it's part of */}
+      {(ctx.churchNetworks || []).length ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: GIVING_ON ? 16 : 20, animation: 'trinityFade .5s ease .05s both' }}>
+          {ctx.churchNetworks.map(n => (
+            <button key={n.networkPub} onClick={() => { ctx.setActiveChurch(n.npub); ctx.toast('Viewing ' + (n.name || 'the network')); }} title="Tap to see its announcements & events" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px 5px 8px', borderRadius: 999, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+              <Icon name="globe" size={14} color="var(--clay)" />
+              <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>Part of</span>
+              <span style={{ fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 150 }}>{n.name || 'a network'}</span>
+              <Icon name="chevR" size={14} color="var(--ink-3)" />
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {/* segmented: Groups / Giving (giving parked for the pilot) */}
       {GIVING_ON ? (
@@ -420,49 +437,7 @@ function ChatScreen({ ctx }) {
       </div>
       ) : (
       <React.Fragment>
-      {/* anonymous identity banner — opens the ProfileSheet hub */}
-      <button onClick={() => ctx.openProfile()} style={{
-        width: '100%', textAlign: 'left', cursor: 'pointer', border: '1px solid var(--line)',
-        background: 'var(--surface)', borderRadius: 20, padding: 14, marginBottom: 22, boxShadow: 'var(--shadow)',
-        display: 'flex', alignItems: 'center', gap: 13, animation: 'trinityFade .5s ease .05s both',
-      }}>
-        <UserAvatar av={myAvatar(id)} name={myName(id)} size={44} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{myName(id)}</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--clay-soft)', color: 'var(--clay-ink)', padding: '2px 8px', borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: '.3px' }}>
-              <Icon name="shield" size={11} /> ANON</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--ink-3)', fontSize: 12, marginTop: 2 }}>
-            <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} />
-            {relayCount} relay{relayCount === 1 ? '' : 's'} · Nostr · tap to manage
-          </div>
-        </div>
-        <Icon name="chevR" size={18} color="var(--ink-3)" />
-      </button>
-
       <ServingEntry ctx={ctx} />
-
-      {(ctx.churchNetworks || []).length ? (
-        <React.Fragment>
-          <SectionLabel>Part of</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .06s both' }}>
-            {ctx.churchNetworks.map(n => (
-              <button key={n.networkPub} onClick={() => { ctx.setActiveChurch(n.npub); ctx.toast('Viewing ' + (n.name || 'the network')); }} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left', width: '100%', fontFamily: 'var(--font-ui)' }}>
-                <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="globe" size={22} /></div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                    <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name || 'A wider network'}</span>
-                    <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 7px', flexShrink: 0 }}>NETWORK</span>
-                  </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Tap to see its announcements &amp; events</div>
-                </div>
-                <Icon name="chevR" size={18} color="var(--ink-3)" />
-              </button>
-            ))}
-          </div>
-        </React.Fragment>
-      ) : null}
 
       {teamGroups.length ? (
         <React.Fragment>
@@ -686,12 +661,61 @@ function ServingEntry({ ctx }) {
   );
 }
 
+// a group leader creates an event for their group, right from the chat. Publishes via the member's
+// own key (the relay only accepts it because the steward named them a leader of this group).
+function GroupEventComposer({ group, ctx, onClose }) {
+  const [title, setTitle] = useC('');
+  const [date, setDate] = useC('');
+  const [time, setTime] = useC('19:30');
+  const [where, setWhere] = useC('');
+  const [blurb, setBlurb] = useC('');
+  const [busy, setBusy] = useC(false);
+  const accent = group.accent || 'var(--clay)';
+  const save = async () => {
+    if (!title.trim() || !date) return;
+    setBusy(true);
+    const r = await ctx.publishGroupEvent(group.id, { title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent });
+    setBusy(false);
+    if (r) { ctx.toast('Event posted to ' + group.name); onClose(); }
+    else ctx.toast('Couldn’t post the event — you may not be a leader of this group.');
+  };
+  const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
+  const lbl = { fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '14px 2px 6px' };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 120, background: 'rgba(20,15,10,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 460, maxHeight: '92%', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', padding: '20px 18px 26px', animation: 'trinityRise .24s cubic-bezier(.2,.8,.3,1) both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <div style={{ width: 38, height: 38, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="calPlus" size={20} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>New event</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>for {group.name}</div></div>
+          <button onClick={onClose} style={{ border: 'none', background: 'var(--surface-2)', borderRadius: 999, width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)' }}><Icon name="x" size={17} /></button>
+        </div>
+        <div style={lbl}>Title</div>
+        <input value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer breakfast" style={fld} />
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}><div style={lbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={fld} /></div>
+          <div style={{ width: 130 }}><div style={lbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={fld} /></div>
+        </div>
+        <div style={lbl}>Where</div>
+        <input value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Church café" style={fld} />
+        <div style={lbl}>Note (optional)</div>
+        <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical' }} />
+        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
+          <button onClick={save} disabled={busy || !title.trim() || !date} style={{ flex: 1.4, padding: 13, borderRadius: 13, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || !title.trim() || !date) ? 0.55 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={16} color="#fff" /> {busy ? 'Posting…' : 'Post event'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ChatRoom({ group, open, onClose, ctx }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
   const [prayerOn, setPrayerOn] = useC(false);   // attach a "prayer request" flag to this message
   const [reactions, setReactions] = useC({});    // targetId -> { reactorPubkey: {content, ts} }
   const [pickerFor, setPickerFor] = useC(null);  // message id whose emoji picker is open
+  const [composeEvt, setComposeEvt] = useC(false); // group-leader event composer open?
+  const isLeader = !!group && (ctx.myLeaderGroups || []).some(g => g.id === group.id);
   const id = useIdentity();
   const scRef = useCR();
   useCE(() => {
@@ -770,9 +794,11 @@ function ChatRoom({ group, open, onClose, ctx }) {
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
               <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members ? `${group.members} anonymous` : 'Anonymous'} · Nostr</div>
           </div>
+          {isLeader ? <button onClick={() => setComposeEvt(true)} title="Create an event for this group" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 38, padding: '0 12px', borderRadius: 12, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, flexShrink: 0 }}><Icon name="calPlus" size={16} color="#fff" /> Event</button> : null}
           <IconBtn name="shield" onClick={() => ctx.toast('Everyone here is anonymous')} />
         </div>
       </div>
+      {composeEvt ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
 
       <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ textAlign: 'center', margin: '2px 0 4px' }}>
@@ -928,18 +954,25 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
 function DMThread({ peer, open, onClose, ctx }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
+  const [rxFor, setRxFor] = useC('');
   const scRef = useCR();
   const FS = window.Fellowship;
+  const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
   const d = (FS && FS.displayFor && peer) ? FS.displayFor(peer) : { handle: 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
   useCE(() => {
     setMsgs([]); setDraft('');
     if (!peer || !FS || !FS.subscribeThread) return;
     if (FS.requestProfiles) FS.requestProfiles([peer]);
-    return FS.subscribeThread(peer, (m) => setMsgs(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m].sort((a, b) => (a.ts || 0) - (b.ts || 0))));
+    return FS.subscribeThread(peer, (m) => setMsgs(prev => {
+      const i = prev.findIndex(x => x.id === m.id);
+      if (i === -1) return [...prev, m].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      const next = prev.slice(); next[i] = m; return next;
+    }));
   }, [peer]);
   useCE(() => { if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, open]);
   if (!peer) return null;
   const send = () => { if (!draft.trim() || !FS) return; FS.sendDM(peer, draft.trim()); setDraft(''); };
+  const react = (m, emoji) => { if (FS && FS.reactDM) FS.reactDM(peer, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
@@ -958,12 +991,26 @@ function DMThread({ peer, open, onClose, ctx }) {
             <Icon name="lock" size={13} /> Only you two can read these messages</span>
         </div>
         {msgs.map(m => (
-          <div key={m.id} style={{ display: 'flex', justifyContent: m.mine ? 'flex-end' : 'flex-start' }}>
-            <div style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)',
+          <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
+            <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
               border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>
               <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', wordBreak: 'break-word' }}>{m.content}</p>
             </div>
+            {m.reactions && m.reactions.length ? (
+              <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }}>
+                {Object.entries(m.reactions.reduce((a, e) => (a[e] = (a[e] || 0) + 1, a), {})).map(([emo, n]) => (
+                  <button key={emo} onClick={() => react(m, emo)} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 8px', borderRadius: 999, fontSize: 12.5, border: '1px solid var(--line)', background: m.myReaction === emo ? 'color-mix(in oklab, var(--clay) 16%, var(--surface))' : 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{emo}{n > 1 ? <span style={{ color: 'var(--ink-3)', fontWeight: 700 }}>{n}</span> : null}</button>
+                ))}
+              </div>
+            ) : null}
+            {rxFor === m.id ? (
+              <div style={{ display: 'flex', gap: 3, marginTop: 5, padding: '5px 8px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
+                {DM_EMOJI.map(emo => (
+                  <button key={emo} onClick={() => react(m, emo)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '2px 4px', borderRadius: 8, opacity: m.myReaction === emo ? 1 : 0.9 }}>{emo}</button>
+                ))}
+              </div>
+            ) : null}
           </div>
         ))}
       </div>

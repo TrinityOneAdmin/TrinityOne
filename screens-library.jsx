@@ -104,12 +104,13 @@ function LibraryHome({ ctx }) {
 
 // ── encrypted full backup (keys, journals, notes, highlights, books) ──
 function BackupCard({ ctx }) {
-  const [provider, setProvider] = React.useState(null); // null | 'iCloud' | 'Google Drive' | 'Dropbox'
   const [picking, setPicking] = React.useState(false);
-  const PROVIDERS = [
-  { id: 'iCloud', ic: 'cloud' },
-  { id: 'Google Drive', ic: 'cloud' },
-  { id: 'Dropbox', ic: 'cloud' }];
+  const [pass, setPass] = React.useState('');
+  const [show, setShow] = React.useState(false);
+  const [busy, setBusy] = React.useState('');     // '' | 'local' | 'cloud'
+  const [done, setDone] = React.useState(null);   // null | 'device' | 'downloads' | 'cloud'
+  const fileRef = React.useRef(null);
+  const secure = (typeof window !== 'undefined') && window.isSecureContext && (typeof crypto !== 'undefined') && crypto.subtle;
 
   const INCLUDED = [
   { ic: 'key', label: 'Recovery key', sealed: true },
@@ -118,28 +119,43 @@ function BackupCard({ ctx }) {
   { ic: 'bookmark', label: 'Bookmarks' },
   { ic: 'books', label: 'Downloaded books' }];
 
-  const connect = (id) => {setProvider(id);setPicking(false);ctx.toast('Backing up to ' + id + '…');};
+  const strength = pass.length === 0 ? null
+    : pass.length < 4 ? { t: 'Too short', c: 'var(--ink-3)' }
+    : /^\d+$/.test(pass) && pass.length < 6 ? { t: 'PIN — easy to use, easier to guess', c: 'var(--clay)' }
+    : pass.length < 8 ? { t: 'OK', c: 'var(--gold)' }
+    : { t: 'Strong', c: 'var(--sage)' };
 
-  if (provider) {
-    return (
-      <div style={{ marginBottom: 13, borderRadius: 18, overflow: 'hidden',
-        background: 'color-mix(in oklab, var(--sage) 13%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 30%, transparent)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px' }}>
-          <div style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Icon name="cloudCheck" size={21} stroke={2} color="#fff" /></div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>Backed up to {provider}</div>
-            <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>Everything encrypted · synced just now</div>
-          </div>
-          <button onClick={() => setProvider(null)} style={{ border: 'none', background: 'none', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Manage</button>
-        </div>
-      </div>);
+  const run = async (mode) => {
+    if (!secure) { ctx.toast('Open the app over https to make a backup'); return; }
+    if (pass.length < 4) { ctx.toast('Use at least 4 characters (a PIN is fine)'); return; }
+    setBusy(mode);
+    try {
+      const obj = window.TrinityBackup.collectMember();
+      const text = await window.TrinityBackup.encryptObj(obj, pass);
+      const name = 'trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      const res = await window.TrinityBackup.saveFile(name, text, mode);
+      setBusy(''); setDone((res && res.where) || mode);
+      ctx.toast(mode === 'local' ? 'Saved to your device' : 'Backup ready to store');
+      setTimeout(() => { setDone(null); setPicking(false); setPass(''); }, 2200);
+    } catch (e) { setBusy(''); ctx.toast('Backup failed: ' + (e.message || e)); }
+  };
 
-  }
+  const onRestoreFile = async (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    const p = window.prompt('Enter the passphrase or PIN for this backup file:'); if (p == null) return;
+    try {
+      const text = await window.TrinityBackup.readFile(f);
+      const obj = await window.TrinityBackup.decryptStr(text, p);
+      await window.TrinityBackup.applyMember(obj);
+      ctx.toast('Backup restored');
+    } catch (err) { ctx.toast(err.message || 'Couldn’t restore that file'); }
+  };
 
   return (
     <div style={{ marginBottom: 13, borderRadius: 18, background: 'var(--surface-2)', border: '1px solid var(--line)', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px 11px' }} data-comment-anchor="67df77a64d-div-123-7">
+      <input ref={fileRef} type="file" accept="application/json,.json" onChange={onRestoreFile} style={{ display: 'none' }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px 11px' }}>
         <div style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Icon name="cloud" size={21} stroke={1.9} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -164,22 +180,38 @@ function BackupCard({ ctx }) {
       {/* security note — always visible */}
       <div style={{ display: 'flex', gap: 8, padding: '0 15px 13px', fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>
         <Icon name="shield" size={14} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <span>Sealed on this phone before it uploads. Your <b style={{ color: 'var(--ink-2)' }}>recovery key</b> is locked with a passphrase only you know — not even the cloud provider can read it.</span>
+        <span>Sealed on this phone with a passphrase only you know — restore it later from a file on your device or your cloud drive. If you lose the passphrase, no one can open it.</span>
       </div>
 
-      {picking ?
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, padding: '0 12px 12px', animation: 'lumenFade .2s ease both' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', color: 'var(--ink-3)', padding: '0 3px 2px', textTransform: 'uppercase' }}>Choose where it's stored</div>
-          {PROVIDERS.map((p) =>
-        <button key={p.id} onClick={() => connect(p.id)} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', width: '100%', textAlign: 'left',
-          borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-              <Icon name={p.ic} size={19} color="var(--ink-2)" />
-              <span style={{ flex: 1, fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{p.id}</span>
-              <Icon name="chevR" size={17} color="var(--ink-3)" />
-            </button>
-        )}
-        </div> :
-      null}
+      {picking ? (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9, padding: '0 12px 13px', animation: 'lumenFade .2s ease both' }}>
+        {!secure ? (
+          <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+            <Icon name="lock" size={15} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>You’re on an <b>http</b> address — the browser disables encryption here. Open the app over <b>https</b> to create a backup.</span>
+          </div>
+        ) : null}
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', color: 'var(--ink-3)', padding: '2px 3px 0', textTransform: 'uppercase' }}>Passphrase or PIN</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input value={pass} onChange={e => setPass(e.target.value)} type={show ? 'text' : 'password'} placeholder="a memorable passphrase, or a PIN"
+            style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+          <button onClick={() => setShow(s => !s)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 12, padding: '0 14px', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{show ? 'Hide' : 'Show'}</button>
+        </div>
+        {strength ? <div style={{ fontSize: 11.5, color: strength.c, fontWeight: 600, padding: '0 3px' }}>{strength.t}</div> : null}
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => run('local')} disabled={!!busy || pass.length < 4 || !secure} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '12px', borderRadius: 12,
+            border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || pass.length < 4 || !secure) ? 0.55 : 1 }}>
+            <Icon name={done === 'device' || done === 'downloads' ? 'check' : 'arrowUp'} size={16} color="var(--clay)" style={done === 'device' || done === 'downloads' ? null : { transform: 'rotate(180deg)' }} /> {busy === 'local' ? 'Saving…' : (done === 'device' || done === 'downloads') ? 'Saved' : 'Save to device'}</button>
+          <button onClick={() => run('cloud')} disabled={!!busy || pass.length < 4 || !secure} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '12px', borderRadius: 12,
+            border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', opacity: (busy || pass.length < 4 || !secure) ? 0.55 : 1 }}>
+            <Icon name={done === 'cloud' ? 'check' : 'cloud'} size={16} color="#fff" /> {busy === 'cloud' ? 'Sealing…' : done === 'cloud' ? 'Ready' : 'Save to cloud'}</button>
+        </div>
+        <button onClick={() => fileRef.current && fileRef.current.click()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px', borderRadius: 12,
+          border: 'none', background: 'transparent', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+          <Icon name="refresh" size={15} color="var(--ink-3)" /> Restore from a backup file</button>
+      </div>
+      ) : null}
     </div>);
 
 }
@@ -577,6 +609,63 @@ function StoreRow({ item, catIcon, ctx }) {
   );
 }
 
+// "Installed" tier — everything downloaded onto this device, removable (except the active Bible)
+function InstalledBrowser({ ctx, category, force }) {
+  const map = window.Bible.installedMap();
+  const active = window.Bible.activeVersion;
+  let rows = Object.values(map);
+  if (category) rows = rows.filter(r => (r.category || 'bibles') === category);
+  rows.sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.name || '').localeCompare(b.name || ''));
+
+  const CAT_LABEL = { bibles: 'Bible', dictionaries: 'Dictionary', commentaries: 'Commentary', devotionals: 'Devotional' };
+  const remove = (r) => {
+    if (r.abbr === active) { ctx.toast('Switch to another Bible before removing this one'); return; }
+    if (window.Bible.removeModule(r.abbr)) { ctx.toast(`Removed ${r.abbr || r.name}`); force(x => x + 1); }
+    else ctx.toast(`Couldn't remove ${r.name}`);
+  };
+
+  if (!rows.length) return (
+    <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-3)' }}>
+      <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="library" size={24} /></div>
+      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>Nothing installed yet</div>
+      <p style={{ fontSize: 13.5, lineHeight: 1.55, maxWidth: 260, margin: '0 auto' }}>Modules you download appear here, ready to read offline.</p>
+    </div>
+  );
+
+  return (
+    <React.Fragment>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '2px 0 12px', display: 'flex', alignItems: 'center', gap: 7 }}>
+        <Icon name="check" size={15} color="var(--sage)" stroke={2.4} />
+        {rows.length} module{rows.length === 1 ? '' : 's'} on this device
+      </div>
+      {rows.map(r => {
+        const isActive = r.abbr === active;
+        return (
+          <div key={r.url} style={{ display: 'flex', gap: 12, padding: '13px 4px', borderBottom: '1px solid var(--line-2)', alignItems: 'center' }}>
+            <div style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+              background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}>
+              <Icon name={(CAT_STYLE[r.category] || CAT_STYLE.bibles).icon} size={21} stroke={1.8} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{r.name}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, margin: '2px 0 0' }}>
+                {[CAT_LABEL[r.category] || 'Module', r.abbr, isActive ? 'Active' : null].filter(Boolean).join('  ·  ')}
+              </div>
+            </div>
+            <button onClick={() => remove(r)} disabled={isActive} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5,
+              border: '1px solid var(--line)', background: 'var(--surface)', color: isActive ? 'var(--ink-3)' : 'var(--danger, #c0392b)',
+              borderRadius: 11, padding: '7px 11px', cursor: isActive ? 'default' : 'pointer', opacity: isActive ? 0.5 : 1,
+              fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>
+              <Icon name="trash" size={14} stroke={2.2} /> Remove
+            </button>
+          </div>
+        );
+      })}
+    </React.Fragment>
+  );
+}
+
 // "Browse by language" tier — the deep eBible.org mirror (1,290 translations)
 function MirrorBrowser({ mirror, ctx }) {
   const [lang, setLang] = React.useState('eng');
@@ -655,10 +744,9 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Download once — stays on your device</div>
           </div>
         </div>
-        {/* segmented: Featured / By language (language = full eBible mirror, bibles only) */}
-        {showLang ? (
+        {/* segmented: Featured / All bibles (full eBible mirror, bibles only) / Installed */}
         <div style={{ display: 'flex', gap: 4, padding: 4, margin: '0 18px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          {[['featured', 'Featured'], ['language', 'By language']].map(([id, label]) => {
+          {[['featured', 'Featured'], ...(showLang ? [['language', 'All bibles']] : []), ['installed', 'Installed']].map(([id, label]) => {
             const on = view === id;
             return (
               <button key={id} onClick={() => setView(id)} style={{
@@ -670,7 +758,6 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
             );
           })}
         </div>
-        ) : null}
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
@@ -685,6 +772,8 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
               </div>
             );
           })
+        ) : view === 'installed' ? (
+          <InstalledBrowser ctx={ctx} category={category} force={force} />
         ) : (
           !mirror ? <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><Spinner size={26} /></div>
           : <MirrorBrowser mirror={mirror} ctx={ctx} />

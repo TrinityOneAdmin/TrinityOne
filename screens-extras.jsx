@@ -2,12 +2,51 @@
 const { useState: useX } = React;
 
 // ── Notifications (note 8) ──
+function relTimeNotif(ts) {
+  if (!ts) return '';
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (s < 60) return 'now';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h';
+  return Math.floor(s / 86400) + 'd';
+}
+
+const NOTIF_ICON = { message: 'chat', prayer: 'pray', giving: 'bolt', amen: 'heart', notice: 'bell', plan: 'plans', network: 'globe', devotional: 'read', event: 'calendar' };
+const NOTIF_ACCENT = { network: 'var(--clay)', notice: 'var(--clay)', devotional: 'var(--sage)', plan: 'var(--gold)', event: 'var(--clay)' };
+
 function NotificationsScreen({ open, onClose, ctx }) {
-  const D = window.TrinityData;
-  const items = D.NOTIFICATIONS;
-  const kindIcon = { message: 'chat', prayer: 'pray', giving: 'bolt', amen: 'heart', notice: 'bell', plan: 'plans' };
+  const [detail, setDetail] = useX(null);   // a notification opened for its full text
+  const netSeen = (() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } })();
+  const items = (ctx.notifications || []).map(n => ({ ...n, time: relTimeNotif(n.ts), unread: (n.ts || 0) > netSeen, accent: NOTIF_ACCENT[n.kind] || 'var(--clay)' }));
+  // mark seen when this screen opens
+  React.useEffect(() => { if (open && ctx.markNetSeen) ctx.markNetSeen(); }, [open]);
+  const onRowClick = (n) => {
+    if (n.devo) { onClose(); ctx.openChurchDevo(n.devo); return; }
+    if (n.go === 'plans') { onClose(); ctx.openPlans && ctx.openPlans(); return; }
+    if (n.go === 'serving') { onClose(); ctx.openServing && ctx.openServing(); return; }
+    if (n.groupObj && ctx.openGroup) { onClose(); ctx.openGroup(n.groupObj); return; }   // broadcast: open its chat
+    if (n.go === 'chat') { onClose(); ctx.go('chat'); return; }
+    setDetail(n);   // network announcement: show the full message
+  };
+  const newItems = items.filter(n => n.unread);
+  const earlierItems = items.filter(n => !n.unread);
   return (
     <Overlay open={open} onClose={onClose}>
+      {detail ? (
+        <div onClick={() => setDetail(null)} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(20,15,10,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxHeight: '80%', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', padding: '20px 20px 30px', animation: 'trinityRise .24s cubic-bezier(.2,.8,.3,1) both' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 12 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, background: `color-mix(in oklab, ${detail.accent} 16%, var(--surface))`, color: detail.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={NOTIF_ICON[detail.kind] || 'bell'} size={21} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{detail.group}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{detail.kind === 'network' ? 'Network announcement' : 'Announcement'} · {relTimeNotif(detail.ts)}</div>
+              </div>
+              <button onClick={() => setDetail(null)} style={{ border: 'none', background: 'var(--surface-2)', borderRadius: 999, width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)' }}><Icon name="x" size={17} /></button>
+            </div>
+            <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink)', margin: 0, textWrap: 'pretty', whiteSpace: 'pre-wrap' }}>{detail.text}</p>
+          </div>
+        </div>
+      ) : null}
       <div style={{ paddingTop: 50, flexShrink: 0, borderBottom: '1px solid var(--line-2)',
         background: 'color-mix(in oklab, var(--paper) 92%, transparent)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 14px' }}>
@@ -17,18 +56,25 @@ function NotificationsScreen({ open, onClose, ctx }) {
           <div style={{ flex: 1 }}>
             <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Notifications</h1>
           </div>
-          <button onClick={() => ctx.toast('All caught up')} style={{ border: 'none', background: 'none', color: 'var(--clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Mark all read</button>
+          {items.length ? <button onClick={() => { if (ctx.markNetSeen) ctx.markNetSeen(); ctx.toast('All caught up'); }} style={{ border: 'none', background: 'none', color: 'var(--clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Mark all read</button> : null}
         </div>
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 16px 30px' }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 10 }}>NEW</div>
+        {!items.length ? (
+          <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--ink-3)' }}>
+            <div style={{ width: 56, height: 56, borderRadius: 16, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="bell" size={26} color="var(--ink-3)" /></div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink-2)' }}>You’re all caught up</div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 250, margin: '6px auto 0' }}>When your church shares a devotional, plan, event, or announcement, it’ll show up here.</p>
+          </div>
+        ) : null}
+        {newItems.length ? <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 10 }}>NEW</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 22 }}>
-          {items.filter(n => n.unread).map(n => <NotifRow key={n.id} n={n} ic={kindIcon[n.kind]} onClick={() => { onClose(); ctx.go('chat'); }} />)}
+          {newItems.map(n => <NotifRow key={n.id} n={n} ic={NOTIF_ICON[n.kind] || 'bell'} onClick={() => onRowClick(n)} />)}
         </div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 10 }}>EARLIER</div>
+        {earlierItems.length ? <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 10 }}>EARLIER</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-          {items.filter(n => !n.unread).map(n => <NotifRow key={n.id} n={n} ic={kindIcon[n.kind]} onClick={() => { onClose(); ctx.go('chat'); }} />)}
+          {earlierItems.map(n => <NotifRow key={n.id} n={n} ic={NOTIF_ICON[n.kind] || 'bell'} onClick={() => onRowClick(n)} />)}
         </div>
       </div>
     </Overlay>
@@ -62,88 +108,125 @@ function NotifRow({ n, ic, onClick }) {
   );
 }
 
-// ── Listen / audio (note 5) ──
+// ── Listen / audio: streams the church's podcast feed (set in the steward console) ──
+const lsnClock = (s) => { s = Math.floor(s || 0); const m = Math.floor(s / 60); return m + ':' + String(s % 60).padStart(2, '0'); };
+const lsnPubDate = (s) => { try { const d = new Date(s); if (isNaN(d)) return ''; return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return ''; } };
+
 function ListenScreen({ open, onClose, ctx }) {
-  const D = window.TrinityData;
-  const L = D.LISTEN;
-  const [playing, setPlaying] = useX(true);
-  const now = L.now;
+  const audioFeed = (ctx.church && ctx.church.audioFeed) || '';
+  const [data, setData] = useX(null);     // { channel, episodes }
+  const [loading, setLoading] = useX(false);
+  const [cur, setCur] = useX(null);       // episode now playing
+  const [playing, setPlaying] = useX(false);
+  const [pos, setPos] = useX({ t: 0, d: 0 });
+  const audioRef = React.useRef(null);
+  const FS = window.Fellowship;
+
+  React.useEffect(() => {
+    if (!open || !audioFeed) { if (!audioFeed) setData({ episodes: [] }); return; }
+    const base = FS && FS.gatewayBase && FS.gatewayBase();
+    if (!base) { setData({ episodes: [], error: 'offline' }); return; }
+    setLoading(true);
+    fetch(base + '/audiofeed?url=' + encodeURIComponent(audioFeed))
+      .then(r => r.json()).then(d => setData(d || { episodes: [] }))
+      .catch(() => setData({ episodes: [] }))
+      .then(() => setLoading(false));
+  }, [open, audioFeed]);
+
+  // pause playback when the screen is closed
+  React.useEffect(() => { if (!open && audioRef.current) { try { audioRef.current.pause(); } catch (e) {} setPlaying(false); } }, [open]);
+
+  const episodes = (data && data.episodes) || [];
+  const playEp = (ep) => {
+    setCur(ep); setPlaying(true);
+    setTimeout(() => { const a = audioRef.current; if (a) { a.src = ep.audio; a.play().then(() => setPlaying(true)).catch(() => { setPlaying(false); ctx.toast('Couldn’t play that episode'); }); } }, 0);
+  };
+  const toggle = () => { const a = audioRef.current; if (!a || !cur) return; if (a.paused) { a.play().then(() => setPlaying(true)).catch(() => {}); } else { a.pause(); setPlaying(false); } };
+  const seek = (delta) => { const a = audioRef.current; if (a && a.duration) a.currentTime = Math.max(0, Math.min(a.duration, a.currentTime + delta)); };
+  const onBar = (e) => { const a = audioRef.current; if (!a || !a.duration) return; const r = e.currentTarget.getBoundingClientRect(); a.currentTime = ((e.clientX - r.left) / r.width) * a.duration; };
+
   return (
     <Overlay open={open} onClose={onClose}>
+      <audio ref={audioRef} preload="none"
+        onTimeUpdate={() => { const a = audioRef.current; if (a) setPos({ t: a.currentTime, d: a.duration || 0 }); }}
+        onEnded={() => { setPlaying(false); const i = episodes.findIndex(e => e.id === (cur && cur.id)); if (i >= 0 && episodes[i + 1]) playEp(episodes[i + 1]); }}
+        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} style={{ display: 'none' }} />
       <div style={{ paddingTop: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
           <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)',
             background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
             <Icon name="chevL" size={20} /></button>
-          <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Listen</h1>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Listen</h1>
+            {data && data.channel && data.channel.name ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{data.channel.name}</div> : null}
+          </div>
         </div>
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '10px 16px 30px' }}>
-        {!now ? (
+        {loading && !episodes.length ? (
+          <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--ink-3)' }}><div style={{ width: 26, height: 26, margin: '0 auto', borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} /><p style={{ marginTop: 14, fontSize: 14 }}>Loading episodes…</p></div>
+        ) : null}
+        {!loading && !episodes.length ? (
           <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--ink-3)' }}>
             <div style={{ width: 56, height: 56, borderRadius: 16, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="headphones" size={26} color="var(--ink-3)" /></div>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink-2)' }}>Nothing to listen to yet</div>
-            <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '6px auto 0' }}>Narrated scripture and audio devotionals will appear here.</p>
+            <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '6px auto 0' }}>{audioFeed ? 'Your church’s audio will appear here soon.' : 'Your church hasn’t added an audio feed yet.'}</p>
           </div>
         ) : null}
-        {/* now playing */}
-        {now ? (<React.Fragment>
-        <div style={{ borderRadius: 26, overflow: 'hidden', background: now.color, color: '#fff', padding: 22, marginBottom: 24, boxShadow: 'var(--shadow-lg)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>
-            <Icon name="headphones" size={16} stroke={2} color="#fff" /> Now playing
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, margin: '18px 0' }}>
-            <div style={{ width: 72, height: 84, borderRadius: 14, background: 'rgba(255,255,255,.16)', display: 'flex', alignItems: 'flex-end', padding: 9, flexShrink: 0 }}>
-              <span style={{ fontFamily: 'var(--font-display)', color: '#fff', fontWeight: 700, fontSize: 15, lineHeight: 1 }}>{now.tag}</span>
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, lineHeight: 1.15 }}>{now.title}</div>
-              <div style={{ fontSize: 13.5, opacity: .9, marginTop: 4 }}>{now.sub}</div>
-              <div style={{ fontSize: 12, opacity: .7, marginTop: 2 }}>{now.reader}</div>
-            </div>
-          </div>
-          {/* scrubber */}
-          <div style={{ height: 5, borderRadius: 3, background: 'rgba(255,255,255,.25)', overflow: 'hidden' }}>
-            <div style={{ width: `${now.pos * 100}%`, height: '100%', background: '#fff', borderRadius: 3 }} />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 600, opacity: .85, marginTop: 7 }}>
-            <span>{now.at}</span><span>-{now.len}</span>
-          </div>
-          {/* transport */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 26, marginTop: 16 }}>
-            <button onClick={() => ctx.toast('Back 15s')} aria-label="Rewind" style={transBtn}><Icon name="rewind" size={26} color="#fff" /></button>
-            <button onClick={() => setPlaying(p => !p)} aria-label="Play/pause" style={{
-              width: 64, height: 64, borderRadius: 999, border: 'none', cursor: 'pointer', background: '#fff',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 6px 18px rgba(0,0,0,.25)' }}>
-              <Icon name={playing ? 'pause' : 'play'} size={26} color="var(--ink)" />
-            </button>
-            <button onClick={() => ctx.toast('Forward 15s')} aria-label="Forward" style={transBtn}><Icon name="forward" size={26} color="#fff" /></button>
-          </div>
-        </div>
 
-        {/* up next */}
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 12 }}>UP NEXT</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {L.queue.map(a => (
-            <button key={a.id} onClick={() => ctx.toast('Playing · ' + a.title)} style={{
-              display: 'flex', alignItems: 'center', gap: 13, padding: 13, width: '100%', textAlign: 'left', cursor: 'pointer',
-              borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)' }}>
-              <div style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: `color-mix(in oklab, ${a.accent} 15%, var(--surface))`, color: a.accent }}>
-                <Icon name={a.ic} size={22} stroke={1.9} /></div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)', lineHeight: 1.2 }}>{a.title}</div>
-                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{a.sub}</div>
+        {/* now playing */}
+        {cur ? (
+          <div style={{ borderRadius: 26, overflow: 'hidden', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', padding: 22, marginBottom: 24, boxShadow: 'var(--shadow-lg)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>
+              <Icon name="headphones" size={16} stroke={2} color="#fff" /> Now playing
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, margin: '18px 0' }}>
+              <div style={{ width: 72, height: 72, borderRadius: 16, background: cur.image ? `center/cover url(${cur.image})` : 'rgba(255,255,255,.16)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{!cur.image ? <Icon name="headphones" size={28} color="#fff" /> : null}</div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700, lineHeight: 1.15 }}>{cur.title}</div>
+                <div style={{ fontSize: 12.5, opacity: .85, marginTop: 4 }}>{[lsnPubDate(cur.published), cur.duration].filter(Boolean).join(' · ')}</div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
-                <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>{a.dur}</span>
-                <Icon name="play" size={18} color="var(--clay)" />
-              </div>
-            </button>
-          ))}
-        </div>
-        </React.Fragment>) : null}
+            </div>
+            <div onClick={onBar} style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,.25)', overflow: 'hidden', cursor: 'pointer' }}>
+              <div style={{ width: `${pos.d ? (pos.t / pos.d) * 100 : 0}%`, height: '100%', background: '#fff', borderRadius: 3 }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 600, opacity: .85, marginTop: 7 }}>
+              <span>{lsnClock(pos.t)}</span><span>{pos.d ? lsnClock(pos.d) : (cur.duration || '')}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 26, marginTop: 16 }}>
+              <button onClick={() => seek(-15)} aria-label="Back 15s" style={transBtn}><Icon name="rewind" size={26} color="#fff" /></button>
+              <button onClick={toggle} aria-label="Play/pause" style={{ width: 64, height: 64, borderRadius: 999, border: 'none', cursor: 'pointer', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 6px 18px rgba(0,0,0,.25)' }}>
+                <Icon name={playing ? 'pause' : 'play'} size={26} color="var(--ink)" />
+              </button>
+              <button onClick={() => seek(15)} aria-label="Forward 15s" style={transBtn}><Icon name="forward" size={26} color="#fff" /></button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* episode list */}
+        {episodes.length ? (
+          <React.Fragment>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 12 }}>EPISODES</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {episodes.map(ep => {
+                const isCur = cur && cur.id === ep.id;
+                return (
+                  <button key={ep.id} onClick={() => (isCur ? toggle() : playEp(ep))} style={{
+                    display: 'flex', alignItems: 'center', gap: 13, padding: 13, width: '100%', textAlign: 'left', cursor: 'pointer',
+                    borderRadius: 18, background: isCur ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', border: '1px solid ' + (isCur ? 'color-mix(in oklab, var(--clay) 30%, var(--line))' : 'var(--line)'), boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)' }}>
+                    <div style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: ep.image ? `center/cover url(${ep.image})` : 'color-mix(in oklab, var(--clay) 15%, var(--surface))', color: 'var(--clay)' }}>{!ep.image ? <Icon name={isCur && playing ? 'pause' : 'play'} size={20} color="var(--clay)" /> : null}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{ep.title}</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{[lsnPubDate(ep.published), ep.duration].filter(Boolean).join(' · ')}</div>
+                    </div>
+                    <Icon name={isCur && playing ? 'pause' : 'play'} size={18} color="var(--clay)" style={{ flexShrink: 0 }} />
+                  </button>
+                );
+              })}
+            </div>
+          </React.Fragment>
+        ) : null}
       </div>
     </Overlay>
   );

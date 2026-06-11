@@ -326,6 +326,7 @@ function ServingScreen({ open, onClose, ctx }) {
   const [tab, setTab] = useSv('serving');
   const [sheet, setSheet] = useSv(null);   // { kind, item }
   const [rosterOpen, setRosterOpen] = useSv(false);
+  const [svcExpanded, setSvcExpanded] = useSv(false);   // show all upcoming services vs the first 3
   useSvE(() => { if (open) { setTab('serving'); setSheet(null); setRosterOpen(false); } }, [open]);
   const pending = ctx.servPending || [];
   const upcoming = ctx.servConfirmed || [];
@@ -372,7 +373,10 @@ function ServingScreen({ open, onClose, ctx }) {
                     <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 2 }}>{req.time} · {req.service}</div>
                   </div>
                 </div>
-                <button onClick={() => setSheet({ kind: 'respond', item: req })} style={{ ...svPrimary(), padding: 14, fontSize: 15 }}>Respond</button>
+                <div style={{ display: 'flex', gap: 9 }}>
+                  <button onClick={() => { ctx.respondServing(req, 'accept'); ctx.toast(`You’re serving ${svParts(req.date).dow} ${svParts(req.date).day}`); }} style={{ ...svPrimary(), flex: 1, padding: 14, fontSize: 15 }}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I can serve</button>
+                  <button onClick={() => setSheet({ kind: 'respond', item: req })} style={{ flexShrink: 0, padding: '0 16px', borderRadius: 15, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Can’t make it</button>
+                </div>
               </div>
             ))}
 
@@ -419,11 +423,26 @@ function ServingScreen({ open, onClose, ctx }) {
                 </div>
               </div>
             ) : (pending.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--ink-3)' }}>
-                <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}><Icon name="hand" size={26} /></div>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>You’re not on the rota yet</div>
-                <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '0 auto' }}>When your church puts you on to serve, it’ll show up here — and we’ll remind you the day before. Meanwhile, check <b>Events</b> for what’s on.</p>
-              </div>
+              (ctx.myRosterTeams || []).length ? (
+                <div style={{ padding: '8px 0 4px' }}>
+                  <div style={{ borderRadius: 20, padding: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', textAlign: 'center', marginBottom: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 12 }}>
+                      {(ctx.myRosterTeams || []).slice(0, 4).map(t => (
+                        <div key={t.id} style={{ width: 46, height: 46, borderRadius: 14, background: `color-mix(in oklab, ${t.accent || 'var(--clay)'} 15%, var(--surface))`, color: t.accent || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={t.icon || 'hand'} size={24} /></div>
+                      ))}
+                    </div>
+                    <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>You’re on {(ctx.myRosterTeams || []).length === 1 ? 'the ' + ctx.myRosterTeams[0].name + ' team' : (ctx.myRosterTeams || []).length + ' teams'}</div>
+                    <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto', color: 'var(--ink-2)' }}>No dates scheduled for you yet. When your church puts you on a service, it’ll show up here and we’ll remind you the day before.</p>
+                    {(ctx.myRosterTeams || []).length > 1 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>{(ctx.myRosterTeams || []).map(t => t.name).join(' · ')}</div> : null}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--ink-3)' }}>
+                  <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}><Icon name="hand" size={26} /></div>
+                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>You’re not on a serving team yet</div>
+                  <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '0 auto' }}>When your church adds you to a team, it’ll show up here — and we’ll remind you the day before you serve. Meanwhile, check <b>Events</b> for what’s on.</p>
+                </div>
+              )
             ) : null)}
 
             {upcoming.length > (next ? 1 : 0) ? <SectionLabel>Your upcoming</SectionLabel> : null}
@@ -494,11 +513,12 @@ function ServingScreen({ open, onClose, ctx }) {
               const todayIso = svTodayIso();
               const upSvc = (ctx.churchServices || []).filter(s => (s.date || '') >= todayIso).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
               if (!upSvc.length) return null;
+              const shownSvc = svcExpanded ? upSvc : upSvc.slice(0, 3);
               return (
                 <React.Fragment>
                   <SectionLabel>Services</SectionLabel>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22 }}>
-                    {upSvc.map((s, i) => (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: upSvc.length > 3 ? 12 : 22 }}>
+                    {shownSvc.map((s, i) => (
                       <div key={'svc' + i} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
                         <ServDateBlock iso={s.date} accent="var(--clay)" />
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -509,6 +529,11 @@ function ServingScreen({ open, onClose, ctx }) {
                       </div>
                     ))}
                   </div>
+                  {upSvc.length > 3 ? (
+                    <button onClick={() => setSvcExpanded(v => !v)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', padding: '10px', marginBottom: 22, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+                      {svcExpanded ? 'Show less' : `Show ${upSvc.length - 3} more`} <Icon name={svcExpanded ? 'chevU' : 'chevD'} size={16} color="var(--clay)" />
+                    </button>
+                  ) : null}
                 </React.Fragment>
               );
             })()}

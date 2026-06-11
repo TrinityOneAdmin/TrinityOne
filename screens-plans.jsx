@@ -4,6 +4,29 @@ const { useState: useP } = React;
 function doneDays(ctx, id) { return ctx.planProgress[id] || []; }
 function nextDay(plan, doneSet) { return plan.days.find(d => !doneSet.has(d.d)) || plan.days[plan.days.length - 1]; }
 
+// a church devotional rendered with the SAME card dimensions as a PlanCard (for the 2-col grid)
+function DevoCard({ d, onClick }) {
+  const accent = d.accent || 'var(--sage)';
+  return (
+    <div onClick={onClick} style={{
+      borderRadius: 22, overflow: 'hidden', cursor: 'pointer', position: 'relative',
+      background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)',
+    }}>
+      <div style={{ height: 80, background: accent, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 80% 0%, rgba(255,255,255,.3), transparent 55%)' }} />
+        <div style={{ position: 'absolute', right: -16, bottom: -22, opacity: .2 }}><Icon name="read" size={120} stroke={1.3} color="#fff" /></div>
+        <span style={{ position: 'absolute', top: 12, left: 14, background: 'rgba(255,255,255,.22)', color: '#fff',
+          padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, backdropFilter: 'blur(4px)' }}>Devotional</span>
+      </div>
+      <div style={{ padding: '13px 15px 15px' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700, lineHeight: 1.1, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{d.title}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3 }}>{d.ref || 'A reflection'}</div>
+        <div style={{ marginTop: 11, fontSize: 12.5, color: 'var(--clay)', fontWeight: 700 }}>Read →</div>
+      </div>
+    </div>
+  );
+}
+
 function PlanCard({ p, ctx, onClick }) {
   const done = doneDays(ctx, p.id).length;
   const pct = p.len ? done / p.len : 0;
@@ -38,6 +61,7 @@ function PlanCard({ p, ctx, onClick }) {
 
 function PlansScreen({ ctx }) {
   const D = window.TrinityData;
+  const [discoverOpen, setDiscoverOpen] = useP(false);   // expand the full "Discover plans" grid
   const churchPlans = ctx.churchPlans || [];           // plans the church's steward shared
   const churchName = (ctx.church && ctx.church.name) || 'your church';
   const allPlans = [...churchPlans, ...D.PLANS];
@@ -90,25 +114,21 @@ function PlansScreen({ ctx }) {
       {(ctx.churchDevos || []).length ? (
         <React.Fragment>
           <SectionLabel>Devotionals from {churchName}</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .1s both' }}>
-            {ctx.churchDevos.map(d => (
-              <div key={d.id} onClick={() => ctx.openChurchDevo(d)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
-                <div style={{ width: 46, height: 46, borderRadius: 14, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={23} stroke={1.8} /></div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[d.ref, 'Devotional'].filter(Boolean).join(' · ')}</div>
-                </div>
-                <Icon name="chevR" size={18} color="var(--ink-3)" />
-              </div>
-            ))}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22, animation: 'trinityFade .5s ease .1s both' }}>
+            {ctx.churchDevos.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
           </div>
         </React.Fragment>
       ) : null}
 
       <SectionLabel>Discover plans</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'trinityFade .5s ease .1s both' }}>
-        {D.PLANS.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} />)}
+        {(discoverOpen ? D.PLANS : D.PLANS.slice(0, 4)).map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} />)}
       </div>
+      {D.PLANS.length > 4 ? (
+        <button onClick={() => setDiscoverOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, width: '100%', marginTop: 12, padding: '12px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+          {discoverOpen ? 'Show fewer' : `Show all ${D.PLANS.length} plans`} <Icon name={discoverOpen ? 'chevU' : 'chevD'} size={17} color="var(--clay)" />
+        </button>
+      ) : null}
     </ScreenScroll>
   );
 }
@@ -238,6 +258,31 @@ function parseDevoDays(src) {
   return { weeks: weeks.filter(w => w.days.length), days, count: days.length, multiWeek: weeks.filter(w => w.days.length).length > 1 };
 }
 
+// open a devotional's "read:" passage in the Bible reader, landing on the verse. Closes the devotional
+// overlays first so the reader is in front. Returns false if the ref can't be resolved.
+function openDevoPassage(ctx, rawRef) {
+  const ref = String(rawRef || '').replace(/^\s*read\s*:?\s*/i, '').trim();
+  if (!ref) return false;
+  const loc = window.Bible.parseRef(ref);
+  if (!loc) { ctx.toast('Couldn’t open ' + ref); return false; }
+  if (!window.Bible.books().includes(loc.book)) { ctx.toast(ref + ' isn’t in this translation'); return false; }
+  if (ctx.openChurchDevo) ctx.openChurchDevo(null);   // close the devotional reader/index
+  ctx.gotoRef(loc.book, loc.chap, loc.verse || 1);
+  return true;
+}
+// a tappable scripture chip: opens the passage in the reader
+function DevoRefChip({ refText, ctx, style }) {
+  if (!refText) return null;
+  return (
+    <button onClick={() => openDevoPassage(ctx, refText)} title={'Open ' + refText + ' in the Bible'} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 999, cursor: 'pointer',
+      border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))',
+      color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, ...(style || {}) }}>
+      <Icon name="read" size={14} color="var(--clay)" /> {refText} <Icon name="chevR" size={14} color="var(--clay)" />
+    </button>
+  );
+}
+
 // ── one day of a multi-day devotional (prose + ref + mark-read), opened over the index ──
 function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
   if (!day) return null;
@@ -259,7 +304,7 @@ function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
       </div>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--paper)' }}>
         <div style={{ maxWidth: 640, margin: '0 auto', padding: '22px 22px 40px' }}>
-          {day.ref ? <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 700, color: 'var(--clay)', marginBottom: 14 }}>{day.ref}</div> : null}
+          {day.ref ? <div style={{ marginBottom: 16 }}><DevoRefChip refText={day.ref} ctx={ctx} /></div> : null}
           {renderMarkdown(day.body)}
         </div>
       </div>
@@ -315,6 +360,7 @@ function ChurchDevoView({ devo, open, onClose, ctx }) {
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--paper)' }}>
           <div style={{ maxWidth: 640, margin: '0 auto', padding: '24px 22px 60px' }}>
+            {devo.ref ? <div style={{ marginBottom: 16 }}><DevoRefChip refText={devo.ref} ctx={ctx} /></div> : null}
             {devo.text
               ? (isMd
                 ? renderMarkdown(devo.text)

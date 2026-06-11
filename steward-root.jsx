@@ -3,87 +3,112 @@
 // Phase B: wired to window.Steward (real church key + Nostr publishing on the self-hosted relay).
 const { useState: useSt, useEffect: useStE } = React;
 
+// bumps whenever the console's active identity switches (church <-> a network), so every data hook
+// below re-subscribes against the now-active pubkey. (The header toggle calls setActiveIdentity.)
+function useStewardIdv() {
+  const [v, setV] = useSt(0);
+  useStE(() => {
+    const f = () => setV(x => x + 1);
+    window.addEventListener('steward-identity', f);
+    return () => window.removeEventListener('steward-identity', f);
+  }, []);
+  return v;
+}
+window.useStewardIdv = useStewardIdv;
+
 // live church data from the relay (published by this console). Shared by the dashboard sections.
 function useStewardFunds() {
+  const idv = useStewardIdv();
   const [funds, setFunds] = useSt([]);
-  useStE(() => window.Steward.subscribeFunds(setFunds), []);
+  useStE(() => window.Steward.subscribeFunds(setFunds), [idv]);
   return funds;
 }
 window.useStewardFunds = useStewardFunds;
 
 function useStewardGroups() {
+  const idv = useStewardIdv();
   const [groups, setGroups] = useSt([]);
-  useStE(() => window.Steward.subscribeGroups(setGroups), []);
+  useStE(() => window.Steward.subscribeGroups(setGroups), [idv]);
   return groups;
 }
 window.useStewardGroups = useStewardGroups;
 
 function useStewardPlans() {
+  const idv = useStewardIdv();
   const [plans, setPlans] = useSt([]);
-  useStE(() => window.Steward.subscribePlans(setPlans), []);
+  useStE(() => window.Steward.subscribePlans(setPlans), [idv]);
   return plans;
 }
 window.useStewardPlans = useStewardPlans;
 
 function useStewardDevotionals() {
+  const idv = useStewardIdv();
   const [devos, setDevos] = useSt([]);
-  useStE(() => window.Steward.subscribeDevotionals(setDevos), []);
+  useStE(() => window.Steward.subscribeDevotionals(setDevos), [idv]);
   return devos;
 }
 window.useStewardDevotionals = useStewardDevotionals;
 
 function useStewardRotas() {
+  const idv = useStewardIdv();
   const [rotas, setRotas] = useSt([]);
-  useStE(() => window.Steward.subscribeRotas(setRotas), []);
+  useStE(() => window.Steward.subscribeRotas(setRotas), [idv]);
   return rotas;
 }
 window.useStewardRotas = useStewardRotas;
 
 function useStewardRosters() {
+  const idv = useStewardIdv();
   const [rosters, setRosters] = useSt([]);
-  useStE(() => window.Steward.subscribeRosters(setRosters), []);
+  useStE(() => window.Steward.subscribeRosters(setRosters), [idv]);
   return rosters;
 }
 window.useStewardRosters = useStewardRosters;
 
 function useStewardServices() {
+  const idv = useStewardIdv();
   const [services, setServices] = useSt([]);
-  useStE(() => window.Steward.subscribeServices(setServices), []);
+  useStE(() => window.Steward.subscribeServices(setServices), [idv]);
   return services;
 }
 window.useStewardServices = useStewardServices;
 
 function useStewardEvents() {
+  const idv = useStewardIdv();
   const [events, setEvents] = useSt([]);
-  useStE(() => window.Steward.subscribeEvents(setEvents), []);
+  useStE(() => window.Steward.subscribeEvents(setEvents), [idv]);
   return events;
 }
 window.useStewardEvents = useStewardEvents;
 
 function useStewardUnavail() {
+  const idv = useStewardIdv();
   const [unavail, setUnavail] = useSt({});
-  useStE(() => window.Steward.subscribeUnavail(setUnavail), []);
+  useStE(() => window.Steward.subscribeUnavail(setUnavail), [idv]);
   return unavail;
 }
 window.useStewardUnavail = useStewardUnavail;
 
 function useStewardRsvps() {
+  const idv = useStewardIdv();
   const [rsvps, setRsvps] = useSt({});
-  useStE(() => window.Steward.subscribeRsvps(setRsvps), []);
+  useStE(() => window.Steward.subscribeRsvps(setRsvps), [idv]);
   return rsvps;
 }
 window.useStewardRsvps = useStewardRsvps;
 
 function useStewardRequestReplies() {
+  const idv = useStewardIdv();
   const [replies, setReplies] = useSt([]);
-  useStE(() => window.Steward.subscribeRequestReplies(setReplies), []);
+  useStE(() => window.Steward.subscribeRequestReplies(setReplies), [idv]);
   return replies;
 }
 window.useStewardRequestReplies = useStewardRequestReplies;
 
 function useStewardRequests() {
+  const idv = useStewardIdv();
   const [requests, setRequests] = useSt([]);
-  useStE(() => window.Steward.subscribeRequests(setRequests), []);
+  useStE(() => window.Steward.subscribeRequests(setRequests), [idv]);
   return requests;
 }
 window.useStewardRequests = useStewardRequests;
@@ -97,8 +122,9 @@ window.useStewardNetworks = useStewardNetworks;
 
 // people participating in this church's chat (derived from messages addressed to the church)
 function useStewardMembers() {
+  const idv = useStewardIdv();
   const [members, setMembers] = useSt([]);
-  useStE(() => window.Steward.subscribeMembers(setMembers), []);
+  useStE(() => window.Steward.subscribeMembers(setMembers), [idv]);
   return members;
 }
 window.useStewardMembers = useStewardMembers;
@@ -118,24 +144,27 @@ function useStewardRelays() {
 window.useStewardRelays = useStewardRelays;
 
 function useStewardStats() {
+  const idv = useStewardIdv();
   const [stats, setStats] = useSt({ events: 0, announcements: 0 });
-  useStE(() => window.Steward.subscribeStats(setStats), []);
+  useStE(() => window.Steward.subscribeStats(setStats), [idv]);
   return stats;
 }
 window.useStewardStats = useStewardStats;
 
 function useStewardActivity() {
+  const idv = useStewardIdv();
   const [activity, setActivity] = useSt([]);
-  useStE(() => window.Steward.subscribeActivity(setActivity), []);
+  useStE(() => window.Steward.subscribeActivity(setActivity), [idv]);
   return activity;
 }
 window.useStewardActivity = useStewardActivity;
 
-// the church's own profile (name etc.) + npub
+// the active identity's own profile (name etc.) + npub — church, or a network when toggled
 function useStewardChurch() {
+  const idv = useStewardIdv();
   const [p, setP] = useSt({});
-  useStE(() => window.Steward.subscribeProfile(setP), []);
-  return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', channel: (p && p.channel) || '', npub: window.Steward.npub || '' };
+  useStE(() => { setP({}); return window.Steward.subscribeProfile(setP); }, [idv]);
+  return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', channel: (p && p.channel) || '', audioFeed: (p && p.audioFeed) || '', npub: window.Steward.npub || '', isNetwork: window.Steward.isViewingNetwork ? window.Steward.isViewingNetwork() : false };
 }
 window.useStewardChurch = useStewardChurch;
 

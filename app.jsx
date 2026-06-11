@@ -259,10 +259,11 @@ function App() {
   const [help, setHelp] = useA(helpParam || null);
   const idParam = new URLSearchParams(location.search).get('id');   // profile|recovery|invite|relays|newid|member
   const followParam = new URLSearchParams(location.search).get('follow');   // follow a church by its npub
+  const inviteParam = new URLSearchParams(location.search).get('invite');   // a steward invite: adopt a ready-made identity + join
   const churchParam = new URLSearchParams(location.search).get('church');   // '1' / 'follow' opens the switcher
   const dmParam = new URLSearchParams(location.search).get('dm');   // inbox | <peer pubkey> (verification deep-link)
   const servingParam = new URLSearchParams(location.search).get('serving');   // '1' opens the Serving overlay
-  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam || dmParam || servingParam;   // any deep-link skips splash/onboarding
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam || inviteParam || dmParam || servingParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
@@ -281,6 +282,23 @@ function App() {
     window.addEventListener('trinity-profiles', h);
     return () => { window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-profiles', h); };
   }, []);
+  // connTick bumps when the app returns to the foreground or the network reconnects. Relay WebSockets
+  // drop while a phone is backgrounded, and a dropped socket silently misses live pushes — so we tear
+  // down and re-establish the church subscriptions on resume, which re-queries and catches up anything
+  // published while we were away (fixes "new devotionals/events don't appear until I reload").
+  const [connTick, bumpConn] = useA(0);
+  useAE(() => {
+    let last = Date.now();
+    const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - last > 2500) { last = Date.now(); bumpConn(x => x + 1); } };
+    const onOnline = () => bumpConn(x => x + 1);
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('focus', onVis);
+    // insurance: while foregrounded, refresh subscriptions every 90s so a silently-dropped relay socket
+    // can't stall live content (announcements/notifications) for more than ~90s even without a reconnect.
+    const beat = setInterval(() => { if (document.visibilityState === 'visible') { last = Date.now(); bumpConn(x => x + 1); } }, 90000);
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); clearInterval(beat); };
+  }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
   // churches the member follows persist across reloads (a scanned QR / pasted npub should stick).
@@ -298,7 +316,7 @@ function App() {
     const offs = churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0).map(c =>
       window.Fellowship.subscribeChurchProfile(c.npub || c.id, (p) => {
         if (!p) return;
-        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
+        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
       }));
     return () => offs.forEach(o => { try { o && o(); } catch (e) {} });
   }, []);
@@ -312,6 +330,11 @@ function App() {
     const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
     if (!m) return false;
     const npub = m[0];
+    // an invite may carry the church's relay (?relay=wss://…) — add it so we connect to the right relay
+    const rm = String(raw || '').match(/[?&]relay=([^&\s]+)/);
+    if (rm && window.Fellowship && window.Fellowship.addRelay) {
+      try { const relay = decodeURIComponent(rm[1]); if (/^wss?:\/\//i.test(relay)) window.Fellowship.addRelay(relay); } catch (e) {}
+    }
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
     // announce membership so the steward sees this person joined, even if they never post
@@ -319,26 +342,41 @@ function App() {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     return window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (!p) return;
-      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
+      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
     });
   };
   useAE(() => {
-    if (!followParam) return;
-    const off = followChurch(followParam);
-    return typeof off === 'function' ? off : undefined;
+    if (!inviteParam && !followParam) return;
+    let cleanup;
+    (async () => {
+      // a steward invite hands the recipient a ready-made anonymous identity — adopt it first, then join
+      if (inviteParam && window.TrinityIdentity && window.TrinityIdentity.importMnemonic) {
+        const before = (window.Fellowship && window.Fellowship.myPubkey) || '';
+        try {
+          await window.TrinityIdentity.importMnemonic(decodeURIComponent(inviteParam));
+          try { lsSet('trinityone.onboarded', true); } catch (e) {}
+          // wait for the fellowship transport to re-derive its signing key from the new identity,
+          // so membership is announced (and chat is signed) as the invited identity, not the old one
+          for (let i = 0; i < 25; i++) { await new Promise(r => setTimeout(r, 100)); const now = window.Fellowship && window.Fellowship.myPubkey; if (now && now !== before) break; }
+        } catch (e) {}
+      }
+      const src = (followParam || '') + ((typeof location !== 'undefined' && location.search) || '');
+      if (/npub1[0-9a-z]{20,}/.test(src)) { const off = followChurch(src); if (typeof off === 'function') cleanup = off; }
+    })();
+    return () => { if (cleanup) cleanup(); };
   }, []);
   // scope outgoing chat to the active church, so its steward sees who's participating (Members)
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (window.Fellowship && window.Fellowship.setChurch) window.Fellowship.setChurch(np || null);
-  }, [activeChurch, churches]);
+  }, [activeChurch, churches, connTick]);
   // reading plans the active church shares (steward console publishes them) -> shown in Plans
   const [churchPlans, setChurchPlans] = useA([]);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchPlans)) { setChurchPlans([]); return; }
     return window.Fellowship.subscribeChurchPlans(np, setChurchPlans);
-  }, [activeChurch, churches]);
+  }, [activeChurch, churches, connTick]);
   // devotionals the active church shares (text/Markdown reflections)
   const [churchDevos, setChurchDevos] = useA([]);
   const [openDevo, setOpenDevo] = useA(null);   // a church devotional opened for reading
@@ -346,35 +384,46 @@ function App() {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchDevotionals)) { setChurchDevos([]); return; }
     return window.Fellowship.subscribeChurchDevotionals(np, setChurchDevos);
-  }, [activeChurch, churches]);
+  }, [activeChurch, churches, connTick]);
   // ── serving & events: the member is driven by the requests the church p-tags to them ──
   const [servReqs, setServReqs] = useA([]);     // serving requests addressed to me ("can you serve?")
   const [servReplies, setServReplies] = useA({}); // my replies: { requestId: 'accept'|'decline'|'swap' }
   const [churchEvents, setChurchEvents] = useA([]);
   const [myRsvps, setMyRsvps] = useA({});       // { eventId: 'going'|'maybe'|'no' }
   const [openServing, setOpenServing] = useA(servingParam === '1');
-  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyServingRequests) return window.Fellowship.subscribeMyServingRequests(setServReqs); }, [activeChurch, idTick]);
-  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyReqReplies) return window.Fellowship.subscribeMyReqReplies(setServReplies); }, [activeChurch, idTick]);
-  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyRsvps) return window.Fellowship.subscribeMyRsvps(setMyRsvps); }, [activeChurch, idTick]);
+  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyServingRequests) return window.Fellowship.subscribeMyServingRequests(setServReqs); }, [activeChurch, idTick, connTick]);
+  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyReqReplies) return window.Fellowship.subscribeMyReqReplies(setServReplies); }, [activeChurch, idTick, connTick]);
+  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyRsvps) return window.Fellowship.subscribeMyRsvps(setMyRsvps); }, [activeChurch, idTick, connTick]);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchEvents)) { setChurchEvents([]); return; }
     return window.Fellowship.subscribeChurchEvents(np, setChurchEvents);
-  }, [activeChurch, churches]);
+  }, [activeChurch, churches, connTick]);
   // the church's published rota/rosters/services — lets a member see who else is on the team that
   // day, who they can ask to swap, and a month view of services + events.
   const [churchRotas, setChurchRotas] = useA([]);
   const [churchRosters, setChurchRosters] = useA([]);
   const [churchServices, setChurchServices] = useA([]);
+  const [churchTeams, setChurchTeams] = useA([]);   // team groups (for names/icons in rota-derived serving)
+  const [churchGroups, setChurchGroups] = useA([]); // all groups/rooms/teams (for group-leader event posting)
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-    if (!np || !window.Fellowship) { setChurchRotas([]); setChurchRosters([]); setChurchServices([]); return; }
+    if (!np || !window.Fellowship) { setChurchRotas([]); setChurchRosters([]); setChurchServices([]); setChurchTeams([]); setChurchGroups([]); return; }
     const F = window.Fellowship, subs = [];
     if (F.subscribeChurchRotas) subs.push(F.subscribeChurchRotas(np, setChurchRotas));
     if (F.subscribeChurchRosters) subs.push(F.subscribeChurchRosters(np, setChurchRosters));
     if (F.subscribeChurchServices) subs.push(F.subscribeChurchServices(np, setChurchServices));
+    if (F.subscribeChurchGroups) subs.push(F.subscribeChurchGroups(np, (gs) => { setChurchGroups(gs || []); setChurchTeams((gs || []).filter(g => g.kind === 'team')); }));
     return () => subs.forEach(u => { try { u && u(); } catch {} });
-  }, [activeChurch, churches]);
+  }, [activeChurch, churches, connTick]);
+  // events posted by group leaders (members the church empowered) — merged into the church's events
+  const [groupEvents, setGroupEvents] = useA([]);
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship; const gids = churchGroups.map(g => g.id).filter(Boolean);
+    if (!np || !F || !F.subscribeGroupEvents || !gids.length) { setGroupEvents([]); return; }
+    return F.subscribeGroupEvents(np, gids, setGroupEvents);
+  }, [activeChurch, churches, churchGroups, connTick]);
   // the wider networks the active church belongs to (+ resolve their names) — members can follow them
   const [churchNetworks, setChurchNetworks] = useA([]);
   const [networkNames, setNetworkNames] = useA({});
@@ -382,7 +431,7 @@ function App() {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { setChurchNetworks([]); return; }
     return window.Fellowship.subscribeChurchNetworks(np, setChurchNetworks);
-  }, [activeChurch, churches]);
+  }, [activeChurch, churches, connTick]);
   useAE(() => {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
     const offs = churchNetworks.map(n => window.Fellowship.subscribeChurchProfile(n.npub, (p) => { if (p && p.name) setNetworkNames(m => ({ ...m, [n.networkPub]: p.name })); }));
@@ -404,6 +453,7 @@ function App() {
   // the network name (so a region-wide gathering shows on everyone's calendar without switching).
   const [netEventsBy, setNetEventsBy] = useA({});
   const [netPlansBy, setNetPlansBy] = useA({});
+  const [netAnnounceBy, setNetAnnounceBy] = useA({});
   useAE(() => {
     const F = window.Fellowship; if (!F) return;
     const subs = [];
@@ -411,20 +461,79 @@ function App() {
       const label = networkNames[n.networkPub] || 'Network';
       if (F.subscribeChurchEvents) subs.push(F.subscribeChurchEvents(n.npub, (evs) => setNetEventsBy(m => ({ ...m, [n.networkPub]: evs.map(e => ({ ...e, _network: label, _networkPub: n.networkPub })) }))));
       if (F.subscribeChurchPlans) subs.push(F.subscribeChurchPlans(n.npub, (ps) => setNetPlansBy(m => ({ ...m, [n.networkPub]: ps.map(p => ({ ...p, _network: label })) }))));
+      if (F.subscribeNetworkAnnouncements) subs.push(F.subscribeNetworkAnnouncements(n.npub, (ps) => setNetAnnounceBy(m => ({ ...m, [n.networkPub]: ps.map(p => ({ ...p, _network: label, _networkPub: n.networkPub })) }))));
     });
     return () => subs.forEach(o => { try { o && o(); } catch {} });
   }, [churchNetworks, networkNames]);
   const activeNetworkPubs = new Set(churchNetworks.map(n => n.networkPub));
   const netEvents = Object.entries(netEventsBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v);
   const netPlans = Object.entries(netPlansBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v);
+  const netAnnouncements = Object.entries(netAnnounceBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  // broadcast-channel posts from the church (kind-1 in its broadcast groups) — surfaced as notifications
+  const [broadcastMsgs, setBroadcastMsgs] = useA([]);
+  useAE(() => {
+    const F = window.Fellowship;
+    const bcIds = churchGroups.filter(g => g.kind === 'broadcast').map(g => g.id);
+    if (!F || !F.subscribeGroups || !bcIds.length) { setBroadcastMsgs([]); return; }
+    const seen = new Set();
+    const off = F.subscribeGroups(bcIds, (gid, e) => {
+      if (seen.has(e.id)) return; seen.add(e.id);
+      let text = e.content || ''; try { const j = JSON.parse(text); if (j && (j.text || j.ref)) text = j.text || j.ref; } catch (err) {}
+      setBroadcastMsgs(prev => prev.some(x => x.id === e.id) ? prev : [...prev, { id: e.id, gid, text, ts: e.created_at }]);
+    });
+    return off;
+  }, [activeChurch, churchGroups, connTick]);
+
+  // ── unified notifications feed: church resources + broadcasts + network announcements ──
+  const _churchNameFor = (churches.find(c => c.id === activeChurch) || {}).name || 'Your church';
+  const NOTIF_WINDOW = 60 * 24 * 3600;   // only surface things from the last ~60 days
+  const _nowSec = Math.floor(Date.now() / 1000);
+  const notifications = (() => {
+    const out = [];
+    netAnnouncements.forEach(a => out.push({ id: 'net:' + a.id, kind: 'network', group: a._network || 'Network', text: a.text, ts: a.ts, detail: true }));
+    broadcastMsgs.forEach(m => out.push({ id: 'bc:' + m.id, kind: 'notice', group: _churchNameFor, text: m.text, ts: m.ts, groupObj: churchGroups.find(g => g.id === m.gid) || null }));
+    churchDevos.forEach(d => out.push({ id: 'devo:' + d.id, kind: 'devotional', group: _churchNameFor, text: 'Shared a devotional · ' + (d.title || ''), ts: d.ts, devo: d }));
+    churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: _churchNameFor, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
+    churchEvents.forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'serving' }));
+    return out.filter(n => n.ts && (_nowSec - n.ts) < NOTIF_WINDOW).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
+  })();
+  // unread tracking (drives the bell badge); "seen" = newest ts the user has opened the panel at
+  const [netSeenTs, setNetSeenTs] = useA(() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } });
+  const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs).length;
+  const markNetSeen = () => { const top = notifications[0] && notifications[0].ts; if (top && top > netSeenTs) { setNetSeenTs(top); try { localStorage.setItem('trinityone.net-seen', String(top)); } catch {} } };
   // derive serving items from requests + my replies (local date, not UTC)
   const _now = new Date();
   const todayStr = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
+  const myServPub = (window.Fellowship && window.Fellowship.myPubkey) || '';
+  // the church's published ROTAS are the source of truth for "I'm serving" — derive my slots from them,
+  // then layer on any "can you serve?" request + my reply. (Before, this was request-only, so a member
+  // placed on a published rota saw nothing until a request happened to arrive.)
+  const _reqFor = (sid, tid, rid) => servReqs.find(r => r.serviceId === sid && r.teamId === tid && r.roleId === rid);
+  const _verdict = (q) => (q ? (servReplies[q.id] || 'pending') : 'none');
+  const _teamMeta = (id) => churchTeams.find(g => g.id === id) || {};
+  const _roleName = (tid, rid) => { const r = churchRosters.find(x => x.team === tid); const role = r && (r.roles || []).find(ro => ro.id === rid); return role ? role.name : ''; };
+  const myRotaSlots = [];
+  if (myServPub) for (const rota of churchRotas) {
+    if (!rota.published || !rota.assign) continue;
+    const svc = churchServices.find(s => s.id === rota.service);
+    if (!svc || (svc.date || '') < todayStr) continue;
+    for (const key in rota.assign) {
+      const who = rota.assign[key]; if (!who || who.pub !== myServPub) continue;
+      const [tid, rid] = key.split('::'); const tm = _teamMeta(tid); const q = _reqFor(rota.service, tid, rid);
+      myRotaSlots.push({ id: 'rota:' + rota.service + ':' + key, req: q || null, serviceId: rota.service, teamId: tid, roleId: rid, teamName: tm.name || 'Serving', icon: tm.icon || 'hand', accent: tm.accent || 'var(--clay)', role: _roleName(tid, rid), date: svc.date, time: svc.time, service: svc.name, _verdict: _verdict(q) });
+    }
+  }
+  myRotaSlots.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  // teams I'm ON THE ROSTER for (eligible to serve), even if not yet scheduled onto a published rota —
+  // so a member who's been added to a team sees it, instead of a bare "you're not on the rota yet".
+  const myRosterTeams = myServPub ? churchRosters
+    .filter(r => (r.people || []).some(p => p.pub === myServPub))
+    .map(r => { const tm = _teamMeta(r.team); return { id: r.team, name: tm.name || 'Serving team', icon: tm.icon || 'hand', accent: tm.accent || 'var(--clay)' }; }) : [];
+  // pending "can you serve?" asks not yet answered (these take priority over a plain rota placement)
   const servPending = servReqs.filter(r => !servReplies[r.id] && (r.date || '') >= todayStr);
-  const servConfirmed = servReqs.filter(r => servReplies[r.id] === 'accept' && (r.date || '') >= todayStr).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const servDeclined = servReqs.filter(r => (servReplies[r.id] === 'decline' || servReplies[r.id] === 'swap') && (r.date || '') >= todayStr)
-    .map(r => ({ ...r, _verdict: servReplies[r.id] }))
-    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const _pendKey = new Set(servPending.map(r => r.serviceId + '|' + r.teamId + '|' + r.roleId));
+  const servConfirmed = myRotaSlots.filter(s => s._verdict !== 'decline' && s._verdict !== 'swap' && !_pendKey.has(s.serviceId + '|' + s.teamId + '|' + s.roleId));
+  const servDeclined = myRotaSlots.filter(s => s._verdict === 'decline' || s._verdict === 'swap');
   const servNext = servConfirmed[0] || null;
   // schedule local reminders for confirmed slots (the day before) + register web-push (PWA)
   useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servReqs, servReplies]);
@@ -581,14 +690,23 @@ function App() {
     myPubkey: (window.Fellowship && window.Fellowship.myPubkey) || null,
     openChurchDevo: (d) => setOpenDevo(d),
     // serving & events (church's own + aggregated from its network)
-    servPending, servConfirmed, servDeclined, servNext, churchEvents: [...churchEvents, ...netEvents], myRsvps,
-    churchRotas, churchRosters, churchServices,
+    servPending, servConfirmed, servDeclined, servNext, myRosterTeams,
+    churchEvents: (() => { const seen = new Set(churchEvents.map(e => e.id).filter(Boolean)); return [...churchEvents, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; })(),
+    myRsvps,
+    netAnnouncements, netUnread, markNetSeen, notifications,
+    churchRotas, churchRosters, churchServices, churchGroups,
+    // groups this member may post events for (the steward named them a leader)
+    myLeaderGroups: churchGroups.filter(g => (g.leaders || []).includes((window.Fellowship && window.Fellowship.myPubkey) || '')),
+    publishGroupEvent: (groupId, ev) => { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return window.Fellowship.publishGroupEvent(np, groupId, ev); },
     churchNetworks: churchNetworks.map(n => ({ ...n, name: networkNames[n.networkPub] || '', following: !!churches.find(c => c.id === n.npub) })),
     openServing: () => setOpenServing(true),
-    respondServing: (req, verdict, swapTo) => {
+    respondServing: (item, verdict, swapTo) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-      if (window.Fellowship && window.Fellowship.respondToServingRequest) window.Fellowship.respondToServingRequest(np, req.id, verdict, swapTo);
-      setServReplies(m => ({ ...m, [req.id]: verdict }));
+      // item may be a request, or a rota-derived slot that carries its matching request in .req
+      const reqId = (item.req && item.req.id) || (typeof item.id === 'string' && item.id.indexOf('rota:') !== 0 ? item.id : null);
+      if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return; }
+      if (window.Fellowship && window.Fellowship.respondToServingRequest) window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
+      setServReplies(m => ({ ...m, [reqId]: verdict }));
     },
     setRsvp: (eventId, verdict) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;

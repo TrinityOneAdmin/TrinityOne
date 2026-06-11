@@ -66,21 +66,33 @@
     restoreLocal(obj.local);
   }
 
-  // hand the encrypted text to the OS so the user can drop it in any cloud / file app
-  async function saveFile(filename, text) {
+  // save the encrypted text. mode 'local' writes a file straight onto the device (no share sheet);
+  // mode 'cloud' (default) hands it to the OS so the user can drop it into Drive / OneDrive / Files.
+  async function saveFile(filename, text, mode) {
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
-    if (P && P.Filesystem && P.Share && Cap.isNativePlatform && Cap.isNativePlatform()) {
+    const native = P && P.Filesystem && Cap.isNativePlatform && Cap.isNativePlatform();
+    if (mode === 'local') {
+      if (native) {
+        const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' });
+        return { saved: true, where: 'device', uri: w.uri };
+      }
+      // web/PWA: a download is the on-device equivalent
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      return { saved: true, where: 'downloads' };
+    }
+    if (native && P.Share) {
       const w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
       await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive…)', url: w.uri });
-      return true;
+      return { saved: true, where: 'cloud' };
     }
     try {
       const file = new File([text], filename, { type: 'application/json' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'TrinityOne backup' }); return true; }
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'TrinityOne backup' }); return { saved: true, where: 'cloud' }; }
     } catch {}
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
     a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-    return true;
+    return { saved: true, where: 'downloads' };
   }
   const readFile = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Couldn’t read that file.')); r.readAsText(file); });
 

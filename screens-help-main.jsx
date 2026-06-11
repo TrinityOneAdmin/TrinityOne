@@ -121,15 +121,15 @@ function BackupWalkthrough({ onClose, onComplete, ctx, fs = 1 }) {
       {/* footer */}
       <div style={{ padding: '12px 24px 26px', borderTop: '1px solid var(--line-2)' }}>
         {step < 3 ? (
-          <button onClick={() => setStep(s => s + 1)} style={primaryBtn(fs)}>{step === 0 ? 'Start' : step === 1 ? 'I’ve written them down' : 'Yes, all 12 are on paper'}</button>
+          <button onClick={() => setStep(s => s + 1)} style={helpPrimaryBtn(fs)}>{step === 0 ? 'Start' : step === 1 ? 'I’ve written them down' : 'Yes, all 12 are on paper'}</button>
         ) : step === 4 ? (
-          <button onClick={() => { onComplete && onComplete(); onClose(); }} style={primaryBtn(fs)}>Done</button>
+          <button onClick={() => { onComplete && onComplete(); onClose(); }} style={helpPrimaryBtn(fs)}>Done</button>
         ) : <div style={{ height: 4 }} />}
       </div>
     </div>
   );
 }
-function primaryBtn(fs) {
+function helpPrimaryBtn(fs) {
   return { width: '100%', padding: 17, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 17 * fs, fontFamily: 'var(--font-ui)' };
 }
 

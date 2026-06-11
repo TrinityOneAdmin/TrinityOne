@@ -36,8 +36,14 @@ const now = () => Math.floor(Date.now() / 1000);
 function toPubHex(npubOrHex) { try { if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase(); const d = nip19decode(npubOrHex); return d && d.type === 'npub' ? d.data : null; } catch { return null; } }
 
 const RELAYS_LS = 'trinityone.steward.extra-relays';   // extra public relays the church also publishes to
+const NETKEYS_LS = 'trinityone.steward.network-keys';  // networks OWNED on this console: [{ pub, mnemonic, name }]
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+// networks whose signing key lives on this device (so this console can publish AS the network)
+function netKeys() { try { const a = JSON.parse(lsGet(NETKEYS_LS) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
+function saveNetKey(rec) {
+  const a = netKeys().filter(x => x.pub !== rec.pub); a.push(rec); lsSet(NETKEYS_LS, JSON.stringify(a));
+}
 function ownRelay() {
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.host) return 'ws://127.0.0.1:8090/relay';
@@ -61,20 +67,38 @@ function relays() {
 }
 
 const pool = new SimplePool();
-let sk = null, pub = null;
+let sk = null, pub = null;                 // the ACTIVE signing identity (church, or an owned network when toggled)
+let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
 let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
 
 function setKey(mnemonic) {
   sk = privateKeyFromSeedWords(mnemonic);
   pub = getPublicKey(sk);
+  churchSk = sk; churchPub = pub;           // the device's church key
   window.Steward.pubkey = pub;
   window.Steward.npub = npubEncode(pub);
+  window.Steward.churchPub = pub;
+  window.Steward.activePub = pub;
   window.Steward.hasKey = true;
 }
 async function publish(evt) {
   try { await Promise.any(pool.publish(relays(), evt)); }
-  catch (e) { console.warn('[steward] publish failed', e); }
+  catch (e) {
+    console.warn('[steward] publish failed', e);
+    // every relay rejected — surface it so the steward isn't left wondering why nothing saved
+    let reason = '';
+    try { const errs = (e && e.errors) || []; reason = (errs[0] && (errs[0].message || String(errs[0]))) || ''; } catch (x) {}
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+  }
   return evt;
+}
+// resolve the signing key for a chosen publishing identity. asPub === church pub (or empty) -> church key;
+// asPub === an owned network's pub -> that network's key (so the doc is authored by the network).
+function skFor(asPub) {
+  if (!asPub || asPub === pub) return sk;
+  const rec = netKeys().find(x => x.pub === asPub);
+  if (rec) { try { return privateKeyFromSeedWords(rec.mnemonic); } catch { return null; } }
+  return null;
 }
 
 window.Steward = {
@@ -113,7 +137,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     lastProfile = { ...lastProfile, ...meta };   // merge so a partial edit (e.g. name) keeps channel etc.
     const m = lastProfile;
-    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05: m.nip05 || '', picture: m.picture || '', channel: m.channel || '' });
+    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05: m.nip05 || '', picture: m.picture || '', channel: m.channel || '', audioFeed: m.audioFeed || '' });
     return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
   },
   publishFund(fund) {
@@ -135,12 +159,23 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub]], content: content || '' }, sk));
   },
-  // read a group/team's chat (kind-1 tagged with the group id, scoped to this church) — for the console chat view
+  // read a group/team's chat (kind-1 tagged with the group id, scoped to this church) — for the console chat view.
+  // Folds in kind-7 reactions (same shape the member app posts) so the console shows + sets reactions too.
   subscribeGroupChat(groupId, onMsgs) {
     const byId = new Map();
-    const emit = () => onMsgs([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
-    const sub = pool.subscribeMany(relays(), [{ kinds: [1], '#t': [groupId], limit: 300 }], {
+    const rx = new Map();   // msgId -> Map(reactorPub -> emoji)
+    const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(m => {
+      const r = rx.get(m.id); return { ...m, reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
+    });
+    const emit = () => onMsgs(attach());
+    const sub = pool.subscribeMany(relays(), [{ kinds: [1], '#t': [groupId], limit: 300 }, { kinds: [7], '#t': [groupId], limit: 500 }], {
       onevent(e) {
+        if (e.kind === 7) {
+          const tid = (e.tags.find(t => t[0] === 'e') || [])[1]; if (!tid) return;
+          let m = rx.get(tid); if (!m) { m = new Map(); rx.set(tid, m); }
+          if (e.content === '-' || e.content === '') m.delete(e.pubkey); else m.set(e.pubkey, e.content);
+          emit(); return;
+        }
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
         if (!e.tags.some(t => t[0] === 'p' && t[1] === pub)) return;   // this church's scope
         byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text: e.content, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '' });
@@ -150,6 +185,11 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
+  // react to a group message (NIP-25 kind-7), interoperable with the member app. emoji '' or '-' retracts.
+  reactGroup(groupId, msgId, targetPub, emoji) {
+    if (!sk || !groupId || !msgId) return Promise.resolve(null);
+    return publish(finalizeEvent({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', targetPub || ''], ['t', NET], ['t', groupId]], content: emoji || '-' }, sk));
+  },
 
   // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
   async sendDM(peerHex, content) {
@@ -158,20 +198,40 @@ window.Steward = {
     const evt = finalizeEvent({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }, sk);
     return publish(evt);
   },
-  // the 1:1 thread with one member (decrypts both directions)
+  // the 1:1 thread with one member (decrypts both directions; carries kind-7 reactions per message)
   subscribeDMThread(peerHex, onMsgs) {
     const byId = new Map();
-    const emit = () => onMsgs([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+    const rx = new Map();   // msgId -> Map(reactorPub -> emoji)
+    const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(m => {
+      const r = rx.get(m.id); const reactions = r ? [...r.values()].filter(Boolean) : [];
+      return { ...m, reactions, myReaction: r ? r.get(pub) || '' : '' };
+    });
+    const emit = () => onMsgs(attach());
     const take = async (e) => {
       if (byId.has(e.id)) return;
       const mine = e.pubkey === pub; const other = mine ? peerHex : e.pubkey;
       let text = ''; try { text = await nip04decrypt(sk, other, e.content); } catch { return; }
       byId.set(e.id, { id: e.id, mine, text, ts: e.created_at }); emit();
     };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [4], authors: [pub], '#p': [peerHex] }, { kinds: [4], authors: [peerHex], '#p': [pub] }], {
-      onevent(e) { take(e); }, oneose() { emit(); },
+    const takeRx = (e) => {
+      const tid = (e.tags.find(t => t[0] === 'e') || [])[1]; if (!tid) return;
+      let m = rx.get(tid); if (!m) { m = new Map(); rx.set(tid, m); }
+      if (e.content === '-' || e.content === '') m.delete(e.pubkey); else m.set(e.pubkey, e.content);
+      emit();
+    };
+    const sub = pool.subscribeMany(relays(), [
+      { kinds: [4], authors: [pub], '#p': [peerHex] }, { kinds: [4], authors: [peerHex], '#p': [pub] },
+      { kinds: [7], authors: [pub], '#p': [peerHex] }, { kinds: [7], authors: [peerHex], '#p': [pub] },
+    ], {
+      onevent(e) { if (e.kind === 7) takeRx(e); else take(e); }, oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  // react to a member's DM (NIP-25 kind-7). emoji '' or '-' retracts.
+  async reactDM(peerHex, msgId, emoji) {
+    if (!sk || !peerHex || !msgId) return null;
+    const evt = finalizeEvent({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', peerHex], ['t', NET], ['k', '4']], content: emoji || '-' }, sk);
+    return publish(evt);
   },
   // list of members who have a DM thread with the church (most recent first)
   subscribeDMConvos(onConvos) {
@@ -212,9 +272,13 @@ window.Steward = {
   publishGroup(group) {
     if (!sk) return Promise.resolve(null);
     const id = group.id || ('grp' + Date.now());
-    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '' });
+    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '', leaders: Array.isArray(group.leaders) ? group.leaders : [] });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET]], content }, sk))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
+  },
+  // set which members can post events for a group (re-publishes the group def, preserving its fields)
+  setGroupLeaders(group, leaderPubs) {
+    return window.Steward.publishGroup({ ...group, leaders: (leaderPubs || []).filter(Boolean) });
   },
   removeGroup(id) {
     if (!sk) return Promise.resolve(null);
@@ -239,11 +303,12 @@ window.Steward = {
   // ---- reading plans the church shares with the congregation ----
   // Published as a signed kind-30078 (d=plan:<id>) with the full plan (days included) so member apps
   // render it without needing the plan built in. Members then start/track it locally.
-  publishPlan(plan) {
-    if (!sk) return Promise.resolve(null);
+  // asPub (optional) publishes the plan AS an owned network instead of the church — network-wide reading plan.
+  publishPlan(plan, asPub) {
+    const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = plan.id || ('plan' + Date.now());
     const content = JSON.stringify({ id, title: plan.title || 'Plan', sub: plan.sub || '', tag: plan.tag || '', accent: plan.accent || 'var(--clay)', blurb: plan.blurb || '', days: plan.days || [] });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', PLAN_D + id], ['t', NET]], content }, sk))
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', PLAN_D + id], ['t', NET]], content }, signer))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },
   removePlan(id) {
@@ -271,7 +336,9 @@ window.Steward = {
   publishDevotional(devo) {
     if (!sk) return Promise.resolve(null);
     const id = devo.id || ('devo' + Date.now());
-    const content = JSON.stringify({ id, title: devo.title || 'Devotional', ref: devo.ref || '', type: devo.type || 'txt', text: devo.text || '' });
+    const base = { id, title: devo.title || 'Devotional', ref: devo.ref || '', type: devo.type || 'txt', text: devo.text || '' };
+    if (typeof devo.order === 'number') base.order = devo.order;   // steward-controlled display order (lower = first)
+    const content = JSON.stringify(base);
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', DEVO_D + id], ['t', NET]], content }, sk))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },
@@ -281,14 +348,16 @@ window.Steward = {
   },
   subscribeDevotionals(onDevos) {
     const byId = new Map();
-    const emit = () => onDevos([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    // explicit steward order first (lower = earlier); the rest fall back to newest-first
+    const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
+    const emit = () => onDevos([...byId.values()].sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, hasFile: !!c.text, ts: e.created_at }); emit(); } catch {}
+        try { const c = JSON.parse(e.content); byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, hasFile: !!c.text, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -356,14 +425,15 @@ window.Steward = {
 
   // ---- calendar events (non-serving: workdays, lunches, prayer evenings…) ----
   // event = { id?, date, time, title, where, blurb, accent }
-  publishEvent(ev) {
-    if (!sk) return Promise.resolve(null);
+  // asPub (optional) publishes the event AS an owned network instead of the church — network-wide event.
+  publishEvent(ev, asPub) {
+    const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now());
     const groupId = ev.groupId || '';
     const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId });
     const tags = [['d', EVENT_D + id], ['t', NET]];
     if (groupId) tags.push(['t', groupId]);   // lets a group's chat filter to its own events
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags, content }, sk))
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags, content }, signer))
       .then(() => ({ id, ...JSON.parse(content) }));
   },
   removeEvent(id) {
@@ -505,12 +575,59 @@ window.Steward = {
     const m = generateSeedWords();
     const nsk = privateKeyFromSeedWords(m);
     const nPub = getPublicKey(nsk);
+    saveNetKey({ pub: nPub, mnemonic: m, name: name || 'Network' });   // keep the key so this console can publish AS the network
     await window.Steward.joinNetwork(nPub);   // church joins first so the relay whitelists the network key
     await publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || 'Network' }) }, nsk));
     await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + 'net-announce'], ['t', NET]], content: JSON.stringify({ name: 'Announcements', kind: 'broadcast', sub: 'From ' + (name || 'the network'), icon: 'globe', accent: 'var(--clay)' }) }, nsk));
     window.dispatchEvent(new CustomEvent('steward-networks'));
     return { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
   },
+  // networks whose signing key is on THIS console -> [{ pub, npub, name }] (publish-as identities)
+  ownedNetworks() { return netKeys().map(r => ({ pub: r.pub, npub: npubEncode(r.pub), name: r.name || 'Network' })); },
+  // post a broadcast announcement AS an owned network (kind-1 into the net-announce channel)
+  publishNetworkAnnouncement(networkPub, text) {
+    const signer = skFor(networkPub); if (!signer || !text || !text.trim()) return Promise.resolve(null);
+    return publish(finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['t', 'net-announce'], ['p', networkPub]], content: text.trim() }, signer));
+  },
+  // a network's broadcast announcements (most recent first) — for previewing on the console
+  subscribeNetworkAnnouncements(networkPub, onPosts) {
+    const np = toPubHex(networkPub) || networkPub;
+    const byId = new Map();
+    const emit = () => onPosts([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const sub = pool.subscribeMany(relays(), [{ kinds: [1], authors: [np], '#t': ['net-announce'] }], {
+      onevent(e) { byId.set(e.id, { id: e.id, text: e.content, ts: e.created_at }); emit(); }, oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // import an existing network's recovery phrase so this console can also publish as it
+  importNetworkKey(mnemonic, name) {
+    const mm = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (mm.split(' ').length < 12) throw new Error('Enter the full 12-word recovery phrase.');
+    const nsk = privateKeyFromSeedWords(mm); const nPub = getPublicKey(nsk);
+    saveNetKey({ pub: nPub, mnemonic: mm, name: name || 'Network' });
+    window.dispatchEvent(new CustomEvent('steward-networks'));
+    return { networkPub: nPub, npub: npubEncode(nPub) };
+  },
+  // every identity this console can publish as: the church + any owned networks
+  identities() {
+    return [{ kind: 'church', pub: churchPub, npub: churchPub ? npubEncode(churchPub) : '' }, ...netKeys().map(r => ({ kind: 'network', pub: r.pub, npub: npubEncode(r.pub), name: r.name || 'Network' }))];
+  },
+  // switch the WHOLE console between the church and an owned network — the active signing+reading
+  // identity. Subscriptions are keyed on activePub, so the dashboard re-renders as the chosen identity.
+  setActiveIdentity(targetPub) {
+    const tp = toPubHex(targetPub) || targetPub || churchPub;
+    if (tp === churchPub) { sk = churchSk; pub = churchPub; }
+    else {
+      const rec = netKeys().find(x => x.pub === tp);
+      if (!rec) return false;
+      try { sk = privateKeyFromSeedWords(rec.mnemonic); pub = getPublicKey(sk); } catch { return false; }
+    }
+    lastProfile = {};   // don't carry one identity's profile fields into the other's edits
+    window.Steward.pubkey = pub; window.Steward.npub = npubEncode(pub); window.Steward.activePub = pub;
+    window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub } }));
+    return true;
+  },
+  isViewingNetwork() { return pub !== churchPub; },
   // this church's network memberships -> [{ networkPub, npub }]
   subscribeNetworks(onNetworks) {
     const byId = new Map();
@@ -607,7 +724,10 @@ window.Steward = {
     // join links/QRs must use the stable PUBLIC url. An https origin (the public Funnel) is used as-is.
     const PUBLIC_BASE = 'https://trinityone.tailbeaac0.ts.net';
     const base = o.startsWith('https://') ? o : PUBLIC_BASE;
-    return base + '/?follow=' + np;
+    // carry the church's public relay so a member who follows from anywhere connects to the right relay,
+    // not just whatever their app defaults to (lets churches run on their own relay).
+    const relay = base.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:') + '/relay';
+    return base + '/?follow=' + np + '&relay=' + encodeURIComponent(relay);
   },
   // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
   joinCode() { return window.Steward.npub || ''; },

@@ -88,11 +88,11 @@ function TodayScreen({ ctx }) {
             const hdrBtn = { width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
               background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' };
-            const unread = (D.NOTIFICATIONS || []).some(n => n.unread);
+            const unread = (D.NOTIFICATIONS || []).some(n => n.unread) || (ctx.netUnread > 0);
             return (
               <React.Fragment>
                 <button onClick={ctx.openSearch} aria-label="Search" style={hdrBtn}><Icon name="study" size={19} /></button>
-                <button onClick={ctx.openListen} aria-label="Listen" style={hdrBtn}><Icon name="headphones" size={19} /></button>
+                {ctx.church && ctx.church.audioFeed ? <button onClick={ctx.openListen} aria-label="Listen" style={hdrBtn}><Icon name="headphones" size={19} /></button> : null}
                 <button onClick={ctx.openNotifications} aria-label="Notifications" style={hdrBtn}>
                   <Icon name="bell" size={19} />
                   {unread ? <span style={{ position: 'absolute', top: 9, right: 10, width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', border: '1.5px solid var(--surface)' }} /> : null}
@@ -237,7 +237,6 @@ function TodayScreen({ ctx }) {
         {[
           { ic: 'study', label: 'Search', go: () => ctx.openSearch() },
           { ic: 'pen', label: 'Journal', go: () => ctx.newJournal() },
-          { ic: 'headphones', label: 'Listen', go: () => ctx.toast('Audio coming soon') },
         ].map(q => (
           <button key={q.label} onClick={q.go} style={{
             flex: 1, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer',
@@ -248,6 +247,24 @@ function TodayScreen({ ctx }) {
           </button>
         ))}
       </div>
+
+      {/* Network announcements — a quiet teaser at the bottom; full list lives in Notifications */}
+      {(ctx.netAnnouncements || []).length ? (
+        <div style={{ marginTop: 24, animation: 'trinityFade .5s ease .24s both' }}>
+          <SectionLabel action="See all" onAction={() => ctx.openNotifications()}>From your network</SectionLabel>
+          <button onClick={() => ctx.openNotifications()} style={{ display: 'flex', gap: 12, padding: 14, borderRadius: 18, width: '100%', textAlign: 'left', background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+            <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="globe" size={19} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <span style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 700 }}>{(ctx.netAnnouncements[0] || {})._network || 'Network'}</span>
+                {ctx.netUnread > 0 ? <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: 'var(--clay)', borderRadius: 999, padding: '1px 7px' }}>{ctx.netUnread} new</span> : null}
+              </div>
+              <div style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.45, color: 'var(--ink-2)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{(ctx.netAnnouncements[0] || {}).text}</div>
+            </div>
+            <Icon name="chevR" size={18} color="var(--ink-3)" style={{ alignSelf: 'center' }} />
+          </button>
+        </div>
+      ) : null}
     </ScreenScroll>
   );
 }
