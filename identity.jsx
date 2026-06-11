@@ -318,8 +318,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>SECURITY &amp; RECOVERY</div>
         <Group>
           <Row icon="key" label="Public key" sub={identity.npub.slice(0, 28) + '…'} accent="var(--gold)" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(identity.npub).catch(() => {}); ctx.toast('Public key (npub) copied'); }} />
-          <Row icon="shield" label="View recovery phrase" sub="Show the 12 words again" accent="var(--sage)" onClick={() => ctx.openRecovery()} />
-          <Row icon="refresh" label="Restore from phrase" onClick={() => ctx.openRecovery()} />
+          <Row icon="shield" label="Recovery phrase" sub="View your 12 words, or restore from a phrase" accent="var(--sage)" onClick={() => ctx.openRecovery()} />
         </Group>
 
         {/* steward-only tools — hidden for ordinary members */}
@@ -327,7 +326,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <React.Fragment>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '16px 4px 9px' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px' }}>STEWARD</div>
-              <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.3px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', padding: '2px 8px', borderRadius: 999 }}>Grace Chapel</span>
+              {ctx.church && ctx.church.name ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.3px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', padding: '2px 8px', borderRadius: 999 }}>{ctx.church.name}</span> : null}
             </div>
             <Group>
               <Row icon="qr" label="Steward invite" sub="Add someone to your church" accent="var(--clay)" onClick={() => ctx.openInvite()} />

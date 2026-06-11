@@ -35,6 +35,32 @@ Rule of thumb: chat decides *what* and *why*, this doc records it, Design propos
 
 Guardrail for both agents: anything touching keys, relays, or money is high-stakes — propose, never assume. Keep congregation data scoped to the relevant NIP-29 group; nothing sensitive on public relays.
 
+### As-built (pilot implementation)
+
+The table above is the **target**. The pilot ships a pragmatic NIP-01/NIP-78 implementation that the
+NIP-29/NDK design is additive to later. What's actually running:
+
+| Concern | As-built (pilot) |
+|---|---|
+| **Engines** | `window.Bible` (engine.js), `window.Fellowship` (`src/fellowship.src.js`→`vendor/fellowship.js`), `window.Steward` (`src/steward.src.js`→`vendor/steward.js`), `window.TrinityIdentity`, `window.TrinityBackup`. nostr-tools, not NDK. |
+| **Church data** | Addressable **kind-30078** (NIP-78) docs, `d`-prefixed (`group:`, `roster:`, `service:`, `rota:`, `event:`, `plan:`, `devotional:`, `request:`, `network:`, `member:`, `fund:`), `t`=`trinityone`. Steward-signed; members read by author = church pubkey. |
+| **Chat / DMs / reactions** | kind-1 group posts (`t`=groupId, `p`=churchPub scoping); NIP-04 (kind-4) church↔member DMs; NIP-25 (kind-7) reactions on group + DM threads. |
+| **Relay** | `scripts/gateway.mjs` — one Node process = static file server + embedded NIP-01 relay at `/relay` + push (VAPID) + feed proxies (`/feed` YouTube/Rumble, `/audiofeed` podcast RSS). Replaceable/addressable dedup. WebSocket keepalive ping (25s) for Funnel/NAT. |
+| **Write policy** | The relay is **multi-church**: `relay/church.json` (`churches[]`) or `CHURCH_NPUB` (comma list). Each church writes its own docs (scoped by author); members write their own data; group-leaders may post their group's events; networks a church joined may publish church-style content; profiles (kind-0) open. |
+| **Reachability (pilot)** | One gateway exposed via **Tailscale Funnel** (`https://trinityone.tailbeaac0.ts.net`) — the stopgap the **Relay app** replaces. Member native app has **no default relay**; the church's relay is carried in its invite (`?relay=`) and added on follow. |
+| **Identity onboarding** | Steward invite = a real QR/link `?invite=<seed>&follow=<church>&relay=<wss>` — one scan adopts a ready-made identity + joins. In-app QR scan via `BarcodeDetector` (web) / vendored **jsQR** (Android WebView). |
+| **Listen** | Narrated scripture (Web Speech, in the reader) + church audio (podcast RSS via `/audiofeed`). |
+| **Surfaces** | Member app (`index.html` + `*.jsx`, Capacitor APK) and Steward console (`steward.html` + `stew-*.jsx`, runtime Babel, responsive). |
+
+**Gotcha (member app):** all member `.jsx` load as classic scripts sharing one global scope. Two files declaring the same top-level `function`/`const` name throws a redeclaration `SyntaxError` that blanks the APK (Babel tolerates it; the esbuild `www/` build doesn't). Run the dup-global scan + a headless boot check after editing member files.
+
+### Relay app / self-hosting (next)
+
+Each church should run its **own** relay (the topology row above); the pilot's single Funnel-exposed
+gateway is the stopgap. The **Relay app** packages `gateway.mjs` + a tunnel + a setup wizard into a
+desktop app a non-technical steward installs and double-clicks — "run the relay on Win/Mac/Linux
+without code." Scoped in `reference/proposal-relay-app-steward-console.md` + `reference/brief-relay-app-wizard.md`. Until it ships, churches share the multi-church hosted relay.
+
 ---
 
 ## Library (Books)
