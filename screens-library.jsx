@@ -159,8 +159,8 @@ function BackupCard({ ctx }) {
         <div style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Icon name="cloud" size={21} stroke={1.9} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>Back up everything</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.35 }}>One encrypted copy of your whole library — restore on a new phone in seconds.</div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>Back up your data</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.35 }}>An encrypted copy of your notes, journals, highlights & books — restore on a new phone in seconds.</div>
         </div>
         {!picking ? <button onClick={() => setPicking(true)} style={{ border: 'none', background: 'var(--clay)', color: '#fff',
           fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', padding: '9px 14px', borderRadius: 11, flexShrink: 0 }}>Back up</button> : null}
@@ -180,7 +180,7 @@ function BackupCard({ ctx }) {
       {/* security note — always visible */}
       <div style={{ display: 'flex', gap: 8, padding: '0 15px 13px', fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>
         <Icon name="shield" size={14} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <span>Sealed on this phone with a passphrase only you know — restore it later from a file on your device or your cloud drive. If you lose the passphrase, no one can open it.</span>
+        <span>Sealed on this phone with a passphrase only you know — restore it later from a file on your device or cloud drive. If you lose the passphrase, no one can open it. <b style={{ color: 'var(--ink-2)' }}>Your paper recovery key still matters</b> — it restores your account even without this file.</span>
       </div>
 
       {picking ? (

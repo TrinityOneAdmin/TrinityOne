@@ -311,14 +311,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>HELP &amp; SETUP</div>
         <Group>
           <Row icon="book" label="Help & guides" sub="Simple guides, read aloud if you like" accent="var(--clay)" onClick={() => ctx.openHelp('index')} />
-          <Row icon="shield" label="Back up your 12 words" sub="The one thing that keeps your account safe" accent="var(--sage)" onClick={() => ctx.openHelp('backup')} />
         </Group>
 
-        {/* security / recovery group */}
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>SECURITY &amp; RECOVERY</div>
+        {/* YOUR KEY — backs up *access* (your account). Paper is the root of trust. */}
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>YOUR RECOVERY KEY</div>
         <Group>
-          <Row icon="key" label="Public key" sub={identity.npub.slice(0, 28) + '…'} accent="var(--gold)" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(identity.npub).catch(() => {}); ctx.toast('Public key (npub) copied'); }} />
-          <Row icon="shield" label="Recovery phrase" sub="View your 12 words, or restore from a phrase" accent="var(--sage)" onClick={() => ctx.openRecovery()} />
+          <Row icon="shield" label="Recovery key — your 12 words" sub="Your account’s master key. Restores you on any phone — write it on paper, keep it safe." accent="var(--sage)" onClick={() => ctx.openRecovery()} />
+          <Row icon="key" label="Public key" sub={identity.npub.slice(0, 24) + '…'} accent="var(--gold)" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(identity.npub).catch(() => {}); ctx.toast('Public key (npub) copied'); }} />
         </Group>
 
         {/* steward-only tools — hidden for ordinary members */}
@@ -334,8 +333,8 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           </React.Fragment>
         ) : null}
 
-        {/* backup & sync */}
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>BACKUP &amp; SYNC</div>
+        {/* YOUR DATA — backs up *content* (notes/journals/highlights/books). A different job. */}
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>YOUR DATA</div>
         <BackupCard ctx={ctx} />
 
         {/* relays + danger */}
