@@ -7,7 +7,8 @@
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { readFileSync, writeFileSync, renameSync, statSync, createReadStream } from 'fs';
-import { extname, normalize, join } from 'path';
+import { extname, normalize, join, sep } from 'path';
+import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode } from 'nostr-tools/nip19';
 import webpush from 'web-push';
 
@@ -140,7 +141,40 @@ const MIME = {
 const feedCache = new Map();            // channelUrl -> { ts, data }
 const FEED_TTL = 8 * 60 * 1000;
 const decodeXml = (s) => String(s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
-async function fetchText(url) { const r = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; TrinityOne/1.0)' }, redirect: 'follow' }); if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }
+// ---- SSRF guard: the /feed and /audiofeed proxies fetch church-supplied URLs server-side. Only
+// allow public http(s) hosts, re-checked on every redirect hop, so the proxy can't be aimed at the
+// gateway's own network — cloud metadata (169.254.169.254), localhost, or LAN admin panels.
+// (Residual: DNS rebinding between this lookup and fetch's own resolution; acceptable for the pilot.)
+function isPrivateIp(ip) {
+  ip = String(ip).toLowerCase();
+  const v4 = ip.replace(/^::ffff:/, '').match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const a = +v4[1], b = +v4[2];
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  return ip === '::1' || ip === '::' || ip.startsWith('fe80') || ip.startsWith('fc') || ip.startsWith('fd');
+}
+async function assertPublicUrl(raw) {
+  let u; try { u = new URL(raw); } catch { throw new Error('bad url'); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('blocked protocol');
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  if (!host || /^(localhost|.*\.localhost|.*\.local|.*\.internal)$/i.test(host)) throw new Error('blocked host');
+  let addrs; try { addrs = await dnsLookup(host, { all: true }); } catch { throw new Error('dns'); }
+  for (const a of addrs) if (isPrivateIp(a.address)) throw new Error('blocked address');
+  return u;
+}
+async function fetchText(url) {
+  let cur = url;
+  for (let hop = 0; hop < 5; hop++) {
+    await assertPublicUrl(cur);
+    const r = await fetch(cur, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; TrinityOne/1.0)' }, redirect: 'manual', signal: AbortSignal.timeout(8000) });
+    if (r.status >= 300 && r.status < 400) { const loc = r.headers.get('location'); if (!loc) throw new Error('bad redirect'); cur = new URL(loc, cur).toString(); continue; }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+  }
+  throw new Error('too many redirects');
+}
 async function resolveYouTube(input) {
   let channelId = (input.match(/channel\/(UC[\w-]+)/) || input.match(/^(UC[\w-]+)$/) || [])[1] || null;
   if (!channelId) {
@@ -211,6 +245,22 @@ async function getAudioFeed(url) {
   return data;
 }
 
+// security response headers. CSP is deliberately compatible with the current build (Babel needs
+// 'unsafe-eval'; the app has many inline styles/handlers → 'unsafe-inline') but still blocks the
+// big wins: no external/injected <script>, no <object>/<embed>, no <base> hijack, no framing.
+// Referrer-Policy: no-referrer also stops invite links (which carry a seed in the URL) leaking via Referer.
+const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN' };
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob: https:",
+  "media-src 'self' blob: https:",
+  "connect-src 'self' https: wss: ws:",
+  "object-src 'none'", "base-uri 'self'", "frame-src 'self'", "frame-ancestors 'self'",
+].join('; ');
+
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
   // relay status (for the Relay app control dashboard)
@@ -248,16 +298,20 @@ function serveStatic(req, res) {
     req.on('end', () => { try { const { sub, pubkey } = JSON.parse(body); if (sub && sub.endpoint && /^[0-9a-f]{64}$/i.test(pubkey || '')) { const list = pushSubs[pubkey] = pushSubs[pubkey] || []; if (!list.some(s => s.endpoint === sub.endpoint)) { list.push(sub); saveSubs(); } } res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); res.end('ok'); } catch { res.writeHead(400).end('bad'); } });
     return;
   }
-  let p = decodeURIComponent(route);
+  let p; try { p = decodeURIComponent(route); } catch { res.writeHead(400).end('bad request'); return; }
   if (p === '/' || p.endsWith('/')) p += 'index.html';
   const file = normalize(join(ROOT, p));
-  if (!file.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }   // path traversal guard
+  // path-traversal guard: the resolved path must stay strictly inside ROOT. Normalize ROOT's trailing
+  // separator first (it may already carry one), so the boundary is exactly `<root>/` — a sibling like
+  // `<root>-evil` can't satisfy it, and the trailing-slash double-up doesn't reject valid files.
+  const rootBase = ROOT.replace(/[/\\]+$/, '');
+  if (file !== rootBase && !file.startsWith(rootBase + sep)) { res.writeHead(403).end('forbidden'); return; }
   let st; try { st = statSync(file); } catch { res.writeHead(404).end('not found'); return; }
   if (st.isDirectory()) { res.writeHead(404).end('not found'); return; }
-  res.writeHead(200, {
-    'Content-Type': MIME[extname(file).toLowerCase()] || 'application/octet-stream',
-    'Content-Length': st.size, 'Access-Control-Allow-Origin': '*',
-  });
+  const ext = extname(file).toLowerCase();
+  const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS };
+  if (ext === '.html') headers['Content-Security-Policy'] = CSP;
+  res.writeHead(200, headers);
   createReadStream(file).pipe(res);
 }
 
