@@ -33,13 +33,30 @@ const REQUEST_D = 'trinityone/request:';    // steward -> member "can you serve?
 const REQREPLY_D = 'trinityone/reqreply:';  // member -> steward accept/decline/swap (member, p=church)
 const now = () => Math.floor(Date.now() / 1000);
 
-function relays() {
-  const l = (typeof location !== 'undefined') ? location : null;
-  if (!l || !l.host) return ['ws://127.0.0.1:8090/relay'];
-  return [((l.protocol === 'https:') ? 'wss://' : 'ws://') + l.host + '/relay'];
-}
+const RELAYS_LS = 'trinityone.steward.extra-relays';   // extra public relays the church also publishes to
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+function ownRelay() {
+  const l = (typeof location !== 'undefined') ? location : null;
+  if (!l || !l.host) return 'ws://127.0.0.1:8090/relay';
+  return ((l.protocol === 'https:') ? 'wss://' : 'ws://') + l.host + '/relay';
+}
+function extraRelays() {
+  try { const a = JSON.parse(lsGet(RELAYS_LS) || '[]'); return Array.isArray(a) ? a.filter(Boolean) : []; } catch { return []; }
+}
+// normalise a user-typed relay address to a ws/wss URL
+function normRelay(input) {
+  let v = String(input || '').trim();
+  if (!v) return '';
+  if (!/^wss?:\/\//i.test(v)) v = 'wss://' + v.replace(/^\/+/, '');
+  return v.replace(/\/+$/, '');
+}
+function relays() {
+  const own = ownRelay();
+  const out = [own];
+  for (const r of extraRelays()) { if (r && r !== own && !out.includes(r)) out.push(r); }
+  return out;
+}
 
 const pool = new SimplePool();
 let sk = null, pub = null;
@@ -337,8 +354,11 @@ window.Steward = {
   publishEvent(ev) {
     if (!sk) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now());
-    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)' });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET]], content }, sk))
+    const groupId = ev.groupId || '';
+    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', groupId });
+    const tags = [['d', EVENT_D + id], ['t', NET]];
+    if (groupId) tags.push(['t', groupId]);   // lets a group's chat filter to its own events
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags, content }, sk))
       .then(() => ({ id, ...JSON.parse(content) }));
   },
   removeEvent(id) {
@@ -354,6 +374,23 @@ window.Steward = {
     const content = JSON.stringify({ serviceId: req.serviceId || '', teamId: req.teamId || '', roleId: req.roleId || '', role: req.role || '', teamName: req.teamName || '', icon: req.icon || 'hand', accent: req.accent || 'var(--clay)', date: req.date || '', time: req.time || '', service: req.service || '', from: req.from || 'Your church', note: req.note || '' });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', REQUEST_D + id], ['t', NET], ['p', req.memberPub]], content }, sk))
       .then(() => ({ id, ...JSON.parse(content), memberPub: req.memberPub }));
+  },
+  // the church's own "can you serve?" request docs (so the board can join replies to a slot)
+  subscribeRequests(onRequests) {
+    const byId = new Map();
+    const emit = () => onRequests([...byId.values()]);
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d.startsWith(REQUEST_D)) return;
+        const id = d.slice(REQUEST_D.length);
+        const memberPub = (e.tags.find(t => t[0] === 'p') || [])[1] || '';
+        if (!e.content) { byId.delete(id); emit(); return; }
+        try { byId.set(id, { id, memberPub, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
   },
   // the steward's view of replies members sent back (reqreply docs p-tagged to the church)
   subscribeRequestReplies(onReplies) {
@@ -443,6 +480,23 @@ window.Steward = {
 
   // ---- relays: the church's relay(s) — real status, not a mock ----
   relayList() { return relays(); },
+  ownRelay() { return ownRelay(); },
+  extraRelays() { return extraRelays(); },
+  // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)
+  addRelay(input) {
+    const url = normRelay(input);
+    if (!url || url === ownRelay()) return false;
+    const cur = extraRelays(); if (cur.includes(url)) return false;
+    lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
+    window.dispatchEvent(new CustomEvent('steward-relays'));
+    return url;
+  },
+  removeRelay(url) {
+    const next = extraRelays().filter(r => r !== url);
+    lsSet(RELAYS_LS, JSON.stringify(next));
+    window.dispatchEvent(new CustomEvent('steward-relays'));
+    return true;
+  },
   // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms }]
   relayStatus() {
     return Promise.all(relays().map(url => new Promise(res => {

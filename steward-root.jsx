@@ -81,6 +81,13 @@ function useStewardRequestReplies() {
 }
 window.useStewardRequestReplies = useStewardRequestReplies;
 
+function useStewardRequests() {
+  const [requests, setRequests] = useSt([]);
+  useStE(() => window.Steward.subscribeRequests(setRequests), []);
+  return requests;
+}
+window.useStewardRequests = useStewardRequests;
+
 // people participating in this church's chat (derived from messages addressed to the church)
 function useStewardMembers() {
   const [members, setMembers] = useSt([]);
@@ -96,7 +103,8 @@ function useStewardRelays() {
     let alive = true;
     const probe = () => window.Steward.relayStatus().then(s => { if (alive) setStatus(s); }).catch(() => {});
     probe(); const t = setInterval(probe, 10000);
-    return () => { alive = false; clearInterval(t); };
+    window.addEventListener('steward-relays', probe);
+    return () => { alive = false; clearInterval(t); window.removeEventListener('steward-relays', probe); };
   }, []);
   return status;
 }

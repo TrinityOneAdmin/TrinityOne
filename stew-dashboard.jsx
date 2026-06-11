@@ -109,56 +109,8 @@ function copyText(t) {
   } catch (e) { return false; }
 }
 
-// Open a print-friendly paper invite: church QR + link, the steps to join, and blank lines for the
-// member to write down their own 12-word recovery phrase (the only way to restore their account).
-function printInvite(churchName, url, svg) {
-  const w = window.open('', '_blank', 'width=820,height=1040');
-  if (!w) { alert('Allow pop-ups to print the invite.'); return; }
-  const name = churchName || 'Your church';
-  const words = Array.from({ length: 12 }, (_, i) => `<div class="w"><span class="n">${i + 1}.</span><span class="line"></span></div>`).join('');
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${name} — TrinityOne invite</title>
-  <style>
-    @page { margin: 18mm; }
-    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #2a2018; margin: 0; }
-    .wrap { max-width: 640px; margin: 0 auto; }
-    .head { text-align: center; border-bottom: 2px solid #C25A38; padding-bottom: 14px; margin-bottom: 18px; }
-    .brand { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #C25A38; font-weight: 800; }
-    h1 { font-size: 26px; margin: 6px 0 2px; }
-    .sub { color: #6b5d4f; font-size: 14px; }
-    .qrrow { display: flex; gap: 22px; align-items: center; margin: 4px 0 20px; }
-    .qr { width: 168px; height: 168px; border: 1px solid #e7ddcf; border-radius: 12px; padding: 8px; flex-shrink: 0; }
-    .qr svg { width: 100%; height: 100%; }
-    .link { font-family: monospace; font-size: 11px; word-break: break-all; background: #faf5ec; border: 1px solid #e7ddcf; border-radius: 8px; padding: 8px 10px; color: #4a3f33; }
-    ol { padding-left: 20px; line-height: 1.55; font-size: 14px; }
-    ol li { margin-bottom: 7px; }
-    .warn { background: #fdf3e3; border: 1px solid #e8c98c; border-radius: 10px; padding: 12px 14px; font-size: 13px; margin: 16px 0; }
-    .phrase { border: 1px solid #e7ddcf; border-radius: 12px; padding: 16px 18px; margin-top: 8px; }
-    .phrase h3 { margin: 0 0 4px; font-size: 15px; }
-    .phrase p { margin: 0 0 14px; font-size: 12.5px; color: #6b5d4f; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 26px; }
-    .w { display: flex; align-items: flex-end; gap: 8px; }
-    .n { color: #a8957f; font-size: 13px; width: 22px; }
-    .line { flex: 1; border-bottom: 1.5px solid #c9bca9; height: 20px; }
-    .foot { text-align: center; color: #a8957f; font-size: 11px; margin-top: 22px; }
-  </style></head><body><div class="wrap">
-    <div class="head"><div class="brand">TrinityOne</div><h1>Join ${name}</h1><div class="sub">A private, offline-first place to read and belong — no sign-up, no tracking.</div></div>
-    <div class="qrrow">
-      <div class="qr">${svg || ''}</div>
-      <div><p style="margin:0 0 8px;font-size:14px;">Scan this with your phone camera, or go to:</p><div class="link">${url || ''}</div></div>
-    </div>
-    <ol>
-      <li>Open your phone camera and point it at the code above (or type the link into your browser).</li>
-      <li>Tap <b>Add to Home Screen / Install</b> so TrinityOne lives on your phone and works offline.</li>
-      <li>It opens already following <b>${name}</b>. Pick a display name, or stay anonymous.</li>
-      <li>When asked, <b>write down your 12-word recovery phrase</b> in the boxes below.</li>
-    </ol>
-    <div class="warn"><b>Keep your recovery phrase safe.</b> It is the <u>only</u> way to restore your account on a new phone. No one — not even your church — can recover it for you. Don’t share it with anyone.</div>
-    <div class="phrase"><h3>My 12-word recovery phrase</h3><p>Write each word exactly as the app shows it, in order.</p><div class="grid">${words}</div></div>
-    <div class="foot">TrinityOne · self-custodial fellowship</div>
-  </div><script>setTimeout(function(){window.print();},250);</script></body></html>`);
-  w.document.close();
-}
+// The printable paper invite (church QR + steps + blank recovery-phrase grid) is generated on demand
+// by window.TrinityTemplates.printInviteSheet — see stew-templates.jsx. Wired into "Print invite" below.
 
 function JoinCard({ qrSize = 92, center = false }) {
   const church = window.useStewardChurch();   // re-renders once the npub is ready
@@ -180,7 +132,7 @@ function JoinCard({ qrSize = 92, center = false }) {
         <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: center ? 'center' : 'flex-start' }}>
           <button onClick={() => doCopy('code', np)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'code' ? 'check' : 'receipt'} size={14} color="#fff" /> {copied === 'code' ? 'Copied' : 'Copy code'}</button>
           <button onClick={() => doCopy('link', url)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'link' ? 'check' : 'link'} size={14} color="currentColor" /> {copied === 'link' ? 'Copied' : 'Copy link'}</button>
-          <button onClick={() => printInvite(church.name, url, svg)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Print a paper invite with space for the recovery phrase"><Icon name="receipt" size={14} color="currentColor" /> Print invite</button>
+          <button onClick={() => window.TrinityTemplates.printInviteSheet({ name: church.name, url, qrSvg: svg })} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Print a paper invite with the QR + space for the recovery phrase"><Icon name="receipt" size={14} color="currentColor" /> Print invite</button>
         </div>
       </div>
     </div>
@@ -283,9 +235,9 @@ function DashOverview({ onTab }) {
         <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="self-hosted" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          <Panel title="Groups & rooms" action={<button onClick={() => onTab('groups')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={{ flex: 1 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>
+          <Panel title="Groups & rooms" action={<button onClick={() => onTab('groups')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' }}>
               {groups.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No groups yet — create your church’s first chat room.</div> : null}
               {groups.map(g => (
                 <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -297,7 +249,7 @@ function DashOverview({ onTab }) {
             </div>
           </Panel>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>
           <Panel title="Joining code">
             <JoinCard qrSize={92} />
           </Panel>
@@ -418,9 +370,8 @@ function GroupChatModal({ group, onClose }) {
   const isTeam = group.kind === 'team';
   const accent = isTeam ? (group.accent || 'var(--clay)') : group.kind === 'broadcast' ? '#8a6717' : 'var(--sage)';
   return (
-    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 92, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 540, maxWidth: '94%', height: '78%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 18px', borderBottom: '1px solid var(--line)' }}>
+    <div style={{ position: 'absolute', right: 24, bottom: 0, zIndex: 92, width: 344, maxWidth: 'calc(100% - 48px)', height: 480, maxHeight: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '16px 16px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenRise .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
           <div style={{ width: 36, height: 36, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={isTeam ? (group.icon || 'shield') : group.kind === 'broadcast' ? 'send' : 'chat'} size={19} /></div>
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{group.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{isTeam ? 'Team chat' : group.kind === 'broadcast' ? 'Broadcast' : 'Group chat'} · you post as the church</div></div>
           <button onClick={onClose} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
@@ -438,7 +389,6 @@ function GroupChatModal({ group, onClose }) {
           <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="Message your church…" style={{ flex: 1, height: 42, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
           <button onClick={send} disabled={!text.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: text.trim() ? 1 : 0.55 }}><Icon name="send" size={16} color="#fff" /></button>
         </div>
-      </div>
     </div>
   );
 }
@@ -524,6 +474,14 @@ function DashRelays() {
   const host = (typeof location !== 'undefined' && location.host) || '';
   const online = status.filter(r => r.status === 'on').length;
   const checking = status.length === 0;
+  const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
+  const [draft, setDraft] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const addRelay = () => {
+    const r = window.Steward.addRelay && window.Steward.addRelay(draft);
+    if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); return; }
+    setDraft(''); setErr('');
+  };
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', gap: 14 }}>
@@ -546,9 +504,20 @@ function DashRelays() {
                 </div>
                 {self ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage)' : 'var(--clay)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Live' : 'Offline'}</span>
+                {!self && r.url !== own ? <button onClick={() => window.Steward.removeRelay(r.url)} title="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button> : null}
               </div>
             );
           })}
+        </div>
+        {/* add a public relay (redundancy) */}
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: 'flex', gap: 9 }}>
+            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
+              placeholder="nos.lol  ·  relay.damus.io  ·  wss://relay.example.com" spellCheck={false} autoCapitalize="none"
+              style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
+            <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Add relay</button>
+          </div>
+          {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
         </div>
         <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
           <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church hosts its own relay — every message, group, and member lives on infrastructure you control. Members reach it wherever you serve the app.</div>
@@ -693,7 +662,10 @@ function DashDevotionals() {
     <div style={{ position: 'relative', height: '100%' }}>
       {adding ? <NewDevotionalModal onClose={() => setAdding(false)} /> : null}
       <Panel title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
-        action={<button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Upload devotional</button>} style={{ height: '100%' }}>
+        action={<div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
+          <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Upload devotional</button>
+        </div>} style={{ height: '100%' }}>
         {devos.length === 0 ? (
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Upload a .txt or .md reflection on a passage — your congregation reads it in their app.</div>
         ) : (
@@ -745,7 +717,7 @@ function DashMembers() {
           <p style={{ fontSize: 13, margin: '6px 0 0', maxWidth: 320, lineHeight: 1.5 }}>Share your invite code — people appear here the moment they join, whether or not they’ve posted.</p>
         </div>
       ) : (
-        <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto' }}>
+        <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {members.map(m => {
             const named = !!m.name;
             const label = named ? m.name : 'Anonymous';

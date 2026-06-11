@@ -198,6 +198,17 @@ function DashRota({ onNewTeam }) {
   const rotas = window.useStewardRotas();
   const members = window.useStewardMembers();
   const unavail = window.useStewardUnavail();
+  const requests = window.useStewardRequests();          // "can you serve?" docs we sent
+  const replies = window.useStewardRequestReplies();     // members' accept/decline/swap
+
+  // verdict for an assigned slot: 'accept' | 'decline' | 'swap' | 'pending' (asked, no reply) | '' (not asked)
+  const replyById = {}; replies.forEach(r => { if (r.id) replyById[r.id] = r.v; });
+  const slotVerdict = (svcId, teamId, roleId, pub) => {
+    const matches = requests.filter(q => q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!pub || !q.memberPub || q.memberPub === pub));
+    if (!matches.length) return '';
+    matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    return replyById[matches[0].id] || 'pending';
+  };
 
   const rosterFor = (id) => rosters.find(r => r.team === id) || { roles: [], people: [] };
   const persisted = (svcId) => rotas.find(r => r.service === svcId) || null;
@@ -357,11 +368,23 @@ function DashRota({ onNewTeam }) {
                       const key = t.id + '::' + role.id; const a = assign[key];
                       const slot = { key, service: svc, team: t, role };
                       if (a && a.name) {
+                        const verdict = slotVerdict(svc.id, t.id, role.id, a.pub);
+                        const vmap = {
+                          accept: { fg: 'var(--sage)', bg: 'var(--sage)', soft: 8, line: 32, label: 'Accepted', ic: 'check' },
+                          decline: { fg: 'var(--clay)', bg: 'var(--clay)', soft: 9, line: 40, label: 'Declined', ic: 'x' },
+                          swap: { fg: '#8a6717', bg: 'var(--gold)', soft: 10, line: 40, label: 'Wants swap', ic: 'swap' },
+                          pending: { fg: 'var(--ink-3)', bg: 'var(--ink-3)', soft: 5, line: 20, label: 'Asked', ic: 'clock' },
+                          '': { fg: 'var(--sage)', bg: 'var(--sage)', soft: 8, line: 32, label: '', ic: 'check' },
+                        };
+                        const vm = vmap[verdict] || vmap[''];
                         return (
-                          <button key={role.id} onClick={() => setAssignSlot(slot)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: '1px solid color-mix(in oklab, var(--sage) 32%, var(--line))', background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))' }}>
+                          <button key={role.id} onClick={() => setAssignSlot(slot)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
                             <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 10.5 }}>{a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
-                            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}</div><div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.name}</div></div>
-                            <Icon name="check" size={15} stroke={2.4} color="var(--sage)" />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}{vm.label ? <span style={{ color: vm.fg, marginLeft: 6, fontWeight: 700 }}>· {vm.label}</span> : null}</div>
+                              <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: verdict === 'decline' ? 'line-through' : 'none', color: verdict === 'decline' ? 'var(--ink-3)' : 'var(--ink)' }}>{a.name}</div>
+                            </div>
+                            <Icon name={vm.ic} size={15} stroke={2.4} color={vm.fg} />
                           </button>
                         );
                       }
@@ -392,18 +415,20 @@ window.DashRota = DashRota;
 // ════════════════════════ CALENDAR ════════════════════════
 function SchEventModal({ day, onClose }) {
   const ACCENTS = [['var(--clay)', 'Gathering'], ['var(--sage)', 'Prayer'], ['var(--gold)', 'Social'], ['#5360D6', 'Youth']];
+  const allGroups = window.useStewardGroups();   // chat groups + teams the event can belong to
   const [title, setTitle] = useSch('');
   const [date, setDate] = useSch(day || '');
   const [time, setTime] = useSch('19:30');
   const [where, setWhere] = useSch('');
   const [blurb, setBlurb] = useSch('');
   const [accent, setAccent] = useSch('var(--clay)');
+  const [group, setGroup] = useSch('');          // '' = whole church; else a group/team id
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
   const save = () => {
     if (!title.trim() || !date) return;
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
-    dates.forEach(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent }));
+    dates.forEach(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, groupId: group }));
     onClose();
   };
   return (
@@ -420,6 +445,17 @@ function SchEventModal({ day, onClose }) {
       <div style={{ display: 'flex', gap: 8 }}>
         {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
       </div>
+      <div style={schLbl}>Belongs to</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+        {[{ id: '', name: 'Whole church', icon: 'send' }, ...allGroups].map(g => {
+          const on = group === g.id;
+          return (
+            <button key={g.id || 'all'} onClick={() => setGroup(g.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
+              <Icon name={g.id ? (g.kind === 'team' ? (g.icon || 'shield') : 'chat') : 'send'} size={13} color="currentColor" />{g.name}</button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '6px 2px 0', lineHeight: 1.4 }}>Group events still show on everyone’s calendar, and appear inside that group’s chat too.</div>
       <div style={schLbl}>Note (optional)</div>
       <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
