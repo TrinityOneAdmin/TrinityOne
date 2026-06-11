@@ -7,7 +7,15 @@
   const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
   const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 
+  // WebCrypto is only available in a secure context (https, or localhost). Over plain http on a LAN
+  // (e.g. http://192.168.x) crypto.subtle is undefined — give a clear reason, not "importKey of undefined".
+  function ensureCrypto() {
+    if (!(typeof crypto !== 'undefined' && crypto.subtle)) {
+      throw new Error('Backups need a secure connection. Open this over https (your church’s https link) — over plain http the browser disables encryption.');
+    }
+  }
   async function deriveKey(pass, salt) {
+    ensureCrypto();
     const base = await crypto.subtle.importKey('raw', TE.encode(pass), 'PBKDF2', false, ['deriveKey']);
     return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   }

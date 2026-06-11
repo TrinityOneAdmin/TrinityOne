@@ -301,8 +301,14 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             <b style={{ color: 'var(--ink)' }}>No account, no tracking.</b> Your identity lives only on this device as a private key.</div>
         </div>
 
+        {/* my church */}
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 4px 9px' }}>MY CHURCH</div>
+        <Group>
+          <Row icon="qr" label="Follow a church" sub="Scan a code or paste a church’s link" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openChurchSwitcher('follow'); }} />
+        </Group>
+
         {/* help & guides */}
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 4px 9px' }}>HELP &amp; SETUP</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>HELP &amp; SETUP</div>
         <Group>
           <Row icon="book" label="Help & guides" sub="Simple guides, read aloud if you like" accent="var(--clay)" onClick={() => ctx.openHelp('index')} />
           <Row icon="shield" label="Back up your 12 words" sub="The one thing that keeps your account safe" accent="var(--sage)" onClick={() => ctx.openHelp('backup')} />
@@ -338,9 +344,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <Group>
           <Row icon="globe" label="Relays" sub={`${(window.Fellowship && window.Fellowship.relays || D.RELAYS).length} connected · Nostr`} onClick={() => ctx.openRelays()} />
         </Group>
-        <Group>
-          <Row icon="refresh" label="Start a new identity" sub="Replaces this one on this device" danger onClick={() => ctx.openNewIdentity()} />
-        </Group>
+        {/* "Start a new identity" hidden for the pilot — too easy to wipe a key by accident */}
       </div>
     </Overlay>
   );

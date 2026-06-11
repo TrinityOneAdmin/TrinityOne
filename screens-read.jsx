@@ -484,10 +484,19 @@ function CommentaryEdge({ open, onToggle }) {
     </button>
   );
 }
-function CommentaryPanel({ loc, label, open, onClose }) {
+function CommentaryPanel({ loc, label, open, onClose, ctx }) {
   const C = window.TrinityData.COMMENTARY;
   const seeded = false;   // populated once a MySword commentary (.cmt.mybible) module is installed
+  const [view, setView] = useS('commentary');   // 'commentary' | 'notes'
   const sx = useR(0);
+  // the reader's own notes for this chapter (keys look like "John 1:4")
+  const prefix = label + ':';
+  const myNotes = Object.keys(ctx.notes || {}).filter(k => k.indexOf(prefix) === 0)
+    .map(k => ({ ref: k, v: parseInt(k.slice(prefix.length), 10) || 0, text: ctx.notes[k] }))
+    .sort((a, b) => a.v - b.v);
+  const seg = (k, lbl) => (
+    <button onClick={() => setView(k)} style={{ flex: 1, padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>{lbl}</button>
+  );
   return (
     <React.Fragment>
       {open ? <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 24, background: 'rgba(20,15,10,.32)', animation: 'trinityFade .25s ease both' }} /> : null}
@@ -496,16 +505,32 @@ function CommentaryPanel({ loc, label, open, onClose }) {
         onTouchEnd={(e) => { if (e.changedTouches[0].clientX - sx.current > 56) onClose(); }}
         style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 25, width: 'min(440px, 88%)', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', transform: open ? 'translateX(0)' : 'translateX(101%)', transition: 'transform .32s cubic-bezier(.32,.72,0,1)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ paddingTop: 50, flexShrink: 0, borderBottom: '1px solid var(--line)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 8px' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Commentary</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Study</div>
               <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700, lineHeight: 1.1 }}>{label}</div>
             </div>
             <IconBtn name="chevR" onClick={onClose} />
           </div>
+          <div style={{ display: 'flex', gap: 3, padding: '0 14px 10px' }}>
+            <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}</div>
+          </div>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
-          {seeded ? C.blocks.map((b, i) => (
+          {view === 'notes' ? (
+            myNotes.length ? myNotes.map(n => (
+              <div key={n.ref} onClick={() => { onClose(); ctx.gotoRef && (() => { const l = window.Bible.parseRef(n.ref); if (l) ctx.gotoRef(l.book, l.chap, l.verse); })(); }} style={{ marginBottom: 12, padding: 13, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay)', marginBottom: 4 }}>{n.ref}</div>
+                <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>{n.text}</p>
+              </div>
+            )) : (
+              <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
+                <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', color: 'var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="note" size={24} /></div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>No notes here yet</div>
+                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 270, margin: '0 auto' }}>Tap a verse → <b>Note</b> to jot a thought. Your notes for {label} gather here.</p>
+              </div>
+            )
+          ) : seeded ? C.blocks.map((b, i) => (
             <div key={i} style={{ marginBottom: 18 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginBottom: 5 }}>
                 <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: '#fff', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8 }}>v{b.v}</span>
@@ -640,7 +665,7 @@ function ReadScreen({ ctx }) {
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} />
       <CrossRefSheet loc={loc} v={sel} label={labelOf(sel)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />
-      <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} />
+      <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />
       <NoteEditor label={labelOf(sel)} open={sheet === 'note'} value={ctx.notes[keyOf(sel)]} onClose={() => setSheet('action')}
         onSave={(t) => { ctx.setNote(keyOf(sel), t); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />

@@ -345,7 +345,6 @@ function ChatScreen({ ctx }) {
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
         <div style={{ display: 'flex', gap: 9 }}>
           <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
-          <IconBtn name="plus" onClick={() => ctx.openChurchSwitcher('follow')} />
         </div>
       </div>
       <div style={{ marginBottom: GIVING_ON ? 16 : 20, animation: 'trinityFade .5s ease .04s both' }}>

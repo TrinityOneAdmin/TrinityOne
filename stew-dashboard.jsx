@@ -758,6 +758,7 @@ function StewBackupModal({ church, onClose }) {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const [done, setDone] = React.useState(false);
+  const secure = (typeof window !== 'undefined') && window.isSecureContext && (typeof crypto !== 'undefined') && crypto.subtle;
   const strength = pass.length === 0 ? null
     : pass.length < 4 ? { t: 'Too short', c: 'var(--ink-3)' }
     : /^\d+$/.test(pass) && pass.length < 6 ? { t: 'PIN — easy to use, easier to guess', c: 'var(--clay)' }
@@ -786,6 +787,12 @@ function StewBackupModal({ church, onClose }) {
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Back up your church</div>
         </div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 18px' }}>One encrypted file you can keep safe (cloud drive, USB stick). You’ll need your passphrase or PIN to restore it.</p>
+        {!secure ? (
+          <div style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)', marginBottom: 16 }}>
+            <Icon name="lock" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>You’re on an <b>http</b> address, where the browser disables encryption. Open the console over <b>https</b> (your church’s Tailscale link) to create a backup.</div>
+          </div>
+        ) : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 18 }}>
           {incl.map(([ic, t, s]) => (
             <div key={t} style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
@@ -807,7 +814,7 @@ function StewBackupModal({ church, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-          <button onClick={make} disabled={busy || done || pass.length < 4} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4) ? 0.6 : 1 }}>
+          <button onClick={make} disabled={busy || done || pass.length < 4 || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
             <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? 'Saved' : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
         </div>
       </div>
