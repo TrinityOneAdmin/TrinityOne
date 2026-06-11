@@ -301,15 +301,18 @@ function MyMonth({ ctx, onManage }) {
             </button>
           ))}
           {selEv.map(e => (
-            <div key={e.id} style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', padding: 14 }}>
+            <div key={(e._networkPub || '') + e.id} style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', padding: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
                 <div style={{ width: 34, height: 34, borderRadius: 10, background: 'color-mix(in oklab, var(--gold) 15%, var(--surface))', color: 'var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="calendar" size={18} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.1 }}>{e.title}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.1 }}>{e.title}</span>
+                    {e._network ? <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.4px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '1px 6px' }}>{e._network.toUpperCase()}</span> : null}
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}><Icon name="clock" size={12} color="var(--ink-3)" /> {e.time}{e.where ? <React.Fragment><span style={{ opacity: .5 }}>·</span> {e.where}</React.Fragment> : null}</div>
                 </div>
               </div>
-              {svEventRsvpRow({ e, rsvps, ctx })}
+              {e._network ? null : svEventRsvpRow({ e, rsvps, ctx })}
             </div>
           ))}
         </div>
@@ -513,17 +516,22 @@ function ServingScreen({ open, onClose, ctx }) {
             {events.length === 0 ? <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>No socials or events yet — your church will post them here.</div> : null}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {events.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => (
-                <div key={e.id} style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+                <div key={(e._networkPub || '') + e.id} style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
                   {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 150, objectFit: 'cover', display: 'block' }} /> : null}
                   <div style={{ display: 'flex', gap: 13, padding: 16 }}>
-                    <ServDateBlock iso={e.date} accent={e.accent || 'var(--clay)'} />
+                    <ServDateBlock iso={e.date} accent={e._network ? 'var(--clay)' : (e.accent || 'var(--clay)')} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.1 }}>{e.title}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.1 }}>{e.title}</span>
+                        {e._network ? <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 7px' }}>{e._network.toUpperCase()}</span> : null}
+                      </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 3 }}><Icon name="clock" size={13} color="var(--ink-3)" /> {e.time}{e.where ? <React.Fragment><span style={{ opacity: .5 }}>·</span><Icon name="pin" size={13} color="var(--ink-3)" /> {e.where}</React.Fragment> : null}</div>
                       {e.blurb ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '9px 0 0', textWrap: 'pretty' }}>{e.blurb}</p> : null}
                     </div>
                   </div>
-                  <div style={{ padding: '0 16px 14px' }}>{svEventRsvpRow({ e, rsvps, ctx })}</div>
+                  <div style={{ padding: '0 16px 14px' }}>{e._network
+                    ? <div style={{ fontSize: 12, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="globe" size={13} color="var(--ink-3)" /> A {e._network} event</div>
+                    : svEventRsvpRow({ e, rsvps, ctx })}</div>
                 </div>
               ))}
             </div>

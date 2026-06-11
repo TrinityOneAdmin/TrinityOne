@@ -400,6 +400,23 @@ function App() {
       return changed ? next : cs;
     });
   }, [churchNetworks, networkNames]);
+  // content aggregation: pull the network's events + plans into the member's own views, tagged with
+  // the network name (so a region-wide gathering shows on everyone's calendar without switching).
+  const [netEventsBy, setNetEventsBy] = useA({});
+  const [netPlansBy, setNetPlansBy] = useA({});
+  useAE(() => {
+    const F = window.Fellowship; if (!F) return;
+    const subs = [];
+    churchNetworks.forEach(n => {
+      const label = networkNames[n.networkPub] || 'Network';
+      if (F.subscribeChurchEvents) subs.push(F.subscribeChurchEvents(n.npub, (evs) => setNetEventsBy(m => ({ ...m, [n.networkPub]: evs.map(e => ({ ...e, _network: label, _networkPub: n.networkPub })) }))));
+      if (F.subscribeChurchPlans) subs.push(F.subscribeChurchPlans(n.npub, (ps) => setNetPlansBy(m => ({ ...m, [n.networkPub]: ps.map(p => ({ ...p, _network: label })) }))));
+    });
+    return () => subs.forEach(o => { try { o && o(); } catch {} });
+  }, [churchNetworks, networkNames]);
+  const activeNetworkPubs = new Set(churchNetworks.map(n => n.networkPub));
+  const netEvents = Object.entries(netEventsBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v);
+  const netPlans = Object.entries(netPlansBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v);
   // derive serving items from requests + my replies (local date, not UTC)
   const _now = new Date();
   const todayStr = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
@@ -559,12 +576,12 @@ function App() {
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
     devoProgress,
-    churchPlans,
+    churchPlans: [...churchPlans, ...netPlans],
     churchDevos,
     myPubkey: (window.Fellowship && window.Fellowship.myPubkey) || null,
     openChurchDevo: (d) => setOpenDevo(d),
-    // serving & events
-    servPending, servConfirmed, servDeclined, servNext, churchEvents, myRsvps,
+    // serving & events (church's own + aggregated from its network)
+    servPending, servConfirmed, servDeclined, servNext, churchEvents: [...churchEvents, ...netEvents], myRsvps,
     churchRotas, churchRosters, churchServices,
     churchNetworks: churchNetworks.map(n => ({ ...n, name: networkNames[n.networkPub] || '', following: !!churches.find(c => c.id === n.npub) })),
     openServing: () => setOpenServing(true),
