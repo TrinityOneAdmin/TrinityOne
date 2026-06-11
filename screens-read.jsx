@@ -485,9 +485,9 @@ function CommentaryEdge({ open, onToggle }) {
   );
 }
 function CommentaryPanel({ loc, label, open, onClose, ctx }) {
-  const C = window.TrinityData.COMMENTARY;
-  const seeded = false;   // populated once a MySword commentary (.cmt.mybible) module is installed
   const [view, setView] = useS('commentary');   // 'commentary' | 'notes'
+  const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
+  useE(() => { if (!open) return; try { setComm(window.Bible.getCommentary ? window.Bible.getCommentary(loc.book, loc.chap) : []); } catch (e) { setComm([]); } }, [open, loc.book, loc.chap, ctx.version]);
   const sx = useR(0);
   // the reader's own notes for this chapter (keys look like "John 1:4")
   const prefix = label + ':';
@@ -530,19 +530,24 @@ function CommentaryPanel({ loc, label, open, onClose, ctx }) {
                 <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 270, margin: '0 auto' }}>Tap a verse → <b>Note</b> to jot a thought. Your notes for {label} gather here.</p>
               </div>
             )
-          ) : seeded ? C.blocks.map((b, i) => (
-            <div key={i} style={{ marginBottom: 18 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginBottom: 5 }}>
-                <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: '#fff', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8 }}>v{b.v}</span>
-                <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{b.title}</span>
+          ) : comm.length ? comm.map((srcBlk, si) => (
+            <div key={si} style={{ marginBottom: 22 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--line)' }}>
+                <Icon name={srcBlk.kind === 'footnotes' ? 'note' : 'comment'} size={14} color="var(--clay)" />
+                <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--ink-2)' }}>{srcBlk.name}</span>
               </div>
-              <p style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.62, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>{b.text}</p>
+              {srcBlk.rows.map((b, i) => (
+                <div key={i} style={{ marginBottom: 14 }}>
+                  <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: '#fff', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 6 }}>{b.v && b.vTo && b.vTo > b.v ? `v${b.v}–${b.vTo}` : (b.v ? `v${b.v}` : 'Note')}</span>
+                  <div className="commentary-body" style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)' }} dangerouslySetInnerHTML={{ __html: b.html }} />
+                </div>
+              ))}
             </div>
           )) : (
             <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
               <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="comment" size={26} /></div>
-              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>No commentary installed</div>
-              <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 280, margin: '0 auto' }}>Add a commentary from the library (a MySword <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>.cmt.mybible</span> set) and study notes for this passage appear here.</p>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>Nothing here for {label}</div>
+              <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 280, margin: '0 auto' }}>Install a commentary from the Library, or switch to a Bible with study notes (e.g. Geneva) — its footnotes show up here.</p>
             </div>
           )}
         </div>

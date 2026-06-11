@@ -69,6 +69,8 @@
   const dicts = [];
   function addDict(entries){ if(entries) dicts.push(entries); notify(); }
   function loadDictJSON(obj){ addDict((obj && obj.entries) || obj); }
+  const commentaries = {};   // abbr -> commentary source { name, getComment(book,chap) }
+  function addCommentary(src){ if(!src) return null; let abbr = src.abbr || "Cmt", i = 2; while(commentaries[abbr] && commentaries[abbr].name !== src.name) abbr = (src.abbr || "Cmt") + i++; src.abbr = abbr; commentaries[abbr] = src; notify(); return abbr; }
   function lex(id){
     if(!id) return null;
     id = id.toUpperCase();
@@ -162,6 +164,8 @@
       abbr: det.abbr, name: det.name, kind: "mysword", category: "bibles", books, maxChap,
       getVerses: (b, c) => db.q("SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? ORDER BY Verse", [b, c]).map(r => ({ v: r.Verse, html: parseVerse(r.Scripture), text: stripTags(r.Scripture) })),
       plain: (b, c) => db.q("SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? ORDER BY Verse", [b, c]).map(r => ({ v: r.Verse, text: stripTags(r.Scripture) })),
+      // study/footnotes baked into the verse text (e.g. Geneva Bible <RF>…<Rf>) — pulled into Commentary
+      footnotes: (b, c) => { const out = []; db.q("SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? ORDER BY Verse", [b, c]).forEach(r => { const notes = []; String(r.Scripture || "").replace(/<RF[^>]*>([\s\S]*?)<Rf>/g, (m, t) => { const x = stripTags(t).trim(); if(x) notes.push(x); return ""; }); if(notes.length) out.push({ v: r.Verse, notes }); }); return out; },
       // fast search: coarse SQL LIKE to narrow candidates, then refine on stripped text
       search: (re, term, cap) => {
         const like = "%" + term.replace(/[%_\\]/g, "\\$&") + "%";
@@ -185,6 +189,22 @@
       entries[id] = { gloss: g, short: g.slice(0, 64) };
     });
     return Object.keys(entries).length ? entries : null;
+  }
+  // MySword commentary (.cmt.mybible): a Commentary table keyed by book/chapter (+ verse range)
+  function buildCommentaryFromDb(db, fb){
+    const t = db.tables.find(x => /commentary/i.test(x)); if(!t) return null;
+    const cols = db.q("PRAGMA table_info(" + t + ")").map(c => c.name);
+    const find = (...names) => cols.find(c => names.some(n => c.toLowerCase() === n));
+    const bookCol = find("book", "booknumber"), chapCol = find("chapter", "chapternumber", "chapterbegin", "fromchapter");
+    const fromV = find("fromverse", "versebegin", "verse", "versenumber"), toV = find("toverse", "verseend");
+    const dataCol = find("comments", "data", "text", "commentary", "definition");
+    if(!bookCol || !chapCol || !dataCol) return null;
+    const det = detailsOf(db, fb);
+    const sel = "SELECT " + [bookCol + " AS b", chapCol + " AS c", (fromV ? fromV : "0") + " AS fv", (toV ? toV : (fromV || "0")) + " AS tv", dataCol + " AS d"].join(", ") + " FROM " + t + " WHERE " + bookCol + "=? AND " + chapCol + "=? ORDER BY fv";
+    return {
+      abbr: det.abbr, name: det.name, kind: "comment",
+      getComment: (b, c) => { try { return db.q(sel, [b, c]).map(r => ({ v: r.fv, vTo: r.tv, html: parseVerse(String(r.d || "")) })).filter(x => x.html.trim()); } catch(e){ return []; } }
+    };
   }
   function buildFromUSFM(files, fallbackName){
     const dec = new TextDecoder("utf-8");
@@ -248,9 +268,11 @@
     if(isSqlite(u8)){
       const db = await openDb(u8);
       if(db.has("Bible")) return { kind: "bible", abbr: addSource(applyMeta(buildBibleFromDb(db, srcName), meta)) };
+      const cmt = buildCommentaryFromDb(db, srcName);
+      if(cmt){ addCommentary(applyMeta(cmt, meta)); return { kind: "comment", abbr: cmt.abbr }; }
       const dict = buildDictFromDb(db);
       if(dict){ addDict(dict); return { kind: "dict" }; }
-      throw new Error("unsupported MySword module — no Bible or dictionary table");
+      throw new Error("unsupported MySword module — no Bible, commentary or dictionary table");
     }
     if(isZip(u8)){
       const files = fflate.unzipSync(u8);
@@ -259,6 +281,8 @@
       if(dbName){
         const db = await openDb(files[dbName]);
         if(db.has("Bible")) return { kind: "bible", abbr: addSource(applyMeta(buildBibleFromDb(db, srcName), meta)) };
+        const cmt = buildCommentaryFromDb(db, srcName);
+        if(cmt){ addCommentary(applyMeta(cmt, meta)); return { kind: "comment", abbr: cmt.abbr }; }
         const dict = buildDictFromDb(db);
         if(dict){ addDict(dict); return { kind: "dict" }; }
         throw new Error("unsupported module inside " + (srcName || "the archive"));
@@ -409,6 +433,15 @@
   function books(version){ const s = src(version); return s ? s.books.slice() : []; }
   function maxChapter(b, version){ const s = src(version); return s ? (s.maxChap[b] || 1) : 1; }
   function getVerses(b, c, version){ const s = src(version); return s ? s.getVerses(b, c) : []; }
+  // commentary for a passage: installed commentary modules + footnotes baked into the active Bible
+  function getCommentary(b, c, version){
+    const out = [];
+    for(const abbr in commentaries){ const s = commentaries[abbr]; let rows = []; try { rows = s.getComment(b, c); } catch(e){} if(rows && rows.length) out.push({ abbr, name: s.name, kind: "module", rows }); }
+    const s = src(version);
+    if(s && s.footnotes){ let fn = []; try { fn = s.footnotes(b, c); } catch(e){} if(fn.length) out.push({ abbr: s.abbr, name: s.name + " — footnotes", kind: "footnotes", rows: fn.map(f => ({ v: f.v, vTo: f.v, html: f.notes.map(t => "<p>" + t + "</p>").join("") })) }); }
+    return out;
+  }
+  function commentaryList(){ return Object.keys(commentaries).map(a => ({ abbr: a, name: commentaries[a].name })); }
 
   function bookMeta(version){
     return books(version).map(n => ({ num: n, name: bookName(n), abbr: bookAbbr(n), group: bookGroup(n), ch: maxChapter(n, version) }));
@@ -493,7 +526,7 @@
     get loading(){ return loadingFlag; },
     get activeVersion(){ return active; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
-    versions, books, maxChapter, getVerses, bookMeta, defaultLoc, step, refLabel, refKey, search,
+    versions, books, maxChapter, getVerses, getCommentary, commentaryList, bookMeta, defaultLoc, step, refLabel, refKey, search,
     _error: null
   };
 
