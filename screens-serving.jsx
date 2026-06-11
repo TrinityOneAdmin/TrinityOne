@@ -1,21 +1,54 @@
 // screens-serving.jsx — member "Serving & Events". Driven by real serving requests the church
-// p-tags to this member (Fellowship.subscribeMyServingRequests) + my replies + church events.
-// Exports ServingScreen. Entry points: Today + Community.
+// p-tags to this member (Fellowship.subscribeMyServingRequests) + my replies + church events +
+// the church's published rota/rosters/services (so I can see who else is on the team that day,
+// ask a specific teammate to swap, and view a month of services + events). Exports ServingScreen.
+// Entry points: Today + Community.
 const { useState: useSv, useEffect: useSvE } = React;
 
 const SV_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const SV_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function svParts(iso) { try { const d = new Date(iso + 'T00:00'); return { dow: SV_DOW[d.getDay()], day: d.getDate(), mon: SV_MON[d.getMonth()] }; } catch { return { dow: '', day: '', mon: '' }; } }
-function svInitials(name) { return (name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
-function svNextSundays(n) { const out = []; const d = new Date(); d.setHours(0, 0, 0, 0); let guard = 0; while (out.length < n && guard < 60) { if (d.getDay() === 0) { const iso = d.toISOString().slice(0, 10); out.push({ iso, ...svParts(iso) }); } d.setDate(d.getDate() + 1); guard++; } return out; }
+function svInitials(name) { return (name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
+function svIsoLocal(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function svTodayIso() { return svIsoLocal(new Date()); }
+// next n Sundays as LOCAL dates (toISOString shifts to UTC and can land on Saturday in +TZ zones)
+function svNextSundays(n) { const out = []; const d = new Date(); d.setHours(0, 0, 0, 0); let guard = 0; while (out.length < n && guard < 60) { if (d.getDay() === 0) { const iso = svIsoLocal(d); out.push({ iso, ...svParts(iso) }); } d.setDate(d.getDate() + 1); guard++; } return out; }
 function svDownloadICS(it) {
   const dt = (it.date || '').replace(/-/g, ''); const [hh, mm] = (it.time || '10:00').split(':');
   const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT', 'SUMMARY:Serving — ' + (it.teamName || '') + ' (' + (it.role || '') + ')', 'DTSTART:' + dt + 'T' + (hh || '10') + (mm || '00') + '00', 'DESCRIPTION:' + (it.service || ''), 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
   try { const u = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' })); window.open(u, '_blank'); } catch (e) {}
 }
 
-function ServAvatar({ name, size = 34, accent = 'var(--clay)' }) {
-  return <div style={{ width: size, height: size, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: size * 0.36, background: `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 62%, #16120c))` }}>{svInitials(name)}</div>;
+// ── who else is on a service (from the church's published rota + rosters); marks "me" ──
+function svServiceRoster(ctx, serviceId) {
+  const rota = (ctx.churchRotas || []).find(r => r.service === serviceId);
+  if (!rota || !rota.assign) return [];
+  const rosters = ctx.churchRosters || []; const me = ctx.myPubkey;
+  return Object.entries(rota.assign).map(([key, who]) => {
+    if (!who || !who.name) return null;
+    const [teamId, roleId] = key.split('::');
+    const roster = rosters.find(r => r.team === teamId);
+    const role = roster && (roster.roles || []).find(ro => ro.id === roleId);
+    return { name: who.name, pub: who.pub, role: role ? role.name : '', me: !!(me && who.pub === me) };
+  }).filter(Boolean);
+}
+// teammates I could ask to swap (the team's roster people, minus me)
+function svTeamMates(ctx, teamId) {
+  const roster = (ctx.churchRosters || []).find(r => r.team === teamId);
+  const me = ctx.myPubkey;
+  return ((roster && roster.people) || []).filter(p => p && p.name && (!me || p.pub !== me));
+}
+// the teams I'm on (derived from my requests/commitments)
+function svMyTeams(ctx) {
+  const seen = new Map();
+  [...(ctx.servPending || []), ...(ctx.servConfirmed || [])].forEach(r => {
+    if (r.teamId && !seen.has(r.teamId)) seen.set(r.teamId, { id: r.teamId, name: r.teamName || 'Team', icon: r.icon || 'hand', accent: r.accent || 'var(--clay)' });
+  });
+  return [...seen.values()];
+}
+
+function ServAvatar({ name, size = 34, accent = 'var(--clay)', me = false }) {
+  return <div style={{ width: size, height: size, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: me ? size * 0.3 : size * 0.36, background: me ? 'var(--ink)' : `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 62%, #16120c))` }}>{me ? 'You' : svInitials(name)}</div>;
 }
 function ServDateBlock({ iso, accent = 'var(--clay)', tint = true }) {
   const p = svParts(iso);
@@ -31,7 +64,7 @@ function svPrimary() { return { width: '100%', padding: 16, borderRadius: 15, bo
 function svGhost() { return { flex: 1, padding: 14, borderRadius: 14, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }; }
 
 // ── respond to a "can you serve?" request ──
-function RespondSheet({ open, req, onClose, ctx }) {
+function RespondSheet({ open, req, onClose, onSwap, ctx }) {
   if (!req) return null;
   const acc = req.accent || 'var(--clay)';
   return (
@@ -55,7 +88,7 @@ function RespondSheet({ open, req, onClose, ctx }) {
       </div> : null}
       <button onClick={() => { ctx.respondServing(req, 'accept'); ctx.toast(`You’re serving ${svParts(req.date).dow} ${svParts(req.date).day}`); onClose(); }} style={svPrimary()}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I’ll serve</button>
       <div style={{ display: 'flex', gap: 10, marginTop: 11 }}>
-        <button onClick={() => { ctx.respondServing(req, 'swap'); ctx.toast('Asked your leader for a swap'); onClose(); }} style={svGhost()}><Icon name="swap" size={17} color="var(--ink)" /> Find a swap</button>
+        <button onClick={() => onSwap(req)} style={svGhost()}><Icon name="swap" size={17} color="var(--ink)" /> Suggest someone</button>
         <button onClick={() => { ctx.respondServing(req, 'decline'); ctx.toast('Declined — your leader has been told'); onClose(); }} style={svGhost()}><Icon name="x" size={17} color="var(--ink)" /> Can’t this time</button>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, justifyContent: 'center', marginTop: 16, color: 'var(--ink-3)', fontSize: 12 }}><Icon name="shield" size={14} color="var(--ink-3)" /> Only your team leader sees your reply</div>
@@ -63,12 +96,55 @@ function RespondSheet({ open, req, onClose, ctx }) {
   );
 }
 
+// ── ask a specific teammate to swap (falls back to a generic ask if no roster) ──
+function SwapSheet({ open, item, onClose, ctx }) {
+  const [pick, setPick] = useSv(null);
+  useSvE(() => { if (open) setPick(null); }, [open]);
+  if (!item) return null;
+  const mates = svTeamMates(ctx, item.teamId);
+  const doAsk = (pub, label) => { ctx.respondServing(item, 'swap', pub || ''); ctx.toast(label); onClose(); };
+  return (
+    <BottomSheet open={open} onClose={onClose} maxHeight="82%" z={75}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>Ask someone to swap</div><IconBtn name="x" onClick={onClose} />
+      </div>
+      <p style={{ fontSize: 13.5, color: 'var(--ink-2)', margin: '0 0 16px', lineHeight: 1.5 }}>
+        For <b style={{ color: 'var(--ink)' }}>{svParts(item.date).dow} {svParts(item.date).day} {svParts(item.date).mon}</b> · {item.teamName} · {item.role}. They’ll get a friendly ask — nothing changes until they say yes.</p>
+      {mates.length ? (
+        <React.Fragment>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 10 }}>ON YOUR TEAM</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 18 }}>
+            {mates.map(p => {
+              const on = pick && pick.pub === p.pub;
+              return (
+                <button key={p.pub || p.name} onClick={() => setPick(p)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', boxShadow: 'var(--shadow)' }}>
+                  <ServAvatar name={p.name} size={40} accent={item.accent || 'var(--clay)'} />
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>On {item.teamName}</div></div>
+                  {on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={15} stroke={2.8} color="#fff" /></div>
+                    : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)' }} />}
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={() => pick && doAsk(pick.pub, `Asked ${pick.name.split(' ')[0]} to swap`)} disabled={!pick} style={{ ...svPrimary(), background: pick ? 'var(--clay)' : 'var(--line)' }}>
+            <Icon name="swap" size={18} color="#fff" /> {pick ? `Ask ${pick.name.split(' ')[0]} to swap` : 'Choose someone'}</button>
+        </React.Fragment>
+      ) : (
+        <React.Fragment>
+          <div style={{ textAlign: 'center', padding: '8px 8px 18px', color: 'var(--ink-3)', fontSize: 13.5, lineHeight: 1.5 }}>No teammates listed yet — your leader can still find cover.</div>
+          <button onClick={() => doAsk('', 'Asked your leader for a swap')} style={svPrimary()}><Icon name="swap" size={18} color="#fff" /> Ask my leader for a swap</button>
+        </React.Fragment>
+      )}
+    </BottomSheet>
+  );
+}
+
 // ── manage a confirmed serving slot ──
-function ManageSheet({ open, item, onClose, ctx }) {
+function ManageSheet({ open, item, onClose, onSwap, ctx }) {
   if (!item) return null;
   const rows = [
     { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => { svDownloadICS(item); ctx.toast('Added — you’ll be reminded the day before'); onClose(); } },
-    { ic: 'swap', t: 'Ask for a swap', s: 'Tell your leader you need cover', go: () => { ctx.respondServing(item, 'swap'); ctx.toast('Asked your leader for a swap'); onClose(); } },
+    { ic: 'swap', t: 'Ask someone to swap', s: 'Send a friendly ask to a teammate', go: () => onSwap(item) },
     { ic: 'calendar', t: 'I’m away — take me off', s: 'Let your leader know you can’t make it', go: () => { ctx.respondServing(item, 'decline'); ctx.toast('Taken off — thanks for letting us know'); onClose(); } },
   ];
   return (
@@ -123,16 +199,139 @@ function UnavailSheet({ open, onClose, ctx }) {
   );
 }
 
+// ════════════════ member month calendar: my serving + church events ════════════════
+function svEventRsvpRow({ e, rsvps, ctx }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ flex: 1 }} />
+      {[['going', 'Going'], ['maybe', 'Maybe'], ['no', 'Can’t']].map(([v, lbl]) => {
+        const on = rsvps[e.id] === v; const c = v === 'going' ? 'var(--sage)' : v === 'maybe' ? 'var(--gold)' : 'var(--ink-3)';
+        return <button key={v} onClick={() => ctx.setRsvp(e.id, v)} style={{ padding: '7px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: on ? 'none' : '1px solid var(--line)', background: on ? c : 'var(--surface)', color: on ? (v === 'maybe' ? 'var(--midnight)' : '#fff') : 'var(--ink-2)' }}>{lbl}</button>;
+      })}
+    </div>
+  );
+}
+
+function MyMonth({ ctx, onManage }) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const todayIso = svIsoLocal(today);
+  const [view, setView] = useSv(() => ({ y: today.getFullYear(), m: today.getMonth() }));
+  const [sel, setSel] = useSv(todayIso);
+  const serving = ctx.servConfirmed || [];
+  const events = (ctx.churchEvents || []);
+  const churchServices = (ctx.churchServices || []);   // the church's gatherings (everyone)
+  const rsvps = ctx.myRsvps || {};
+
+  // index by iso date
+  const servBy = {}; serving.forEach(s => { (servBy[s.date] = servBy[s.date] || []).push(s); });
+  const evBy = {}; events.forEach(e => { if (e.date) (evBy[e.date] = evBy[e.date] || []).push(e); });
+  const svcBy = {}; churchServices.forEach(s => { if (s.date) (svcBy[s.date] = svcBy[s.date] || []).push(s); });
+
+  const iso = (y, m, d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const first = new Date(view.y, view.m, 1);
+  const lead = (first.getDay() + 6) % 7;                 // Monday-first offset
+  const dim = new Date(view.y, view.m + 1, 0).getDate(); // days in month
+  const cells = []; for (let i = 0; i < lead; i++) cells.push(null);
+  for (let d = 1; d <= dim; d++) cells.push(d);
+  while (cells.length % 7) cells.push(null);
+  const step = (dir) => { let m = view.m + dir, y = view.y; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } setView({ y, m }); };
+
+  const selServ = servBy[sel] || []; const selEv = evBy[sel] || []; const selSvc = svcBy[sel] || [];
+
+  return (
+    <React.Fragment>
+      {/* month nav */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <button onClick={() => step(-1)} style={{ width: 36, height: 36, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)' }}><Icon name="chevL" size={18} /></button>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][view.m]} {view.y}</div>
+        <button onClick={() => step(1)} style={{ width: 36, height: 36, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)' }}><Icon name="chevR" size={18} /></button>
+      </div>
+      {/* grid */}
+      <div style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', padding: '14px 12px', marginBottom: 18 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', marginBottom: 6 }}>
+          {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => <div key={i} style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)' }}>{d}</div>)}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 2 }}>
+          {cells.map((d, i) => {
+            if (!d) return <div key={i} />;
+            const cur = iso(view.y, view.m, d);
+            const hasServ = !!servBy[cur]; const hasEv = !!evBy[cur]; const hasSvc = !!svcBy[cur];
+            const isToday = cur === todayIso; const isSel = cur === sel;
+            return (
+              <button key={i} onClick={() => setSel(cur)} style={{ aspectRatio: '1', border: isSel ? '1.5px solid var(--clay)' : '1px solid transparent', borderRadius: 12, cursor: 'pointer', background: isSel ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : isToday ? 'var(--surface-2)' : 'transparent', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, fontFamily: 'var(--font-ui)', position: 'relative' }}>
+                <span style={{ fontSize: 13.5, fontWeight: isToday || isSel ? 800 : 600, color: isToday ? 'var(--clay)' : 'var(--ink)' }}>{d}</span>
+                <span style={{ display: 'flex', gap: 3, height: 6 }}>
+                  {hasServ ? <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> : null}
+                  {hasSvc && !hasServ ? <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--clay)' }} /> : null}
+                  {hasEv ? <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--gold)' }} /> : null}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 14, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12, fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--sage)' }} /> You’re serving</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)' }} /> Gathering</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--gold)' }} /> Event</span>
+        </div>
+      </div>
+      {/* selected-day detail */}
+      <SectionLabel>{svParts(sel).dow} {svParts(sel).day} {svParts(sel).mon}{sel === todayIso ? ' · Today' : ''}</SectionLabel>
+      {(selServ.length === 0 && selEv.length === 0 && selSvc.length === 0) ? (
+        <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '6px 2px 4px', lineHeight: 1.5 }}>Nothing on this day.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+          {selSvc.map((s, i) => (
+            <div key={'svc' + i} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="calCheck" size={20} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{s.name || 'Gathering'}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{s.time || ''}{selServ.some(x => x.date === s.date) ? ' · you’re serving' : ''}</div>
+              </div>
+            </div>
+          ))}
+          {selServ.map(it => (
+            <button key={it.id} onClick={() => onManage(it)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${it.accent || 'var(--sage)'} 15%, var(--surface))`, color: it.accent || 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={it.icon || 'hand'} size={20} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>Serving · {it.teamName}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{it.role} · {it.time}</div>
+              </div>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: '#345c41', background: 'var(--sage-soft)', borderRadius: 999, padding: '4px 10px' }}>Confirmed</span>
+            </button>
+          ))}
+          {selEv.map(e => (
+            <div key={e.id} style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', padding: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: 'color-mix(in oklab, var(--gold) 15%, var(--surface))', color: 'var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="calendar" size={18} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.1 }}>{e.title}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}><Icon name="clock" size={12} color="var(--ink-3)" /> {e.time}{e.where ? <React.Fragment><span style={{ opacity: .5 }}>·</span> {e.where}</React.Fragment> : null}</div>
+                </div>
+              </div>
+              {svEventRsvpRow({ e, rsvps, ctx })}
+            </div>
+          ))}
+        </div>
+      )}
+    </React.Fragment>
+  );
+}
+
 // ════════════════════════ MAIN OVERLAY ════════════════════════
 function ServingScreen({ open, onClose, ctx }) {
   const [tab, setTab] = useSv('serving');
   const [sheet, setSheet] = useSv(null);   // { kind, item }
-  useSvE(() => { if (open) { setTab('serving'); setSheet(null); } }, [open]);
+  const [rosterOpen, setRosterOpen] = useSv(false);
+  useSvE(() => { if (open) { setTab('serving'); setSheet(null); setRosterOpen(false); } }, [open]);
   const pending = ctx.servPending || [];
   const upcoming = ctx.servConfirmed || [];
+  const declined = ctx.servDeclined || [];
   const next = ctx.servNext;
   const events = ctx.churchEvents || [];
   const rsvps = ctx.myRsvps || {};
+  const myTeams = svMyTeams(ctx);
+  const nextRoster = next ? svServiceRoster(ctx, next.serviceId) : [];
   const close = () => setSheet(null);
 
   return (
@@ -146,11 +345,11 @@ function ServingScreen({ open, onClose, ctx }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 4, padding: '0 14px 12px' }}>
-          {[['serving', 'My serving', 'hand'], ['events', 'Events', 'calendar']].map(([k, lbl, ic]) => {
+          {[['serving', 'My serving', 'hand'], ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck']].map(([k, lbl, ic]) => {
             const on = tab === k;
             return (
-              <button key={k} onClick={() => setTab(k)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
-                <Icon name={ic} size={17} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && pending.length ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: '#fff', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length}</span> : null}
+              <button key={k} onClick={() => setTab(k)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
+                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && pending.length ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: '#fff', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length}</span> : null}
               </button>
             );
           })}
@@ -184,14 +383,43 @@ function ServingScreen({ open, onClose, ctx }) {
                     <div style={{ paddingBottom: 4 }}><div style={{ fontWeight: 700, fontSize: 15 }}>{svParts(next.date).mon} · {next.time}</div><div style={{ fontSize: 12.5, opacity: .9 }}>{next.service}</div></div>
                   </div>
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,.18)', backdropFilter: 'blur(4px)', padding: '7px 13px', borderRadius: 999, fontSize: 13.5, fontWeight: 700, marginTop: 8 }}><Icon name={next.icon || 'hand'} size={16} color="#fff" /> {next.teamName} · {next.role}</div>
-                  <button onClick={() => { svDownloadICS(next); ctx.toast('Added — you’ll be reminded the day before'); }} style={{ width: '100%', marginTop: 16, padding: 13, borderRadius: 14, border: 'none', cursor: 'pointer', background: '#fff', color: '#3C6E57', fontWeight: 700, fontSize: 15, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><Icon name="calPlus" size={18} color="#3C6E57" /> Add to my calendar</button>
+
+                  {nextRoster.length ? (
+                    <React.Fragment>
+                      <button onClick={() => setRosterOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16, border: 'none', background: 'none', cursor: 'pointer', padding: 0, width: '100%' }}>
+                        <div style={{ display: 'flex' }}>
+                          {nextRoster.slice(0, 5).map((p, i) => (
+                            <div key={i} style={{ marginLeft: i ? -10 : 0, borderRadius: 999, boxShadow: '0 0 0 2px #4a7a5c' }}><ServAvatar name={p.name} size={30} me={p.me} accent={next.accent || 'var(--clay)'} /></div>
+                          ))}
+                        </div>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: '#fff', opacity: .95 }}>{nextRoster.length} on the team today</span>
+                        <Icon name={rosterOpen ? 'chevU' : 'chevD'} size={16} color="#fff" style={{ marginLeft: 'auto', opacity: .9 }} />
+                      </button>
+                      {rosterOpen ? (
+                        <div style={{ marginTop: 12, borderRadius: 14, background: 'rgba(255,255,255,.14)', overflow: 'hidden' }}>
+                          {nextRoster.map((p, i) => (
+                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderTop: i ? '1px solid rgba(255,255,255,.14)' : 'none' }}>
+                              <ServAvatar name={p.name} size={28} me={p.me} accent={next.accent || 'var(--clay)'} />
+                              <span style={{ fontSize: 13.5, fontWeight: 700, flex: 1 }}>{p.me ? 'You' : p.name}</span>
+                              <span style={{ fontSize: 12, opacity: .9 }}>{p.role}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </React.Fragment>
+                  ) : null}
+
+                  <div style={{ display: 'flex', gap: 9, marginTop: 16 }}>
+                    <button onClick={() => { svDownloadICS(next); ctx.toast('Added — you’ll be reminded the day before'); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', cursor: 'pointer', background: '#fff', color: '#3C6E57', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={17} color="#3C6E57" /> Add to calendar</button>
+                    <button onClick={() => setSheet({ kind: 'manage', item: next })} style={{ flexShrink: 0, padding: '13px 16px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,.2)', color: '#fff', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, backdropFilter: 'blur(4px)' }}><Icon name="swap" size={17} color="#fff" /> Change</button>
+                  </div>
                 </div>
               </div>
             ) : (pending.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--ink-3)' }}>
                 <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}><Icon name="hand" size={26} /></div>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>You’re not on the rota yet</div>
-                <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '0 auto' }}>When your church puts you on to serve, it’ll show up here — and we’ll remind you the day before.</p>
+                <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '0 auto' }}>When your church puts you on to serve, it’ll show up here — and we’ll remind you the day before. Meanwhile, check <b>Events</b> for what’s on.</p>
               </div>
             ) : null)}
 
@@ -209,13 +437,72 @@ function ServingScreen({ open, onClose, ctx }) {
               ))}
             </div>
 
-            <button onClick={() => setSheet({ kind: 'unavail' })} style={{ width: '100%', padding: '15px 12px', borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontFamily: 'var(--font-ui)' }}>
-              <Icon name="calendar" size={20} color="var(--clay)" /><span style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>Set when I’m unavailable</span></button>
+            {/* quick actions: set unavailable + my teams */}
+            <div style={{ display: 'flex', gap: 11 }}>
+              <button onClick={() => setSheet({ kind: 'unavail' })} style={{ flex: 1, padding: '15px 12px', borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, fontFamily: 'var(--font-ui)' }}>
+                <Icon name="calendar" size={21} color="var(--clay)" /><span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Set unavailable</span></button>
+              {myTeams.length ? (
+                <div style={{ flex: 1, padding: '13px 14px', borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ display: 'flex' }}>
+                    {myTeams.slice(0, 3).map((t, i) => (
+                      <div key={t.id} style={{ marginLeft: i ? -8 : 0, width: 32, height: 32, borderRadius: 10, background: `color-mix(in oklab, ${t.accent} 16%, var(--surface))`, color: t.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--surface-2)' }}><Icon name={t.icon} size={17} /></div>
+                    ))}
+                  </div>
+                  <div style={{ minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700 }}>My teams</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{myTeams.map(t => t.name).join(' · ')}</div></div>
+                </div>
+              ) : (
+                <div style={{ flex: 1, padding: '13px 14px', borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink-3)' }}>
+                  <Icon name="hand" size={20} color="var(--ink-3)" /><div style={{ fontSize: 12, lineHeight: 1.4 }}>No teams yet — your leader adds you</div>
+                </div>
+              )}
+            </div>
+
+            {/* declined / swap-asked — with an undo */}
+            {declined.length ? (
+              <React.Fragment>
+                <div style={{ marginTop: 22 }}><SectionLabel>You said no</SectionLabel></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {declined.map(it => (
+                    <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+                      <ServDateBlock iso={it.date} accent="var(--ink-3)" />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink-2)' }}>{it.teamName}</div>
+                        <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1 }}>{it.role} · {svParts(it.date).dow} {svParts(it.date).day} {svParts(it.date).mon}</div>
+                      </div>
+                      <button onClick={() => { ctx.respondServing(it, 'accept'); ctx.toast('Great — you’re back on'); }} style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> I can serve</button>
+                    </div>
+                  ))}
+                </div>
+              </React.Fragment>
+            ) : null}
           </React.Fragment>
-        ) : (
+        ) : tab === 'events' ? (
           <React.Fragment>
+            {/* regular gatherings (services) the church scheduled */}
+            {(() => {
+              const todayIso = svTodayIso();
+              const upSvc = (ctx.churchServices || []).filter(s => (s.date || '') >= todayIso).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+              if (!upSvc.length) return null;
+              return (
+                <React.Fragment>
+                  <SectionLabel>Services</SectionLabel>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22 }}>
+                    {upSvc.map((s, i) => (
+                      <div key={'svc' + i} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+                        <ServDateBlock iso={s.date} accent="var(--clay)" />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{s.name || 'Sunday Gathering'}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}><Icon name="clock" size={13} color="var(--ink-3)" /> {s.time || ''}</div>
+                        </div>
+                        <button onClick={() => { svDownloadICS({ date: s.date, time: s.time, teamName: s.name || 'Gathering', role: '', service: s.name || '' }); ctx.toast('Added to your calendar'); }} title="Add to calendar" style={{ flexShrink: 0, width: 40, height: 40, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="calPlus" size={18} /></button>
+                      </div>
+                    ))}
+                  </div>
+                </React.Fragment>
+              );
+            })()}
             <SectionLabel>What’s on</SectionLabel>
-            {events.length === 0 ? <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>No events yet — your church will post gatherings and socials here.</div> : null}
+            {events.length === 0 ? <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px', lineHeight: 1.5 }}>No socials or events yet — your church will post them here.</div> : null}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {events.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => (
                 <div key={e.id} style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
@@ -227,22 +514,19 @@ function ServingScreen({ open, onClose, ctx }) {
                       {e.blurb ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '9px 0 0', textWrap: 'pretty' }}>{e.blurb}</p> : null}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px 14px' }}>
-                    <div style={{ flex: 1 }} />
-                    {[['going', 'Going'], ['maybe', 'Maybe'], ['no', 'Can’t']].map(([v, lbl]) => {
-                      const on = rsvps[e.id] === v; const c = v === 'going' ? 'var(--sage)' : v === 'maybe' ? 'var(--gold)' : 'var(--ink-3)';
-                      return <button key={v} onClick={() => ctx.setRsvp(e.id, v)} style={{ padding: '8px 13px', borderRadius: 999, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: on ? 'none' : '1px solid var(--line)', background: on ? c : 'var(--surface)', color: on ? (v === 'maybe' ? 'var(--midnight)' : '#fff') : 'var(--ink-2)' }}>{lbl}</button>;
-                    })}
-                  </div>
+                  <div style={{ padding: '0 16px 14px' }}>{svEventRsvpRow({ e, rsvps, ctx })}</div>
                 </div>
               ))}
             </div>
           </React.Fragment>
+        ) : (
+          <MyMonth ctx={ctx} onManage={(it) => setSheet({ kind: 'manage', item: it })} />
         )}
       </div>
 
-      <RespondSheet open={sheet && sheet.kind === 'respond'} req={sheet && sheet.kind === 'respond' ? sheet.item : null} onClose={close} ctx={ctx} />
-      <ManageSheet open={sheet && sheet.kind === 'manage'} item={sheet && sheet.kind === 'manage' ? sheet.item : null} onClose={close} ctx={ctx} />
+      <RespondSheet open={sheet && sheet.kind === 'respond'} req={sheet && sheet.kind === 'respond' ? sheet.item : null} onClose={close} onSwap={(req) => setSheet({ kind: 'swap', item: req })} ctx={ctx} />
+      <ManageSheet open={sheet && sheet.kind === 'manage'} item={sheet && sheet.kind === 'manage' ? sheet.item : null} onClose={close} onSwap={(it) => setSheet({ kind: 'swap', item: it })} ctx={ctx} />
+      <SwapSheet open={sheet && sheet.kind === 'swap'} item={sheet && sheet.kind === 'swap' ? sheet.item : null} onClose={close} ctx={ctx} />
       <UnavailSheet open={sheet && sheet.kind === 'unavail'} onClose={close} ctx={ctx} />
     </Overlay>
   );

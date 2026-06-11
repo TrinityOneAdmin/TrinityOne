@@ -12,7 +12,7 @@ const HL_COLORS = [
 // ── one verse: real markup HTML, tappable Strong's superscripts, highlight + selection ──
 function VerseRow({ n, html, hl, note, bookmarked, selected, onSelect, onWord }) {
   return (
-    <span style={{ position: 'relative' }}>
+    <span id={'rv-' + n} style={{ position: 'relative' }}>
       <span
         onClick={(e) => {
           const sup = e.target.closest && e.target.closest('sup.st');
@@ -52,21 +52,21 @@ function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare,
       <div style={{ padding: '8px 14px 0' }}>
         <ReadPlansTabs ctx={ctx} />
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px 11px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px 11px' }}>
         <button onClick={onBook} style={{
-          display: 'flex', alignItems: 'center', gap: 6, border: 'none', cursor: 'pointer',
-          background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 13, padding: '9px 13px',
-          fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)',
-        }}>{loc.book} {loc.ch}<Icon name="chevD" size={15} stroke={2.2} color="var(--ink-3)" /></button>
+          display: 'flex', alignItems: 'center', gap: 5, border: 'none', cursor: 'pointer', flexShrink: 0,
+          background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 12, padding: '8px 11px',
+          fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap',
+        }}>{loc.book} {loc.ch}<Icon name="chevD" size={14} stroke={2.2} color="var(--ink-3)" /></button>
         <button onClick={onVersion} style={{
-          display: 'flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)',
-          borderRadius: 13, padding: '9px 11px', fontWeight: 700, fontSize: 13, color: 'var(--clay)',
-          boxShadow: 'var(--shadow)', maxWidth: 130, whiteSpace: 'nowrap',
-        }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{version}</span><Icon name="chevD" size={14} stroke={2.2} color="var(--clay)" style={{ flexShrink: 0 }} /></button>
-        <div style={{ flex: 1 }} />
-        <IconBtn name="study" onClick={() => ctx.openSearch()} />
-        <IconBtn name="compare" onClick={onCompare} style={compare ? { background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : {}} />
-        <IconBtn name="sliders" onClick={onSettings} />
+          display: 'flex', alignItems: 'center', gap: 4, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', flexShrink: 1, minWidth: 0,
+          borderRadius: 12, padding: '8px 9px', fontWeight: 700, fontSize: 12.5, color: 'var(--clay)',
+          boxShadow: 'var(--shadow)', maxWidth: 96, whiteSpace: 'nowrap',
+        }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{version}</span><Icon name="chevD" size={13} stroke={2.2} color="var(--clay)" style={{ flexShrink: 0 }} /></button>
+        <div style={{ flex: 1, minWidth: 4 }} />
+        <IconBtn name="study" size={18} onClick={() => ctx.openSearch()} style={{ width: 38, height: 38 }} />
+        <IconBtn name="compare" size={18} onClick={onCompare} style={compare ? { width: 38, height: 38, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 38, height: 38 }} />
+        <IconBtn name="sliders" size={18} onClick={onSettings} style={{ width: 38, height: 38 }} />
       </div>
     </div>
   );
@@ -412,42 +412,57 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
 }
 
 // ── book + chapter picker (live across the loaded module) ──
-function BookPicker({ open, onClose, onPick }) {
+function BookPicker({ open, onClose, onPick, version }) {
   const B = window.Bible.bookMeta();
-  const [sel, setSel] = useS(null);
-  useE(() => { if (!open) setSel(null); }, [open]);
+  const [book, setBook] = useS(null);   // selected book (showing chapters)
+  const [chap, setChap] = useS(null);   // selected chapter (showing verses)
+  useE(() => { if (!open) { setBook(null); setChap(null); } }, [open]);
   const groups = [['ot', 'OLD TESTAMENT'], ['nt', 'NEW TESTAMENT']].filter(([g]) => B.some(b => b.group === g));
+  const back = () => { if (chap) setChap(null); else if (book) setBook(null); else onClose(); };
+  const title = chap ? `${book.name} ${chap}` : book ? book.name : 'Books';
+  const cellBtn = { aspectRatio: '1', borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontWeight: 700, fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-display)' };
+  // verse count for the chosen book+chapter (from the active version)
+  const verseCount = (book && chap) ? ((window.Bible.getVerses(book.num, chap, version) || []).length || 1) : 0;
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 52 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px 12px' }}>
-          <IconBtn name={sel ? 'chevL' : 'x'} onClick={() => sel ? setSel(null) : onClose()} />
-          <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700 }}>{sel ? sel.name : 'Books'}</h1>
+          <IconBtn name={book || chap ? 'chevL' : 'x'} onClick={back} />
+          <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700 }}>{title}</h1>
+          {chap ? <div style={{ marginLeft: 'auto' }}><button onClick={() => onPick(book.num, chap, 1)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 12, padding: '8px 13px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, color: 'var(--clay)' }}>Whole chapter</button></div> : null}
         </div>
       </div>
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '0 16px 24px' }}>
-        {!sel ? groups.map(([g, title]) => (
+        {!book ? groups.map(([g, title]) => (
           <div key={g} style={{ marginBottom: 18 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 0 10px' }}>{title}</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {B.filter(b => b.group === g).map(b => (
-                <button key={b.num} onClick={() => (b.ch > 1 ? setSel(b) : onPick(b.num, 1))} style={{
+                <button key={b.num} onClick={() => { setBook(b); if (b.ch === 1) setChap(1); }} style={{
                   padding: '12px 16px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)',
                   cursor: 'pointer', fontWeight: 600, fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
                 }}>{b.name}</button>
               ))}
             </div>
           </div>
-        )) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 9 }}>
-            {Array.from({ length: sel.ch }, (_, i) => i + 1).map(c => (
-              <button key={c} onClick={() => onPick(sel.num, c)} style={{
-                aspectRatio: '1', borderRadius: 13, border: '1px solid var(--line)',
-                background: 'var(--surface)', cursor: 'pointer',
-                fontWeight: 700, fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-display)',
-              }}>{c}</button>
-            ))}
-          </div>
+        )) : !chap ? (
+          <React.Fragment>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 0 10px' }}>CHAPTER</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 9 }}>
+              {Array.from({ length: book.ch }, (_, i) => i + 1).map(c => (
+                <button key={c} onClick={() => setChap(c)} style={cellBtn}>{c}</button>
+              ))}
+            </div>
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 0 10px' }}>VERSE</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 9 }}>
+              {Array.from({ length: verseCount }, (_, i) => i + 1).map(v => (
+                <button key={v} onClick={() => onPick(book.num, chap, v)} style={cellBtn}>{v}</button>
+              ))}
+            </div>
+          </React.Fragment>
         )}
       </div>
     </Overlay>
@@ -469,8 +484,14 @@ function ReadScreen({ ctx }) {
   const scrollRef = useR();
   useE(() => { lsSet('trinityone.readerScale', scale); }, [scale]);
   useE(() => { lsSet('trinityone.readerSerif', serif); }, [serif]);
-  // arriving on a specific verse (from Today / Search): select it, scroll up
-  useE(() => { setSel(loc.verse || null); if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [loc.book, loc.chap, loc.verse, version]);
+  // arriving on a specific verse (from Today / Search / Book picker): select it + scroll it into view
+  useE(() => {
+    setSel(loc.verse || null);
+    const sc = scrollRef.current; if (!sc) return;
+    if (loc.verse) {
+      setTimeout(() => { const el = sc.querySelector('#rv-' + loc.verse); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' }); else sc.scrollTop = 0; }, 60);
+    } else { sc.scrollTop = 0; }
+  }, [loc.book, loc.chap, loc.verse, version]);
 
   const verses = Bible.getVerses(loc.book, loc.chap, version);
   const vlist = Bible.versions();
@@ -567,8 +588,8 @@ function ReadScreen({ ctx }) {
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
       <SettingsSheet open={sheet === 'settings'} onClose={close} scale={scale} setScale={setScale}
         serif={serif} setSerif={setSerif} showStrongs={showStrongs} setShowStrongs={setShowStrongs} ctx={ctx} />
-      <BookPicker open={sheet === 'book'} onClose={close}
-        onPick={(book, c) => { close(); ctx.setLoc({ book, chap: c }); }} />
+      <BookPicker open={sheet === 'book'} onClose={close} version={version}
+        onPick={(book, c, v) => { close(); ctx.setLoc({ book, chap: c, verse: v || undefined }); }} />
     </div>
   );
 }

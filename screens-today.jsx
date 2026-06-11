@@ -170,7 +170,17 @@ function TodayScreen({ ctx }) {
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
-      ) : null}
+      ) : (
+        /* not rostered yet — still surface Serving & events so it's always reachable */
+        <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 22, cursor: 'pointer', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both', background: 'var(--surface)', border: '1px solid var(--line)' }}>
+          <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Serving &amp; events</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>See what’s on · RSVP · your rota</div>
+          </div>
+          <Icon name="chevR" size={18} color="var(--ink-3)" />
+        </div>
+      )}
 
       {/* Continue reading */}
       <SectionLabel>Continue reading</SectionLabel>

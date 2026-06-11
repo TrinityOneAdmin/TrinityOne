@@ -207,32 +207,192 @@ function renderMarkdown(src) {
   return out;
 }
 
-// ── church devotional reader (renders an uploaded .txt inline, or .md formatted) ──
-function ChurchDevoView({ devo, open, onClose, ctx }) {
-  if (!devo) return null;
-  const isMd = devo.type === 'md';
+// ── parse a multi-day devotional template into weeks → days ──
+// Template shape: weeks fenced by "═══ WEEK n — COPY FROM HERE/TO HERE ═══" (with optional
+// Title:/Summary:/Tags: lines), days marked "### Day n — title", each day's first **bold** line
+// is its scripture ref, the rest is prose. Returns { weeks, days, count } or null if no day markers.
+function parseDevoDays(src) {
+  const lines = String(src || '').replace(/\r\n/g, '\n').split('\n');
+  const reWeekStart = /═+\s*WEEK\s+(\d+)\s*[—\-–]\s*COPY FROM HERE/i;
+  const reWeekEnd = /═+\s*WEEK\s+\d+\s*[—\-–]\s*COPY TO HERE/i;
+  const reDay = /^###\s+Day\s+(\d+)\s*[—\-–]\s*(.*)$/;
+  const weeks = []; let cur = null; let day = null;
+  const ensureWeek = () => { if (!cur) { cur = { n: weeks.length + 1, title: '', summary: '', days: [] }; weeks.push(cur); } };
+  for (const ln of lines) {
+    let m;
+    if ((m = ln.match(reWeekStart))) { cur = { n: +m[1], title: '', summary: '', days: [] }; weeks.push(cur); day = null; continue; }
+    if (reWeekEnd.test(ln)) { day = null; continue; }
+    if ((m = ln.match(reDay))) { ensureWeek(); day = { d: +m[1], title: m[2].trim(), ref: '', body: [] }; cur.days.push(day); continue; }
+    if ((m = ln.match(/^Title:\s*(.*)$/))) { ensureWeek(); if (!cur.title) cur.title = m[1].trim(); continue; }
+    if ((m = ln.match(/^Summary:\s*(.*)$/))) { ensureWeek(); if (!cur.summary) cur.summary = m[1].trim(); continue; }
+    if (/^Tags:/i.test(ln)) continue;
+    if (day) { if (!day.ref && (m = ln.match(/^\*\*(.+?)\*\*\s*$/))) { day.ref = m[1].trim(); continue; } day.body.push(ln); }
+  }
+  const days = [];
+  for (const w of weeks) {
+    const mm = w.title.match(/Week\s+\d+\s*[:—\-–]\s*(.*)$/i);
+    w.label = (mm ? mm[1] : w.title).trim() || ('Week ' + w.n);
+    for (const d of w.days) { d.week = w.n; d.body = d.body.join('\n').trim(); days.push(d); }
+  }
+  if (!days.length) return null;
+  return { weeks: weeks.filter(w => w.days.length), days, count: days.length, multiWeek: weeks.filter(w => w.days.length).length > 1 };
+}
+
+// ── one day of a multi-day devotional (prose + ref + mark-read), opened over the index ──
+function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
+  if (!day) return null;
+  const doneSet = new Set((ctx.devoProgress && ctx.devoProgress[devo.id]) || []);
+  const isDone = doneSet.has(day.d);
+  const idx = parsed.days.findIndex(x => x.d === day.d);
+  const prev = idx > 0 ? parsed.days[idx - 1] : null;
+  const next = idx < parsed.days.length - 1 ? parsed.days[idx + 1] : null;
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, lineHeight: 1.15 }}>{devo.title}</h1>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[devo.ref, 'Devotional'].filter(Boolean).join(' · ')}</div>
+            <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--clay)' }}>Day {day.d}</div>
+            <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, lineHeight: 1.15 }}>{day.title}</h1>
           </div>
         </div>
       </div>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--paper)' }}>
-        <div style={{ maxWidth: 640, margin: '0 auto', padding: '24px 22px 60px' }}>
-          {devo.text
-            ? (isMd
-              ? renderMarkdown(devo.text)
-              : <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.65, color: 'var(--ink)', whiteSpace: 'pre-wrap', margin: 0, textWrap: 'pretty' }}>{devo.text}</p>)
-            : <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.65, color: 'var(--ink)', margin: 0 }}>This devotional has no text.</p>}
+        <div style={{ maxWidth: 640, margin: '0 auto', padding: '22px 22px 40px' }}>
+          {day.ref ? <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 700, color: 'var(--clay)', marginBottom: 14 }}>{day.ref}</div> : null}
+          {renderMarkdown(day.body)}
         </div>
+      </div>
+      <div style={{ flexShrink: 0, background: 'var(--surface)', borderTop: '1px solid var(--line)', padding: '12px 16px', paddingBottom: 'max(12px, env(safe-area-inset-bottom))', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button onClick={() => prev && ctx.openChurchDevoDay(prev)} disabled={!prev} title="Previous day"
+          style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: prev ? 'var(--ink)' : 'var(--ink-3)', opacity: prev ? 1 : .4, cursor: prev ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name="chevL" size={20} /></button>
+        <button onClick={() => { ctx.toggleDevoDay(devo.id, day.d); if (!isDone && next) ctx.openChurchDevoDay(next); }}
+          style={{ flex: 1, height: 46, borderRadius: 14, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 15,
+            background: isDone ? 'var(--surface-2)' : 'var(--clay)', color: isDone ? 'var(--ink-2)' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          {isDone ? <React.Fragment><Icon name="check" size={18} stroke={2.4} color="var(--ink-2)" /> Read</React.Fragment> : (next ? 'Mark read · next' : 'Mark read')}
+        </button>
+        <button onClick={() => next && ctx.openChurchDevoDay(next)} disabled={!next} title="Next day"
+          style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: next ? 'var(--ink)' : 'var(--ink-3)', opacity: next ? 1 : .4, cursor: next ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name="chevR" size={20} /></button>
       </div>
     </Overlay>
   );
 }
 
-Object.assign(window, { PlansScreen, PlanDetail, ChurchDevoView });
+// ── church devotional reader ──
+// Multi-day templates (### Day n markers) render as a Psalms-of-Comfort-style day index
+// grouped by week, with progress + a per-day prose reader. Plain .txt/.md falls back to a scroll.
+function ChurchDevoView({ devo, open, onClose, ctx }) {
+  const parsed = React.useMemo(() => (devo && devo.type === 'md' ? parseDevoDays(devo.text) : null), [devo]);
+  const [openDay, setOpenDay] = React.useState(null);
+  const [collapsed, setCollapsed] = React.useState({});
+  // expand the week holding the next-undone day on open; collapse the rest
+  React.useEffect(() => {
+    if (!parsed || !devo) { setOpenDay(null); return; }
+    const doneSet = new Set((ctx.devoProgress && ctx.devoProgress[devo.id]) || []);
+    const nextDay = parsed.days.find(d => !doneSet.has(d.d)) || parsed.days[0];
+    const c = {}; parsed.weeks.forEach(w => { c[w.n] = parsed.multiWeek && w.n !== nextDay.week; });
+    setCollapsed(c); setOpenDay(null);
+  }, [devo && devo.id]);
+  if (!devo) return null;
+
+  // expose a day-opener on ctx so the per-day reader's prev/next can drive it
+  ctx.openChurchDevoDay = (d) => setOpenDay(d);
+
+  if (!parsed) {  // plain devotional — original single-scroll
+    const isMd = devo.type === 'md';
+    return (
+      <Overlay open={open} onClose={onClose}>
+        <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
+            <IconBtn name="chevL" onClick={onClose} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, lineHeight: 1.15 }}>{devo.title}</h1>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[devo.ref, 'Devotional'].filter(Boolean).join(' · ')}</div>
+            </div>
+          </div>
+        </div>
+        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--paper)' }}>
+          <div style={{ maxWidth: 640, margin: '0 auto', padding: '24px 22px 60px' }}>
+            {devo.text
+              ? (isMd
+                ? renderMarkdown(devo.text)
+                : <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.65, color: 'var(--ink)', whiteSpace: 'pre-wrap', margin: 0, textWrap: 'pretty' }}>{devo.text}</p>)
+              : <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.65, color: 'var(--ink)', margin: 0 }}>This devotional has no text.</p>}
+          </div>
+        </div>
+      </Overlay>
+    );
+  }
+
+  // multi-day index — grouped by week, Psalms-of-Comfort day rows
+  const doneSet = new Set((ctx.devoProgress && ctx.devoProgress[devo.id]) || []);
+  const todayDay = parsed.days.find(d => !doneSet.has(d.d));
+  const pct = parsed.count ? doneSet.size / parsed.count : 0;
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, var(--clay), var(--clay-deep))', color: '#fff', position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
+        <div style={{ position: 'absolute', right: -30, top: 0, opacity: .15 }}><Icon name="read" size={180} stroke={1.2} color="#fff" /></div>
+        <div style={{ padding: '10px 16px 22px', position: 'relative' }}>
+          <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+            <Icon name="chevD" size={20} color="#fff" /></button>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 700, margin: '16px 0 4px' }}>{devo.title}</h1>
+          <p style={{ margin: '0 0 14px', opacity: .92, fontSize: 14 }}>{parsed.count} days · Devotional</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ flex: 1, height: 7, borderRadius: 4, background: 'rgba(255,255,255,.25)', overflow: 'hidden' }}>
+              <div style={{ width: `${pct * 100}%`, height: '100%', background: '#fff', borderRadius: 4 }} /></div>
+            <span style={{ fontWeight: 700, fontSize: 13 }}>{doneSet.size} / {parsed.count}</span>
+          </div>
+        </div>
+      </div>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '18px 16px 30px' }}>
+        {parsed.weeks.map((w) => {
+          const isCol = !!collapsed[w.n];
+          return (
+            <div key={w.n} style={{ marginBottom: 14 }}>
+              {parsed.multiWeek ? (
+                <button onClick={() => setCollapsed(c => ({ ...c, [w.n]: !c[w.n] }))}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+                  <Icon name={isCol ? 'chevR' : 'chevD'} size={16} color="var(--ink-3)" />
+                  <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>Week {w.n}</span>
+                  <span style={{ fontSize: 13.5, color: 'var(--ink-3)', flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>· {w.label}</span>
+                  <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, flexShrink: 0 }}>{w.days.filter(d => doneSet.has(d.d)).length}/{w.days.length}</span>
+                </button>
+              ) : null}
+              {isCol ? null : w.days.map((d) => {
+                const isDone = doneSet.has(d.d);
+                const isToday = todayDay && d.d === todayDay.d;
+                return (
+                  <div key={d.d} onClick={() => setOpenDay(d)} style={{
+                    display: 'flex', alignItems: 'center', gap: 14, padding: '13px 14px', marginBottom: 9,
+                    borderRadius: 18, background: isToday ? 'var(--clay-soft)' : 'var(--surface)',
+                    border: isToday ? '1.5px solid var(--clay)' : '1px solid var(--line)', cursor: 'pointer',
+                    boxShadow: isToday ? 'var(--shadow)' : 'none' }}>
+                    <button onClick={(e) => { e.stopPropagation(); ctx.toggleDevoDay(devo.id, d.d); }} title={isDone ? 'Mark not read' : 'Mark read'}
+                      style={{ width: 38, height: 38, borderRadius: 999, flexShrink: 0, cursor: 'pointer',
+                        background: isDone ? 'var(--clay)' : isToday ? 'var(--gold)' : 'var(--surface-2)',
+                        border: isDone || isToday ? 'none' : '1px solid var(--line)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: isDone || isToday ? '#fff' : 'var(--ink-3)', fontWeight: 700, fontFamily: 'var(--font-display)', fontSize: 15 }}>
+                      {isDone ? <Icon name="check" size={18} stroke={2.4} color="#fff" /> : d.d}
+                    </button>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Day {d.d}{isToday ? ' · Today' : isDone ? ' · Read' : ''}</div>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</div>
+                      {d.ref ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 600 }}>{d.ref}</div> : null}
+                    </div>
+                    <Icon name="chevR" size={18} color="var(--ink-3)" />
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+      <DevoDayReader devo={devo} day={openDay} parsed={parsed} open={!!openDay} onClose={() => setOpenDay(null)} ctx={ctx} />
+    </Overlay>
+  );
+}
+
+Object.assign(window, { PlansScreen, PlanDetail, ChurchDevoView, parseDevoDays });

@@ -226,6 +226,7 @@ function App() {
   const notes = Object.fromEntries(MD.list('notes').map(n => [n.ref, n.text]));               // {ref: text}
   const bookmarks = MD.list('bookmarks').map(b => b.ref);                                      // [ref]
   const planProgress = MD.settings.get('plans', {});                                           // planId -> [done days]
+  const devoProgress = MD.settings.get('devos', {});                                            // devoId -> [done days]
 
   // overlays
   const [share, setShare] = useA(null);
@@ -272,7 +273,8 @@ function App() {
   const [member, setMember] = useA(idParam === 'member' ? window.TrinityData.MEMBERS.River : null);
   const [idSheet, setIdSheet] = useA(['recovery', 'invite', 'relays'].includes(idParam) ? idParam : null);
   const [newId, setNewId] = useA(idParam === 'newid');
-  const [, forceId] = useA(0);                 // re-render on identity / profile changes
+  const [confirmExit, setConfirmExit] = useA(false);   // hardware-back on Today -> confirm before close
+  const [idTick, forceId] = useA(0);           // bumps on identity / profile changes (also re-runs subs that need myPubkey)
   useAE(() => {
     const h = () => forceId(x => x + 1);
     window.addEventListener('trinity-identity', h);
@@ -349,18 +351,34 @@ function App() {
   const [churchEvents, setChurchEvents] = useA([]);
   const [myRsvps, setMyRsvps] = useA({});       // { eventId: 'going'|'maybe'|'no' }
   const [openServing, setOpenServing] = useA(servingParam === '1');
-  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyServingRequests) return window.Fellowship.subscribeMyServingRequests(setServReqs); }, [activeChurch]);
-  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyReqReplies) return window.Fellowship.subscribeMyReqReplies(setServReplies); }, [activeChurch]);
-  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyRsvps) return window.Fellowship.subscribeMyRsvps(setMyRsvps); }, [activeChurch]);
+  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyServingRequests) return window.Fellowship.subscribeMyServingRequests(setServReqs); }, [activeChurch, idTick]);
+  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyReqReplies) return window.Fellowship.subscribeMyReqReplies(setServReplies); }, [activeChurch, idTick]);
+  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyRsvps) return window.Fellowship.subscribeMyRsvps(setMyRsvps); }, [activeChurch, idTick]);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchEvents)) { setChurchEvents([]); return; }
     return window.Fellowship.subscribeChurchEvents(np, setChurchEvents);
   }, [activeChurch, churches]);
-  // derive serving items from requests + my replies
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const servPending = servReqs.filter(r => !servReplies[r.id]);
+  // the church's published rota/rosters/services — lets a member see who else is on the team that
+  // day, who they can ask to swap, and a month view of services + events.
+  const [churchRotas, setChurchRotas] = useA([]);
+  const [churchRosters, setChurchRosters] = useA([]);
+  const [churchServices, setChurchServices] = useA([]);
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    if (!np || !window.Fellowship) { setChurchRotas([]); setChurchRosters([]); setChurchServices([]); return; }
+    const F = window.Fellowship, subs = [];
+    if (F.subscribeChurchRotas) subs.push(F.subscribeChurchRotas(np, setChurchRotas));
+    if (F.subscribeChurchRosters) subs.push(F.subscribeChurchRosters(np, setChurchRosters));
+    if (F.subscribeChurchServices) subs.push(F.subscribeChurchServices(np, setChurchServices));
+    return () => subs.forEach(u => { try { u && u(); } catch {} });
+  }, [activeChurch, churches]);
+  // derive serving items from requests + my replies (local date, not UTC)
+  const _now = new Date();
+  const todayStr = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
+  const servPending = servReqs.filter(r => !servReplies[r.id] && (r.date || '') >= todayStr);
   const servConfirmed = servReqs.filter(r => servReplies[r.id] === 'accept' && (r.date || '') >= todayStr).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const servDeclined = servReqs.filter(r => (servReplies[r.id] === 'decline' || servReplies[r.id] === 'swap') && (r.date || '') >= todayStr).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const servNext = servConfirmed[0] || null;
   // schedule local reminders for confirmed slots (the day before) + register web-push (PWA)
   useAE(() => { if (window.TrinityReminders) window.TrinityReminders.sync(servConfirmed); }, [servReqs, servReplies]);
@@ -402,13 +420,27 @@ function App() {
   useAE(() => {
     const guard = () => { try { history.pushState({ trinity: 1 }, ''); } catch (e) {} };
     guard();   // seed one entry so the first back press is intercepted, not an app exit
-    const onPop = () => {
-      if (window.trinityGoBack && window.trinityGoBack()) { guard(); return; }       // closed a layer
-      if (tabRef.current !== 'today') { setTab('today'); guard(); return; }          // -> Today
-      // on Today with nothing open: don't re-guard -> the next back exits the app naturally
+    // shared back logic: close a layer, else go to Today, else signal "we're already on Today"
+    const goBack = () => {
+      if (window.trinityGoBack && window.trinityGoBack()) return true;   // closed an overlay/sheet
+      if (tabRef.current !== 'today') { setTab('today'); return true; }  // any other tab -> Today
+      return false;                                                     // on Today with nothing open
     };
+    const onPop = () => { if (goBack()) guard(); };
     window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
+    // native hardware back (Capacitor): popstate isn't reliable in the Android webview, so use the
+    // App plugin's backButton — Read/Community/Library go to Today; on Today, confirm before exit.
+    let nativeSub = null;
+    const Cap = window.Capacitor;
+    if (Cap && Cap.Plugins && Cap.Plugins.App) {
+      try {
+        Cap.Plugins.App.addListener('backButton', () => {
+          if (goBack()) return;
+          setConfirmExit(true);
+        }).then(h => { nativeSub = h; }).catch(() => {});
+      } catch (e) {}
+    }
+    return () => { window.removeEventListener('popstate', onPop); if (nativeSub && nativeSub.remove) try { nativeSub.remove(); } catch (e) {} };
   }, []);
 
   // real identity object for the ProfileSheet/onboarding (derived from the live identity + profile)
@@ -497,12 +529,14 @@ function App() {
     notes, setNote: (k, txt) => { if (txt) MD.put('notes', { id: k, ref: k, text: txt }); else MD.remove('notes', k); },
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
+    devoProgress,
     churchPlans,
     churchDevos,
     myPubkey: (window.Fellowship && window.Fellowship.myPubkey) || null,
     openChurchDevo: (d) => setOpenDevo(d),
     // serving & events
-    servPending, servConfirmed, servNext, churchEvents, myRsvps,
+    servPending, servConfirmed, servDeclined, servNext, churchEvents, myRsvps,
+    churchRotas, churchRosters, churchServices,
     openServing: () => setOpenServing(true),
     respondServing: (req, verdict, swapTo) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
@@ -523,6 +557,11 @@ function App() {
       const prev = MD.settings.get('plans', {});
       const set = new Set(prev[pid] || []); set.has(day) ? set.delete(day) : set.add(day);
       MD.settings.set('plans', { ...prev, [pid]: [...set].sort((a, b) => a - b) });
+    },
+    toggleDevoDay: (did, day) => {
+      const prev = MD.settings.get('devos', {});
+      const set = new Set(prev[did] || []); set.has(day) ? set.delete(day) : set.add(day);
+      MD.settings.set('devos', { ...prev, [did]: [...set].sort((a, b) => a - b) });
     },
   };
 
@@ -603,6 +642,7 @@ function App() {
             <Toast msg={toastMsg} />
           </React.Fragment>
         ) : (
+
           <EmptyState loading={Bible.loading} error={Bible._error} onBrowse={() => setStore(true)} />
         )}
 
@@ -611,6 +651,19 @@ function App() {
           initialView={storeView || (storeParam === 'language' ? 'language' : 'featured')} />
 
         <HelpCenter open={!!help} onClose={() => setHelp(null)} initial={help} ctx={ctx} />
+
+        {confirmExit ? (
+          <div onClick={() => setConfirmExit(false)} style={{ position: 'absolute', inset: 0, zIndex: 120, background: 'rgba(20,15,10,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28 }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 320, background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, textAlign: 'center', animation: 'trinityScale .2s ease both' }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, marginBottom: 6 }}>Close TrinityOne?</div>
+              <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 20px' }}>You can reopen it any time — you’ll pick up right where you left off.</p>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setConfirmExit(false)} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Stay</button>
+                <button onClick={() => { const C = window.Capacitor; if (C && C.Plugins && C.Plugins.App) C.Plugins.App.exitApp(); else setConfirmExit(false); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Close</button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {showSplash ? <Splash onDone={() => setShowSplash(false)} /> : null}
         {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity}

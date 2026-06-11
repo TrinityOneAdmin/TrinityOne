@@ -4999,6 +4999,10 @@
     sk = privateKeyFromSeedWords(mnemonic);
     pub = getPublicKey2(sk);
     window.Fellowship.myPubkey = pub;
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: pub } }));
+    } catch {
+    }
   }
   async function init() {
     if (window.TrinityIdentity && window.TrinityIdentity.ready) await window.TrinityIdentity.ready;
@@ -5530,7 +5534,7 @@
       return window.Fellowship._subChurchAddr(churchNpub, "trinityone/roster:", (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [] }), cb);
     },
     subscribeChurchEvents(churchNpub, cb) {
-      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent }), cb);
+      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, groupId: c.groupId || "" }), cb);
     },
     // ── serving requests the church p-tagged to ME ("can you serve?") ──
     subscribeMyServingRequests(onReqs) {
@@ -5572,6 +5576,7 @@
     },
     // member -> church: reply to a serving request (accept/decline/swap) — p-tagged to the church
     async respondToServingRequest(churchNpub, requestId, verdict, swapTo) {
+      if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !sk) return;
       const content = JSON.stringify({ request: requestId, v: verdict, swapTo: swapTo || "" });

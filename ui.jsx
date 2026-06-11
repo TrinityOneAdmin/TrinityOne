@@ -240,13 +240,13 @@ function Toast({ msg }) {
   if (!msg) return null;
   return (
     <div style={{
-      position: 'absolute', bottom: 92, left: '50%', transform: 'translateX(-50%)',
+      position: 'absolute', bottom: 92, left: 16, right: 16, marginInline: 'auto', width: 'fit-content', maxWidth: 'calc(100% - 32px)',
       zIndex: 60, background: 'var(--ink)', color: 'var(--paper)',
-      padding: '11px 18px', borderRadius: 14, fontSize: 13.5, fontWeight: 600,
-      fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow-lg)', whiteSpace: 'nowrap',
-      animation: 'trinityScale .3s ease both', display: 'flex', alignItems: 'center', gap: 8,
+      padding: '11px 18px', borderRadius: 14, fontSize: 13.5, fontWeight: 600, lineHeight: 1.35, textAlign: 'center',
+      fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow-lg)',
+      animation: 'trinityScale .3s ease both', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
     }}>
-      <Icon name="check" size={16} stroke={2.4} color="var(--clay)" />{msg}
+      <Icon name="check" size={16} stroke={2.4} color="var(--clay)" style={{ flexShrink: 0 }} /><span>{msg}</span>
     </div>
   );
 }

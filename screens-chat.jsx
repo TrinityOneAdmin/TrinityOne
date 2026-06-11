@@ -640,7 +640,19 @@ function evtToMsg(e) {
 // ── a Community entry into the Serving overlay (shown above the groups list) ──
 function ServingEntry({ ctx }) {
   const next = ctx.servNext; const pending = (ctx.servPending || []).length;
-  if (!next && !pending) return null;
+  if (!next && !pending) {
+    // not rostered — still offer a way into Serving & events
+    return (
+      <button onClick={() => ctx.openServing && ctx.openServing()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', background: 'var(--surface)', border: '1px solid var(--line)' }}>
+        <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Serving &amp; events</div>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>See what’s on · RSVP · your rota</div>
+        </div>
+        <Icon name="chevR" size={18} color="var(--ink-3)" />
+      </button>
+    );
+  }
   return (
     <button onClick={() => ctx.openServing && ctx.openServing()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
       background: pending ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: pending ? '1px solid color-mix(in oklab, var(--gold) 32%, var(--line))' : '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))' }}>
@@ -719,6 +731,12 @@ function ChatRoom({ group, open, onClose, ctx }) {
     setPickerFor(null);
   };
 
+  // events the church tagged to THIS group — surfaced here and on everyone's calendar
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const groupEvents = (ctx.churchEvents || [])
+    .filter(e => e.groupId && e.groupId === group.id && (e.date || '') >= todayIso)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);
+
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)',
@@ -741,6 +759,33 @@ function ChatRoom({ group, open, onClose, ctx }) {
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
             <Icon name="lock" size={13} /> Messages are anonymous & relayed over Nostr</span>
         </div>
+        {groupEvents.length ? (
+          <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}><Icon name="calendar" size={14} color="var(--clay)" /> UPCOMING IN THIS GROUP</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {groupEvents.map(e => {
+                const p = (window.svParts ? window.svParts(e.date) : null) || {};
+                const d = new Date(e.date + 'T00:00');
+                const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()] || '';
+                const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()] || '';
+                return (
+                  <button key={e.id} onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 8, borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+                    <div style={{ width: 42, flexShrink: 0, textAlign: 'center', borderRadius: 10, padding: '5px 0', background: `color-mix(in oklab, ${e.accent || 'var(--clay)'} 13%, var(--surface))` }}>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', color: e.accent || 'var(--clay)' }}>{dow}</div>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17, lineHeight: 1 }}>{d.getDate()}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--ink-3)', textTransform: 'uppercase' }}>{mon}</div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.title}</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[e.time, e.where].filter(Boolean).join(' · ')}</div>
+                    </div>
+                    <Icon name="chevR" size={16} color="var(--ink-3)" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
         {msgs.map(m => <Bubble key={m.id} m={m} ctx={ctx}
           summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
           pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}

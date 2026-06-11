@@ -81,22 +81,7 @@ function ChannelAvatar({ ch, size = 56 }) {
 function WatchView({ ctx }) {
   const [data, setData] = useW(null);
   const [paste, setPaste] = useW('');
-  React.useEffect(() => { window.Bible.getVideos().then(setData); }, []);
-
-  if (!data || !(data.videos || []).length) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 50, color: 'var(--ink-3)', gap: 14 }}>
-        {!data
-          ? <div style={{ width: 24, height: 24, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
-          : <span style={{ fontSize: 14 }}>No videos yet.</span>}
-      </div>
-    );
-  }
-
-  const ch = data.channel || {};
-  const videos = data.videos;
-  const featured = videos[0];
-  const rest = videos.slice(1);
+  React.useEffect(() => { window.Bible.getVideos().then(d => setData(d || { channel: null, videos: [] })); }, []);
 
   const add = () => {
     const id = parseYT(paste);
@@ -106,26 +91,75 @@ function WatchView({ ctx }) {
     setPaste('');
   };
 
+  // the "paste a YouTube link" box — shown whether or not a channel/feed is configured, so a member
+  // can always loop in their own video.
+  const pasteBox = (
+    <div style={{ marginTop: 24, padding: 16, borderRadius: 20, background: 'var(--surface-2)', border: '1px dashed color-mix(in oklab, var(--clay) 40%, var(--line))' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <Icon name="plus" size={17} color="var(--clay)" stroke={2.4} />
+        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>Loop in a video</span>
+      </div>
+      <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.4 }}>Paste any YouTube link and it plays right here.</p>
+      <div style={{ display: 'flex', gap: 9 }}>
+        <input value={paste} onChange={e => setPaste(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }}
+          placeholder="youtube.com/watch?v=…" style={{ flex: 1, minWidth: 0, height: 44, padding: '0 14px', borderRadius: 13,
+          border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+        <button onClick={add} style={{ border: 'none', background: 'var(--clay)', color: '#fff', padding: '0 18px', borderRadius: 13,
+          fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', flexShrink: 0 }}>Add</button>
+      </div>
+    </div>
+  );
+
+  if (!data) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 50, color: 'var(--ink-3)', gap: 14 }}>
+        <div style={{ width: 24, height: 24, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+      </div>
+    );
+  }
+
+  const ch = data.channel || null;
+  const videos = data.videos || [];
+
+  // no channel feed yet — invite the member to add their own
+  if (!videos.length) {
+    return (
+      <div style={{ animation: 'trinityFade .4s ease both' }}>
+        <div style={{ textAlign: 'center', padding: '28px 16px 6px', color: 'var(--ink-3)' }}>
+          <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}><Icon name="play" size={26} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>No videos yet</div>
+          <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>Paste a YouTube link below to watch it here, or your church will add their videos.</p>
+        </div>
+        {pasteBox}
+      </div>
+    );
+  }
+
+  const featured = videos[0];
+  const rest = videos.slice(1);
+
   return (
     <div style={{ animation: 'trinityFade .4s ease both' }}>
-      {/* church header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
-        <ChannelAvatar ch={ch} size={56} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.15 }}>{ch.name}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{ch.handle} · YouTube</div>
+      {/* channel header — only when a channel is configured */}
+      {ch ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+          <ChannelAvatar ch={ch} size={56} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.15 }}>{ch.name}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{ch.handle} · YouTube</div>
+          </div>
+          {ch.url ? <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)',
+            padding: '9px 15px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', flexShrink: 0 }}>
+            Channel
+          </button> : null}
         </div>
-        <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)',
-          padding: '9px 15px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', flexShrink: 0 }}>
-          Channel
-        </button>
-      </div>
+      ) : null}
 
       {/* featured (latest) */}
       <div onClick={() => ctx.openVideo(featured)} style={{ cursor: 'pointer', marginBottom: 22 }}>
         <VideoPoster v={featured} h={196} />
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, lineHeight: 1.22, marginTop: 11 }}>{featured.title}</div>
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3 }}>{ch.name} · {fmtDate(featured.published)}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3 }}>{[ch && ch.name, fmtDate(featured.published)].filter(Boolean).join(' · ')}</div>
       </div>
 
       {/* list */}
@@ -134,21 +168,7 @@ function WatchView({ ctx }) {
         {rest.map(v => <VideoRow key={v.id} v={v} onClick={() => ctx.openVideo(v)} />)}
       </div>
 
-      {/* paste a link */}
-      <div style={{ marginTop: 24, padding: 16, borderRadius: 20, background: 'var(--surface-2)', border: '1px dashed color-mix(in oklab, var(--clay) 40%, var(--line))' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-          <Icon name="plus" size={17} color="var(--clay)" stroke={2.4} />
-          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>Loop in a video</span>
-        </div>
-        <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.4 }}>Paste any YouTube link and it plays right here.</p>
-        <div style={{ display: 'flex', gap: 9 }}>
-          <input value={paste} onChange={e => setPaste(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }}
-            placeholder="youtube.com/watch?v=…" style={{ flex: 1, minWidth: 0, height: 44, padding: '0 14px', borderRadius: 13,
-            border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
-          <button onClick={add} style={{ border: 'none', background: 'var(--clay)', color: '#fff', padding: '0 18px', borderRadius: 13,
-            fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', flexShrink: 0 }}>Add</button>
-        </div>
-      </div>
+      {pasteBox}
     </div>
   );
 }
