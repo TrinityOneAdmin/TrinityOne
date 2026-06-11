@@ -245,15 +245,25 @@ function DashRota({ onNewTeam }) {
   const pers = persisted(svcId);
   const isPublished = pers && pers.published && sameAssign(assign, pers.assign);
 
+  // Assigning only edits the draft — the member is NOT asked until you Publish (so you can move people
+  // around freely first). Publish then sends a "Can you serve?" to anyone newly assigned.
   const doAssign = (slot, person) => {
     const next = { ...assign, [slot.key]: { name: person.name, pub: person.pub || '' } };
     setAssign(next); setAssignSlot(null);
-    if (person.pub) {
-      const m = teamMeta(slot.team);
-      window.Steward.sendServingRequest({ memberPub: person.pub, serviceId: svc.id, teamId: slot.team.id, roleId: slot.role.id, role: slot.role.name, teamName: m.name, icon: m.icon, accent: m.accent, date: svc.date, time: svc.time, service: svc.name, note: `Can you serve on ${m.name} (${slot.role.name})?` });
-    }
   };
   const clearSlot = (slot) => { const next = { ...assign }; delete next[slot.key]; setAssign(next); setAssignSlot(null); };
+  // already asked this person for this exact slot? (don't re-send on every publish)
+  const alreadyAsked = (sId, tId, rId, pub) => requests.some(q => q.serviceId === sId && q.teamId === tId && q.roleId === rId && q.memberPub === pub);
+  const sendRequestsFor = (sId, sDate, sTime, sName, assignMap) => {
+    for (const key in assignMap) {
+      const a = assignMap[key]; if (!a || !a.pub) continue;
+      const [teamId, roleId] = key.split('::');
+      if (alreadyAsked(sId, teamId, roleId, a.pub)) continue;
+      const team = teams.find(t => t.id === teamId); const m = team ? teamMeta(team) : {};
+      const role = rosterFor(teamId).roles.find(r => r.id === roleId);
+      window.Steward.sendServingRequest({ memberPub: a.pub, serviceId: sId, teamId, roleId, role: role ? role.name : '', teamName: m.name || (team && team.name) || 'Team', icon: m.icon, accent: m.accent, date: sDate, time: sTime, service: sName, note: `Can you serve on ${m.name || (team && team.name) || 'the team'} (${role ? role.name : ''})?` });
+    }
+  };
   // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
   const fillAssign = (base, date, svcId) => {
     const next = { ...base };
@@ -284,7 +294,7 @@ function DashRota({ onNewTeam }) {
     const byDate = {}; sortedSvcs.forEach(s => { byDate[s.date] = s; });
     const ensured = [];
     for (const dt of dates) { if (byDate[dt]) ensured.push(byDate[dt]); else { const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time }); if (ns) ensured.push(ns); } }
-    for (const s of ensured) { const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id); await window.Steward.publishRota({ service: s.id, published: true, assign: filled }); if (s.id === svcId) setAssign(filled); }
+    for (const s of ensured) { const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id); await window.Steward.publishRota({ service: s.id, published: true, assign: filled }); sendRequestsFor(s.id, s.date, s.time, s.name, filled); if (s.id === svcId) setAssign(filled); }
     setFlash(`Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`); setTimeout(() => setFlash(''), 2800);
   };
   const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
@@ -295,7 +305,7 @@ function DashRota({ onNewTeam }) {
     if (!src) { setFlash('No earlier rota with people to copy'); setTimeout(() => setFlash(''), 2400); return; }
     setAssign({ ...assignFor(src.id) }); setFlash(`Copied ${schParts(src.date).day} ${schParts(src.date).mon}`); setTimeout(() => setFlash(''), 2200);
   };
-  const publish = () => { window.Steward.publishRota({ service: svcId, published: true, assign }); setFlash('Published — your church can see it'); setTimeout(() => setFlash(''), 2400); };
+  const publish = () => { window.Steward.publishRota({ service: svcId, published: true, assign }); sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign); setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400); };
 
   if (teams.length === 0) {
     return (

@@ -397,9 +397,41 @@ function DashGroups() {
   const all = window.useStewardGroups();   // groups AND teams (teams are chat channels too)
   const [adding, setAdding] = React.useState(new URLSearchParams(location.search).get('newgroup') === '1');
   const [chatGroup, setChatGroup] = React.useState(null);
+  const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
+  const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
+  const undoTimer = React.useRef(null);
   const items = all.map(g => ({ ...g, ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
+  const confirmDelete = () => {
+    const g = pendingDelete; if (!g) return;
+    window.Steward.removeGroup(g.id);
+    setPendingDelete(null); setUndo(g);
+    clearTimeout(undoTimer.current); undoTimer.current = setTimeout(() => setUndo(null), 9000);
+  };
+  const doUndo = () => { if (undo) window.Steward.publishGroup({ id: undo.id, name: undo.name, kind: undo.kind, sub: undo.sub, icon: undo.icon, accent: undo.accent }); clearTimeout(undoTimer.current); setUndo(null); };
   return (
     <div style={{ position: 'relative', height: '100%' }}>
+      {pendingDelete ? (
+        <div onClick={() => setPendingDelete(null)} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 8 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="trash" size={21} /></div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Delete “{pendingDelete.name}”?</div>
+            </div>
+            <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 8px' }}>This removes the {pendingDelete.kind === 'team' ? 'team and its rota roles' : 'group'} for everyone. Members will no longer see it{pendingDelete.kind === 'team' ? ', and its rota assignments stop applying' : ' or its chat'}.</p>
+            <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 20px' }}>Past messages stay on the relay but won’t be shown. You can undo this for a few seconds.</p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setPendingDelete(null)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Keep it</button>
+              <button onClick={confirmDelete} className="sk-btn" style={{ flex: 1, padding: 13, fontSize: 14, background: 'var(--clay)', color: '#fff' }}><Icon name="trash" size={15} color="#fff" /> Delete</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {undo ? (
+        <div style={{ position: 'absolute', left: '50%', bottom: 18, transform: 'translateX(-50%)', zIndex: 90, display: 'flex', alignItems: 'center', gap: 14, background: 'var(--ink)', color: 'var(--paper)', padding: '11px 14px 11px 18px', borderRadius: 14, boxShadow: 'var(--shadow-lg)', fontSize: 13.5, fontWeight: 600 }}>
+          Removed “{undo.name}”
+          <button onClick={doUndo} style={{ border: 'none', background: 'rgba(255,255,255,.16)', color: '#fff', borderRadius: 9, padding: '6px 13px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>Undo</button>
+        </div>
+      ) : null}
       <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         renderRight={(it) => (
@@ -407,7 +439,7 @@ function DashGroups() {
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <SkPill tint="clay">Team</SkPill> : null}
             <button onClick={() => setChatGroup(it)} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
-            <button onClick={() => window.Steward.removeGroup(it.id)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+            <button onClick={() => setPendingDelete(it)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
           </div>
         )} />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />

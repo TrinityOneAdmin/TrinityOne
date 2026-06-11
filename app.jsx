@@ -318,7 +318,8 @@ function App() {
     if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     return window.Fellowship.subscribeChurchProfile(npub, (p) => {
-      if (p && p.name) setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name, initials: p.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
+      if (!p) return;
+      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
     });
   };
   useAE(() => {
