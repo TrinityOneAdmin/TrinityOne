@@ -23,11 +23,13 @@ const MAX_EVENTS = 20000;
 const NET = 'trinityone';
 const GROUP_D = 'trinityone/group:', FUND_D = 'trinityone/fund:', MEMBER_D = 'trinityone/member:', PLAN_D = 'trinityone/plan:', DEVO_D = 'trinityone/devotional:', ROTA_D = 'trinityone/rota:';
 const ROSTER_D = 'trinityone/roster:', SERVICE_D = 'trinityone/service:', EVENT_D = 'trinityone/event:', REQUEST_D = 'trinityone/request:';
+const NETWORK_D = 'trinityone/network:';   // the church declares it belongs to a network (the network's pubkey)
 function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch { return null; } }
 let CHURCH_PUB = toHexPub(process.env.CHURCH_NPUB);
 if (!CHURCH_PUB) { try { CHURCH_PUB = toHexPub(JSON.parse(readFileSync(join(ROOT, 'relay', 'church.json'), 'utf8')).npub); } catch {} }
 const MEMBERS = new Set();     // pubkeys that announced membership (minus those removed)
 const BROADCAST = new Set();   // group ids the church marked broadcast
+const NETWORKS = new Set();    // network pubkeys this church joined — allowed to publish church-style content here
 
 // ---- web push (VAPID): notify members of serving requests in real time (PWA) ----
 const VAPID_PATH = join(ROOT, 'relay', 'vapid.json');
@@ -76,24 +78,28 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (!CHURCH_PUB || e.kind !== 30078) return;
   const d = dtag(e), removed = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
   if (d === MEMBER_D + CHURCH_PUB) { if (removed) MEMBERS.delete(e.pubkey); else MEMBERS.add(e.pubkey); }   // membership for THIS church
-  else if (d.startsWith(GROUP_D) && e.pubkey === CHURCH_PUB) {
+  else if (d.startsWith(NETWORK_D) && e.pubkey === CHURCH_PUB) {   // this church joined/left a network
+    const np = d.slice(NETWORK_D.length); if (removed) NETWORKS.delete(np); else NETWORKS.add(np);
+  }
+  else if (d.startsWith(GROUP_D) && (e.pubkey === CHURCH_PUB || NETWORKS.has(e.pubkey))) {
     const id = d.slice(GROUP_D.length); let kind = ''; try { kind = JSON.parse(e.content).kind; } catch {}
     if (kind === 'broadcast' && !removed) BROADCAST.add(id); else BROADCAST.delete(id);
   }
 }
 function accept(e) {
   if (!CHURCH_PUB) return true;                                  // unconfigured = open
-  const isChurch = e.pubkey === CHURCH_PUB, isMember = isChurch || MEMBERS.has(e.pubkey);
+  // a network this church belongs to may publish church-style content here (groups/events/plans/posts)
+  const isChurch = e.pubkey === CHURCH_PUB, isNetwork = NETWORKS.has(e.pubkey), isLeader = isChurch || isNetwork, isMember = isLeader || MEMBERS.has(e.pubkey);
   const k = e.kind;
   if (k === 0) return true;                                      // profiles (replaceable, low risk)
   if (k === 30078) {
     const d = dtag(e);
     if (d.startsWith(GROUP_D) || d.startsWith(FUND_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
-      || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(EVENT_D) || d.startsWith(REQUEST_D)) return isChurch;   // church definitions only
-    if (d.startsWith(MEMBER_D)) return true;                    // joining (self-declared membership)
+      || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(EVENT_D) || d.startsWith(REQUEST_D)) return isLeader;   // church/network definitions
+    if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
     return isMember;                                            // member's own data (MyData)
   }
-  if (k === 1) { const g = gidOf(e); if (g && BROADCAST.has(g)) return isChurch; return isMember; }  // broadcast = steward-only
+  if (k === 1) { const g = gidOf(e); if (g && BROADCAST.has(g)) return isLeader; return isMember; }  // broadcast = church/network
   if (k === 7 || k === 4 || k === 1059 || k === 1060) return isMember;    // reactions + DMs
   return isMember;                                               // anything else: members only
 }
@@ -112,7 +118,7 @@ const MIME = {
 // ---- video feed proxy: fetch a church's YouTube/Rumble channel feed server-side (browsers can't,
 // the RSS has no CORS). Returns { channel:{name,url,platform}, videos:[{id,ytId,title,published,thumb}] }.
 const feedCache = new Map();            // channelUrl -> { ts, data }
-const FEED_TTL = 30 * 60 * 1000;
+const FEED_TTL = 8 * 60 * 1000;
 const decodeXml = (s) => String(s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
 async function fetchText(url) { const r = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; TrinityOne/1.0)' }, redirect: 'follow' }); if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }
 async function resolveYouTube(input) {

@@ -388,6 +388,18 @@ function App() {
     const offs = churchNetworks.map(n => window.Fellowship.subscribeChurchProfile(n.npub, (p) => { if (p && p.name) setNetworkNames(m => ({ ...m, [n.networkPub]: p.name })); }));
     return () => offs.forEach(o => { try { o && o(); } catch {} });
   }, [churchNetworks]);
+  // autocascade: a church's network is auto-followed (added to the switcher, tagged as a network) so
+  // its content is there without the member hunting for it — they just switch to it to view it.
+  useAE(() => {
+    if (!churchNetworks.length) return;
+    setChurches(cs => {
+      let next = cs, changed = false;
+      for (const n of churchNetworks) {
+        if (!next.find(c => c.id === n.npub)) { next = [...next, { id: n.npub, npub: n.npub, name: networkNames[n.networkPub] || 'Network', initials: 'NW', accent: 'var(--clay)', kind: 'network', sub: 'Network' }]; changed = true; }
+      }
+      return changed ? next : cs;
+    });
+  }, [churchNetworks, networkNames]);
   // derive serving items from requests + my replies (local date, not UTC)
   const _now = new Date();
   const todayStr = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');

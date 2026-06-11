@@ -9497,6 +9497,20 @@ zoo`.split("\n");
       const np = toPubHex(networkPub) || networkPub;
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["deleted", "1"]], content: "" }, sk));
     },
+    // create a brand-new network: generate its key, join it (so the relay lets it post here), then
+    // publish the network's profile + a starter announcements channel (signed by the network key).
+    // Returns { npub, mnemonic } — save/share these to run the network's own console later.
+    async createNetwork(name) {
+      if (!sk) return null;
+      const m = generateSeedWords();
+      const nsk = privateKeyFromSeedWords(m);
+      const nPub = getPublicKey2(nsk);
+      await window.Steward.joinNetwork(nPub);
+      await publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || "Network" }) }, nsk));
+      await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + "net-announce"], ["t", NET]], content: JSON.stringify({ name: "Announcements", kind: "broadcast", sub: "From " + (name || "the network"), icon: "globe", accent: "var(--clay)" }) }, nsk));
+      window.dispatchEvent(new CustomEvent("steward-networks"));
+      return { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
+    },
     // this church's network memberships -> [{ networkPub, npub }]
     subscribeNetworks(onNetworks) {
       const byId = /* @__PURE__ */ new Map();

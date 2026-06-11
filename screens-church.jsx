@@ -161,10 +161,11 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5 }}>{c.name}</span>
+                      {c.kind === 'network' ? <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 7px' }}>NETWORK</span> : null}
                       {c.verified ? <Icon name="check" size={14} stroke={3} color="var(--sage)" /> : null}
                     </div>
                     {c.tagline ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 13.5, color: 'var(--ink-2)', fontStyle: 'italic', lineHeight: 1.35, marginTop: 1 }}>“{c.tagline}”</div> : null}
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5 }}><b style={{ color: 'var(--ink-2)' }}>{c.members}</b> members</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5 }}>{c.kind === 'network' ? 'A network of churches' : <React.Fragment><b style={{ color: 'var(--ink-2)' }}>{c.members}</b> members</React.Fragment>}</div>
                   </div>
                   {on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="check" size={15} stroke={2.8} color="#fff" /></div>
                     : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)', flexShrink: 0 }} />}

@@ -448,16 +448,17 @@ function ChatScreen({ ctx }) {
           <SectionLabel>Part of</SectionLabel>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .06s both' }}>
             {ctx.churchNetworks.map(n => (
-              <div key={n.networkPub} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+              <button key={n.networkPub} onClick={() => { ctx.setActiveChurch(n.npub); ctx.toast('Viewing ' + (n.name || 'the network')); }} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left', width: '100%', fontFamily: 'var(--font-ui)' }}>
                 <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="globe" size={22} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name || 'A wider network'}</div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>A network of churches</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name || 'A wider network'}</span>
+                    <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 7px', flexShrink: 0 }}>NETWORK</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Tap to see its announcements &amp; events</div>
                 </div>
-                {n.following
-                  ? <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="check" size={15} color="var(--sage)" /> Following</span>
-                  : <button onClick={() => { ctx.followChurch(n.npub); ctx.toast('Following ' + (n.name || 'the network')); }} style={{ flexShrink: 0, padding: '9px 15px', borderRadius: 12, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>Follow</button>}
-              </div>
+                <Icon name="chevR" size={18} color="var(--ink-3)" />
+              </button>
             ))}
           </div>
         </React.Fragment>

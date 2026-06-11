@@ -870,26 +870,49 @@ function NetworkRow({ net, onLeave }) {
   );
 }
 
-// the wider networks this church belongs to (a network is its own npub; members can follow it)
+// the wider network this church belongs to (one for now). A network is its own npub.
 function DashNetworksPanel() {
   const networks = window.useStewardNetworks();
+  const net = networks[0] || null;        // a church belongs to one network for now
   const [draft, setDraft] = React.useState('');
   const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [created, setCreated] = React.useState(null);   // { npub, mnemonic } just-created — show to save
   const join = () => { const r = window.Steward.joinNetwork && window.Steward.joinNetwork(draft.trim()); if (!r) { setErr('Paste the network’s code (npub1…).'); return; } Promise.resolve(r).then(() => { setDraft(''); setErr(''); }); };
-  const leave = (net) => { if (window.confirm('Leave this network? Your members will stop seeing its shared content.')) window.Steward.leaveNetwork(net.networkPub); };
+  const leave = (n) => { if (window.confirm('Leave this network? Your members will stop seeing its shared content.')) window.Steward.leaveNetwork(n.networkPub); };
+  const create = async () => {
+    const name = window.prompt('Name your network (e.g. Regions Beyond):'); if (!name || !name.trim()) return;
+    setBusy(true);
+    try { const r = await window.Steward.createNetwork(name.trim()); if (r) setCreated(r); } catch (e) { setErr('Couldn’t create the network.'); }
+    setBusy(false);
+  };
   return (
-    <Panel title="Networks">
-      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Belong to a wider group of churches — a region, a denomination, or a family of churches. Paste the network’s <b>code</b> (it has its own npub, set up like a church). Your members can follow it and see its shared groups, events and plans.</div>
-      {networks.length ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 14 }}>
-          {networks.map(n => <NetworkRow key={n.networkPub} net={n} onLeave={leave} />)}
+    <Panel title="Network">
+      {created ? (
+        <div style={{ borderRadius: 14, border: '1.5px solid color-mix(in oklab, var(--sage) 40%, var(--line))', background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', padding: 16, marginBottom: 14 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, marginBottom: 6 }}>Network created 🎉</div>
+          <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px' }}>Save this recovery phrase — it’s the network’s key. Restore it in a console to post network-wide announcements, events and plans. Share the code with other churches so they can join.</p>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>NETWORK CODE</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, wordBreak: 'break-all', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 8, padding: '7px 9px', marginBottom: 9 }}>{created.npub}</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>RECOVERY PHRASE</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 8, padding: '9px 11px', marginBottom: 10 }}>{created.mnemonic}</div>
+          <button onClick={() => setCreated(null)} className="sk-btn sk-btn--clay" style={{ padding: '8px 14px', fontSize: 13 }}>I’ve saved it</button>
         </div>
       ) : null}
-      <div style={{ display: 'flex', gap: 9 }}>
-        <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') join(); }} spellCheck={false} autoCapitalize="none"
-          placeholder="npub1… (the network’s code)" style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)', outline: 'none' }} />
-        <button onClick={join} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Join</button>
-      </div>
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Belong to a wider group of churches — a region, a denomination, or a family of churches. Your members see its shared announcements, events and plans alongside your own.</div>
+      {net ? (
+        <NetworkRow net={net} onLeave={leave} />
+      ) : (
+        <React.Fragment>
+          <button onClick={create} disabled={busy} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 12, fontSize: 14, marginBottom: 12, opacity: busy ? 0.6 : 1 }}><Icon name="globe" size={16} color="#fff" /> {busy ? 'Creating…' : 'Create a network'}</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink-3)', fontSize: 12, fontWeight: 700, margin: '4px 0 12px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} />OR JOIN ONE<div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
+          <div style={{ display: 'flex', gap: 9 }}>
+            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') join(); }} spellCheck={false} autoCapitalize="none"
+              placeholder="npub1… (a network’s code)" style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)', outline: 'none' }} />
+            <button onClick={join} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13 }}>Join</button>
+          </div>
+        </React.Fragment>
+      )}
       {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
     </Panel>
   );
@@ -947,7 +970,7 @@ function DashSettings({ onTab }) {
     }).catch(err => window.alert('Restore failed: ' + (err.message || err)));
   };
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
+    <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640, height: '100%', overflowY: 'auto', paddingBottom: 20 }}>
       {backupOpen ? <StewBackupModal church={church} onClose={() => setBackupOpen(false)} /> : null}
       <Panel title="Church identity" action={<button onClick={editName} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
