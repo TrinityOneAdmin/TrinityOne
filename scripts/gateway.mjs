@@ -57,6 +57,20 @@ function maybePush(evt) {
   } catch {}
 }
 const dtag = (e) => { const t = (e.tags || []).find(t => t[0] === 'd'); return t ? t[1] : ''; };
+// NIP-01 replaceable (0/3/10000-19999) + addressable (30000-39999 by d-tag): keep only the newest
+// per (pubkey, kind[, d]). Without this, e.g. a member's swap then decline reqreply both linger and
+// clients guess by arrival order — the source of stale/wrong rota verdicts.
+function replKey(e) {
+  const k = e.kind;
+  if (k === 0 || k === 3 || (k >= 10000 && k < 20000)) return e.pubkey + ':' + k;
+  if (k >= 30000 && k < 40000) return e.pubkey + ':' + k + ':' + dtag(e);
+  return null;
+}
+function dedupEvents(arr) {
+  const latest = new Map(); const plain = [];
+  for (const e of arr) { const rk = replKey(e); if (!rk) { plain.push(e); continue; } const cur = latest.get(rk); if (!cur || (e.created_at || 0) >= (cur.created_at || 0)) latest.set(rk, e); }
+  return [...plain, ...latest.values()].sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+}
 const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (!CHURCH_PUB || e.kind !== 30078) return;
@@ -171,7 +185,7 @@ function serveStatic(req, res) {
 
 // ---- relay (NIP-01, persisted) ----
 let events = [];
-try { const d = JSON.parse(readFileSync(DB, 'utf8')); if (Array.isArray(d)) events = d.slice(-MAX_EVENTS); } catch {}
+try { const d = JSON.parse(readFileSync(DB, 'utf8')); if (Array.isArray(d)) events = dedupEvents(d).slice(-MAX_EVENTS); } catch {}
 if (CHURCH_PUB) events.forEach(note);   // rebuild member/broadcast state from stored events
 let saveTimer = null;
 function scheduleSave() {
@@ -212,6 +226,13 @@ wss.on('connection', ws => {
       const evt = rest[0]; if (!evt || !evt.id) return;
       if (!accept(evt)) { ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: not a member or not permitted for this group'])); return; }
       note(evt);   // a membership/broadcast change takes effect for subsequent events
+      // replaceable/addressable: drop older versions; ignore if we already hold a newer one
+      const rk = replKey(evt);
+      if (rk) {
+        const older = [];
+        for (let i = events.length - 1; i >= 0; i--) { if (replKey(events[i]) !== rk) continue; if ((events[i].created_at || 0) > (evt.created_at || 0)) { ws.send(JSON.stringify(['OK', evt.id, true, 'have newer'])); return; } older.push(i); }
+        for (const i of older) events.splice(i, 1);   // descending indices — safe to splice in order
+      }
       events.push(evt); if (events.length > MAX_EVENTS) events.shift();
       scheduleSave();
       maybePush(evt);   // notify the targeted member if this is a serving request

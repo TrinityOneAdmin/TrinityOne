@@ -255,16 +255,27 @@ function DashRota({ onNewTeam }) {
   };
   const clearSlot = (slot) => { const next = { ...assign }; delete next[slot.key]; setAssign(next); setAssignSlot(null); };
   // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
-  const fillAssign = (base, date) => {
-    const next = { ...base }; const used = new Set(Object.values(next).filter(a => a && a.name).map(a => 'n:' + a.name));
+  const fillAssign = (base, date, svcId) => {
+    const next = { ...base };
+    // clear slots whose member declined / asked to swap, so Auto-fill treats them as open — and
+    // remember who said no so we don't put them straight back on.
+    const noFor = {};
+    for (const key in next) {
+      const a = next[key]; if (!a || !a.name) continue;
+      const [teamId, roleId] = key.split('::');
+      const v = svcId ? slotVerdict(svcId, teamId, roleId, a.pub) : '';
+      if (v === 'decline' || v === 'swap') { const s = noFor[key] = noFor[key] || new Set(); s.add('n:' + a.name); if (a.pub) s.add('p:' + a.pub); delete next[key]; }
+    }
+    const used = new Set(Object.values(next).filter(a => a && a.name).map(a => 'n:' + a.name));
     teams.forEach(t => { const r = rosterFor(t.id); r.roles.forEach(role => {
       const key = t.id + '::' + role.id; if (next[key] && next[key].name) return;
-      const pick = r.people.find(p => !used.has('n:' + p.name) && !(p.pub && (unavail[p.pub] || []).includes(date)));
+      const no = noFor[key] || new Set();
+      const pick = r.people.find(p => !used.has('n:' + p.name) && !no.has('n:' + p.name) && !(p.pub && no.has('p:' + p.pub)) && !(p.pub && (unavail[p.pub] || []).includes(date)));
       if (pick) { next[key] = { name: pick.name, pub: pick.pub || '' }; used.add('n:' + pick.name); }
     }); });
     return next;
   };
-  const autoFill = () => { setAssign(fillAssign(assign, svc.date)); setFlash('Filled what I could from who’s free'); setTimeout(() => setFlash(''), 2200); };
+  const autoFill = () => { setAssign(fillAssign(assign, svc.date, svc.id)); setFlash('Filled the gaps — including anyone who said no'); setTimeout(() => setFlash(''), 2200); };
   // create + fill: generate weekly services for the period (if missing), then auto-fill & publish each
   const autoFillAhead = async (months) => {
     setFillMenu(false);
@@ -273,7 +284,7 @@ function DashRota({ onNewTeam }) {
     const byDate = {}; sortedSvcs.forEach(s => { byDate[s.date] = s; });
     const ensured = [];
     for (const dt of dates) { if (byDate[dt]) ensured.push(byDate[dt]); else { const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time }); if (ns) ensured.push(ns); } }
-    for (const s of ensured) { const filled = fillAssign(assignFor(s.id) || {}, s.date); await window.Steward.publishRota({ service: s.id, published: true, assign: filled }); if (s.id === svcId) setAssign(filled); }
+    for (const s of ensured) { const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id); await window.Steward.publishRota({ service: s.id, published: true, assign: filled }); if (s.id === svcId) setAssign(filled); }
     setFlash(`Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`); setTimeout(() => setFlash(''), 2800);
   };
   const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
