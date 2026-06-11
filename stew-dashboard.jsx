@@ -74,7 +74,7 @@ function StewDashboard({ initial = 'overview' }) {
             {tab === 'rota'
               ? <button onClick={() => setAddingTeam(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New team</button>
               : <button onClick={() => setPosting(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> New post</button>}
-            <SkBadge initials="PJ" size={36} radius={11} accent="var(--sage)" />
+            <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials="PJ" size={36} radius={11} accent="var(--sage)" /></button>
           </div>
           {/* content */}
           <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: 28, background: 'var(--paper)' }}>
@@ -395,8 +395,10 @@ function GroupChatModal({ group, onClose }) {
 
 function DashGroups() {
   const all = window.useStewardGroups();   // groups AND teams (teams are chat channels too)
+  const rosters = window.useStewardRosters();
   const [adding, setAdding] = React.useState(new URLSearchParams(location.search).get('newgroup') === '1');
   const [chatGroup, setChatGroup] = React.useState(null);
+  const [teamMembers, setTeamMembers] = React.useState(null);   // { team, people }
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
@@ -437,13 +439,33 @@ function DashGroups() {
         renderRight={(it) => (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
-            {it.kind === 'team' ? <SkPill tint="clay">Team</SkPill> : null}
+            {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             <button onClick={() => setChatGroup(it)} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
             <button onClick={() => setPendingDelete(it)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
           </div>
         )} />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
       {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}
+      {teamMembers ? (
+        <div onClick={() => setTeamMembers(null)} style={{ position: 'absolute', inset: 0, zIndex: 92, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', maxHeight: '80%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${teamMembers.team.accent || 'var(--clay)'} 16%, var(--surface))`, color: teamMembers.team.accent || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={teamMembers.team.icon || 'shield'} size={20} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{teamMembers.team.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{teamMembers.people.length} member{teamMembers.people.length === 1 ? '' : 's'}</div></div>
+              <button onClick={() => setTeamMembers(null)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
+            </div>
+            <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {teamMembers.people.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No one on this team yet — add people via the team’s roster on the Rota page.</div>
+                : teamMembers.people.map((p, i) => (
+                  <div key={p.id || p.pub || i} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${teamMembers.team.accent || 'var(--clay)'}, color-mix(in oklab, ${teamMembers.team.accent || 'var(--clay)'} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{(p.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{p.name}</div>{p.pub ? <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)' }}>linked member</div> : <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>not linked to an app account</div>}</div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
