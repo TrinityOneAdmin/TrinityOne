@@ -7,7 +7,6 @@ const NAV = [
   { key: 'calendar', label: 'Calendar', ic: 'calendar' },
   { key: 'resources', label: 'Resources', ic: 'read' },
   { key: 'members', label: 'Members', ic: 'pray' },
-  { key: 'relays', label: 'Relays', ic: 'globe' },
   { key: 'settings', label: 'Settings', ic: 'sliders' },
   // { key: 'giving', label: 'Giving', ic: 'gift' },   // parked for the pilot (chat first)
 ];
@@ -99,6 +98,115 @@ function PublishErrorBanner() {
   );
 }
 
+// wizard step chrome — module-level so its component type is stable across renders
+// (defining it inside StewSetupWizard would remount on every keystroke and blur the inputs).
+function WizShell({ step, title, sub, children, footer }) {
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 42%, transparent)', backdropFilter: 'blur(4px)', animation: 'lumenFade .18s ease both' }}>
+      <div className="no-scrollbar" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+        <div style={{ padding: '26px 28px 0' }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '-.4px' }}>{title}</div>
+          {sub ? <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 0' }}>{sub}</div> : null}
+          <div style={{ marginTop: 18 }}>{children}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '20px 28px 24px' }}>{footer}</div>
+      </div>
+    </div>
+  );
+}
+
+// First-run setup wizard — catches a brand-new church on first console load and walks
+// name → starter groups → first serving team (or defer). Each step publishes immediately;
+// a localStorage flag (set on finish/skip) keeps it from reappearing.
+function StewSetupWizard({ church, onDone, onTab }) {
+  const [step, setStep] = React.useState(0);
+  const [name, setName] = React.useState(church.name || '');
+  const [busy, setBusy] = React.useState(false);
+  const [teamName, setTeamName] = React.useState('');
+  const STARTERS = [
+    { id: 'whole', name: 'Whole Church', kind: 'broadcast', sub: 'Announcements for everyone' },
+    { id: 'prayer', name: 'Prayer', kind: 'group', sub: 'Share & lift requests' },
+    { id: 'life', name: 'Life Group', kind: 'group', sub: 'A midweek small group' },
+  ];
+  const [picks, setPicks] = React.useState(() => new Set(['whole', 'prayer']));
+  const toggle = (id) => setPicks(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const next = () => setStep(s => s + 1);
+  const fld = { width: '100%', boxSizing: 'border-box', height: 48, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
+  const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 };
+
+  const saveName = async () => { const n = name.trim(); if (n && n !== church.name) { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 })); setBusy(false); } next(); };
+  const saveGroups = async () => { const chosen = STARTERS.filter(s => picks.has(s.id)); if (chosen.length) { setBusy(true); for (const g of chosen) await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub })); setBusy(false); } next(); };
+  const saveTeam = async () => { const t = teamName.trim(); if (t) { setBusy(true); await Promise.resolve(window.Steward.publishGroup({ name: t, kind: 'team', sub: 'Serving team' })); setBusy(false); } next(); };
+
+  if (step === 0) return (
+    <WizShell step={step} title="Welcome to your console" sub="Let’s get your church set up — about a minute. First, what’s it called? Members see this name when they join."
+      footer={<React.Fragment>
+        <button onClick={onDone} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip setup</button>
+        <div style={{ flex: 1 }} />
+        <button onClick={saveName} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (busy || !name.trim()) ? .5 : 1 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
+      </React.Fragment>}>
+      <div style={lbl}>CHURCH NAME</div>
+      <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && name.trim()) saveName(); }} placeholder="e.g. Trinity Church Littlehampton" style={fld} />
+    </WizShell>
+  );
+
+  if (step === 1) return (
+    <WizShell step={step} title="Create a few spaces" sub="Groups are chat rooms (or announcement channels) your members join. Pick a few to start — you can add or remove any time."
+      footer={<React.Fragment>
+        <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        <div style={{ flex: 1 }} />
+        <button onClick={saveGroups} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{picks.size ? `Create ${picks.size} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="#fff" /></button>
+      </React.Fragment>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {STARTERS.map(s => {
+          const on = picks.has(s.id);
+          return (
+            <button key={s.id} onClick={() => toggle(s.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', padding: '13px 15px', borderRadius: 14, cursor: 'pointer', background: on ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface)', border: '1.5px solid ' + (on ? 'var(--clay)' : 'var(--line)'), fontFamily: 'var(--font-ui)' }}>
+              <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? 'var(--clay)' : 'var(--surface-2)', color: on ? '#fff' : 'var(--ink-3)' }}><Icon name={s.kind === 'broadcast' ? 'send' : 'chat'} size={18} color="currentColor" /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.name}{s.kind === 'broadcast' ? <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginLeft: 7 }}>Broadcast</span> : null}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>{s.sub}</div>
+              </div>
+              <div style={{ width: 22, height: 22, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? 'var(--clay)' : 'transparent', border: on ? 'none' : '1.5px solid var(--line)' }}>{on ? <Icon name="check" size={14} color="#fff" /> : null}</div>
+            </button>
+          );
+        })}
+      </div>
+    </WizShell>
+  );
+
+  if (step === 2) return (
+    <WizShell step={step} title="Serving rota" sub="Teams are who serves on a Sunday — welcome, kids, sound, and so on. Start one now if you like, or set this up later in the Rota tab."
+      footer={<React.Fragment>
+        <button onClick={() => setStep(1)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        <div style={{ flex: 1 }} />
+        <button onClick={saveTeam} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{teamName.trim() ? 'Create team & continue' : 'I’ll do this later'} <Icon name="chevR" size={15} color="#fff" /></button>
+      </React.Fragment>}>
+      <div style={lbl}>FIRST TEAM (OPTIONAL)</div>
+      <input value={teamName} onChange={e => setTeamName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveTeam(); }} placeholder="e.g. Welcome Team" style={fld} />
+      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.5 }}>You’ll add who’s on the team and build the schedule from the Rota tab.</div>
+    </WizShell>
+  );
+
+  return (
+    <WizShell step={step} title="You’re all set 🎉" sub="Your church is live. Hand members a joining code from “Invite code”, and post your first note any time."
+      footer={<React.Fragment>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => { if (onTab) onTab('overview'); onDone(); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 22px' }}><Icon name="check" size={16} color="#fff" /> Go to dashboard</button>
+      </React.Fragment>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        {[['qr', 'Share a joining code', 'Invite members with a QR or short code.'], ['send', 'Post a note', 'Reach your whole church from “New post”.'], ['globe', 'Relays & settings', 'Manage relays, video & audio in Settings.']].map(([ic, t, d]) => (
+          <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: 'var(--clay)' }}><Icon name={ic} size={17} color="currentColor" /></div>
+            <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 13.5 }}>{t}</div><div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{d}</div></div>
+          </div>
+        ))}
+      </div>
+    </WizShell>
+  );
+}
+
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
@@ -114,6 +222,20 @@ function StewDashboard({ initial = 'overview' }) {
   React.useEffect(() => { const f = () => setVw(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
   const narrow = vw < 760;
 
+  // first-run wizard: on a fresh church (no published name) show the setup wizard once.
+  // Wait ~1.8s for the relay to answer so an existing church doesn't flash it; a localStorage
+  // flag (set on finish/skip) keeps it from returning.
+  const [wizard, setWizard] = React.useState(false);
+  const nameRef = React.useRef(church.name);
+  nameRef.current = church.name;
+  React.useEffect(() => {
+    let done = true; try { done = localStorage.getItem('trinityone.steward.wizard.done') === '1'; } catch {}
+    if (done || church.isNetwork) return;
+    const t = setTimeout(() => { if (!nameRef.current) setWizard(true); }, 1800);
+    return () => clearTimeout(t);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const finishWizard = () => { try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {} setWizard(false); };
+
   // tab content + topbar actions, shared by both layouts
   const content = (
     <React.Fragment>
@@ -124,7 +246,6 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'calendar' && <DashCalendar />}
       {tab === 'resources' && <DashResources />}
       {tab === 'members' && <DashMembers />}
-      {tab === 'relays' && <DashRelays />}
       {tab === 'settings' && <DashSettings onTab={setTab} />}
     </React.Fragment>
   );
@@ -146,6 +267,7 @@ function StewDashboard({ initial = 'overview' }) {
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
         <MemberChatDock />
         <PublishErrorBanner />
+        {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
           <div style={{ flexShrink: 0, background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderBottom: '1px solid var(--line)', padding: '10px 12px 8px', display: 'flex', flexDirection: 'column', gap: 9 }}>
@@ -182,6 +304,7 @@ function StewDashboard({ initial = 'overview' }) {
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
         <PublishErrorBanner />
+        {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
         {/* sidebar */}
@@ -727,12 +850,12 @@ function NewTeamModal({ open, onClose }) {
 }
 window.NewTeamModal = NewTeamModal;
 
-function DashRelays() {
+function DashRelaysCard() {
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
-  const stats = window.useStewardStats();     // { events }
   const host = (typeof location !== 'undefined' && location.host) || '';
   const online = status.filter(r => r.status === 'on').length;
   const checking = status.length === 0;
+  const allUp = online === status.length;
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
   const [draft, setDraft] = React.useState('');
   const [err, setErr] = React.useState('');
@@ -742,13 +865,8 @@ function DashRelays() {
     setDraft(''); setErr('');
   };
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', gap: 14 }}>
-        <StatCard label="Relays online" value={checking ? '…' : `${online}/${status.length}`} sub={online === status.length && !checking ? 'all reachable' : 'check connection'} ic="globe" tint={online ? 'sage' : 'clay'} />
-        <StatCard label="Events stored" value={String(stats.events)} sub="your church's footprint" ic="receipt" tint="clay" />
-        <StatCard label="Hosting" value="Self" sub="this church's relay" ic="shield" tint="ink" />
-      </div>
-      <Panel title="Relays" style={{ flex: 1 }}>
+      <Panel title="Relays" action={!checking ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: allUp ? 'var(--sage)' : 'var(--clay)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: allUp ? 'var(--sage)' : 'var(--clay)' }} /> {online}/{status.length} online</span> : null}>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where your church publishes. It hosts its own relay; add public relays for redundancy in case yours is ever offline.</div>
         {checking ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>Checking relays…</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {status.map(r => {
@@ -782,7 +900,6 @@ function DashRelays() {
           <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church hosts its own relay — every message, group, and member lives on infrastructure you control. Members reach it wherever you serve the app.</div>
         </div>
       </Panel>
-    </div>
   );
 }
 
@@ -1152,7 +1269,9 @@ function NetworkAnnounceComposer() {
     return () => window.removeEventListener('steward-networks', refresh);
   }, []);
   const net = owned[0] || null;           // one owned network for now
+  const [liveName, setLiveName] = React.useState('');
   React.useEffect(() => { if (!net || !window.Steward.subscribeNetworkAnnouncements) return; return window.Steward.subscribeNetworkAnnouncements(net.pub, setPosts); }, [net && net.pub]);
+  React.useEffect(() => { setLiveName(''); if (!net || !window.Steward.subscribeNetworkProfile) return; return window.Steward.subscribeNetworkProfile(net.pub, (p) => { if (p && p.name) setLiveName(p.name); }); }, [net && net.pub]);
   if (!net) return null;
   const post = async () => {
     if (!text.trim()) return;
@@ -1163,7 +1282,7 @@ function NetworkAnnounceComposer() {
     <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <Icon name="globe" size={16} color="var(--clay)" />
-        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Announce to <b>{net.name}</b></div>
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Announce to <b>{liveName || net.name}</b></div>
       </div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 9 }}>Reaches every member of every church in the network.</div>
       <textarea value={text} onChange={e => setText(e.target.value)} rows={3} placeholder="Share news with the whole network…" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '11px 13px', fontSize: 14, lineHeight: 1.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical', marginBottom: 9 }} />
@@ -1344,7 +1463,7 @@ function DashSettings({ onTab }) {
     }).catch(err => window.alert('Restore failed: ' + (err.message || err)));
   };
   return (
-    <div className="no-scrollbar" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', alignItems: 'start', gap: 16, height: '100%', overflowY: 'auto', paddingBottom: 20 }}>
+    <div className="no-scrollbar sk-masonry" style={{ height: '100%', overflowY: 'auto', paddingBottom: 4 }}>
       {backupOpen ? <StewBackupModal church={church} onClose={() => setBackupOpen(false)} /> : null}
       {editingName ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={saveName} onClose={() => setEditingName(false)} /> : null}
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
@@ -1363,6 +1482,8 @@ function DashSettings({ onTab }) {
       <DashAudioPanel church={church} />
 
       <DashNetworksPanel />
+
+      <DashRelaysCard />
 
       <Panel title="Church key">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>

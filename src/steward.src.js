@@ -642,7 +642,14 @@ window.Steward = {
   subscribeNetworkProfile(networkPub, onProfile) {
     const np = toPubHex(networkPub) || networkPub; let latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [np] }], {
-      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { onProfile(JSON.parse(e.content)); } catch {} }, oneose() {},
+      onevent(e) {
+        if (e.created_at < latest) return; latest = e.created_at;
+        let prof; try { prof = JSON.parse(e.content); } catch { return; }
+        onProfile(prof);
+        // self-heal: keep an owned network's locally-stored name in sync with its published profile,
+        // so the identity switcher + announce composer follow a rename instead of showing the old name.
+        if (prof && prof.name) { const rec = netKeys().find(x => x.pub === np); if (rec && rec.name !== prof.name) { saveNetKey({ ...rec, name: prof.name }); window.dispatchEvent(new CustomEvent('steward-networks')); } }
+      }, oneose() {},
     });
     return () => { try { sub.close(); } catch {} };
   },

@@ -17,6 +17,9 @@
   #root { height: 100vh; }
   .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
+  /* masonry card layout: packs variable-height cards tightly, no dead rows */
+  .sk-masonry { column-width: 330px; column-gap: 16px; }
+  .sk-masonry > * { break-inside: avoid; -webkit-column-break-inside: avoid; margin-bottom: 16px; }
   .stew-root *::-webkit-scrollbar { width: 0; height: 0; }
 
   /* steward UI primitives (from the handoff's Steward Surfaces stylesheet) */

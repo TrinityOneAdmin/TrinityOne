@@ -9727,9 +9727,19 @@ zoo`.split("\n");
         onevent(e) {
           if (e.created_at < latest) return;
           latest = e.created_at;
+          let prof;
           try {
-            onProfile(JSON.parse(e.content));
+            prof = JSON.parse(e.content);
           } catch {
+            return;
+          }
+          onProfile(prof);
+          if (prof && prof.name) {
+            const rec = netKeys().find((x) => x.pub === np);
+            if (rec && rec.name !== prof.name) {
+              saveNetKey({ ...rec, name: prof.name });
+              window.dispatchEvent(new CustomEvent("steward-networks"));
+            }
           }
         },
         oneose() {
