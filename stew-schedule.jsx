@@ -277,12 +277,29 @@ function DashRota({ onNewTeam }) {
       if (v === 'decline' || v === 'swap') { const s = noFor[key] = noFor[key] || new Set(); s.add('n:' + a.name); if (a.pub) s.add('p:' + a.pub); delete next[key]; }
     }
     const used = new Set(Object.values(next).filter(a => a && a.name).map(a => 'n:' + a.name));
+    // gather every empty slot + its eligible roster people (not away, not declined)
+    const slots = [];
     teams.forEach(t => { const r = rosterFor(t.id); r.roles.forEach(role => {
       const key = t.id + '::' + role.id; if (next[key] && next[key].name) return;
       const no = noFor[key] || new Set();
-      const pick = r.people.find(p => !used.has('n:' + p.name) && !no.has('n:' + p.name) && !(p.pub && no.has('p:' + p.pub)) && !(p.pub && (unavail[p.pub] || []).includes(date)));
-      if (pick) { next[key] = { name: pick.name, pub: pick.pub || '' }; used.add('n:' + pick.name); }
+      const cand = r.people.filter(p => !no.has('n:' + p.name) && !(p.pub && no.has('p:' + p.pub)) && !(p.pub && (unavail[p.pub] || []).includes(date)));
+      slots.push({ key, cand });
     }); });
+    // fill the MOST-CONSTRAINED slot first (fewest free people), so people shared across teams don't
+    // get grabbed by an early team and starve a later one — maximises how many slots get covered.
+    while (true) {
+      let best = null;
+      for (const s of slots) {
+        if (next[s.key] && next[s.key].name) continue;
+        const avail = s.cand.filter(p => !used.has('n:' + p.name));
+        if (!avail.length) continue;
+        if (!best || avail.length < best.avail.length) best = { s, avail };
+      }
+      if (!best) break;
+      const pick = best.avail[0];
+      next[best.s.key] = { name: pick.name, pub: pick.pub || '' };
+      used.add('n:' + pick.name);
+    }
     return next;
   };
   const autoFill = () => { setAssign(fillAssign(assign, svc.date, svc.id)); setFlash('Filled the gaps — including anyone who said no'); setTimeout(() => setFlash(''), 2200); };
