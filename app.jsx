@@ -553,6 +553,7 @@ function App() {
     !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ||
     !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
     !!(window.navigator && window.navigator.standalone) ||
+    (typeof location !== 'undefined' && /[?&]app=1(?:&|$)/.test(location.search)) ||   // ?app=1 → unframed full-screen (marketing "Launch the web app")
     window.innerWidth <= 500
   );
   // scaling to viewport (desktop preview only)
