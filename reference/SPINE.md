@@ -54,6 +54,8 @@ NIP-29/NDK design is additive to later. What's actually running:
 
 **Gotcha (member app):** all member `.jsx` load as classic scripts sharing one global scope. Two files declaring the same top-level `function`/`const` name throws a redeclaration `SyntaxError` that blanks the APK (Babel tolerates it; the esbuild `www/` build doesn't). Run the dup-global scan + a headless boot check after editing member files.
 
+**Parked for the pilot (Bitcoin/Lightning):** anything touching BTC/LN ships behind a "coming soon" marker, not as a live feature — member **giving** (`GIVING_ON=false` in `screens-chat.jsx`), the steward **Giving** tab (commented out of `NAV`), and the marketing Share/Lightning sections (`.soon-pill`). The marketing **donate** card (Lightning address) is **hidden** until the wallet ships — re-add the "Give" card in `welcome.html`'s Support section (and decide LN-invoice/LNURL vs on-chain BTC vs both, with real addresses) when giving goes live. The **full-screen web app** is reachable at `/index.html?app=1` (forces unframed mode; the marketing "Launch the web app" uses it).
+
 ### Relay app / self-hosting (next)
 
 Each church should run its **own** relay (the topology row above); the pilot's single Funnel-exposed
@@ -121,6 +123,14 @@ Cloud backup is client-side end-to-end encrypted: sealed on device *before* uplo
 ---
 
 ## Roadmap
+
+### Security audit  *(near-term — do before wider rollout; flagged 2026-06-11)*
+The pilot took shortcuts that need a real review before more churches join. Audit at least:
+- **Key custody:** member + church/network keys (BIP-39 seeds) sit in `localStorage` — XSS = total compromise. Review CSP, dependency/vendor supply chain (`vendor/*.js`, Babel/React CDN vs vendored), and the path to the planned Keykeeper/NIP-46 signer that gets seeds out of page scope.
+- **Invite links:** identity seeds travel in URLs (`?invite=<seed>`) — referer/history/clipboard leakage, single-use vs replayable, expiry.
+- **Relay write policy:** `gateway.mjs` is multi-church and author-scoped — confirm a church can't write another's docs, members can't forge steward events, and group-leader/network write paths can't be abused. Check the embedded NIP-01 relay for unauth read/DoS.
+- **Exposure:** Tailscale Funnel endpoint, push/VAPID, the feed proxies (`/feed`, `/audiofeed`) for SSRF, and the `/status` endpoint for info leak.
+- **Backups:** passphrase-encrypted file backup (`TrinityBackup`) — KDF/crypto choices, and the in-page reveal of recovery phrases.
 
 ### Phase 1 — Scripture + Fellowship  *(current)*
 Bible reading (Open.Bible) and NIP-29 community chat over NDK. Self-custodial identity in place. This is the build target now.
