@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TrinityOne — Relay app</title>
+<style>
+  :root { --paper:#efece6; --surface:#fff; --surface-2:#f6f3ec; --line:#e4ded2; --ink:#1f1a14; --ink-2:#5b5346; --ink-3:#9a9082; --clay:#C25A38; --clay-soft:#F3DECF; --sage:#5E8C6A; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--paper); color:var(--ink); }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 26px 20px 60px; }
+  .brand { display:flex; align-items:center; gap:9px; margin-bottom:22px; }
+  .brand b { font-weight:800; font-size:18px; } .brand .clay { color:var(--clay); }
+  .tag { font-size:10px; font-weight:700; letter-spacing:.5px; color:var(--ink-3); border:1px solid var(--line); border-radius:6px; padding:2px 6px; }
+  .hero { display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 1px 3px rgba(0,0,0,.05); margin-bottom:16px; }
+  .dot { width:12px; height:12px; border-radius:999px; flex-shrink:0; }
+  .dot.on { background:var(--sage); box-shadow:0 0 0 4px color-mix(in oklab, var(--sage) 22%, transparent); }
+  .dot.off { background:var(--ink-3); }
+  .hero h1 { margin:0; font-size:20px; } .hero .sub { color:var(--ink-2); font-size:13.5px; margin-top:3px; }
+  .grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-bottom:16px; }
+  .stat { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:13px; }
+  .stat .n { font-size:24px; font-weight:800; } .stat .l { font-size:11.5px; color:var(--ink-3); font-weight:600; margin-top:2px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:18px; margin-bottom:16px; }
+  .card h2 { margin:0 0 12px; font-size:15px; }
+  .row { display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:12px; background:var(--surface-2); border:1px solid var(--line); margin-bottom:9px; }
+  .row .k { font-size:11px; font-weight:700; letter-spacing:.4px; color:var(--ink-3); text-transform:uppercase; width:110px; flex-shrink:0; }
+  .row .v { flex:1; font-family: ui-monospace, monospace; font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  button { border:none; cursor:pointer; font-family:inherit; font-weight:700; border-radius:10px; }
+  .btn-clay { background:var(--clay); color:#fff; padding:8px 13px; font-size:13px; }
+  .btn-ghost { background:var(--surface); border:1px solid var(--line); color:var(--ink-2); padding:7px 11px; font-size:12.5px; }
+  .ch { display:flex; align-items:center; gap:9px; padding:9px 12px; border-radius:11px; background:var(--surface-2); border:1px solid var(--line); margin-bottom:8px; }
+  .ch .badge { width:30px; height:30px; border-radius:9px; background:color-mix(in oklab, var(--clay) 14%, var(--surface)); color:var(--clay); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; flex-shrink:0; }
+  .warn { display:flex; gap:9px; padding:12px 14px; border-radius:12px; background:color-mix(in oklab, var(--clay) 8%, var(--surface)); border:1px solid color-mix(in oklab, var(--clay) 28%, transparent); font-size:13px; color:var(--ink-2); line-height:1.5; }
+  .muted { color:var(--ink-3); font-size:12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><b>Trinity<span class="clay">One</span></b> <span class="tag">RELAY APP</span></div>
+
+  <div class="hero">
+    <span class="dot off" id="dot"></span>
+    <div style="flex:1; min-width:0">
+      <h1 id="title">Connecting to your relay…</h1>
+      <div class="sub" id="sub">The box that carries your church's messages.</div>
+    </div>
+    <button class="btn-clay" id="openConsole">Open Steward console</button>
+  </div>
+
+  <div class="grid">
+    <div class="stat"><div class="n" id="s-churches">—</div><div class="l">Churches</div></div>
+    <div class="stat"><div class="n" id="s-members">—</div><div class="l">Members</div></div>
+    <div class="stat"><div class="n" id="s-events">—</div><div class="l">Events stored</div></div>
+    <div class="stat"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
+  </div>
+
+  <div class="card">
+    <h2>How members reach you</h2>
+    <div id="reach"></div>
+    <div class="row"><span class="k">Member relay</span><span class="v" id="wss">—</span><button class="btn-ghost" data-copy="wss">Copy</button></div>
+    <div class="row"><span class="k">Console</span><span class="v" id="console">—</span><button class="btn-ghost" data-copy="console">Copy</button></div>
+    <div class="muted" style="margin-top:6px">Members join with the invite QR you share from the console — it carries this relay automatically.</div>
+  </div>
+
+  <div class="card">
+    <h2>Churches on this relay</h2>
+    <div id="churches"><div class="muted">Loading…</div></div>
+    <div class="muted" style="margin-top:8px">Add a church by creating it in the Steward console, then add its npub to <code>relay/church.json</code>. The relay only accepts writes from churches it's configured for.</div>
+  </div>
+</div>
+
+<script>
+  const qs = new URLSearchParams(location.search);
+  // public base: passed by the launcher (?public=https://…), else this page's own origin
+  const publicBase = qs.get('public') || location.origin;
+  const wssUrl = publicBase.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:') + '/relay';
+  const consoleUrl = publicBase + '/steward.html';
+  const isPublic = /^https:|\.ts\.net|trycloudflare|\.app/i.test(publicBase) && !/localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\./.test(publicBase);
+
+  document.getElementById('wss').textContent = wssUrl;
+  document.getElementById('console').textContent = consoleUrl;
+  document.getElementById('openConsole').onclick = () => window.open(consoleUrl, '_blank');
+  const copyMap = { wss: wssUrl, console: consoleUrl };
+  document.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(copyMap[b.dataset.copy]); b.textContent = 'Copied'; setTimeout(()=>b.textContent='Copy', 1400); } catch(e){}
+  });
+  document.getElementById('reach').innerHTML = isPublic
+    ? '<div class="row" style="background:color-mix(in oklab, var(--sage) 9%, var(--surface)); border-color:color-mix(in oklab, var(--sage) 28%, transparent)"><span style="color:var(--sage); font-weight:700; font-size:13px">✓ Reachable from anywhere</span><span class="muted" style="margin-left:auto">'+publicBase.replace(/^https?:\/\//,'')+'</span></div>'
+    : '<div class="warn">⚠ This relay is only reachable on your computer / local network. To let members join from anywhere, turn on a tunnel (Tailscale Funnel or Cloudflare) — the packaged app does this for you.</div>';
+
+  const initials = (n) => (n||'?').split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  async function poll() {
+    try {
+      const r = await fetch('/status', { cache:'no-store' });
+      const s = await r.json();
+      document.getElementById('dot').className = 'dot on';
+      document.getElementById('title').textContent = 'Your relay is running';
+      const up = Math.floor(s.uptimeMs/1000); const h=Math.floor(up/3600), m=Math.floor((up%3600)/60);
+      document.getElementById('sub').textContent = 'Up ' + (h?h+'h ':'') + m + 'm · port ' + s.port;
+      document.getElementById('s-churches').textContent = s.counts.churches;
+      document.getElementById('s-members').textContent = s.counts.members;
+      document.getElementById('s-events').textContent = s.counts.events;
+      document.getElementById('s-conns').textContent = s.counts.connections;
+      const ch = document.getElementById('churches');
+      ch.innerHTML = (s.churches||[]).length
+        ? s.churches.map(c => '<div class="ch"><div class="badge">'+initials(c.name)+'</div><div style="flex:1; min-width:0"><div style="font-weight:700; font-size:14px">'+(c.name||'(unnamed)')+'</div><div class="muted" style="font-family:ui-monospace,monospace; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">'+c.hex.slice(0,16)+'…</div></div></div>').join('')
+        : '<div class="warn">No church configured yet. Create one in the Steward console, then add its npub to relay/church.json.</div>';
+    } catch (e) {
+      document.getElementById('dot').className = 'dot off';
+      document.getElementById('title').textContent = 'Relay not reachable';
+      document.getElementById('sub').textContent = 'Is the relay running? Restart the app.';
+    }
+  }
+  poll(); setInterval(poll, 5000);
+</script>
+</body>
+</html>

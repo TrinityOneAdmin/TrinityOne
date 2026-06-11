@@ -28,12 +28,14 @@ function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]
 // the relay can host MULTIPLE churches — each manages its own data, scoped by author. Configure via
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
 const CHURCH_PUBS = new Set();
-const addChurch = (s) => { const h = toHexPub(s); if (h) CHURCH_PUBS.add(h); };
-(process.env.CHURCH_NPUB || '').split(',').forEach(addChurch);
+const CHURCH_NAMES = new Map();   // hex pub -> display name (for the Relay app dashboard)
+const addChurch = (s, name) => { const h = toHexPub(s); if (h) { CHURCH_PUBS.add(h); if (name) CHURCH_NAMES.set(h, name); } };
+(process.env.CHURCH_NPUB || '').split(',').forEach(s => addChurch(s));
 try {
   const cj = JSON.parse(readFileSync(join(ROOT, 'relay', 'church.json'), 'utf8'));
-  if (cj) { if (cj.npub) addChurch(cj.npub); (cj.npubs || []).forEach(addChurch); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c))); }
+  if (cj) { if (cj.npub) addChurch(cj.npub, cj.name); (cj.npubs || []).forEach(s => addChurch(s)); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c), c && c.name)); }
 } catch {}
+const STARTED_AT = Date.now();
 const MEMBERS = new Set();     // pubkeys that announced membership (minus those removed)
 const BROADCAST = new Set();   // group ids the church marked broadcast
 const NETWORKS = new Set();    // network pubkeys this church joined — allowed to publish church-style content here
@@ -211,6 +213,17 @@ async function getAudioFeed(url) {
 
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
+  // relay status (for the Relay app control dashboard)
+  if (route === '/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({
+      ok: true, port: PORT, uptimeMs: Date.now() - STARTED_AT,
+      writePolicy: CHURCH_PUBS.size > 0,
+      churches: [...CHURCH_PUBS].map(p => ({ name: CHURCH_NAMES.get(p) || '', hex: p })),
+      counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: events.length, connections: wss ? wss.clients.size : 0 },
+    }));
+    return;
+  }
   // audio (podcast) feed proxy
   if (route === '/audiofeed') {
     let u = ''; try { u = new URL(req.url, 'http://x').searchParams.get('url') || ''; } catch {}

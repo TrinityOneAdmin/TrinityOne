@@ -44,18 +44,28 @@ const gw = spawn(process.execPath, [join(ROOT, 'scripts', 'gateway.mjs'), String
 gw.stdout.on('data', d => process.stdout.write('  [relay] ' + d));
 gw.stderr.on('data', d => process.stderr.write('  [relay] ' + d));
 
-// once it's listening, print the reachability summary
+// open a URL in the OS default browser (the GUI control dashboard)
+function openInBrowser(u) {
+  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open';
+  exec(`${cmd} "${u}"`, () => {});
+}
+
+// once it's listening, print the reachability summary + open the control dashboard
 setTimeout(async () => {
   const { url, how } = await publicBase();
   const wss = url.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:') + '/relay';
+  const control = `http://localhost:${PORT}/relay-app/control.html?public=${encodeURIComponent(url)}`;
   line('\n  ✓ Relay running.  Reachability: ' + how);
   line('  ─'.repeat(40));
+  line('  Control panel   : ' + control);
   line('  Steward console : ' + url + '/steward.html');
   line('  Member relay    : ' + wss);
   line('  Members join via the invite QR you share from the console.');
   if (how !== 'Tailscale Funnel') line('\n  ⚠  Not publicly reachable yet. To let members join from anywhere,\n     turn on a tunnel (Tailscale Funnel or Cloudflare) — the packaged app will do this for you.');
   line('  ─'.repeat(40));
+  line('  Opening the control panel in your browser…');
   line('  Leave this running. Close the window to stop the relay.\n');
+  if (!process.env.RELAY_NO_OPEN) openInBrowser(control);
 }, 1500);
 
 const stop = () => { try { gw.kill('SIGTERM'); } catch {} process.exit(0); };
