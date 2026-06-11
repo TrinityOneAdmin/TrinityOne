@@ -126,6 +126,7 @@ window.Fellowship = {
   // leave a church: tombstone the membership event (they vanish from the steward's list unless they
   // have posted). Wired for when an unfollow action exists.
   async leaveMembership(npubOrHex) {
+    if (!sk) await window.Fellowship.ready;
     const cp = toPub(npubOrHex); if (!cp || !sk) return;
     const evt = finalizeEvent({
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
@@ -436,6 +437,7 @@ window.Fellowship = {
   },
   // member RSVP to a calendar event — one addressable doc per (member,event), p-tagged to church
   async setEventRsvp(churchNpub, eventId, verdict) {
+    if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) return;
     const content = JSON.stringify({ event: eventId, v: verdict });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }, sk);
@@ -454,6 +456,7 @@ window.Fellowship = {
   },
   // member sets the Sundays they're unavailable (own addressable doc, p-tagged to church)
   async setUnavailable(churchNpub, dates) {
+    if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) return;
     const me = window.Fellowship.myPubkey;
     const content = JSON.stringify({ dates: dates || [] });
