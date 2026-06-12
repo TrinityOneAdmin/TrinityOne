@@ -62,7 +62,11 @@ if [[ $DO_GW == 1 ]]; then
   run "systemctl --user restart trinity-gateway"
 fi
 
-say "release complete${DRY:+ (dry run — nothing changed)}"
-[[ $DO_WEB == 1 && $DRY == 0 ]] && echo "   live: https://trinityone.pages.dev"
-[[ $DRY == 1 ]] && echo "   (dry run — re-run without --dry to apply)"
+if [[ $DRY == 1 ]]; then
+  say "release complete (dry run — nothing changed)"
+  echo "   (re-run without --dry to apply)"
+else
+  say "release complete"
+  [[ $DO_WEB == 1 ]] && echo "   live: https://trinityone.pages.dev"
+fi
 exit 0
