@@ -97,8 +97,8 @@ function Onboarding({ onDone, ctx }) {
 
         {step === 1 && (
           <div style={{ paddingTop: 8 }}>
-            <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, margin: '0 0 8px' }}>What should people call you?</h1>
-            <p style={{ fontSize: 16, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 0 22px' }}>This is the only thing others see — <b style={{ color: 'var(--ink)' }}>never</b> your phone number or real name. You can change it any time.</p>
+            <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, margin: '0 0 8px' }}>What should your church call you?</h1>
+            <p style={{ fontSize: 16, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 0 22px' }}>Use your name so your church family recognises you. It’s all anyone sees — <b style={{ color: 'var(--ink)' }}>never</b> your phone number or email. You can change it any time.</p>
             <input value={name} onChange={e => setName(e.target.value)} maxLength={40} placeholder="e.g. Maria" autoFocus
               style={{ width: '100%', boxSizing: 'border-box', height: 56, padding: '0 18px', borderRadius: 16, textAlign: 'center', marginBottom: 22,
                 border: '1.5px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 19, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
@@ -159,7 +159,7 @@ function Onboarding({ onDone, ctx }) {
         {step === 0 && <button onClick={() => setStep(1)} style={bigBtn(true)}>Get started</button>}
         {step === 1 && <React.Fragment>
           <button onClick={() => setStep(2)} style={bigBtn(true)}>Continue</button>
-          <button onClick={() => { setName(''); setStep(2); }} style={textBtn()}>Stay anonymous</button>
+          <button onClick={() => { setName(''); setStep(2); }} style={textBtn()}>Skip — stay private for now</button>
         </React.Fragment>}
         {step === 2 && <React.Fragment>
           <button onClick={() => setStep(3)} disabled={!saved} style={{ ...bigBtn(true), opacity: saved ? 1 : .5 }}>Continue</button>

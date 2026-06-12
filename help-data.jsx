@@ -13,7 +13,7 @@ window.HelpData = {
         { type: 'list', items: [
           { lead: 'No account, no password, no email.', text: 'There’s nothing to sign up for and nothing to forget.' },
           { lead: 'Your phone holds a private “key” that is you.', text: 'It’s made for you automatically and stays on your phone. It’s how your church knows it’s really you.' },
-          { lead: 'You stay anonymous unless you choose a name.', text: 'No phone number, no real name. Pick a friendly name your church sees — or stay “Anonymous”.' },
+          { lead: 'Use your name so your church recognises you.', text: 'No phone number or email — just a friendly name your church sees. You can keep it private if you’d rather.' },
           { lead: 'No company in the middle.', text: 'Not even we can read into your account or reset it for you.' },
         ] },
         { type: 'callout', tone: 'gold', text: 'Wonderful for privacy — but it means one thing is now yours to do: a short backup. The next guide is the most important one. Please read it.' },
@@ -51,7 +51,7 @@ window.HelpData = {
       minutes: 2,
       blocks: [
         { type: 'list', items: [
-          { lead: 'Name', text: 'Tap your circle at the top, choose Display name, and type a friendly name — e.g. “Maria from Tuesday group”. Leave it blank to stay Anonymous.' },
+          { lead: 'Name', text: 'Tap your circle at the top, choose Display name, and type a friendly name — e.g. “Maria from Tuesday group”. Leave it blank to keep it private.' },
           { lead: 'Picture', text: 'Choose a colour with your initial, or pick a small picture from the gallery. You can’t upload a photo — that keeps everyone private.' },
         ] },
         { type: 'note', text: 'You can change these any time. They’re the only things others see — never your phone number, email, or real name.' },

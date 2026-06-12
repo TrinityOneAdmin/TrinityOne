@@ -21,7 +21,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
         <h1 style={{ margin: '0 14px', fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 700, letterSpacing: '-.5px', lineHeight: 1.1 }}>
           What should your<br/>church call you?</h1>
         <p style={{ margin: '10px 26px 0', fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)', textWrap: 'pretty' }}>
-          Pick a name and a mark. No email, no phone — just how friends recognise you. You can stay anonymous.</p>
+          Pick a name and a mark so your church family recognises you. No email, no phone — and you can keep it private if you’d rather.</p>
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '6px 22px 12px' }}>
@@ -47,7 +47,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
         <button onClick={onSkip} style={{
           width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer',
           color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)',
-        }}>Stay anonymous for now</button>
+        }}>Skip for now</button>
       </div>
     </div>
   );
@@ -161,7 +161,7 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
           </div>
           <h1 style={{ margin: '0 14px', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, letterSpacing: '-.5px', lineHeight: 1.1 }}>Your new start</h1>
           <p style={{ margin: '9px 26px 0', fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.5, color: 'var(--ink-2)', textWrap: 'pretty' }}>
-            Pick a name and a mark for the fresh identity. You can stay anonymous.</p>
+            Pick a name and a mark for the fresh identity. You can keep it private if you’d rather.</p>
         </div>
 
         <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '6px 22px 12px' }}>
@@ -230,7 +230,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         </div>
         <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 22px 30px' }}>
           <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' }}>DISPLAY NAME</label>
-          <input value={name} onChange={e => setName(e.target.value.slice(0, 24))} placeholder="Leave blank to stay anonymous" style={{
+          <input value={name} onChange={e => setName(e.target.value.slice(0, 24))} placeholder="Your name (optional)" style={{
             width: '100%', height: 52, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)',
             padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)' }} />
           <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 12px' }}>YOUR MARK</label>
