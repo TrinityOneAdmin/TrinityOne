@@ -1,7 +1,7 @@
 // TrinityOne service worker — makes the app boot offline.
 // The app SHELL (html/jsx/libs/fonts) is cached here; Bible MODULES live in IndexedDB (engine.js)
 // and chat goes over the relay WebSocket — neither is touched by this worker.
-const CACHE = 'trinity-shell-v41';   // bump on each app deploy so installed PWAs refresh the shell
+const CACHE = 'trinity-shell-v42';   // bump on each app deploy so installed PWAs refresh the shell
 
 // Precache the boot-critical core. Everything else same-origin is cached on first fetch, so one
 // online visit (to install / join) makes every screen available offline afterwards.
@@ -35,16 +35,19 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;   // POSTs, cross-origin: pass through
-  // the relay (WebSocket upgrade) and the large Bible modules (owned by IndexedDB) are left alone
-  if (url.pathname.startsWith('/relay') || url.pathname.startsWith('/modules/') || url.pathname.startsWith('/push/')) return;
-  // cache-first, then refresh in the background so the next load picks up new deploys
-  e.respondWith(caches.match(e.request).then((cached) => {
-    const network = fetch(e.request).then((res) => {
-      if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
-      return res;
-    }).catch(() => cached);
-    return cached || network;
-  }));
+  // the relay (WebSocket), the large Bible modules (owned by IndexedDB) and the dynamic API endpoints
+  // are left alone — never cached
+  if (/^\/(relay|modules\/|push\/|config|status|feed|audiofeed)/.test(url.pathname)) return;
+  // App shell (navigations + HTML/JSX source) is network-first, so a new deploy is picked up on the
+  // next load instead of being pinned to the old cached copy; it falls back to cache when offline.
+  const isShell = e.request.mode === 'navigate' || url.pathname === '/' || /\.(html|jsx)$/.test(url.pathname);
+  const fresh = (req) => fetch(req).then((res) => { if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); } return res; });
+  if (isShell) {
+    e.respondWith(fresh(e.request).catch(() => caches.match(e.request).then((c) => c || caches.match('./index.html'))));
+    return;
+  }
+  // everything else (big immutable libs, fonts, wasm): cache-first, refresh in the background
+  e.respondWith(caches.match(e.request).then((cached) => cached || fresh(e.request).catch(() => cached)));
 });
 
 // ---- web push: show serving requests even when the app isn't open (PWA) ----
