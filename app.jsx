@@ -334,6 +334,10 @@ function App() {
     const rm = String(raw || '').match(/[?&]relay=([^&\s]+)/);
     if (rm && window.Fellowship && window.Fellowship.addRelay) {
       try { const relay = decodeURIComponent(rm[1]); if (/^wss?:\/\//i.test(relay)) window.Fellowship.addRelay(relay); } catch (e) {}
+    } else if (window.Fellowship && window.Fellowship.addRelay && window.Fellowship.CANONICAL_RELAY && !(window.Fellowship.relays || []).length) {
+      // bare npub (no relay in the link) and no relay yet (e.g. the CDN-hosted app) → fall back to the
+      // pilot relay so the church's name + groups can resolve.
+      window.Fellowship.addRelay(window.Fellowship.CANONICAL_RELAY);
     }
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
@@ -777,7 +781,7 @@ function App() {
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
                 <DesktopNav active={tab} onChange={setTab} />
-                {tab === 'chat' ? (
+                {tab === 'chat' && ctx.church && ctx.church.npub ? (
                   <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
                     <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>

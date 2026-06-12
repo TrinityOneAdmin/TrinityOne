@@ -4970,6 +4970,7 @@
   var _staticHost = !!(_loc && _loc.host && /\.(github\.io|pages\.dev|netlify\.app)$/i.test(_loc.host));
   var _originRelay = !_native && !_staticHost && _loc && _loc.host ? (_loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay" : null;
   var DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];
+  var CANONICAL_RELAY = "wss://trinityone.tailbeaac0.ts.net/relay";
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
     try {
@@ -5034,6 +5035,7 @@
   });
   window.Fellowship = {
     relays: loadRelays(),
+    CANONICAL_RELAY,
     myPubkey: null,
     myProfile: null,
     churchPub: null,

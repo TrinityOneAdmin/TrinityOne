@@ -138,6 +138,13 @@ Bible reading (Open.Bible) and NIP-29 community chat over NDK. Self-custodial id
 ### Phase 2 — Provision
 Lightning giving: NIP-57 zaps + NIP-47 wallet connect via ndk-wallet. Scoped, reviewed separately because it's money.
 
+- **Church-adjacent charities** *(post-pilot design conversation — not yet scoped)*: a way for a charity
+  linked to a church (or a whole network) to receive donations from that church/network's members — e.g.
+  a missions org, food bank, or partner ministry the church endorses. Real design questions: who can add/
+  endorse a linked charity (steward? network?), how members discover it, trust/verification so it can't be
+  spoofed, whether gifts route through the church or straight to the charity's own key, and how it shows in
+  giving history. Have this once the pilot's own giving is proven.
+
 ### Phase 3 — Rota & Calendar  *(future release — proposed, not yet committed)*
 ChurchSuite-style scheduling on the same Nostr infrastructure.
 

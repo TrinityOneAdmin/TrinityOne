@@ -23,7 +23,7 @@ check "reader (sql.js, offline-capable)" "?module=$MOD&tab=read"          'reade
 check "today (verse of the day)"         "?module=$MOD&tab=today"         'Verse of the day'
 check "plans (real plan)"                "?module=$MOD&tab=plans"         'The Gospel of John'
 check "search (engine)"                  "?module=$MOD&tab=search&q=light" 'class="st"|reader-body|mark'
-check "chat (groups list)"               "?module=$MOD&tab=chat"          'Your groups'
+check "chat (groups or join prompt)"     "?module=$MOD&tab=chat"          'Your groups|Join your church'
 check "module store (eBible mirror)"     "?module=$MOD&store=language"    'translations'
 check "boot splash present"              "?module=$MOD"                   'to-splash'
 

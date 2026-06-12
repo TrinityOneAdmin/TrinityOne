@@ -265,7 +265,8 @@ function ChatScreen({ ctx }) {
   // real, steward-defined groups when the church has them; otherwise the sample set for this church
   const churchGroups = realGroups.length
     ? realGroups.map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || '') }))
-    : D.GROUPS.filter(g => g.church === ctx.church.id);
+    : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id));
+  const notJoined = !(ctx.church && ctx.church.npub);   // hasn't joined a real church yet
   const teamGroups = churchGroups.filter(g => g.team);
   const plainGroups = churchGroups.filter(g => !g.team);
   const groupIdsKey = churchGroups.map(g => g.id).join(',');
@@ -388,6 +389,13 @@ function ChatScreen({ ctx }) {
 
       {GIVING_ON && view === 'giving' ? (
         <GivingView ctx={ctx} balance={ctx.walletSats} setBalance={ctx.setWalletSats} history={ctx.giving} setHistory={ctx.setGiving} />
+      ) : notJoined ? (
+        <div style={{ textAlign: 'center', padding: '44px 22px', animation: 'trinityFade .4s ease both' }}>
+          <div style={{ width: 66, height: 66, borderRadius: 20, margin: '0 auto 16px', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}><Icon name="chat" size={32} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 23, marginBottom: 8 }}>Join your church</div>
+          <p style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 320, margin: '0 auto 22px' }}>Community is where your church gathers — groups, prayer requests and notices. Scan the invite your church shares, or paste its code, to join in.</p>
+          <button onClick={() => ctx.openChurchSwitcher && ctx.openChurchSwitcher('follow')} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '13px 22px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 15 }}><Icon name="qr" size={18} color="#fff" /> Join a church</button>
+        </div>
       ) : (
       <React.Fragment>
       {/* search */}
