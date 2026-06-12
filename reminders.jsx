@@ -71,7 +71,10 @@
         if (!vapid || !vapid.publicKey) return;
         sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(vapid.publicKey) });
       }
-      await fetch('/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sub, pubkey }) });
+      // prove control of the key (NIP-98), bound to this endpoint, so the relay won't accept a
+      // subscription registered under someone else's pubkey
+      const auth = (window.Fellowship && window.Fellowship.signAuth) ? await window.Fellowship.signAuth(sub.endpoint) : null;
+      await fetch('/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sub, auth }) });
       pushDone = pubkey;
     } catch (e) { /* push not available — local reminders still work */ }
   }

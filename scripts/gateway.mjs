@@ -10,6 +10,7 @@ import { readFileSync, writeFileSync, renameSync, statSync, createReadStream } f
 import { extname, normalize, join, sep } from 'path';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
+import { verifyEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
 import { randomBytes, timingSafeEqual } from 'crypto';
 
@@ -362,7 +363,24 @@ function serveStatic(req, res) {
   if (route === '/push/subscribe') {
     if (req.method !== 'POST') { res.writeHead(405).end('method'); return; }
     let body = ''; req.on('data', c => { body += c; if (body.length > 1e5) req.destroy(); });
-    req.on('end', () => { try { const { sub, pubkey } = JSON.parse(body); if (sub && sub.endpoint && /^[0-9a-f]{64}$/i.test(pubkey || '')) { const list = pushSubs[pubkey] = pushSubs[pubkey] || []; if (!list.some(s => s.endpoint === sub.endpoint)) { list.push(sub); saveSubs(); } } res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); res.end('ok'); } catch { res.writeHead(400).end('bad'); } });
+    req.on('end', () => {
+      try {
+        const { sub, auth } = JSON.parse(body);
+        const j401 = (m) => { res.writeHead(401, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' }); res.end(m); };
+        if (!sub || !sub.endpoint) { res.writeHead(400).end('bad'); return; }
+        // require a NIP-98-style proof the subscriber controls the pubkey, bound to THIS endpoint, fresh —
+        // so nobody can register their endpoint under another member's key (notification hijack).
+        if (!auth || typeof auth !== 'object' || !verifyEvent(auth)) return j401('unauthorized');
+        const u = (auth.tags.find(t => t[0] === 'u') || [])[1];
+        if (u !== sub.endpoint) return j401('endpoint mismatch');
+        if (Math.abs(Math.floor(Date.now() / 1000) - (auth.created_at || 0)) > 300) return j401('stale proof');
+        const pubkey = auth.pubkey;
+        if (!/^[0-9a-f]{64}$/i.test(pubkey)) { res.writeHead(400).end('bad'); return; }
+        const list = pushSubs[pubkey] = pushSubs[pubkey] || [];
+        if (!list.some(s => s.endpoint === sub.endpoint)) { list.push(sub); saveSubs(); }
+        res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); res.end('ok');
+      } catch { res.writeHead(400).end('bad'); }
+    });
     return;
   }
   let p; try { p = decodeURIComponent(route); } catch { res.writeHead(400).end('bad request'); return; }

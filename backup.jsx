@@ -14,21 +14,22 @@
       throw new Error('Backups need a secure connection. Open this over https (your church’s https link) — over plain http the browser disables encryption.');
     }
   }
-  async function deriveKey(pass, salt) {
+  const KDF_ITER = 600000;   // OWASP-2023 minimum for PBKDF2-SHA256 (older backups carry their own count)
+  async function deriveKey(pass, salt, iter) {
     ensureCrypto();
     const base = await crypto.subtle.importKey('raw', TE.encode(pass), 'PBKDF2', false, ['deriveKey']);
-    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iter || KDF_ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   }
   async function encryptObj(obj, pass) {
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await deriveKey(pass, salt);
+    const key = await deriveKey(pass, salt, KDF_ITER);
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, TE.encode(JSON.stringify(obj)));
-    return JSON.stringify({ v: 1, app: 'trinityone-backup', salt: b64(salt), iv: b64(iv), data: b64(ct) }, null, 0);
+    return JSON.stringify({ v: 2, app: 'trinityone-backup', kdf: 'PBKDF2-SHA256', iter: KDF_ITER, salt: b64(salt), iv: b64(iv), data: b64(ct) }, null, 0);
   }
   async function decryptStr(str, pass) {
     let env; try { env = JSON.parse(str); } catch { throw new Error('That isn’t a TrinityOne backup file.'); }
     if (!env || env.app !== 'trinityone-backup') throw new Error('That isn’t a TrinityOne backup file.');
-    const key = await deriveKey(pass, unb64(env.salt));
+    const key = await deriveKey(pass, unb64(env.salt), env.iter || 150000);
     let pt; try { pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data)); }
     catch { throw new Error('Wrong passphrase, or the file is damaged.'); }
     return JSON.parse(TD.decode(pt));

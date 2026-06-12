@@ -5057,6 +5057,24 @@
       window.Fellowship.churchPub = toPub(npubOrHex);
       return window.Fellowship.churchPub;
     },
+    // NIP-98-style signed proof that we control this key, bound to a URL/endpoint — so a push
+    // subscription can't be registered under another member's pubkey. Returns a signed event or null.
+    async signAuth(url) {
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+          return null;
+        }
+      }
+      if (!sk) return null;
+      return finalizeEvent2({
+        kind: 27235,
+        created_at: Math.floor(Date.now() / 1e3),
+        tags: [["u", String(url || "")], ["method", "POST"]],
+        content: ""
+      }, sk);
+    },
     // announce membership of a church (a signed, addressable presence event) so the steward can see
     // people who joined even if they never post. Idempotent (addressable, d=member:<churchPub>).
     // This makes the member's pseudonymous npub visible as a member of this church.
