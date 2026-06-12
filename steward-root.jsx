@@ -129,6 +129,14 @@ function useStewardMembers() {
 }
 window.useStewardMembers = useStewardMembers;
 
+function useStewardBlocked() {
+  const idv = useStewardIdv();
+  const [blocked, setBlocked] = useSt([]);
+  useStE(() => window.Steward.subscribeBlocked(setBlocked), [idv]);
+  return blocked;   // array of blocked hex pubkeys
+}
+window.useStewardBlocked = useStewardBlocked;
+
 // live relay status (re-probed every 10s) + the church's footprint count on the relay
 function useStewardRelays() {
   const [status, setStatus] = useSt([]);

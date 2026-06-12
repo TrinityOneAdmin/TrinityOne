@@ -32,6 +32,7 @@ const EVENT_D = 'trinityone/event:';        // calendar event (church)
 const REQUEST_D = 'trinityone/request:';    // steward -> member "can you serve?" (church, p=member)
 const REQREPLY_D = 'trinityone/reqreply:';  // member -> steward accept/decline/swap (member, p=church)
 const NETWORK_D = 'trinityone/network:';    // church -> network membership ("we belong to X"), p=network
+const BLOCKED_D = 'trinityone/blocked:';    // this church's blocklist (banned member pubkeys), d=blocked:<churchpub>
 const now = () => Math.floor(Date.now() / 1000);
 function toPubHex(npubOrHex) { try { if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase(); const d = nip19decode(npubOrHex); return d && d.type === 'npub' ? d.data : null; } catch { return null; } }
 
@@ -280,7 +281,8 @@ window.Steward = {
   publishGroup(group) {
     if (!sk) return Promise.resolve(null);
     const id = group.id || ('grp' + Date.now());
-    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '', leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === 'number' ? group.order : undefined });
+    const inviteOnly = group.visibility === 'invite';
+    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '', leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === 'number' ? group.order : undefined, visibility: inviteOnly ? 'invite' : undefined, members: inviteOnly && Array.isArray(group.members) ? group.members : undefined });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET]], content }, sk))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },
@@ -291,6 +293,27 @@ window.Steward = {
   removeGroup(id) {
     if (!sk) return Promise.resolve(null);
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET], ['deleted', '1']], content: '' }, sk));
+  },
+  // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
+  // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
+  subscribeBlocked(onBlocked) {
+    let cur = [];
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d !== BLOCKED_D + pub) return;
+        try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
+        onBlocked(cur);
+      },
+      oneose() { onBlocked(cur); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys)
+    if (!sk) return Promise.resolve(null);
+    const list = [...new Set((pubkeys || []).filter(Boolean))];
+    const content = JSON.stringify({ pubkeys: list });
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk));
   },
   subscribeGroups(onGroups) {
     const byId = new Map();

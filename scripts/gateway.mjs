@@ -28,6 +28,7 @@ const NET = 'trinityone';
 const GROUP_D = 'trinityone/group:', FUND_D = 'trinityone/fund:', MEMBER_D = 'trinityone/member:', PLAN_D = 'trinityone/plan:', DEVO_D = 'trinityone/devotional:', ROTA_D = 'trinityone/rota:';
 const ROSTER_D = 'trinityone/roster:', SERVICE_D = 'trinityone/service:', EVENT_D = 'trinityone/event:', REQUEST_D = 'trinityone/request:';
 const NETWORK_D = 'trinityone/network:';   // the church declares it belongs to a network (the network's pubkey)
+const BLOCKED_D = 'trinityone/blocked:';   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
 function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch { return null; } }
 // the relay can host MULTIPLE churches — each manages its own data, scoped by author. Configure via
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
@@ -60,6 +61,11 @@ const MEMBERS = new Set();     // pubkeys that announced membership (minus those
 const BROADCAST = new Set();   // group ids the church marked broadcast
 const NETWORKS = new Set();    // network pubkeys this church joined — allowed to publish church-style content here
 const GROUP_LEADERS = new Map(); // groupId -> Set(pubkey) — members a leader empowered to post events for that group
+const BLOCKED_BY = new Map();    // churchpub -> Set(blocked member pubkeys); BLOCKED is the union for fast checks
+const BLOCKED = new Set();       // banned pubkeys — rejected on write, withheld on read
+function rebuildBlocked() { BLOCKED.clear(); for (const s of BLOCKED_BY.values()) for (const p of s) BLOCKED.add(p); }
+const GROUP_VIS = new Map();     // groupId -> 'open' | 'invite'
+const GROUP_MEMBERS = new Map(); // groupId -> Set(pubkey) allowed to post in an invite-only group
 
 // ---- web push (VAPID): notify members of serving requests in real time (PWA) ----
 const VAPID_PATH = join(ROOT, 'relay', 'vapid.json');
@@ -113,10 +119,18 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
-    if (c.kind === 'broadcast' && !removed) BROADCAST.add(id); else BROADCAST.delete(id);
+    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); return; }
+    if (c.kind === 'broadcast') BROADCAST.add(id); else BROADCAST.delete(id);
     // a group def may name member leaders who can post events for that group
-    if (removed) GROUP_LEADERS.delete(id);
-    else GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : []));
+    GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : []));
+    // invite-only groups carry the allowlist of member pubkeys who may post
+    if (c.visibility === 'invite') { GROUP_VIS.set(id, 'invite'); GROUP_MEMBERS.set(id, new Set((Array.isArray(c.members) ? c.members : []).map(p => toHexPub(p) || p).filter(Boolean))); }
+    else { GROUP_VIS.set(id, 'open'); GROUP_MEMBERS.delete(id); }
+  }
+  else if (d.startsWith(BLOCKED_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(BLOCKED_D.length) === e.pubkey) {
+    const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
+    BLOCKED_BY.set(e.pubkey, set); rebuildBlocked();
+    for (const pk of set) MEMBERS.delete(pk);   // a blocked member drops off the roster
   }
 }
 // the group id an event-doc is scoped to (its non-NET 't' tag), or '' for a whole-church event
@@ -125,6 +139,7 @@ function accept(e) {
   if (!CHURCH_PUBS.size) return true;                            // unconfigured = open
   // a network a church belongs to may publish church-style content here (groups/events/plans/posts)
   const isChurch = CHURCH_PUBS.has(e.pubkey), isNetwork = NETWORKS.has(e.pubkey), isLeader = isChurch || isNetwork, isMember = isLeader || MEMBERS.has(e.pubkey);
+  if (BLOCKED.has(e.pubkey) && !isLeader) return false;          // a blocked member can't write anything
   const k = e.kind;
   if (k === 0) return true;                                      // profiles (replaceable, low risk)
   if (k === 30078) {
@@ -135,11 +150,16 @@ function accept(e) {
       return !!(leaders && leaders.has(e.pubkey));
     }
     if (d.startsWith(GROUP_D) || d.startsWith(FUND_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
-      || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(REQUEST_D)) return isLeader;   // church/network definitions
+      || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(REQUEST_D) || d.startsWith(BLOCKED_D)) return isLeader;   // church/network definitions (incl. the blocklist)
     if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
     return isMember;                                            // member's own data (MyData)
   }
-  if (k === 1) { const g = gidOf(e); if (g && BROADCAST.has(g)) return isLeader; return isMember; }  // broadcast = church/network
+  if (k === 1) {   // chat
+    const g = gidOf(e);
+    if (g && BROADCAST.has(g)) return isLeader;                 // broadcast channel = church/network only
+    if (g && GROUP_VIS.get(g) === 'invite') { const mem = GROUP_MEMBERS.get(g); return isLeader || !!(mem && mem.has(e.pubkey)); }  // invite-only group
+    return isMember;
+  }
   if (k === 7 || k === 4 || k === 1059 || k === 1060) return isMember;    // reactions + DMs
   return isMember;                                               // anything else: members only
 }
@@ -555,7 +575,8 @@ wss.on('connection', ws => {
       let filters = rest.slice(1);
       if (filters.length === 1 && Array.isArray(filters[0])) filters = filters[0];
       subs.get(ws).set(subId, filters);
-      let matched = events.filter(e => matchAny(e, filters));
+      // withhold a blocked member's existing events from reads (they're banned, not just write-blocked)
+      let matched = events.filter(e => matchAny(e, filters) && !BLOCKED.has(e.pubkey));
       const lim = Math.max(0, ...filters.map(f => f.limit || 0));
       if (lim) matched = matched.slice(-lim);
       for (const e of matched) ws.send(JSON.stringify(['EVENT', subId, e]));

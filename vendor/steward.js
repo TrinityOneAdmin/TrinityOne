@@ -8771,6 +8771,7 @@ zoo`.split("\n");
   var REQUEST_D = "trinityone/request:";
   var REQREPLY_D = "trinityone/reqreply:";
   var NETWORK_D = "trinityone/network:";
+  var BLOCKED_D = "trinityone/blocked:";
   var now = () => Math.floor(Date.now() / 1e3);
   function toPubHex(npubOrHex) {
     try {
@@ -9143,7 +9144,8 @@ zoo`.split("\n");
     publishGroup(group) {
       if (!sk) return Promise.resolve(null);
       const id = group.id || "grp" + Date.now();
-      const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === "number" ? group.order : void 0 });
+      const inviteOnly = group.visibility === "invite";
+      const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === "number" ? group.order : void 0, visibility: inviteOnly ? "invite" : void 0, members: inviteOnly && Array.isArray(group.members) ? group.members : void 0 });
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET]], content }, sk)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
     // set which members can post events for a group (re-publishes the group def, preserving its fields)
@@ -9153,6 +9155,38 @@ zoo`.split("\n");
     removeGroup(id) {
       if (!sk) return Promise.resolve(null);
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+    },
+    // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
+    // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
+    subscribeBlocked(onBlocked) {
+      let cur = [];
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d !== BLOCKED_D + pub) return;
+          try {
+            cur = JSON.parse(e.content).pubkeys || [];
+          } catch {
+            cur = [];
+          }
+          onBlocked(cur);
+        },
+        oneose() {
+          onBlocked(cur);
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    setBlocked(pubkeys) {
+      if (!sk) return Promise.resolve(null);
+      const list = [...new Set((pubkeys || []).filter(Boolean))];
+      const content = JSON.stringify({ pubkeys: list });
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }, sk));
     },
     subscribeGroups(onGroups) {
       const byId = /* @__PURE__ */ new Map();

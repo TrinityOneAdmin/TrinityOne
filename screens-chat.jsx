@@ -262,9 +262,13 @@ function ChatScreen({ ctx }) {
   }, [ctx.church && ctx.church.npub]);
 
   const accentFor = (s) => { const cs = ['var(--clay)', 'var(--sage)', 'var(--gold)', '#5360D6', '#C24B7A']; let h = 0; for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return cs[h % cs.length]; };
-  // real, steward-defined groups when the church has them; otherwise the sample set for this church
+  // real, steward-defined groups when the church has them; otherwise the sample set for this church.
+  // invite-only groups are hidden unless I'm on their member list (the relay also enforces posting).
+  const myPub = window.Fellowship && window.Fellowship.myPubkey;
   const churchGroups = realGroups.length
-    ? realGroups.map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || '') }))
+    ? realGroups
+        .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
+        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite' }))
     : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id));
   const notJoined = !(ctx.church && ctx.church.npub);   // hasn't joined a real church yet
   const teamGroups = churchGroups.filter(g => g.team);

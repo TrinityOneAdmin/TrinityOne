@@ -693,16 +693,25 @@ function NewGroupModal({ open, onClose }) {
   const [name, setName] = React.useState('');
   const [kind, setKind] = React.useState('group');
   const [sub, setSub] = React.useState('');
-  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); } }, [open]);
+  const [inviteOnly, setInviteOnly] = React.useState(false);
+  const [sel, setSel] = React.useState(new Set());   // chosen member pubkeys for an invite-only group
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setSel(new Set()); } }, [open]);
   if (!open) return null;
-  const create = () => { if (!name.trim()) return; window.Steward.publishGroup({ name: name.trim(), kind, sub: sub.trim() }); onClose(); };
+  const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
+  const create = () => {
+    if (!name.trim()) return;
+    const g = { name: name.trim(), kind, sub: sub.trim() };
+    if (kind === 'group' && inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
+    window.Steward.publishGroup(g); onClose();
+  };
   const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 30,
       background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
       <div style={{ width: 480, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
-        <div style={{ padding: '24px 26px 0' }}>
+        <div className="no-scrollbar" style={{ padding: '24px 26px 0', maxHeight: '64vh', overflowY: 'auto' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, marginBottom: 4 }}>New group</div>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18, lineHeight: 1.5 }}>A chat room (or a broadcast channel) for your church. It’s published as a signed event your members can join.</div>
           <div style={lbl}>NAME</div>
@@ -712,6 +721,30 @@ function NewGroupModal({ open, onClose }) {
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '6px 0 16px', lineHeight: 1.45 }}>{kind === 'broadcast' ? 'Only stewards post; everyone reads. Good for announcements.' : 'Everyone in the group can post and reply.'}</div>
           <div style={lbl}>DESCRIPTION</div>
           <input value={sub} onChange={e => setSub(e.target.value)} placeholder="Optional — e.g. Whole church" style={{ ...fld, fontSize: 14.5 }} />
+          {kind === 'group' ? (
+            <React.Fragment>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '18px 0 0', cursor: 'pointer' }}>
+                <input type="checkbox" checked={inviteOnly} onChange={e => setInviteOnly(e.target.checked)} style={{ marginTop: 2 }} />
+                <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>Invite-only</b> — hidden from the group list, and only the members you choose can post (the relay enforces it).</span>
+              </label>
+              {inviteOnly ? (
+                <div style={{ marginTop: 14 }}>
+                  <div style={lbl}>WHO’S IN · {sel.size}</div>
+                  {members.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members have joined yet — create the group, then add people here once they’re in.</div> : (
+                    <div className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {members.map(m => { const on = sel.has(m.pubkey); return (
+                        <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+                          <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
+                          <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)', marginLeft: 'auto' }}>{shortNpub(m.npub)}</span>
+                        </button>
+                      ); })}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </React.Fragment>
+          ) : null}
         </div>
         <div style={{ display: 'flex', gap: 10, padding: '20px 26px 22px' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px' }}>Cancel</button>
@@ -1363,16 +1396,22 @@ window.DashResources = DashResources;
 
 function DashMembers() {
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
+  const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const blockedSet = new Set(blockedList);
   const [copied, setCopied] = React.useState('');
   const [showInactive, setShowInactive] = React.useState(false);
+  const [showBlocked, setShowBlocked] = React.useState(false);
+  const [confirmBlock, setConfirmBlock] = React.useState(null);
   const doCopy = (np) => { copyText(np); setCopied(np); setTimeout(() => setCopied(''), 1400); };
+  const block = (pk) => { setConfirmBlock(null); window.Steward.setBlocked([...blockedList, pk]); };
+  const unblock = (pk) => window.Steward.setBlocked(blockedList.filter(p => p !== pk));
   const total = members.length;
   // "last seen" = newest of a post or a membership heartbeat. No activity in 90 days → inactive list.
   const INACTIVE_DAYS = 90;
   const cutoff = Math.floor(Date.now() / 1000) - INACTIVE_DAYS * 86400;
   const seen = (m) => Math.max(m.lastTs || 0, m.joined || 0);
-  const activeM = members.filter(m => seen(m) >= cutoff);
-  const inactiveM = members.filter(m => seen(m) < cutoff);
+  const activeM = members.filter(m => seen(m) >= cutoff && !blockedSet.has(m.pubkey));
+  const inactiveM = members.filter(m => seen(m) < cutoff && !blockedSet.has(m.pubkey));
   const chatting = activeM.filter(m => m.count > 0).length;
   const memberRow = (m, inactive) => {
     const named = !!m.name;
@@ -1394,6 +1433,9 @@ function DashMembers() {
           <Icon name="chat" size={15} color="currentColor" /> Chat</button>
         <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
           <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
+        {confirmBlock === m.pubkey
+          ? <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Confirm block</button>
+          : <button onClick={() => setConfirmBlock(m.pubkey)} title="Remove / block this member" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="shield" size={15} color="currentColor" /></button>}
       </div>
     );
   };
@@ -1415,6 +1457,23 @@ function DashMembers() {
                 <Icon name={showInactive ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showInactive ? 'Hide' : 'See'} inactive · {inactiveM.length} (no activity in {INACTIVE_DAYS} days)
               </button>
               {showInactive ? inactiveM.map(m => memberRow(m, true)) : null}
+            </React.Fragment>
+          ) : null}
+          {blockedList.length ? (
+            <React.Fragment>
+              <button onClick={() => setShowBlocked(s => !s)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, border: '1px dashed color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'var(--surface)', cursor: 'pointer', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>
+                <Icon name={showBlocked ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showBlocked ? 'Hide' : 'See'} blocked · {blockedList.length}
+              </button>
+              {showBlocked ? blockedList.map(pk => (
+                <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', opacity: 0.85 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="shield" size={18} /></div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>Blocked member</div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{String(pk).slice(0, 12)}…</div>
+                  </div>
+                  <button onClick={() => unblock(pk)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', color: 'var(--sage)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Unblock</button>
+                </div>
+              )) : null}
             </React.Fragment>
           ) : null}
         </div>
