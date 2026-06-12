@@ -37,9 +37,17 @@ one's up, else your LAN address), and prints:
 
 Leave the window open; close it to stop the relay.
 
-## Which church it serves
-Edit `../relay/church.json` (`{ "churches": [ { "npub": "npub1…", "name": "…" } ] }`) with your
-church's npub from the Steward console. The relay only accepts writes from churches it's configured for.
+## Which church it serves — set it up in the browser
+Open the **control dashboard** (`/relay-app/control.html`) and, under *Churches on this relay*, paste
+your church's `npub` (from the Steward console) and Save. It writes the relay's write policy and applies
+it instantly — no file editing, no restart. The relay only accepts writes from churches listed there.
+
+- **On the relay box itself**, no token is needed.
+- **From another device** (a laptop on the same network, or over a tunnel), enter the relay's **admin
+  token** once — printed by the installer, or `journalctl -u trinityone-relay | grep "admin token"`.
+
+The config is stored in `../relay/church.json`; you can still edit it by hand + `systemctl restart` if
+you prefer.
 
 ## What's next (see `reference/brief-relay-app-wizard.md`)
 - **v0.7.1** — Tauri shell: this launcher + the `stew-relay.jsx` control UI as a signed desktop app

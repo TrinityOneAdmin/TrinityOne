@@ -22,5 +22,7 @@ relay/relay-db.json.tmp
 relay/relay-db.json.bak-*
 relay/tunnel-url.txt
 relay/church.json
+relay/church.json.tmp
+relay/admin.json
 relay/vapid.json
 relay/push-subs.json

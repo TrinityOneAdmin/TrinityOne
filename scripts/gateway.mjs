@@ -9,8 +9,9 @@ import { WebSocketServer } from 'ws';
 import { readFileSync, writeFileSync, renameSync, statSync, createReadStream } from 'fs';
 import { extname, normalize, join, sep } from 'path';
 import { lookup as dnsLookup } from 'dns/promises';
-import { decode as nip19decode } from 'nostr-tools/nip19';
+import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import webpush from 'web-push';
+import { randomBytes, timingSafeEqual } from 'crypto';
 
 const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
@@ -31,11 +32,26 @@ function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]
 const CHURCH_PUBS = new Set();
 const CHURCH_NAMES = new Map();   // hex pub -> display name (for the Relay app dashboard)
 const addChurch = (s, name) => { const h = toHexPub(s); if (h) { CHURCH_PUBS.add(h); if (name) CHURCH_NAMES.set(h, name); } };
-(process.env.CHURCH_NPUB || '').split(',').forEach(s => addChurch(s));
-try {
-  const cj = JSON.parse(readFileSync(join(ROOT, 'relay', 'church.json'), 'utf8'));
-  if (cj) { if (cj.npub) addChurch(cj.npub, cj.name); (cj.npubs || []).forEach(s => addChurch(s)); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c), c && c.name)); }
-} catch {}
+const CHURCH_FILE = join(ROOT, 'relay', 'church.json');
+// (re)load the write policy from env + church.json — called at startup and after a browser config save
+function loadChurches() {
+  CHURCH_PUBS.clear(); CHURCH_NAMES.clear();
+  (process.env.CHURCH_NPUB || '').split(',').forEach(s => addChurch(s));
+  try {
+    const cj = JSON.parse(readFileSync(CHURCH_FILE, 'utf8'));
+    if (cj) { if (cj.npub) addChurch(cj.npub, cj.name); (cj.npubs || []).forEach(s => addChurch(s)); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c), c && c.name)); }
+  } catch {}
+}
+loadChurches();
+// admin token — gates the browser config endpoint (/config), which changes the write policy. Generated
+// once and stored 0600. Loopback requests (you're on the box) are trusted; LAN/tunnel must present it.
+const ADMIN_FILE = join(ROOT, 'relay', 'admin.json');
+let ADMIN_TOKEN = '';
+try { ADMIN_TOKEN = JSON.parse(readFileSync(ADMIN_FILE, 'utf8')).token || ''; } catch {}
+if (!ADMIN_TOKEN) { ADMIN_TOKEN = randomBytes(24).toString('base64url'); try { writeFileSync(ADMIN_FILE, JSON.stringify({ token: ADMIN_TOKEN }), { mode: 0o600 }); } catch {} }
+function reqIsLoopback(req) { const a = (req.socket && req.socket.remoteAddress) || ''; return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1'; }
+function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
+function adminOK(req) { if (reqIsLoopback(req)) return true; const t = reqToken(req); if (!t || !ADMIN_TOKEN) return false; const a = Buffer.from(t), b = Buffer.from(ADMIN_TOKEN); return a.length === b.length && timingSafeEqual(a, b); }
 const STARTED_AT = Date.now();
 const MEMBERS = new Set();     // pubkeys that announced membership (minus those removed)
 const BROADCAST = new Set();   // group ids the church marked broadcast
@@ -274,6 +290,38 @@ function serveStatic(req, res) {
     }));
     return;
   }
+  // browser setup wizard: read/write the relay's write policy (church.json). Auth required (token or
+  // loopback). The control dashboard uses this so a steward never has to SSH in and edit a file.
+  if (route === '/config') {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    if (req.method === 'GET') {
+      res.writeHead(200, H);
+      res.end(JSON.stringify({ ok: true, port: PORT, configured: CHURCH_PUBS.size > 0, churches: [...CHURCH_PUBS].map(p => ({ npub: npubEncode(p), name: CHURCH_NAMES.get(p) || '' })) }));
+      return;
+    }
+    if (req.method === 'POST') {
+      let body = ''; req.on('data', c => { body += c; if (body.length > 1e5) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const churches = JSON.parse(body || '{}').churches;
+          if (!Array.isArray(churches)) throw new Error('expected { churches: [...] }');
+          const clean = [];
+          for (const c of churches.slice(0, 50)) {
+            const npub = String((c && c.npub) || '').trim();
+            const hex = toHexPub(npub);
+            if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub: ' + npub.slice(0, 24) })); return; }
+            clean.push({ npub: npubEncode(hex), name: String((c && c.name) || '').slice(0, 80) });
+          }
+          const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches: clean }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
+          loadChurches();   // apply live — no restart needed
+          res.writeHead(200, H); res.end(JSON.stringify({ ok: true, configured: CHURCH_PUBS.size > 0, churches: clean }));
+        } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
+      });
+      return;
+    }
+    res.writeHead(405, H); res.end('{"error":"method"}'); return;
+  }
   // audio (podcast) feed proxy
   if (route === '/audiofeed') {
     let u = ''; try { u = new URL(req.url, 'http://x').searchParams.get('url') || ''; } catch {}
@@ -398,4 +446,6 @@ const wsHeartbeat = setInterval(() => {
 wss.on('close', () => clearInterval(wsHeartbeat));
 server.listen(PORT, '0.0.0.0', () =>
   console.log(`TrinityOne gateway on http://0.0.0.0:${PORT}  (app + relay at /relay, ${events.length} events loaded)` +
-    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set CHURCH_NPUB to enforce)`)));
+    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set up a church in the control dashboard)`) +
+    `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
+    `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}`));
