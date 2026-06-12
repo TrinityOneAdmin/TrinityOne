@@ -881,9 +881,18 @@ function NewTeamModal({ open, onClose }) {
   const [icon, setIcon] = React.useState('hand');
   const [accent, setAccent] = React.useState('#C25A38');
   const [roles, setRoles] = React.useState('');
-  React.useEffect(() => { if (open) { setName(''); setDesc(''); setIcon('hand'); setAccent('#C25A38'); setRoles(''); } }, [open]);
+  const [selId, setSelId] = React.useState('');   // which preset is applied (so switching repopulates)
+  React.useEffect(() => { if (open) { setName(''); setDesc(''); setIcon('hand'); setAccent('#C25A38'); setRoles(''); setSelId(''); } }, [open]);
   if (!open) return null;
-  const applyPreset = (p) => { setIcon(p.icon); setAccent(p.accent); if (!name.trim()) setName(p.name); if (!roles.trim()) setRoles(p.roles); };
+  const applyPreset = (p) => {
+    setIcon(p.icon); setAccent(p.accent);
+    // switching templates repopulates name/roles — but keep anything you typed by hand (i.e. that no
+    // longer matches the previously-applied preset).
+    const prev = (window.TEAM_PRESETS || []).find(x => x.id === selId);
+    if (!name.trim() || (prev && name === prev.name)) setName(p.name);
+    if (!roles.trim() || (prev && roles === prev.roles)) setRoles(p.roles);
+    setSelId(p.id);
+  };
   const create = () => {
     if (!name.trim()) return;
     const roleList = roles.split('\n').map(s => s.trim()).filter(Boolean).map(n => ({ name: n }));
@@ -901,7 +910,7 @@ function NewTeamModal({ open, onClose }) {
         <div style={lbl}>Kind</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {(window.TEAM_PRESETS || []).map(p => {
-            const on = icon === p.icon && accent === p.accent;
+            const on = selId === p.id;
             return (
               <button key={p.id} onClick={() => applyPreset(p)} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13,
                 border: on ? `2px solid ${p.accent}` : '1px solid var(--line)', background: on ? `color-mix(in oklab, ${p.accent} 10%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>
