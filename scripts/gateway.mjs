@@ -586,7 +586,8 @@ const matchAny = (evt, filters) => filters.some(f => matchFilter(evt, f));
 const subs = new Map();   // ws -> Map(subId -> filters[])
 
 const server = createServer(serveStatic);
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });   // 1 MB cap (default is 100 MB — memory-DoS guard)
+const MAX_SUBS_PER_CONN = 64;   // a single connection can't flood the relay with REQ subscriptions
 server.on('upgrade', (req, socket, head) => {
   if ((req.url || '').split('?')[0] !== '/relay') { socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
@@ -622,7 +623,9 @@ wss.on('connection', ws => {
       const subId = rest[0];
       let filters = rest.slice(1);
       if (filters.length === 1 && Array.isArray(filters[0])) filters = filters[0];
-      subs.get(ws).set(subId, filters);
+      const mysubs = subs.get(ws);
+      if (!mysubs.has(subId) && mysubs.size >= MAX_SUBS_PER_CONN) { ws.send(JSON.stringify(['CLOSED', subId, 'rate-limited: too many subscriptions'])); return; }
+      mysubs.set(subId, filters);
       // withhold a blocked member's events, and an invite-only group's messages from non-members (NIP-42)
       let matched = events.filter(e => matchAny(e, filters) && !BLOCKED.has(e.pubkey) && canRead(e, ws._auth));
       const lim = Math.max(0, ...filters.map(f => f.limit || 0));

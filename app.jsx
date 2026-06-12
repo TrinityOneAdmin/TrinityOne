@@ -404,6 +404,9 @@ function App() {
       }
       const src = (followParam || '') + ((typeof location !== 'undefined' && location.search) || '');
       if (/npub1[0-9a-z]{20,}/.test(src)) { const off = followChurch(src); if (typeof off === 'function') cleanup = off; }
+      // SECURITY: scrub the secret invite seed (and follow/relay) from the URL so it doesn't linger in
+      // browser history, bookmarks, or leak via the Referer header on the next outbound request.
+      try { const u = new URL(location.href); ['invite', 'follow', 'relay'].forEach(k => u.searchParams.delete(k)); const q = u.searchParams.toString(); history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + u.hash); } catch (e) {}
     })();
     return () => { if (cleanup) cleanup(); };
   }, []);
