@@ -314,9 +314,10 @@ function App() {
   useAE(() => {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
     const followed = churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0);
-    // previously-followed church but no relay yet (e.g. the CDN app, reloaded) → add the shared pool
-    // so its name/groups resolve. Relay still only lands when a church is/was joined.
-    if (followed.length && window.Fellowship.addRelay && !(window.Fellowship.relays || []).length) {
+    // a followed church publishes across the whole shared pool — make sure every community node is in
+    // the member's relay set (backfills for people who joined before extra nodes existed). addRelay
+    // dedupes, so this is safe to run every load. Relays still only land once a church is/was joined.
+    if (followed.length && window.Fellowship.addRelay) {
       const pool = window.Fellowship.CANONICAL_RELAYS || (window.Fellowship.CANONICAL_RELAY ? [window.Fellowship.CANONICAL_RELAY] : []);
       pool.forEach(r => window.Fellowship.addRelay(r));
     }
