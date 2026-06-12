@@ -77,6 +77,8 @@ function relays() {
 
 const pool = new SimplePool();
 let sk = null, pub = null;                 // the ACTIVE signing identity (church, or an owned network when toggled)
+// NIP-42: prove the church/network key when a relay challenges, so the console reads invite-only groups.
+pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); return finalizeEvent(authEvent, sk); };
 let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
 let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
 

@@ -163,6 +163,16 @@ function accept(e) {
   if (k === 7 || k === 4 || k === 1059 || k === 1060) return isMember;    // reactions + DMs
   return isMember;                                               // anything else: members only
 }
+// read-gate (NIP-42): an invite-only group's messages are served only to a connection that has proven
+// (via AUTH) it belongs to that group's member list (or is the church/network). Everything else is public.
+function canRead(e, authed) {
+  if (e.kind !== 1) return true;
+  const g = gidOf(e);
+  if (!g || GROUP_VIS.get(g) !== 'invite') return true;
+  if (!authed) return false;
+  if (CHURCH_PUBS.has(authed) || NETWORKS.has(authed)) return true;
+  const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(authed));
+}
 
 // ---- static file serving ----
 const MIME = {
@@ -549,6 +559,9 @@ server.on('upgrade', (req, socket, head) => {
 wss.on('connection', ws => {
   subs.set(ws, new Map());
   ws.isAlive = true;
+  ws._auth = null;                                    // pubkey once the client proves it via NIP-42 AUTH
+  ws._challenge = randomBytes(16).toString('hex');    // per-connection nonce
+  try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {}   // invite-only reads need an authed connection
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', raw => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
@@ -569,18 +582,28 @@ wss.on('connection', ws => {
       maybePush(evt);   // notify the targeted member if this is a serving request
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       for (const [client, m] of subs) { if (client.readyState !== 1) continue;
-        for (const [subId, filters] of m) if (matchAny(evt, filters)) client.send(JSON.stringify(['EVENT', subId, evt])); }
+        for (const [subId, filters] of m) if (matchAny(evt, filters) && canRead(evt, client._auth)) client.send(JSON.stringify(['EVENT', subId, evt])); }
     } else if (type === 'REQ') {
       const subId = rest[0];
       let filters = rest.slice(1);
       if (filters.length === 1 && Array.isArray(filters[0])) filters = filters[0];
       subs.get(ws).set(subId, filters);
-      // withhold a blocked member's existing events from reads (they're banned, not just write-blocked)
-      let matched = events.filter(e => matchAny(e, filters) && !BLOCKED.has(e.pubkey));
+      // withhold a blocked member's events, and an invite-only group's messages from non-members (NIP-42)
+      let matched = events.filter(e => matchAny(e, filters) && !BLOCKED.has(e.pubkey) && canRead(e, ws._auth));
       const lim = Math.max(0, ...filters.map(f => f.limit || 0));
       if (lim) matched = matched.slice(-lim);
       for (const e of matched) ws.send(JSON.stringify(['EVENT', subId, e]));
       ws.send(JSON.stringify(['EOSE', subId]));
+    } else if (type === 'AUTH') {
+      // NIP-42: the client proves which pubkey it controls, so we can serve it invite-only group reads
+      const evt = rest[0];
+      try {
+        const ch = evt && (evt.tags.find(t => t[0] === 'challenge') || [])[1];
+        const fresh = evt && Math.abs(Math.floor(Date.now() / 1000) - (evt.created_at || 0)) < 600;
+        if (evt && evt.kind === 22242 && ch === ws._challenge && fresh && verifyEvent(evt)) {
+          ws._auth = evt.pubkey; ws.send(JSON.stringify(['OK', evt.id, true, '']));
+        } else ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed: bad challenge or signature']));
+      } catch { ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed'])); }
     } else if (type === 'CLOSE') { subs.get(ws)?.delete(rest[0]); }
   });
   ws.on('close', () => subs.delete(ws));

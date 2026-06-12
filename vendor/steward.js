@@ -8848,6 +8848,10 @@ zoo`.split("\n");
   var pool = new SimplePool();
   var sk = null;
   var pub = null;
+  pool.automaticallyAuth = () => async (authEvent) => {
+    if (!sk) throw new Error("no key");
+    return finalizeEvent2(authEvent, sk);
+  };
   var churchSk = null;
   var churchPub = null;
   var lastProfile = {};

@@ -5000,6 +5000,16 @@
   var pool = new SimplePool();
   var sk = null;
   var pub = null;
+  pool.automaticallyAuth = () => async (authEvent) => {
+    if (!sk) {
+      try {
+        await window.Fellowship.ready;
+      } catch {
+      }
+    }
+    if (!sk) throw new Error("no key");
+    return finalizeEvent2(authEvent, sk);
+  };
   var profiles = {};
   var pendingProfiles = /* @__PURE__ */ new Set();
   var PROFILE_KEY = "trinityone.profile";

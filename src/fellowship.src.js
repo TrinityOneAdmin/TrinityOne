@@ -65,6 +65,13 @@ function profile(pub) {
 
 const pool = new SimplePool();
 let sk = null, pub = null;
+// NIP-42: when a relay challenges, prove our pubkey by signing the auth event with our key — so the
+// relay serves us the invite-only groups we belong to. No effect on relays that never challenge.
+pool.automaticallyAuth = () => async (authEvent) => {
+  if (!sk) { try { await window.Fellowship.ready; } catch {} }
+  if (!sk) throw new Error('no key');
+  return finalizeEvent(authEvent, sk);
+};
 
 // kind-0 profile metadata cache (pubkey -> {name, picture, about})
 const profiles = {};
