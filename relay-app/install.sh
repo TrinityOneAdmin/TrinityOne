@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # TrinityOne Relay — one-line installer for any Debian/Ubuntu/Raspberry Pi OS box.
 #
-#   curl -fsSL https://raw.githubusercontent.com/swasb-altFreeBird/Machaira_TrinityOne/main/relay-app/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/swasb-altFreeBird/TrinityOne/main/relay-app/install.sh | sudo bash
 #
 # Sets up the gateway (relay + app + browser control dashboard) as a systemd service that starts on
 # boot, then optionally brings up a tunnel so the relay is reachable from outside the church LAN.
@@ -17,7 +17,7 @@
 #   -y                          non-interactive: accept defaults, no prompts
 set -euo pipefail
 
-REPO="https://github.com/swasb-altFreeBird/Machaira_TrinityOne"
+REPO="https://github.com/swasb-altFreeBird/TrinityOne"
 DIR="/opt/trinityone"; PORT="8000"; BRANCH="main"
 CHURCH=""; CHURCH_NAME=""; TUNNEL=""; ASSUME_YES=0
 SVC_USER="trinityone"; SVC="trinityone-relay"

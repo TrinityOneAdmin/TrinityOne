@@ -12,7 +12,7 @@
   - **Member app** — phone app (`index.html` + `*.jsx`), shipped as a PWA **and** an Android **APK** (Capacitor).
   - **Steward console** — desktop web (`steward.html` + `stew-*.jsx`) the church leader runs.
 - **Pilot church:** **Trinity Church Littlehampton**, npub `npub1xs306y87gxlf59nf9mpta0hkfg9p6e97ksefnulys0qkelqp7kjqyxywme` (hex `3422fd10fe41…`).
-- **Repo:** `https://github.com/swasb-altFreeBird/Machaira_TrinityOne` (**private**), branch **`main`**.
+- **Repo:** `https://github.com/swasb-altFreeBird/TrinityOne` (**private**), branch **`main`**.
 - **Working dir on this box:** `/mnt/storage/projects/lumen-bible` (the folder is historically named "lumen-bible"; the product is "TrinityOne").
 - **Live hosting:** self-hosted gateway (systemd) → **Tailscale Funnel** at `https://trinityone.tailbeaac0.ts.net`.
 - **APK download (always-fresh):** `https://trinityone.tailbeaac0.ts.net/trinityone-debug.apk`
@@ -42,7 +42,7 @@ Other reference docs worth knowing:
 
 | Thing | Value |
 |---|---|
-| Repo | `github.com/swasb-altFreeBird/Machaira_TrinityOne` (private), branch `main` |
+| Repo | `github.com/swasb-altFreeBird/TrinityOne` (private), branch `main` |
 | Working dir | `/mnt/storage/projects/lumen-bible` |
 | Node | v22.22.2 (via nvm) |
 | Member app entry | `index.html` (loads `*.jsx` via runtime Babel in dev; **pre-transpiled with esbuild** for the APK) |

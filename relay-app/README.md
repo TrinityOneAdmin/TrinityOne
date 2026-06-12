@@ -8,7 +8,7 @@ For a relay that runs on boot and keeps running with nothing left open — on a 
 mini-PC, an old laptop, or a VPS (any apt-based Linux; not Pi-specific):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/swasb-altFreeBird/Machaira_TrinityOne/main/relay-app/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/swasb-altFreeBird/TrinityOne/main/relay-app/install.sh | sudo bash
 ```
 
 It installs Node if needed, fetches the app, runs the relay as a hardened `systemd` service under a
