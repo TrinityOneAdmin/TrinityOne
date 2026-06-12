@@ -1181,15 +1181,103 @@ function DashDevotionals() {
   );
 }
 
+// Bulk-upload resources: drop a set of .md/.txt files and publish them all at once — each file becomes
+// a devotional (Markdown body) or a reading plan (one Bible reference per line).
+function BulkUploadModal({ kind, onClose }) {
+  const isPlans = kind === 'plans';
+  const [items, setItems] = React.useState([]);   // [{ name, title, text?, ref?, days?, count?, error? }]
+  const [drag, setDrag] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [done, setDone] = React.useState(0);
+  const inputRef = React.useRef(null);
+
+  const parse = (name, raw) => {
+    const baseTitle = name.replace(/\.(txt|md|markdown)$/i, '').replace(/[-_]+/g, ' ').trim() || 'Untitled';
+    if (isPlans) {
+      let lines = raw.split('\n').map(s => s.trim()).filter(Boolean);
+      let title = baseTitle;
+      if (lines[0] && /^#+\s+/.test(lines[0])) { title = lines[0].replace(/^#+\s*/, '').trim() || baseTitle; lines = lines.slice(1); }
+      const days = lines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
+      return { name, title, count: days.length, days, error: days.length ? '' : 'no readings' };
+    }
+    const h = raw.match(/^\s*#\s+(.+)$/m);
+    const rf = raw.match(/\b(?:[1-3]\s?)?[A-Z][a-z]+\s+\d+(?::\d+(?:-\d+)?)?\b/);
+    const text = raw.trim();
+    return { name, title: (h ? h[1].trim() : baseTitle), ref: rf ? rf[0].trim() : '', text, error: text ? '' : 'empty file' };
+  };
+  const addFiles = (list) => {
+    const files = [...list].filter(f => /\.(txt|md|markdown)$/i.test(f.name)).slice(0, 200);
+    if (!files.length) return;
+    Promise.all(files.map(f => new Promise(res => { const r = new FileReader(); r.onload = () => res(parse(f.name, String(r.result || ''))); r.onerror = () => res({ name: f.name, title: f.name, error: 'unreadable' }); r.readAsText(f); })))
+      .then(parsed => setItems(prev => { const seen = new Set(prev.map(p => p.name)); return [...prev, ...parsed.filter(p => !seen.has(p.name))]; }));
+  };
+  const valid = items.filter(it => !it.error);
+  const publishAll = async () => {
+    setBusy(true); setDone(0);
+    for (let i = 0; i < valid.length; i++) {
+      const it = valid[i];
+      try {
+        if (isPlans) await Promise.resolve(window.Steward.publishPlan({ id: 'bulk-' + Date.now().toString(36) + i, title: it.title, sub: it.count + ' day' + (it.count === 1 ? '' : 's'), tag: 'Custom', accent: 'var(--clay)', blurb: '', days: it.days }));
+        else await Promise.resolve(window.Steward.publishDevotional({ title: it.title, ref: it.ref || '', type: 'txt', text: it.text }));
+      } catch (e) {}
+      setDone(d => d + 1);
+    }
+    setBusy(false); setTimeout(onClose, 650);
+  };
+  const fld = { display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', marginBottom: 8 };
+  return (
+    <div onClick={() => !busy && onClose()} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '96%', maxHeight: '90%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenScale .2s ease both' }}>
+        <div style={{ padding: '24px 26px 0' }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Bulk upload {isPlans ? 'reading plans' : 'devotionals'}</div>
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Drop one or more text files — each file becomes a plan, with one Bible reference per line (a “# Title” first line is used as the name).' : 'Drop one or more Markdown / text files — each becomes a devotional. The first “# Heading” (or the filename) is the title.'}</p>
+        </div>
+        <div style={{ padding: '0 26px' }}>
+          <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }} onClick={() => inputRef.current && inputRef.current.click()}
+            style={{ border: '2px dashed ' + (drag ? 'var(--clay)' : 'var(--line)'), borderRadius: 16, background: drag ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface-2)', padding: '24px 18px', textAlign: 'center', cursor: 'pointer', transition: 'all .15s' }}>
+            <Icon name="share" size={26} color="var(--ink-3)" />
+            <div style={{ fontWeight: 700, fontSize: 14.5, marginTop: 8 }}>Drop files here, or click to choose</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 3 }}>.md · .markdown · .txt</div>
+            <input ref={inputRef} type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" multiple onChange={e => { addFiles(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
+          </div>
+        </div>
+        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: items.length ? '14px 26px 4px' : 0 }}>
+          {items.map((it, i) => (
+            <div key={i} style={{ ...fld, border: '1px solid ' + (it.error ? 'color-mix(in oklab, var(--clay) 30%, var(--line))' : 'var(--line)') }}>
+              <Icon name={it.error ? 'x' : (isPlans ? 'read' : 'receipt')} size={17} color={it.error ? 'var(--clay)' : 'var(--clay)'} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.title}</div>
+                <div style={{ fontSize: 11.5, color: it.error ? 'var(--clay)' : 'var(--ink-3)' }}>{it.error ? it.error : (isPlans ? it.count + ' readings' : ((it.ref ? it.ref + ' · ' : '') + it.text.length + ' chars'))} · {it.name}</div>
+              </div>
+              {!busy ? <button onClick={() => setItems(items.filter((_, x) => x !== i))} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} /></button> : null}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 26px 20px', borderTop: '1px solid var(--line)' }}>
+          <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink-3)' }}>{busy ? `Publishing… ${done}/${valid.length}` : (valid.length ? `${valid.length} ready${items.length - valid.length ? ` · ${items.length - valid.length} skipped` : ''}` : 'No files yet')}</div>
+          <button onClick={onClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, opacity: busy ? .5 : 1 }}>Cancel</button>
+          <button onClick={publishAll} disabled={busy || !valid.length} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 13.5, opacity: (busy || !valid.length) ? .5 : 1 }}><Icon name="send" size={15} color="#fff" /> Publish {valid.length || ''}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashResources() {
   const [view, setView] = React.useState('plans');   // plans | devotionals
-  const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 16 };
+  const [bulk, setBulk] = React.useState(false);
+  const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
   const btn = (k, label) => (
     <button onClick={() => setView(k)} style={{ padding: '8px 16px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
   );
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={seg}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}</div>
+    <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {bulk ? <BulkUploadModal kind={view} onClose={() => setBulk(false)} /> : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        <div style={seg}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}</div>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button>
+      </div>
       <div style={{ flex: 1, minHeight: 0 }}>{view === 'plans' ? <DashPlans /> : <DashDevotionals />}</div>
     </div>
   );
