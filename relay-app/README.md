@@ -3,7 +3,26 @@
 The box that carries your church's messages, run on your own computer. This is the **runnable core** —
 the launcher the packaged desktop app (Tauri, signed installer) will wrap so there's nothing to type.
 
-## Run it now (no packaging yet — needs Node installed)
+## Install on a Linux box, one line *(recommended — always-on)*
+For a relay that runs on boot and keeps running with nothing left open — on a Raspberry Pi, a
+mini-PC, an old laptop, or a VPS (any apt-based Linux; not Pi-specific):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/swasb-altFreeBird/Machaira_TrinityOne/main/relay-app/install.sh | sudo bash
+```
+
+It installs Node if needed, fetches the app, runs the relay as a hardened `systemd` service under a
+dedicated `trinityone` user, asks for your church npub (write policy) and **lets you pick how it's
+reachable** — Tailscale, a Cloudflare quick tunnel, or LAN-only. Non-interactive / scripted:
+
+```bash
+curl -fsSL …/install.sh | sudo bash -s -- --church npub1… --name "Grace Chapel" --tunnel tailscale -y
+```
+
+Flags: `--church <npub[,npub…]>` · `--name` · `--tunnel tailscale|cloudflared|none` · `--port` ·
+`--dir` · `--branch` · `-y`. Re-run any time to update. Manage with `systemctl status trinityone-relay`.
+
+## Or run it from a window (no install — needs Node)
 - **Mac:** double-click `start.command`
 - **Windows:** double-click `start.bat`
 - **Linux:** `./start.sh` (or `node start.mjs`)
