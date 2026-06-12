@@ -707,6 +707,22 @@ window.Steward = {
     if (!r.ok) { let m = ''; try { m = (await r.json()).error; } catch {} throw new Error(m || ('the relay responded ' + r.status)); }
     return r.json();
   },
+  // self-register this church with the shared pool relays by PROVING key ownership (NIP-98 signed by the
+  // church key) — no admin token, and a church can only ever register its own npub. Called automatically
+  // on console load, so onboarding a new church needs zero manual relay setup.
+  async selfRegister(name) {
+    if (!churchSk || !churchPub) return;
+    const np = npubEncode(churchPub);
+    const bases = new Set([window.Steward.configBase()]);
+    for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, ''));
+    for (const base of bases) {
+      const url = base + '/config';
+      try {
+        const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
+        await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: np, name: name || '' }, auth }) });
+      } catch (e) {}
+    }
+  },
   // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)
   addRelay(input) {
     const url = normRelay(input);

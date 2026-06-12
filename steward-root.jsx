@@ -183,6 +183,9 @@ function initChurch() {
   const inject = params.get('churchkey');                 // test hook: load a known church key
   if (inject) window.Steward.init(inject);
   window.Steward.ensureKey();
+  // self-register this church with the shared pool relays (proves key ownership — no admin token), so a
+  // new church is write-policy-enabled + moderation-capable with zero manual relay setup. Fire-and-forget.
+  if (window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
   // first run: publish the sample chat groups (the focus) as REAL signed events. Funds are NOT
   // seeded — giving is parked for the pilot, so the console stays chat-only.
   if (inject) return;

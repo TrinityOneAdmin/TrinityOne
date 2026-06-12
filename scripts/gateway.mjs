@@ -422,10 +422,11 @@ function serveStatic(req, res) {
     const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' };
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS, ...CORS };
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
-    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    const isAdmin = adminOK(req);
     const curChurches = () => [...CHURCH_PUBS].map(p => ({ npub: npubEncode(p), name: CHURCH_NAMES.get(p) || '' }));
     const writeChurches = (list) => { const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches: list }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE); loadChurches(); };
     if (req.method === 'GET') {
+      if (!isAdmin) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }   // don't leak the church list
       res.writeHead(200, H);
       res.end(JSON.stringify({ ok: true, port: PORT, configured: CHURCH_PUBS.size > 0, churches: curChurches() }));
       return;
@@ -435,19 +436,31 @@ function serveStatic(req, res) {
       req.on('end', () => {
         try {
           const parsed = JSON.parse(body || '{}');
-          // addChurch: idempotent append (used by the steward console to self-register without clobbering others)
+          // addChurch: idempotent append. Authorized by EITHER the admin token OR a NIP-98 proof signed by
+          // the church key being registered — so a steward self-registers their OWN church (and only it),
+          // with no admin token. (Append only ever adds one's own npub; it can't clobber other churches.)
           if (parsed.addChurch) {
             const hex = toHexPub(String(parsed.addChurch.npub || '').trim());
             if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub' })); return; }
+            if (!isAdmin) {
+              const a = parsed.auth;
+              const sigOk = a && typeof a === 'object' && a.kind === 27235 && verifyEvent(a);
+              const fresh = sigOk && Math.abs(Math.floor(Date.now() / 1000) - (a.created_at || 0)) <= 300;
+              const ownsKey = sigOk && a.pubkey === hex;   // the signer IS the church being registered
+              const uTag = sigOk && (a.tags.find(t => t[0] === 'u') || [])[1];
+              const uOk = uTag && /\/config\/?$/.test(String(uTag));   // bound to this endpoint (anti-replay)
+              if (!(sigOk && fresh && ownsKey && uOk)) { res.writeHead(401, H); res.end(JSON.stringify({ error: 'unauthorized: register with the admin token, or sign a fresh proof with this church key' })); return; }
+            }
             const list = curChurches();
             const name = String(parsed.addChurch.name || '').slice(0, 80);
             const existing = list.find(c => toHexPub(c.npub) === hex);
             if (existing) { if (name) existing.name = name; } else { list.push({ npub: npubEncode(hex), name }); }
             writeChurches(list);
-            res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: list }));
+            res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: isAdmin ? list : undefined }));
             return;
           }
-          // full replace
+          // full replace — admin token only (rewrites the whole write policy)
+          if (!isAdmin) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
           const churches = parsed.churches;
           if (!Array.isArray(churches)) throw new Error('expected { churches: [...] } or { addChurch: {…} }');
           const clean = [];
