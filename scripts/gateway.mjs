@@ -49,9 +49,10 @@ const ADMIN_FILE = join(ROOT, 'relay', 'admin.json');
 let ADMIN_TOKEN = '';
 try { ADMIN_TOKEN = JSON.parse(readFileSync(ADMIN_FILE, 'utf8')).token || ''; } catch {}
 if (!ADMIN_TOKEN) { ADMIN_TOKEN = randomBytes(24).toString('base64url'); try { writeFileSync(ADMIN_FILE, JSON.stringify({ token: ADMIN_TOKEN }), { mode: 0o600 }); } catch {} }
-function reqIsLoopback(req) { const a = (req.socket && req.socket.remoteAddress) || ''; return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1'; }
 function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
-function adminOK(req) { if (reqIsLoopback(req)) return true; const t = reqToken(req); if (!t || !ADMIN_TOKEN) return false; const a = Buffer.from(t), b = Buffer.from(ADMIN_TOKEN); return a.length === b.length && timingSafeEqual(a, b); }
+// Always require the admin token. Do NOT trust loopback: the relay runs behind the Tailscale Funnel /
+// cloudflared, which proxy from 127.0.0.1, so a public request is indistinguishable from a local one.
+function adminOK(req) { const t = reqToken(req); if (!t || !ADMIN_TOKEN) return false; const a = Buffer.from(t), b = Buffer.from(ADMIN_TOKEN); return a.length === b.length && timingSafeEqual(a, b); }
 const STARTED_AT = Date.now();
 const MEMBERS = new Set();     // pubkeys that announced membership (minus those removed)
 const BROADCAST = new Set();   // group ids the church marked broadcast
@@ -285,7 +286,8 @@ function serveStatic(req, res) {
     res.end(JSON.stringify({
       ok: true, port: PORT, uptimeMs: Date.now() - STARTED_AT,
       writePolicy: CHURCH_PUBS.size > 0,
-      churches: [...CHURCH_PUBS].map(p => ({ name: CHURCH_NAMES.get(p) || '', hex: p })),
+      // church npubs/names are intentionally NOT exposed here (unauthenticated) — the dashboard reads
+      // the list from the token-gated /config; /status carries only non-sensitive counts.
       counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: events.length, connections: wss ? wss.clients.size : 0 },
     }));
     return;

@@ -42,9 +42,9 @@ Open the **control dashboard** (`/relay-app/control.html`) and, under *Churches 
 your church's `npub` (from the Steward console) and Save. It writes the relay's write policy and applies
 it instantly — no file editing, no restart. The relay only accepts writes from churches listed there.
 
-- **On the relay box itself**, no token is needed.
-- **From another device** (a laptop on the same network, or over a tunnel), enter the relay's **admin
-  token** once — printed by the installer, or `journalctl -u trinityone-relay | grep "admin token"`.
+Configuring requires the relay's **admin token** (the relay runs behind a tunnel that proxies from
+localhost, so it can't safely treat "local" requests as trusted). The token is printed by the installer,
+or `journalctl -u trinityone-relay | grep "admin token"` on the relay box — enter it once in the dashboard.
 
 The config is stored in `../relay/church.json`; you can still edit it by hand + `systemctl restart` if
 you prefer.

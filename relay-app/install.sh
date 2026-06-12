@@ -184,7 +184,7 @@ echo "  Member relay URL:   ws://${LAN_IP:-localhost}:$PORT/relay   (wss:// once
 echo "  Manage:             systemctl status $SVC   ·   journalctl -u $SVC -f"
 echo
 echo "  Set up your church(es) in the browser — open the control dashboard and paste your npub."
-echo "  On the relay box itself no token is needed; from another device, enter this admin token:"
+echo "  Configuring requires this admin token (keep it private):"
 echo "      ${ADMIN_TOKEN:-<see: journalctl -u $SVC | grep \"admin token\">}"
 echo "  (Or set keys non-interactively any time: re-run with --church npub1…)"
 echo
