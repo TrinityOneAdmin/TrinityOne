@@ -757,6 +757,44 @@ function NewGroupModal({ open, onClose }) {
   );
 }
 
+// Manage who's in an invite-only group after it's created (add/remove the allowlist). Re-publishes the
+// group with the new member set — the relay then enforces posting + the read-gate against it.
+function EditGroupMembersModal({ group, onClose }) {
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const [sel, setSel] = React.useState(() => new Set(Array.isArray(group.members) ? group.members : []));
+  const [busy, setBusy] = React.useState(false);
+  const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
+  const known = new Set(members.map(m => m.pubkey));
+  const orphans = [...sel].filter(pk => !known.has(pk));   // in the group but not in the current roster
+  const save = () => { setBusy(true); Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: [...sel] })).then(() => onClose()).catch(() => setBusy(false)); };
+  const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
+  return (
+    <div onClick={() => !busy && onClose()} style={{ position: 'absolute', inset: 0, zIndex: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '100%', maxHeight: '88%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+        <div style={{ padding: '22px 24px 14px' }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>Who’s in “{group.name}”</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>Invite-only — only these members can post and read. Remove someone and the relay locks them out of the chat.</div>
+        </div>
+        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={lbl}>MEMBERS · {sel.size}</div>
+          {members.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members have joined yet.</div> : members.map(m => { const on = sel.has(m.pubkey); return (
+            <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+              <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
+              <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
+              <span style={{ fontSize: 11, color: m.nip05 ? 'var(--sage)' : 'var(--ink-3)', fontFamily: m.nip05 ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{m.nip05 ? '@' + String(m.nip05).split('@')[0] : shortNpub(m.npub)}</span>
+            </button>
+          ); })}
+          {orphans.length ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>{orphans.length} other member{orphans.length === 1 ? '' : 's'} in this group aren’t on the current roster (left/quiet) — they stay unless you’ve unticked them above.</div> : null}
+        </div>
+        <div style={{ display: 'flex', gap: 10, padding: '16px 24px 20px', borderTop: '1px solid var(--line)' }}>
+          <button onClick={onClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}>Cancel</button>
+          <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}><Icon name="check" size={16} color="#fff" /> Save members</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Console chat view for one group/team — read the scrollback + post as the church.
 function GroupChatModal({ group, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
@@ -815,6 +853,7 @@ function DashGroups() {
   const [chatGroup, setChatGroup] = React.useState(null);
   const [teamMembers, setTeamMembers] = React.useState(null);   // { team, people }
   const [leadersFor, setLeadersFor] = React.useState(null);     // group whose event-leaders we're editing
+  const [editMembersFor, setEditMembersFor] = React.useState(null);   // invite-only group whose members we're editing
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
@@ -858,6 +897,7 @@ function DashGroups() {
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
+            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who's in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
             <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
             <button onClick={() => setChatGroup(it)} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
             <button onClick={() => setPendingDelete(it)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
@@ -886,6 +926,7 @@ function DashGroups() {
         </div>
       ) : null}
       {leadersFor ? <GroupLeadersModal group={leadersFor} onClose={() => setLeadersFor(null)} /> : null}
+      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} onClose={() => setEditMembersFor(null)} /> : null}
     </div>
   );
 }
@@ -1422,6 +1463,9 @@ function DashMembers() {
   const [showInactive, setShowInactive] = React.useState(false);
   const [showBlocked, setShowBlocked] = React.useState(false);
   const [confirmBlock, setConfirmBlock] = React.useState(null);
+  const [q, setQ] = React.useState('');
+  const ql = q.trim().toLowerCase();
+  const matchQ = (m) => !ql || (m.name || '').toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql) || (m.npub || '').toLowerCase().includes(ql);
   const doCopy = (np) => { copyText(np); setCopied(np); setTimeout(() => setCopied(''), 1400); };
   const block = (pk) => { setConfirmBlock(null); window.Steward.setBlocked([...blockedList, pk]); };
   const unblock = (pk) => window.Steward.setBlocked(blockedList.filter(p => p !== pk));
@@ -1430,8 +1474,8 @@ function DashMembers() {
   const INACTIVE_DAYS = 90;
   const cutoff = Math.floor(Date.now() / 1000) - INACTIVE_DAYS * 86400;
   const seen = (m) => Math.max(m.lastTs || 0, m.joined || 0);
-  const activeM = members.filter(m => seen(m) >= cutoff && !blockedSet.has(m.pubkey));
-  const inactiveM = members.filter(m => seen(m) < cutoff && !blockedSet.has(m.pubkey));
+  const activeM = members.filter(m => seen(m) >= cutoff && !blockedSet.has(m.pubkey) && matchQ(m));
+  const inactiveM = members.filter(m => seen(m) < cutoff && !blockedSet.has(m.pubkey) && matchQ(m));
   const chatting = activeM.filter(m => m.count > 0).length;
   const memberRow = (m, inactive) => {
     const named = !!m.name;
@@ -1473,9 +1517,17 @@ function DashMembers() {
           <p style={{ fontSize: 13, margin: '6px 0 0', maxWidth: 320, lineHeight: 1.5 }}>Share your invite code — people appear here the moment they join, whether or not they’ve posted.</p>
         </div>
       ) : (
+        <React.Fragment>
+        {total > 6 || ql ? (
+          <div style={{ position: 'relative', marginBottom: 12, flexShrink: 0 }}>
+            <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-3)', display: 'flex' }}><Icon name="study" size={15} color="currentColor" /></span>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search members by name or @handle" style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 12px 0 34px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+            {q ? <button onClick={() => setQ('')} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} /></button> : null}
+          </div>
+        ) : null}
         <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {activeM.map(m => memberRow(m, false))}
-          {activeM.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No active members in the last {INACTIVE_DAYS} days.</div> : null}
+          {activeM.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>{ql ? 'No members match “' + q + '”.' : 'No active members in the last ' + INACTIVE_DAYS + ' days.'}</div> : null}
           {inactiveM.length ? (
             <React.Fragment>
               <button onClick={() => setShowInactive(s => !s)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, border: '1px dashed var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>
@@ -1502,6 +1554,7 @@ function DashMembers() {
             </React.Fragment>
           ) : null}
         </div>
+        </React.Fragment>
       )}
       <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)', flexShrink: 0 }}>
         <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Anonymous by design — you see who’s <b style={{ color: 'var(--ink)' }}>joined</b> and who’s active, never anyone’s real-world identity unless they chose a name. No giving is ever shown here.</div>

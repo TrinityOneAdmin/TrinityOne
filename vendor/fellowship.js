@@ -5019,7 +5019,7 @@
     const p = profiles[pubkey];
     const av = p && p.av || { kind: "symbol", color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] };
     const handle = p && p.name || base.handle;
-    return { pubkey, handle, name: handle, color: av.color || base.color, av, picture: p && p.picture };
+    return { pubkey, handle, name: handle, color: av.color || base.color, av, picture: p && p.picture, nip05: p && p.nip05 || "" };
   }
   async function deriveFromIdentity() {
     const mnemonic = window.TrinityIdentity ? await window.TrinityIdentity.exportMnemonic() : null;
