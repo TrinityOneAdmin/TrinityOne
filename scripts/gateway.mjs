@@ -280,6 +280,43 @@ const CSP = [
   "object-src 'none'", "base-uri 'self'", "frame-src 'self'", "frame-ancestors 'self'",
 ].join('; ');
 
+// ── Tailscale control (powers the "Go public" wizard in relay-app/control.html) ────────────────
+// The installer grants the relay user `tailscale set --operator`, so these run without sudo. Every
+// route that calls these is gated behind the admin token (adminOK) — nothing here is interpolated
+// into a shell (spawn with an arg array), and the only caller-supplied value (an optional auth key)
+// is format-checked first.
+const TS_BIN = 'tailscale';
+function tsRun(args, { timeoutMs = 12000 } = {}) {
+  return new Promise((resolve) => {
+    let out = '', err = '', done = false, child;
+    const finish = (code) => { if (done) return; done = true; resolve({ code, out, err }); };
+    try { child = spawn(TS_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (e) { resolve({ code: -1, out: '', err: String((e && e.message) || e), missing: true }); return; }
+    child.on('error', (e) => { err += String((e && e.message) || e); finish(-1); });
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('close', (code) => finish(code));
+    if (timeoutMs) setTimeout(() => finish(0), timeoutMs);
+  });
+}
+async function tsState() {
+  const st = await tsRun(['status', '--json'], { timeoutMs: 8000 });
+  if (st.missing || /not found|executable file not found|no such file/i.test(st.err)) return { installed: false };
+  let j = null; try { j = JSON.parse(st.out); } catch {}
+  if (!j) {
+    const needsOperator = /operator|access denied|permission denied|use sudo|connect: permission/i.test(st.err);
+    return { installed: true, backendState: 'Unknown', needsOperator, error: (st.err || '').trim().slice(0, 200) };
+  }
+  const backendState = j.BackendState || 'Unknown';
+  const dnsName = String((j.Self && j.Self.DNSName) || '').replace(/\.$/, '');
+  let funnelOn = false;
+  const sv = await tsRun(['serve', 'status', '--json'], { timeoutMs: 6000 });
+  try { const sj = JSON.parse(sv.out); funnelOn = !!(sj && sj.AllowFunnel && Object.values(sj.AllowFunnel).some(Boolean)); } catch {}
+  if (!funnelOn) { const fn = await tsRun(['funnel', 'status'], { timeoutMs: 6000 }); if (/https:\/\/\S+/.test(fn.out)) funnelOn = true; }
+  const publicUrl = (funnelOn && dnsName) ? 'https://' + dnsName : '';
+  return { installed: true, backendState, loggedIn: backendState === 'Running', dnsName, funnelOn, publicUrl, relayWss: publicUrl ? publicUrl.replace(/^https/, 'wss') + '/relay' : '' };
+}
+
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
   // relay status (for the Relay app control dashboard)
@@ -304,6 +341,49 @@ function serveStatic(req, res) {
     git.on('error', () => { try { res.destroy(); } catch {} });
     git.on('close', (code) => { if (code !== 0) { try { res.destroy(); } catch {} } });
     return;
+  }
+  // "Go public" wizard control — token-gated. Lets the relay dashboard bring the node onto Tailscale
+  // and turn on Funnel (public HTTPS/WSS) with no terminal. See relay-app/control.html.
+  if (route === '/tailscale/state' || route === '/tailscale/up' || route === '/tailscale/funnel') {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    if (route === '/tailscale/state' && req.method === 'GET') {
+      tsState().then(s => { res.writeHead(200, H); res.end(JSON.stringify(s)); })
+        .catch(e => { res.writeHead(200, H); res.end(JSON.stringify({ installed: true, error: String((e && e.message) || e) })); });
+      return;
+    }
+    if (route === '/tailscale/up' && req.method === 'POST') {
+      let body = ''; req.on('data', c => { body += c; if (body.length > 1e4) req.destroy(); });
+      req.on('end', () => {
+        let authKey = ''; try { authKey = String((JSON.parse(body || '{}')).authKey || '').trim(); } catch {}
+        if (authKey && !/^tskey-[A-Za-z0-9-]+$/.test(authKey)) { res.writeHead(400, H); res.end('{"error":"that does not look like a Tailscale auth key"}'); return; }
+        tsState().then(cur => {
+          if (cur.loggedIn) { res.writeHead(200, H); res.end(JSON.stringify({ running: true, ...cur })); return; }
+          const args = ['up']; if (authKey) args.push('--auth-key=' + authKey);
+          let resolved = false, buf = '';
+          const respond = (obj, code = 200) => { if (resolved) return; resolved = true; res.writeHead(code, H); res.end(JSON.stringify(obj)); };
+          let child;
+          try { child = spawn(TS_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] }); }
+          catch (e) { respond({ error: String((e && e.message) || e) }, 500); return; }
+          const scan = () => { const m = buf.match(/https:\/\/login\.tailscale\.com\/\S+/); if (m) respond({ authUrl: m[0] }); };
+          child.stdout.on('data', d => { buf += d; scan(); });
+          child.stderr.on('data', d => { buf += d; scan(); });
+          child.on('error', e => respond({ error: String((e && e.message) || e) }, 500));
+          child.on('close', code => respond({ running: code === 0, code, output: buf.trim().slice(0, 300) }));
+          setTimeout(() => respond({ pending: true, output: buf.trim().slice(0, 300) }), 12000);
+          child.unref();   // let `up` keep running so the login can complete; the client polls /state
+        }).catch(e => { res.writeHead(500, H); res.end(JSON.stringify({ error: String((e && e.message) || e) })); });
+      });
+      return;
+    }
+    if (route === '/tailscale/funnel' && req.method === 'POST') {
+      tsRun(['funnel', '--bg', String(PORT)], { timeoutMs: 25000 }).then(async r => {
+        if (r.code === 0) { const s = await tsState(); res.writeHead(200, H); res.end(JSON.stringify({ ok: true, ...s })); }
+        else { const needsPolicy = /funnel|not available|https|cert|denied|not enabled/i.test((r.err || '') + (r.out || '')); res.writeHead(200, H); res.end(JSON.stringify({ ok: false, error: (r.err || r.out || 'funnel failed').trim().slice(0, 300), needsPolicy })); }
+      }).catch(e => { res.writeHead(500, H); res.end(JSON.stringify({ error: String((e && e.message) || e) })); });
+      return;
+    }
+    res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
   // browser setup wizard: read/write the relay's write policy (church.json). Auth required (token or
   // loopback). The control dashboard uses this so a steward never has to SSH in and edit a file.

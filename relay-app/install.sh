@@ -127,30 +127,19 @@ ReadWritePaths=$DIR/relay
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now "$SVC" >/dev/null 2>&1
+systemctl enable "$SVC" >/dev/null 2>&1
+systemctl restart "$SVC"   # restart (not just enable --now) so re-running the installer loads new code
 sleep 2
 systemctl is-active --quiet "$SVC" && ok "relay running on port $PORT (starts on boot)" || die "service failed to start — check: journalctl -u $SVC"
 
-# ── tunnel (operator-selectable) ────────────────────────────────────────────────
-if [ -z "$TUNNEL" ]; then
-  echo; echo "  Reachability — how should the relay be reached from outside the church LAN?"
-  echo "    1) Tailscale   (rock-solid; one login)"
-  echo "    2) Cloudflare  (cloudflared quick tunnel; no account, random URL)"
-  echo "    3) LAN only    (this network only; add a tunnel later)"
-  case "$(ask '  Choose [1/2/3] (default 3): ' '3')" in
-    1) TUNNEL=tailscale;; 2) TUNNEL=cloudflared;; *) TUNNEL=none;;
-  esac
-fi
-
+# ── reachability ─────────────────────────────────────────────────────────────────
+# Default: install Tailscale and grant the relay permission to manage it, so the operator
+# finishes exposure from the browser ("Go public" in the dashboard) with no terminal at all.
+# cloudflared / LAN-only stay available via --tunnel for advanced/non-interactive installs.
 LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 case "$TUNNEL" in
-  tailscale)
-    say "Setting up Tailscale"
-    command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
-    ok "Tailscale installed"
-    warn "Final step needs you (one-time login). Run:"
-    echo "      sudo tailscale up"
-    echo "      sudo tailscale funnel $PORT      # public HTTPS URL, or 'serve' for tailnet-only"
+  none)
+    ok "LAN-only for now — turn on public access anytime from the dashboard's 'Go public' button"
     ;;
   cloudflared)
     say "Setting up a Cloudflare quick tunnel"
@@ -177,20 +166,31 @@ UNIT
     warn "Find your public URL with:  journalctl -u $SVC-tunnel | grep trycloudflare"
     warn "Quick-tunnel URLs are random and change on restart — use a named Cloudflare tunnel for a stable address."
     ;;
-  none|*)
-    ok "LAN-only for now"
+  *)  # default (and --tunnel tailscale): prepare one-click public access from the browser
+    say "Preparing one-click public access (Tailscale)"
+    command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
+    ok "Tailscale installed"
+    if tailscale set --operator="$SVC_USER" >/dev/null 2>&1; then
+      ok "the relay can manage Tailscale — you'll finish going public in the browser, no terminal"
+    else
+      warn "couldn't grant operator automatically; if the dashboard asks, run once: sudo tailscale set --operator=$SVC_USER"
+    fi
     ;;
 esac
 
 # ── done ────────────────────────────────────────────────────────────────────────
 ADMIN_TOKEN="$(node -e 'try{process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).token||"")}catch(e){}' "$DIR/relay/admin.json" 2>/dev/null || true)"
-say "Done."
-echo "  Control dashboard:  http://${LAN_IP:-localhost}:$PORT/relay-app/control.html"
-echo "  Member relay URL:   ws://${LAN_IP:-localhost}:$PORT/relay   (wss:// once a tunnel is up)"
-echo "  Manage:             systemctl status $SVC   ·   journalctl -u $SVC -f"
+say "Done — finish in the browser (no more terminal)."
+echo "  Open the dashboard:  http://${LAN_IP:-localhost}:$PORT/relay-app/control.html"
 echo
-echo "  Set up your church(es) in the browser — open the control dashboard and paste your npub."
-echo "  Configuring requires this admin token (keep it private):"
+echo "  There you'll:"
+echo "    1) Paste the admin token below to unlock it"
+echo "    2) Click 'Connect to Tailscale' → 'Make it public'  (gives you a public https:// URL)"
+echo "    3) Add your church's npub so the relay accepts its posts"
+echo
+echo "  Admin token (keep it private):"
 echo "      ${ADMIN_TOKEN:-<see: journalctl -u $SVC | grep \"admin token\">}"
-echo "  (Or set keys non-interactively any time: re-run with --church npub1…)"
+echo
+echo "  Manage:  systemctl status $SVC   ·   journalctl -u $SVC -f"
+echo "  (Advanced: --tunnel cloudflared|none, or set keys with --church npub1…)"
 echo
