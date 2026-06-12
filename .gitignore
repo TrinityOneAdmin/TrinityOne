@@ -4,8 +4,9 @@ node_modules/
 # generated / build outputs
 # www/ is populated by scripts/sync-web.sh
 www/
-# android/ native project — regenerate with `npx cap add android`
+# android/ + ios/ native projects — regenerate with `npx cap add android` / `npx cap add ios`
 android/
+ios/
 *.apk
 dist/
 *.log
