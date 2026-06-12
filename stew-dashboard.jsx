@@ -462,6 +462,9 @@ function StewDashboard({ initial = 'overview' }) {
 
 // ---- the join flow: a real QR + code members scan/paste to follow this church ----
 function shortNpub(np) { return np ? np.slice(0, 14) + '…' + np.slice(-6) : '—'; }
+// a member's handle local-part: their NIP-05 if set, else derived from their display name (the relay
+// resolves name@host either way). '' only when they have no name at all (truly anonymous).
+function nameHandle(m) { if (!m) return ''; if (m.nip05) return String(m.nip05).split('@')[0]; return m.name ? String(m.name).toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30) : ''; }
 function copyText(t) {
   if (!t) return false;
   // navigator.clipboard only works in a secure context (https / localhost). Over plain http on the
@@ -776,7 +779,7 @@ function NewGroupModal({ open, onClose }) {
                         <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                           <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
                           <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
-                          <span style={{ fontSize: 11, color: m.nip05 ? 'var(--sage)' : 'var(--ink-3)', fontWeight: m.nip05 ? 700 : 400, fontFamily: m.nip05 ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{m.nip05 ? '@' + String(m.nip05).split('@')[0] : shortNpub(m.npub)}</span>
+                          <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage)' : 'var(--ink-3)', fontWeight: nameHandle(m) ? 700 : 400, fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
                         </button>
                       ); })}
                     </div>
@@ -826,7 +829,7 @@ function EditGroupMembersModal({ group, onClose }) {
             <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
               <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
               <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
-              <span style={{ fontSize: 11, color: m.nip05 ? 'var(--sage)' : 'var(--ink-3)', fontFamily: m.nip05 ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{m.nip05 ? '@' + String(m.nip05).split('@')[0] : shortNpub(m.npub)}</span>
+              <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage)' : 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
             </button>
           ); })}
           {orphans.length ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>{orphans.length} other member{orphans.length === 1 ? '' : 's'} in this group aren’t on the current roster (left/quiet) — they stay unless you’ve unticked them above.</div> : null}
@@ -1532,15 +1535,15 @@ function DashMembers() {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <span style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</span>
-            {m.nip05
-              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage)', fontWeight: 700 }} title={m.nip05}>@{String(m.nip05).split('@')[0]} <Icon name="check" size={11} stroke={3} color="var(--sage)" /></span>
+            {nameHandle(m)
+              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage)', fontWeight: 700 }} title={m.nip05 || m.npub}>@{nameHandle(m)} <Icon name="check" size={11} stroke={3} color="var(--sage)" /></span>
               : <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }} title={m.npub}>{shortNpub(m.npub)}</span>}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
         </div>
         {inactive ? <SkPill tint="ink">inactive</SkPill> : (m.count === 0 ? <SkPill tint="ink">joined</SkPill> : null)}
         {!named ? <SkPill tint="sage">anonymous</SkPill> : null}
-        <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+        <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
           <Icon name="chat" size={15} color="currentColor" /> Chat</button>
         <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
           <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
@@ -1991,7 +1994,7 @@ function StewDmWindow({ peer, offset, onClose }) {
     <div style={{ width: 316, background: 'var(--surface)', borderRadius: '14px 14px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: min ? 48 : 420, transition: 'height .18s' }}>
       <div onClick={() => setMin(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', cursor: 'pointer', background: 'var(--surface)', borderBottom: min ? 'none' : '1px solid var(--line)', flexShrink: 0 }}>
         <SkBadge initials={initials} size={28} radius={9} accent={SK_TINT.gold.fg} />
-        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{peer.name || 'Member'}</div><div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontFamily: 'var(--mono)' }}>{shortNpub(peer.npub)}</div></div>
+        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{peer.name || 'Member'}</div><div style={{ fontSize: 10.5, color: nameHandle(peer) ? 'var(--sage)' : 'var(--ink-3)', fontWeight: nameHandle(peer) ? 700 : 400, fontFamily: nameHandle(peer) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(peer) ? '@' + nameHandle(peer) : shortNpub(peer.npub)}</div></div>
         <button onClick={(e) => { e.stopPropagation(); setMin(v => !v); }} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3 }}><Icon name={min ? 'chevU' : 'chevD'} size={16} /></button>
         <button onClick={(e) => { e.stopPropagation(); onClose(); }} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3 }}><Icon name="x" size={16} /></button>
       </div>
