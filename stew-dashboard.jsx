@@ -1451,7 +1451,10 @@ function DashMembers() {
         <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
           <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
         {confirmBlock === m.pubkey
-          ? <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Confirm block</button>
+          ? <span style={{ display: 'flex', gap: 6 }}>
+              <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Confirm block</button>
+              <button onClick={() => setConfirmBlock(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="x" size={15} color="currentColor" /></button>
+            </span>
           : <button onClick={() => setConfirmBlock(m.pubkey)} title="Remove / block this member" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="shield" size={15} color="currentColor" /></button>}
       </div>
     );
