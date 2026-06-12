@@ -172,6 +172,9 @@ A one-to-many announcements channel for stewards.
 
 Out of scope for now: full ChurchSuite surface (CRM, child check-in, broadcast comms). Giving is already cleaner here via Lightning than ChurchSuite offers.
 
+### Nice-to-haves (small UX, unprioritised)
+- **Member search** — a search/filter field in the Steward console's Members tab (filter by name / npub) for churches with longer rosters. *(requested 2026-06-12)*
+
 ---
 
 ## Conventions
