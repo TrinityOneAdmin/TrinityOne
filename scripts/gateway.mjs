@@ -454,6 +454,10 @@ function serveStatic(req, res) {
             const list = curChurches();
             const name = String(parsed.addChurch.name || '').slice(0, 80);
             const existing = list.find(c => toHexPub(c.npub) === hex);
+            // cap self-registration: a valid signature is cheap to mint with a fresh keypair, so
+            // without a ceiling anyone could append churches forever and bloat the write policy.
+            // The admin token bypasses this (real onboarding); a new self-register past the cap is refused.
+            if (!isAdmin && !existing && list.length >= 200) { res.writeHead(429, H); res.end(JSON.stringify({ error: 'registration capacity reached — contact the relay operator' })); return; }
             if (existing) { if (name) existing.name = name; } else { list.push({ npub: npubEncode(hex), name }); }
             writeChurches(list);
             res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: isAdmin ? list : undefined }));
