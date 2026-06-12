@@ -690,6 +690,16 @@ function App() {
     openSearch: () => setSearchOpen(true),
     openShare: (v) => setShare(v),
     openShareSheet: (v) => setShareSheet(v),
+    // share arbitrary text via the OS share sheet (native or web), falling back to clipboard
+    shareText: async (text, title) => {
+      const t = (text || '').trim(); if (!t) return;
+      const Cap = window.Capacitor, P = Cap && Cap.Plugins;
+      try {
+        if (P && P.Share && Cap.isNativePlatform && Cap.isNativePlatform()) { await P.Share.share({ title: title || 'TrinityOne', text: t }); return; }
+        if (navigator.share) { await navigator.share({ text: t }); return; }
+      } catch (e) { if (e && e.name === 'AbortError') return; }
+      try { if (navigator.clipboard) { await navigator.clipboard.writeText(t); toast('Copied — paste it anywhere'); } } catch (e) {}
+    },
     openHelp: (initial) => setHelp(initial || 'index'),
     openDevotional: () => setDevo(true),
     openPlan: (p) => setPlan(p),

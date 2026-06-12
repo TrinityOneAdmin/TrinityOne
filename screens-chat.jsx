@@ -603,11 +603,25 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live }) {
   );
 }
 
+// shareable text for any message kind (plain text, verse, or a shared card)
+function shareTextOf(m) {
+  if (!m) return '';
+  if (m.text) return m.text;
+  if (m.kind === 'verse' && m.verse) return '“' + m.verse.text + '” — ' + m.verse.ref + (m.verse.version ? ' (' + m.verse.version + ')' : '');
+  if (m.card) return [m.card.title, m.card.ref, m.card.text].filter(Boolean).join('\n');
+  return '';
+}
 function Row({ me, m, children, ctx }) {
   const d = (m.pubkey && window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(m.pubkey) : { handle: m.handle, color: m.color };
   const canDM = !!(m.pubkey && ctx && ctx.openDM);
+  // press-and-hold a message to share it (OS share sheet). Touch-move cancels so scrolling is unaffected.
+  const lp = React.useRef(null);
+  const doShare = () => { const t = shareTextOf(m); if (t && ctx && ctx.shareText) ctx.shareText(t); };
+  const startLP = () => { clearTimeout(lp.current); lp.current = setTimeout(doShare, 480); };
+  const cancelLP = () => { clearTimeout(lp.current); lp.current = null; };
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both' }}>
+    <div onTouchStart={startLP} onTouchEnd={cancelLP} onTouchMove={cancelLP} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both' }}>
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
         <UserAvatar av={avOf(d)} name={d.handle} size={22} />
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>{d.handle}</span>
