@@ -537,7 +537,7 @@ function App() {
     broadcastMsgs.forEach(m => out.push({ id: 'bc:' + m.id, kind: 'notice', group: _churchNameFor, text: m.text, ts: m.ts, groupObj: churchGroups.find(g => g.id === m.gid) || null }));
     churchDevos.forEach(d => out.push({ id: 'devo:' + d.id, kind: 'devotional', group: _churchNameFor, text: 'Shared a devotional · ' + (d.title || ''), ts: d.ts, devo: d }));
     churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: _churchNameFor, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
-    churchEvents.forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'serving' }));
+    churchEvents.forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
     return out.filter(n => n.ts && (_nowSec - n.ts) < NOTIF_WINDOW).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
   })();
   // unread tracking (drives the bell badge); "seen" = newest ts the user has opened the panel at

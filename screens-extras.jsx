@@ -23,6 +23,7 @@ function NotificationsScreen({ open, onClose, ctx }) {
   const onRowClick = (n) => {
     if (n.devo) { onClose(); ctx.openChurchDevo(n.devo); return; }
     if (n.go === 'plans') { onClose(); ctx.openPlans && ctx.openPlans(); return; }
+    if (n.go === 'event' && n.event) { onClose(); ctx.openEvent ? ctx.openEvent(n.event) : (ctx.openServing && ctx.openServing()); return; }
     if (n.go === 'serving') { onClose(); ctx.openServing && ctx.openServing(); return; }
     if (n.groupObj && ctx.openGroup) { onClose(); ctx.openGroup(n.groupObj); return; }   // broadcast: open its chat
     if (n.go === 'chat') { onClose(); ctx.go('chat'); return; }
