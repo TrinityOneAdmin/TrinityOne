@@ -625,7 +625,14 @@ function Row({ me, m, children, ctx }) {
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
         <UserAvatar av={avOf(d)} name={d.handle} size={22} />
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>{d.handle}</span>
-        {d.nip05 ? <Icon name="check" size={11} stroke={3} color="var(--sage)" /> : null}
+        {d.nip05 ? (() => {
+          const h = String(d.nip05).split('@')[0];                                           // the @nicename (NIP-05 local part)
+          const dup = d.handle && d.handle.toLowerCase().replace(/[^a-z0-9]+/g, '') === h.toLowerCase();   // name already IS the handle — don't repeat it
+          return <React.Fragment>
+            {!dup ? <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--sage)' }}>@{h}</span> : null}
+            <Icon name="check" size={11} stroke={3} color="var(--sage)" />
+          </React.Fragment>;
+        })() : null}
         <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{m.when}</span>
       </div> : null}
       {children}
