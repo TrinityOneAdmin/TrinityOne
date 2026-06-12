@@ -70,7 +70,7 @@ const TABS = [
 function TabBar({ active, onChange }) {
   return (
     <div style={{
-      position: 'absolute', left: 12, right: 12, bottom: 12, zIndex: 25,
+      position: 'absolute', left: 12, right: 12, bottom: 'max(12px, env(safe-area-inset-bottom))', zIndex: 25,
       height: 66, borderRadius: 26, display: 'flex', alignItems: 'center',
       justifyContent: 'space-around', padding: '0 6px',
       background: 'color-mix(in oklab, var(--surface) 82%, transparent)',
