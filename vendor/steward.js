@@ -9143,7 +9143,7 @@ zoo`.split("\n");
     publishGroup(group) {
       if (!sk) return Promise.resolve(null);
       const id = group.id || "grp" + Date.now();
-      const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [] });
+      const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === "number" ? group.order : void 0 });
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET]], content }, sk)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
     // set which members can post events for a group (re-publishes the group def, preserving its fields)
@@ -9156,7 +9156,7 @@ zoo`.split("\n");
     },
     subscribeGroups(onGroups) {
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => onGroups([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+      const emit = () => onGroups([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";

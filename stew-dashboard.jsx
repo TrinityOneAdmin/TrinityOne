@@ -616,18 +616,42 @@ function DashGiving() {
   );
 }
 
-function ListPanel({ title, items, addLabel, renderRight, onAdd, empty }) {
+function ListPanel({ title, items, addLabel, renderRight, onAdd, empty, reorderable, onReorder }) {
+  const [order, setOrder] = React.useState(null);   // working copy while dragging
+  const [dragId, setDragId] = React.useState(null);
+  const [overId, setOverId] = React.useState(null);
+  const list = order || items;
+  const idOf = (it, i) => it.id != null ? it.id : i;
+  const onDragOver = (e, id) => {
+    e.preventDefault();
+    if (dragId == null || id === dragId) return;
+    const arr = (order || items).slice();
+    const from = arr.findIndex((x, i) => idOf(x, i) === dragId), to = arr.findIndex((x, i) => idOf(x, i) === id);
+    if (from < 0 || to < 0) return;
+    const [m] = arr.splice(from, 1); arr.splice(to, 0, m);
+    setOrder(arr); setOverId(id);
+  };
+  const onDrop = () => { if (order && onReorder) onReorder(order); setDragId(null); setOverId(null); setOrder(null); };
+  const move = (idx, dir) => { const arr = items.slice(); const j = idx + dir; if (j < 0 || j >= arr.length) return; const t = arr[idx]; arr[idx] = arr[j]; arr[j] = t; if (onReorder) onReorder(arr); };
   return (
     <Panel title={title} action={<button onClick={onAdd} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {addLabel}</button>} style={{ height: '100%' }}>
       {items.length === 0 ? <div style={{ textAlign: 'center', padding: '34px 10px', color: 'var(--ink-3)', fontSize: 13.5 }}>{empty || 'Nothing here yet.'}</div> : null}
+      {reorderable && items.length > 1 ? <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 2px 10px', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="dots" size={13} color="var(--ink-3)" /> Drag to reorder — this is the order your members see.</div> : null}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {items.map((it, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+        {list.map((it, i) => {
+          const id = idOf(it, i), dragging = dragId === id;
+          return (
+          <div key={id} draggable={!!reorderable}
+            onDragStart={reorderable ? (e) => { setDragId(id); try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(id)); } catch (err) {} } : undefined}
+            onDragOver={reorderable ? (e) => onDragOver(e, id) : undefined} onDrop={reorderable ? onDrop : undefined} onDragEnd={reorderable ? () => { setDragId(null); setOverId(null); setOrder(null); } : undefined}
+            style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid ' + (overId === id && !dragging ? 'var(--clay)' : 'var(--line)'), opacity: dragging ? 0.4 : 1, boxShadow: dragging ? 'var(--shadow-lg)' : 'none', transition: 'border-color .12s, opacity .12s' }}>
+            {reorderable ? <div title="Drag to reorder" style={{ cursor: 'grab', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, touchAction: 'none' }}><Icon name="dots" size={18} color="currentColor" /></div> : null}
             <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)' }}><Icon name={it.ic} size={19} color="currentColor" /></div>
-            <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{it.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{it.sub}</div></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{it.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{it.sub}</div></div>
             {renderRight(it)}
           </div>
-        ))}
+          );
+        })}
       </div>
     </Panel>
   );
@@ -761,6 +785,7 @@ function DashGroups() {
         </div>
       ) : null}
       <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items}
+        reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...g, order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         renderRight={(it) => (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

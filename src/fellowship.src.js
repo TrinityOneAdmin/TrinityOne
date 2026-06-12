@@ -365,7 +365,8 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onGroups([]); return () => {}; }
     const byId = new Map();
-    const emit = () => onGroups([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+    // honour the steward's chosen order (groups without an order fall to the end, by age)
+    const emit = () => onGroups([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
