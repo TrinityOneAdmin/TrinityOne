@@ -46,7 +46,7 @@ function saveNetKey(rec) {
 }
 // The TrinityOne shared-relay pool — relays we operate that every church can use. On a static host
 // the steward publishes across all of them (they don't sync to each other). Add a URL here per host.
-const CANONICAL_RELAYS = ['wss://trinityone.tailbeaac0.ts.net/relay'];
+const CANONICAL_RELAYS = ['wss://trinityone-master-01.tailbeaac0.ts.net/relay', 'wss://trinityone.tailbeaac0.ts.net/relay'];
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 function ownRelay() {
   const l = (typeof location !== 'undefined') ? location : null;

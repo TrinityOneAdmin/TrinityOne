@@ -8809,7 +8809,7 @@ zoo`.split("\n");
     a.push(rec);
     lsSet(NETKEYS_LS, JSON.stringify(a));
   }
-  var CANONICAL_RELAYS = ["wss://trinityone.tailbeaac0.ts.net/relay"];
+  var CANONICAL_RELAYS = ["wss://trinityone-master-01.tailbeaac0.ts.net/relay", "wss://trinityone.tailbeaac0.ts.net/relay"];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function ownRelay() {
     const l = typeof location !== "undefined" ? location : null;

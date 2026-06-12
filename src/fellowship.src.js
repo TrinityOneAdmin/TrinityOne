@@ -45,7 +45,8 @@ const DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];   // native / static 
 // yet (e.g. the CDN-hosted app), so its name + groups resolve. Add a host's wss URL here once it joins
 // the pool — these relays don't sync to each other, so clients write to all of them.
 const CANONICAL_RELAYS = [
-  'wss://trinityone.tailbeaac0.ts.net/relay',
+  'wss://trinityone-master-01.tailbeaac0.ts.net/relay',   // master-01 — dedicated pilot relay (primary)
+  'wss://trinityone.tailbeaac0.ts.net/relay',             // dev box — secondary, for redundancy
 ];
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 const RELAYS_KEY = 'trinityone.relays';

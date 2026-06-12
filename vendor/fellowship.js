@@ -4971,7 +4971,10 @@
   var _originRelay = !_native && !_staticHost && _loc && _loc.host ? (_loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay" : null;
   var DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];
   var CANONICAL_RELAYS = [
+    "wss://trinityone-master-01.tailbeaac0.ts.net/relay",
+    // master-01 — dedicated pilot relay (primary)
     "wss://trinityone.tailbeaac0.ts.net/relay"
+    // dev box — secondary, for redundancy
   ];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   var RELAYS_KEY = "trinityone.relays";
