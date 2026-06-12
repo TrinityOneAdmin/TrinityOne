@@ -94,7 +94,7 @@ function SearchScreen({ ctx, onBack }) {
                       padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
                       <div style={{ fontWeight: 700, color: 'var(--clay)', fontSize: 13.5, marginBottom: 4 }}>{r.ref}</div>
                       <p style={{ margin: 0, fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.5, color: 'var(--ink)', textWrap: 'pretty' }}
-                        dangerouslySetInnerHTML={{ __html: hl(r.text) }} />
+                        dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(hl(r.text)) }} />
                     </div>
                   ))}
                 </div>

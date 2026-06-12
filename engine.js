@@ -2,6 +2,28 @@
 // Loads MySword (.bbl.mybible SQLite) and open.bible (USFM-in-zip) modules
 // entirely in-browser, parses Scripture markup, and exposes window.Bible.
 "use strict";
+// XSS guard: verse + commentary HTML is rendered via dangerouslySetInnerHTML, but a malicious
+// .mybible/.cmt module could embed <script> or onerror= in its content. Whitelist-sanitize first —
+// keep the engine's safe formatting tags/classes, drop everything else.
+window.sanitizeHtml = function (html) {
+  if (typeof html !== "string" || html.indexOf("<") === -1) return html || "";
+  try {
+    const OK_TAG = { SPAN: 1, SUP: 1, SUB: 1, BR: 1, EM: 1, I: 1, B: 1, STRONG: 1, MARK: 1, U: 1, P: 1, DIV: 1, BLOCKQUOTE: 1, UL: 1, OL: 1, LI: 1, SMALL: 1, WBR: 1, HR: 1, RUBY: 1, RT: 1 };
+    const OK_ATTR = { "class": 1, "data-s": 1 };
+    const DROP = { SCRIPT: 1, STYLE: 1, IFRAME: 1, OBJECT: 1, EMBED: 1, LINK: 1, META: 1, BASE: 1, FORM: 1, SVG: 1, IMG: 1, AUDIO: 1, VIDEO: 1, BUTTON: 1, INPUT: 1, A: 1 };
+    const t = document.createElement("template");
+    t.innerHTML = html;
+    const els = t.content.querySelectorAll("*");
+    for (let i = els.length - 1; i >= 0; i--) {       // reverse = innermost first
+      const el = els[i], tag = el.tagName;
+      if (DROP[tag]) { el.remove(); continue; }        // remove dangerous elements + their content
+      if (!OK_TAG[tag]) { el.replaceWith.apply(el, [].slice.call(el.childNodes)); continue; }  // unwrap, keep text
+      const attrs = [].slice.call(el.attributes);
+      for (let j = 0; j < attrs.length; j++) { if (!OK_ATTR[attrs[j].name.toLowerCase()]) el.removeAttribute(attrs[j].name); }
+    }
+    return t.innerHTML;
+  } catch (e) { return String(html).replace(/<[^>]*>/g, ""); }   // fallback: strip all tags
+};
 (function () {
   const SQLJS_BASE = "vendor/sqljs/";   // vendored locally (offline); was cdnjs
 

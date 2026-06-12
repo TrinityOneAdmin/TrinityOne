@@ -67,7 +67,7 @@ function AllUsesView({ id, open, onClose, ctx }) {
                   <Icon name="chevR" size={16} color="var(--ink-3)" />
                 </div>
                 <p style={{ margin: 0, fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.5, color: 'var(--ink)', textWrap: 'pretty' }}
-                  dangerouslySetInnerHTML={{ __html: hiText(u.text, con.en) }} />
+                  dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(hiText(u.text, con.en)) }} />
               </div>
             ))}
           </div>

@@ -33,7 +33,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
         <span style={hl ? {
           background: hl, borderRadius: 3, padding: '1px 1px',
           WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
-        } : null} dangerouslySetInnerHTML={{ __html: html }} />
+        } : null} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(html) }} />
         {note ? <Icon name="note" size={14} color="var(--gold)" style={{ verticalAlign: 'middle', marginLeft: 4 }} /> : null}
       </span>{' '}
     </span>
@@ -560,7 +560,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx }) {
               {srcBlk.rows.map((b, i) => (
                 <div key={i} style={{ marginBottom: 14 }}>
                   <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: '#fff', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 6 }}>{b.v && b.vTo && b.vTo > b.v ? `v${b.v}–${b.vTo}` : (b.v ? `v${b.v}` : 'Note')}</span>
-                  <div className="commentary-body" style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)' }} dangerouslySetInnerHTML={{ __html: b.html }} />
+                  <div className="commentary-body" style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)' }} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(b.html) }} />
                 </div>
               ))}
             </div>
