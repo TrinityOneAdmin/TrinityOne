@@ -557,6 +557,10 @@ function App() {
     !!(window.navigator && window.navigator.standalone) ||
     window.innerWidth <= 500
   ));
+  // wide desktop browser → left-sidebar layout (reactive to resize); phones / native stay phone-first
+  const [vw, setVw] = useA(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  useAE(() => { const f = () => setVw(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
+  const desktop = fullscreen && vw >= 900;
   // scaling to viewport (desktop preview only)
   const wrapRef = useAR();
   useAE(() => {
@@ -769,8 +773,19 @@ function App() {
       <PhoneFrame bare={fullscreen}>
         {Bible.loaded ? (
           <React.Fragment>
-            <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>
-            <TabBar active={tab} onChange={setTab} />
+            {desktop ? (
+              <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
+                <DesktopNav active={tab} onChange={setTab} />
+                <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-start', minWidth: 0, background: 'var(--paper)' }}>
+                  <div style={{ position: 'relative', width: '100%', maxWidth: 920, borderRight: '1px solid var(--line)' }}>{screens[tab]}</div>
+                </div>
+              </div>
+            ) : (
+              <React.Fragment>
+                <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>
+                <TabBar active={tab} onChange={setTab} />
+              </React.Fragment>
+            )}
 
             {/* overlays */}
             <ShareCard verse={share} open={!!share} onClose={() => setShare(null)} ctx={ctx} />

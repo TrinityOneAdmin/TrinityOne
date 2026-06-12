@@ -97,6 +97,40 @@ function TabBar({ active, onChange }) {
   );
 }
 
+// ── Desktop left sidebar nav (replaces the floating TabBar on a wide screen) ──
+function DesktopNav({ active, onChange }) {
+  return (
+    <div style={{
+      width: 240, flexShrink: 0, height: '100%', boxSizing: 'border-box',
+      display: 'flex', flexDirection: 'column', padding: '20px 14px',
+      background: 'var(--surface)', borderRight: '1px solid var(--line)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 10px 20px' }}>
+        <Halo size={26} color="var(--ink)" spark="var(--clay)" />
+        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, letterSpacing: '-.3px' }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {TABS.map(t => {
+          const on = active === t.id;
+          return (
+            <button key={t.id} onClick={() => onChange(t.id)} style={{
+              display: 'flex', alignItems: 'center', gap: 13, padding: '11px 13px', borderRadius: 13,
+              border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 15, fontWeight: on ? 700 : 600,
+              background: on ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'transparent',
+              color: on ? 'var(--clay)' : 'var(--ink-2)', transition: 'background .15s, color .15s', textAlign: 'left',
+            }}>
+              <Icon name={t.icon} size={21} stroke={on ? 2.1 : 1.8} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {t.label}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ flex: 1 }} />
+      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '1.5px', textTransform: 'uppercase', color: 'var(--ink-3)', padding: '10px 13px' }}>Read · Gather · Share</div>
+    </div>
+  );
+}
+window.DesktopNav = DesktopNav;
+
 // ── Bible / Plans segmented toggle (the Read tab holds both views) ──
 function ReadPlansTabs({ ctx, style = {} }) {
   const v = ctx.readView || 'bible';
