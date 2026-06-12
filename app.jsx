@@ -313,7 +313,13 @@ function App() {
   // on load, refresh each followed church's name/groups from the relay (names may have changed)
   useAE(() => {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
-    const offs = churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0).map(c =>
+    const followed = churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0);
+    // previously-followed church but no relay yet (e.g. the CDN app, reloaded) → add the canonical relay
+    // so its name/groups resolve. Relay still only lands when a church is/was joined.
+    if (followed.length && window.Fellowship.addRelay && window.Fellowship.CANONICAL_RELAY && !(window.Fellowship.relays || []).length) {
+      window.Fellowship.addRelay(window.Fellowship.CANONICAL_RELAY);
+    }
+    const offs = followed.map(c =>
       window.Fellowship.subscribeChurchProfile(c.npub || c.id, (p) => {
         if (!p) return;
         setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
