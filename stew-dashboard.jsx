@@ -129,6 +129,31 @@ function JoinNotifier() {
   );
 }
 
+// auto-distribute encrypted-group keys to NEW members (an open group keys everyone; an invite group its
+// allowlist). reuse-only — it never mints a new key in the background (that would orphan history); removals
+// are rotated explicitly from the edit-members modal. Renders nothing.
+function KeyDistributor() {
+  const groups = window.useStewardGroups ? window.useStewardGroups() : [];
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const last = React.useRef({});
+  React.useEffect(() => {
+    const memberPubs = members.map(m => m.pubkey);
+    for (const g of groups) {
+      if (!g.encrypted) continue;
+      const recips = g.visibility === 'invite' ? (g.members || []) : memberPubs;
+      const key = [...new Set(recips)].sort().join(',');
+      const prev = last.current[g.id];
+      if (prev === undefined) { last.current[g.id] = key; continue; }   // first sighting — already keyed by create/edit
+      if (key !== prev) {
+        const grew = recips.some(pk => pk && !prev.split(',').includes(pk));
+        if (grew && window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true });
+        last.current[g.id] = key;
+      }
+    }
+  }, [groups, members]);
+  return null;
+}
+
 // wizard step chrome — module-level so its component type is stable across renders
 // (defining it inside StewSetupWizard would remount on every keystroke and blur the inputs).
 function WizShell({ step, title, sub, children, footer }) {
@@ -349,7 +374,7 @@ function StewDashboard({ initial = 'overview' }) {
         {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
         <MemberChatDock />
-        <PublishErrorBanner /><JoinNotifier />
+        <PublishErrorBanner /><JoinNotifier /><KeyDistributor />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
@@ -386,7 +411,7 @@ function StewDashboard({ initial = 'overview' }) {
       {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
-        <PublishErrorBanner /><JoinNotifier />
+        <PublishErrorBanner /><JoinNotifier /><KeyDistributor />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
@@ -696,16 +721,25 @@ function NewGroupModal({ open, onClose }) {
   const [kind, setKind] = React.useState('group');
   const [sub, setSub] = React.useState('');
   const [inviteOnly, setInviteOnly] = React.useState(false);
+  const [encrypted, setEncrypted] = React.useState(false);
   const [sel, setSel] = React.useState(new Set());   // chosen member pubkeys for an invite-only group
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
-  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setSel(new Set()); } }, [open]);
+  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(false); setSel(new Set()); } }, [open]);
   if (!open) return null;
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const create = () => {
     if (!name.trim()) return;
     const g = { name: name.trim(), kind, sub: sub.trim() };
     if (kind === 'group' && inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
-    window.Steward.publishGroup(g); onClose();
+    if (kind === 'group' && encrypted) g.encrypted = true;
+    Promise.resolve(window.Steward.publishGroup(g)).then(pub => {
+      // encrypted → mint + distribute the group key. Recipients: the allowlist (invite) or everyone (open).
+      if (encrypted && pub && pub.id && window.Steward.publishGroupKey) {
+        const recips = inviteOnly ? [...sel] : members.map(m => m.pubkey);
+        window.Steward.publishGroupKey(pub.id, recips);
+      }
+    });
+    onClose();
   };
   const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
@@ -728,6 +762,10 @@ function NewGroupModal({ open, onClose }) {
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '18px 0 0', cursor: 'pointer' }}>
                 <input type="checkbox" checked={inviteOnly} onChange={e => setInviteOnly(e.target.checked)} style={{ marginTop: 2 }} />
                 <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>Invite-only</b> — hidden from the group list, and only the members you choose can post (the relay enforces it).</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '12px 0 0', cursor: 'pointer' }}>
+                <input type="checkbox" checked={encrypted} onChange={e => setEncrypted(e.target.checked)} style={{ marginTop: 2 }} />
+                <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>🔒 Encrypted</b> — messages are sealed end-to-end; not even the relay can read them. {inviteOnly ? 'Keyed to the chosen members.' : 'Keyed to everyone in the church.'} New members can read past messages.</span>
               </label>
               {inviteOnly ? (
                 <div style={{ marginTop: 14 }}>
@@ -766,7 +804,14 @@ function EditGroupMembersModal({ group, onClose }) {
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const known = new Set(members.map(m => m.pubkey));
   const orphans = [...sel].filter(pk => !known.has(pk));   // in the group but not in the current roster
-  const save = () => { setBusy(true); Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: [...sel] })).then(() => onClose()).catch(() => setBusy(false)); };
+  const save = () => {
+    setBusy(true);
+    const newM = [...sel];
+    const removed = (group.members || []).some(pk => !sel.has(pk));   // someone dropped → rotate the key
+    Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: newM }))
+      .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
+      .then(() => onClose()).catch(() => setBusy(false));
+  };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
   return (
     <div onClick={() => !busy && onClose()} style={{ position: 'absolute', inset: 0, zIndex: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>

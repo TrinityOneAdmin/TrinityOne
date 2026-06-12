@@ -10007,6 +10007,7 @@ zoo`.split("\n");
     // (used on removal so the removed member can't read future messages). The church wraps to itself too. ----
     publishGroupKey(groupId, memberPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
+      if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);
       const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toHexPub(p) || p).filter(Boolean)])];
       let key = _skeys[groupId];
       if (opts.rotate || !key) {
