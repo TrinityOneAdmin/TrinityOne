@@ -363,6 +363,29 @@ function App() {
       setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
     });
   };
+  // leave a church: tombstone the membership (steward sees them drop) + stop following locally
+  const leaveChurch = (npub) => {
+    const F = window.Fellowship;
+    if (F && F.leaveMembership) { try { F.leaveMembership(npub); } catch (e) {} }
+    const remaining = churches.filter(c => c.id !== npub);
+    setChurches(remaining);
+    if (activeChurch === npub) {
+      const next = (remaining.find(c => c.npub) || remaining[0] || {}).id || null;
+      setActiveChurch(next); lsSet('trinityone.activeChurch', next);
+    }
+    toast('You’ve left the church');
+  };
+  // membership heartbeat: refresh the member event on launch so quiet members (who read but never
+  // post) don't look inactive, and so an uninstalled app stops refreshing and ages out. Throttled ~12h.
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !(F && F.announceMembership)) return;
+    let last = 0; try { last = Number(localStorage.getItem('trinityone.hb:' + np) || 0); } catch {}
+    if (Date.now() - last < 12 * 3600 * 1000) return;
+    const beat = () => { F.announceMembership(np); try { localStorage.setItem('trinityone.hb:' + np, String(Date.now())); } catch {} };
+    if (F.ready && F.ready.then) F.ready.then(beat).catch(() => {}); else beat();
+  }, [activeChurch]);
   useAE(() => {
     if (!inviteParam && !followParam) return;
     let cleanup;
@@ -699,6 +722,7 @@ function App() {
     setActiveChurch: (id) => { setActiveChurch(id); lsSet('trinityone.activeChurch', id); },
     addChurch: (c) => { setChurches(cs => cs.find(x => x.id === c.id) ? cs : [...cs, c]); setActiveChurch(c.id); lsSet('trinityone.activeChurch', c.id); },
     followChurch,   // follow a real church by npub (from a scanned/pasted invite); false if invalid
+    leaveChurch,    // leave a church: tombstone membership + unfollow locally
     activeChurchId: activeChurch,
     // ---- user-owned data: everything routes through window.MyData (local now, Nostr later) ----
     myData: MD,

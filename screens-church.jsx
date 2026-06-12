@@ -153,6 +153,7 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
 // ════ Church switcher sheet ════
 function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFollowed, initialMode }) {
   const [mode, setMode] = useCh('list'); // 'list' | 'follow'
+  const [confirmLeave, setConfirmLeave] = useCh(null);   // church id awaiting leave confirmation
   useChE(() => { if (open) setMode(initialMode === 'follow' || new URLSearchParams(location.search).get('church') === 'follow' ? 'follow' : 'list'); }, [open]);
 
   return (
@@ -168,25 +169,32 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {churches.map(c => {
               const on = c.id === activeId;
+              const followed = !!c.npub;   // a real followed church (vs a built-in/sample) can be left
               return (
-                <button key={c.id} onClick={() => onPick(c.id)} style={{
-                  display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, cursor: 'pointer', textAlign: 'left',
+                <div key={c.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
                   border: on ? '2px solid var(--clay)' : '1px solid var(--line)',
                   background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', boxShadow: 'var(--shadow)',
                 }}>
-                  <ChurchBadge church={c} size={50} radius={15} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5 }}>{c.name}</span>
-                      {c.kind === 'network' ? <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 7px' }}>NETWORK</span> : null}
-                      {c.verified ? <Icon name="check" size={14} stroke={3} color="var(--sage)" /> : null}
+                  <div onClick={() => onPick(c.id)} style={{ display: 'flex', alignItems: 'center', gap: 13, flex: 1, minWidth: 0, cursor: 'pointer', textAlign: 'left' }}>
+                    <ChurchBadge church={c} size={50} radius={15} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5 }}>{c.name}</span>
+                        {c.kind === 'network' ? <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 7px' }}>NETWORK</span> : null}
+                        {c.verified ? <Icon name="check" size={14} stroke={3} color="var(--sage)" /> : null}
+                      </div>
+                      {c.tagline ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 13.5, color: 'var(--ink-2)', fontStyle: 'italic', lineHeight: 1.35, marginTop: 1 }}>“{c.tagline}”</div> : null}
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5 }}>{c.kind === 'network' ? 'A network of churches' : <React.Fragment><b style={{ color: 'var(--ink-2)' }}>{c.members}</b> members</React.Fragment>}</div>
                     </div>
-                    {c.tagline ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 13.5, color: 'var(--ink-2)', fontStyle: 'italic', lineHeight: 1.35, marginTop: 1 }}>“{c.tagline}”</div> : null}
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5 }}>{c.kind === 'network' ? 'A network of churches' : <React.Fragment><b style={{ color: 'var(--ink-2)' }}>{c.members}</b> members</React.Fragment>}</div>
                   </div>
-                  {on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="check" size={15} stroke={2.8} color="#fff" /></div>
-                    : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)', flexShrink: 0 }} />}
-                </button>
+                  {followed ? (
+                    confirmLeave === c.id
+                      ? <button onClick={() => { setConfirmLeave(null); ctx.leaveChurch(c.id); }} style={{ flexShrink: 0, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 12.5, padding: '7px 11px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Confirm leave</button>
+                      : <button onClick={() => setConfirmLeave(c.id)} title="Leave this church" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 12.5, padding: '7px 11px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Leave</button>
+                  ) : (on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="check" size={15} stroke={2.8} color="#fff" /></div>
+                    : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)', flexShrink: 0 }} />)}
+                </div>
               );
             })}
           </div>

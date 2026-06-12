@@ -1333,11 +1333,41 @@ window.DashResources = DashResources;
 function DashMembers() {
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
   const [copied, setCopied] = React.useState('');
-  const total = members.length;
-  const active = members.filter(m => m.count > 0).length;
+  const [showInactive, setShowInactive] = React.useState(false);
   const doCopy = (np) => { copyText(np); setCopied(np); setTimeout(() => setCopied(''), 1400); };
+  const total = members.length;
+  // "last seen" = newest of a post or a membership heartbeat. No activity in 90 days → inactive list.
+  const INACTIVE_DAYS = 90;
+  const cutoff = Math.floor(Date.now() / 1000) - INACTIVE_DAYS * 86400;
+  const seen = (m) => Math.max(m.lastTs || 0, m.joined || 0);
+  const activeM = members.filter(m => seen(m) >= cutoff);
+  const inactiveM = members.filter(m => seen(m) < cutoff);
+  const chatting = activeM.filter(m => m.count > 0).length;
+  const memberRow = (m, inactive) => {
+    const named = !!m.name;
+    const label = named ? m.name : 'Anonymous';
+    const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+    return (
+      <div key={m.pubkey} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: inactive ? 0.62 : 1 }}>
+        <SkBadge initials={initials} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{shortNpub(m.npub)}</span>
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
+        </div>
+        {inactive ? <SkPill tint="ink">inactive</SkPill> : (m.count === 0 ? <SkPill tint="ink">joined</SkPill> : null)}
+        {!named ? <SkPill tint="sage">anonymous</SkPill> : null}
+        <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+          <Icon name="chat" size={15} color="currentColor" /> Chat</button>
+        <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
+          <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
+      </div>
+    );
+  };
   return (
-    <Panel title="Members" action={<SkPill tint="sage">{total ? `${total} member${total === 1 ? '' : 's'}${active ? ` · ${active} chatting` : ''}` : 'none yet'}</SkPill>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Panel title="Members" action={<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {total === 0 ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'var(--ink-3)', padding: 24 }}>
           <div style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="pray" size={26} color="var(--ink-3)" /></div>
@@ -1346,29 +1376,16 @@ function DashMembers() {
         </div>
       ) : (
         <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          {members.map(m => {
-            const named = !!m.name;
-            const label = named ? m.name : 'Anonymous';
-            const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
-            return (
-              <div key={m.pubkey} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-                <SkBadge initials={initials} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                    <span style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</span>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{shortNpub(m.npub)}</span>
-                  </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
-                </div>
-                {m.count === 0 ? <SkPill tint="ink">joined</SkPill> : null}
-                {!named ? <SkPill tint="sage">anonymous</SkPill> : null}
-                <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-                  <Icon name="chat" size={15} color="currentColor" /> Chat</button>
-                <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
-                  <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
-              </div>
-            );
-          })}
+          {activeM.map(m => memberRow(m, false))}
+          {activeM.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No active members in the last {INACTIVE_DAYS} days.</div> : null}
+          {inactiveM.length ? (
+            <React.Fragment>
+              <button onClick={() => setShowInactive(s => !s)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, border: '1px dashed var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>
+                <Icon name={showInactive ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showInactive ? 'Hide' : 'See'} inactive · {inactiveM.length} (no activity in {INACTIVE_DAYS} days)
+              </button>
+              {showInactive ? inactiveM.map(m => memberRow(m, true)) : null}
+            </React.Fragment>
+          ) : null}
         </div>
       )}
       <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)', flexShrink: 0 }}>
