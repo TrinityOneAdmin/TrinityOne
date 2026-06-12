@@ -329,6 +329,12 @@ function App() {
   }, []);
   const [churchSwitcher, setChurchSwitcher] = useA(churchParam === '1' || churchParam === 'follow');
   const [churchSwitcherMode, setChurchSwitcherMode] = useA(churchParam === 'follow' ? 'follow' : 'list');
+  // first-run prompt to follow a church — skippable (closing it lands them in the Bible). Only nudges
+  // if they're not already following a real church (deep-linked joiners skip onboarding entirely).
+  const promptFollowChurch = () => {
+    const followsReal = !!(churches.find(c => c.id === activeChurch) || {}).npub;
+    if (!followsReal) { setChurchSwitcherMode('follow'); setChurchSwitcher(true); }
+  };
   // follow a real church by its npub (the steward shares it via QR/link/code): add it + make it
   // active, and resolve its name from the relay. The church's real groups (published by its console)
   // then load in chat. Accepts a bare npub OR anything containing one (a ?follow= link). Returns
@@ -337,15 +343,15 @@ function App() {
     const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
     if (!m) return false;
     const npub = m[0];
-    // an invite may carry the church's relay (?relay=wss://…) — add it so we connect to the right relay
-    const rm = String(raw || '').match(/[?&]relay=([^&\s]+)/);
-    if (rm && window.Fellowship && window.Fellowship.addRelay) {
-      try { const relay = decodeURIComponent(rm[1]); if (/^wss?:\/\//i.test(relay)) window.Fellowship.addRelay(relay); } catch (e) {}
-    } else if (window.Fellowship && window.Fellowship.addRelay && !(window.Fellowship.relays || []).length) {
-      // bare npub (no relay in the link) and no relay yet (e.g. the CDN-hosted app) → fall back to the
-      // shared pool so the church's name + groups can resolve.
-      const pool = window.Fellowship.CANONICAL_RELAYS || (window.Fellowship.CANONICAL_RELAY ? [window.Fellowship.CANONICAL_RELAY] : []);
-      pool.forEach(r => window.Fellowship.addRelay(r));
+    const F = window.Fellowship;
+    if (F && F.addRelay) {
+      // always connect to the whole shared pool (the church publishes across all of it), so a member
+      // gets every community node for redundancy — not just the single relay carried in their link.
+      const pool = F.CANONICAL_RELAYS || (F.CANONICAL_RELAY ? [F.CANONICAL_RELAY] : []);
+      pool.forEach(r => F.addRelay(r));
+      // plus any church-specific relay carried in the invite/QR (?relay=wss://…) — e.g. a self-hosted one
+      const rm = String(raw || '').match(/[?&]relay=([^&\s]+)/);
+      if (rm) { try { const relay = decodeURIComponent(rm[1]); if (/^wss?:\/\//i.test(relay)) F.addRelay(relay); } catch (e) {} }
     }
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
@@ -624,7 +630,9 @@ function App() {
     const name = (FS && FS.myProfile && FS.myProfile.name) || '';
     let avatar = { kind: 'monogram', color: cur.color || '#5E8C6A' };
     if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; }
-    return { name, avatar, npub: cur.npub || '', handle: cur.handle || 'Anonymous', steward: true };
+    // stewards run their church from the separate Steward console — ordinary members aren't stewards,
+    // so the member app hides steward-only tools (e.g. the invite generator).
+    return { name, avatar, npub: cur.npub || '', handle: cur.handle || 'Anonymous', steward: false };
   })();
   // saving a profile publishes name + mark to the user's key (kind-0)
   const saveIdentity = (patch) => {
@@ -895,8 +903,8 @@ function App() {
 
         {showSplash ? <Splash onDone={() => setShowSplash(false)} /> : null}
         {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity}
-          onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); }}
-          onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); }} /> : null}
+          onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); promptFollowChurch(); }}
+          onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); promptFollowChurch(); }} /> : null}
       </PhoneFrame>
     </div>
   );
