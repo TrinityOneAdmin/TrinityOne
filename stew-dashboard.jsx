@@ -1223,6 +1223,16 @@ function DashDevotionals() {
   const list = order || devos;
   // persist a new order: number each devotional by position, re-publish only the ones that changed
   const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: i }); }); };
+  // sort the list and bake it into the saved order (so the member app shows the same). "number" is a
+  // numeric-aware title sort, so "Day 2" comes before "Day 10".
+  const numIn = (s) => { const m = String(s || '').match(/\d+/); return m ? parseInt(m[0], 10) : Infinity; };
+  const applySort = (mode) => {
+    const arr = devos.slice();
+    if (mode === 'number') arr.sort((a, b) => numIn(a.title) - numIn(b.title) || String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true }));
+    else if (mode === 'title') arr.sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true }));
+    else if (mode === 'newest') arr.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    persist(arr);
+  };
   // arrow fallback (accessibility): swap with a neighbour
   const move = (idx, dir) => { const arr = devos.slice(); const j = idx + dir; if (j < 0 || j >= arr.length) return; const t = arr[idx]; arr[idx] = arr[j]; arr[j] = t; persist(arr); };
   // drag: reorder the working copy live; commit on drop
@@ -1249,7 +1259,12 @@ function DashDevotionals() {
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Upload a .txt or .md reflection on a passage — your congregation reads it in their app.</div>
         ) : (
           <React.Fragment>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 2px 10px', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="dots" size={13} color="var(--ink-3)" /> Drag to reorder — this is the order your members see.</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px 10px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="dots" size={13} color="var(--ink-3)" /> Drag to reorder, or sort:</span>
+            {[['number', 'By number'], ['title', 'A→Z'], ['newest', 'Newest']].map(([m, lbl]) => (
+              <button key={m} onClick={() => applySort(m)} title="Sets the order your members see" style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 8, padding: '4px 9px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{lbl}</button>
+            ))}
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {list.map((d, i) => {
               const dragging = dragId === d.id;
