@@ -9921,7 +9921,7 @@ zoo`.split("\n");
       const o = typeof location !== "undefined" && location.origin || "";
       const PUBLIC_BASE = "https://trinityone.tailbeaac0.ts.net";
       const base = o.startsWith("https://") ? o : PUBLIC_BASE;
-      const relay = base.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:") + "/relay";
+      const relay = ownRelay();
       return base + "/?follow=" + np + "&relay=" + encodeURIComponent(relay);
     },
     // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")

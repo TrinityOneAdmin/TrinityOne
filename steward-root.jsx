@@ -222,14 +222,14 @@ function StewardRoot() {
   if (!showcase) {
     return (
       <div className="stew-root" style={{ height: '100%' }}>
-        {consoleView === 'wizard' ? <StewWizard /> : <StewDashboard initial={params.get('tab') || 'overview'} />}
+        {consoleView === 'wizard' ? <StewWizard onDone={() => setConsoleView('dashboard')} /> : <StewDashboard initial={params.get('tab') || 'overview'} />}
       </div>
     );
   }
 
   // ── ?showcase=1: the design gallery of every surface (kept for reference) ──
   let body = null;
-  if (surface === 'console') body = <Frame w={1180} h={800}>{consoleView === 'wizard' ? <StewWizard /> : <StewDashboard initial={params.get('tab') || 'overview'} />}</Frame>;
+  if (surface === 'console') body = <Frame w={1180} h={800}>{consoleView === 'wizard' ? <StewWizard onDone={() => setConsoleView('dashboard')} /> : <StewDashboard initial={params.get('tab') || 'overview'} />}</Frame>;
   else if (surface === 'relay') body = <Frame w={1180} h={760}><RelayNodeApp initial={params.get('relay') === 'setup' ? 'setup' : 'running'} /></Frame>;
   else if (surface === 'extension') body = params.get('ext') === 'home' ? <StewExtensionHome /> : <StewExtensionRequest />;
   else if (surface === 'phone') body = <StewPhone initial={params.get('phone') || 'home'} />;

@@ -27,19 +27,39 @@ function ConsoleChrome({ children, bg = 'var(--paper)', showcase = false, url = 
 // ════════════════════════════ WIZARD ════════════════════════════
 const WIZ_STEPS = [
   { key: 'key', t: 'Create your church key', ic: 'key' },
-  { key: 'identity', t: 'Name & verify', ic: 'shield' },
-  { key: 'fund', t: 'Your first fund', ic: 'gift' },
+  { key: 'identity', t: 'Name your church', ic: 'shield' },
   { key: 'relays', t: 'Choose your relays', ic: 'globe' },
   { key: 'invite', t: 'Invite your people', ic: 'qr' },
-];
+];   // giving/funds parked until after the pilot — payments aren't surfaced yet
 
-function StewWizard() {
+// editable text field for the wizard (the design-mock SkField is read-only)
+function WizInput({ label, value, onChange, placeholder, hint, mono, autoFocus }) {
+  return (
+    <label style={{ display: 'block' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 8 }}>{label}</div>
+      <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} autoFocus={autoFocus}
+        spellCheck={mono ? false : undefined} autoCapitalize={mono ? 'none' : undefined}
+        style={{ width: '100%', padding: '12px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: mono ? 'var(--mono)' : 'var(--font-ui)', fontSize: 15, outline: 'none', boxSizing: 'border-box' }} />
+      {hint ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 7, lineHeight: 1.5 }}>{hint}</div> : null}
+    </label>
+  );
+}
+
+function StewWizard({ onDone }) {
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '', npub: '' };
   const [step, setStep] = React.useState(0);
-  const [custody, setCustody] = React.useState('extension');
-  const [verified, setVerified] = React.useState(false);
-  const [fundCustody, setFundCustody] = React.useState('strike');
+  const [name, setName] = React.useState(church.name || '');
+  const [nip05, setNip05] = React.useState('');
   const [ownRelay, setOwnRelay] = React.useState(false);
   const last = step === WIZ_STEPS.length - 1;
+  // publish the church's profile when leaving the identity step, so its name resolves for members
+  const publishIdentity = () => {
+    if (window.Steward && window.Steward.publishProfile) {
+      window.Steward.publishProfile({ name: (name || '').trim() || 'Our Church', nip05: (nip05 || '').trim() });
+    }
+  };
+  const goNext = () => { if (WIZ_STEPS[step].key === 'identity') publishIdentity(); setStep(s => s + 1); };
+  const finish = () => { if (onDone) onDone(); else setStep(0); };
 
   return (
     <ConsoleChrome>
@@ -77,11 +97,10 @@ function StewWizard() {
             <div style={{ maxWidth: 560 }}>
               <SkPill tint={last ? 'sage' : 'clay'}>Step {step + 1} of {WIZ_STEPS.length}</SkPill>
               <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 34, letterSpacing: '-1px', margin: '16px 0 0', lineHeight: 1.05 }}>{WIZ_STEPS[step].t}</h1>
-              {step === 0 && <WizKey custody={custody} setCustody={setCustody} />}
-              {step === 1 && <WizIdentity verified={verified} setVerified={setVerified} />}
-              {step === 2 && <WizFund fundCustody={fundCustody} setFundCustody={setFundCustody} />}
-              {step === 3 && <WizRelays ownRelay={ownRelay} setOwnRelay={setOwnRelay} />}
-              {step === 4 && <WizInvite />}
+              {step === 0 && <WizKey />}
+              {step === 1 && <WizIdentity name={name} setName={setName} nip05={nip05} setNip05={setNip05} />}
+              {step === 2 && <WizRelays ownRelay={ownRelay} setOwnRelay={setOwnRelay} />}
+              {step === 3 && <WizInvite />}
             </div>
           </div>
           {/* footer */}
@@ -90,9 +109,9 @@ function StewWizard() {
               <Icon name="chevL" size={16} color="currentColor" /> Back
             </button>
             {last ? (
-              <button className="sk-btn sk-btn--clay" onClick={() => setStep(0)}>Open Steward Console <Icon name="chevR" size={16} color="#fff" /></button>
+              <button className="sk-btn sk-btn--clay" onClick={finish}>Open Steward Console <Icon name="chevR" size={16} color="#fff" /></button>
             ) : (
-              <button className="sk-btn sk-btn--clay" onClick={() => setStep(s => s + 1)}>Continue <Icon name="chevR" size={16} color="#fff" /></button>
+              <button className="sk-btn sk-btn--clay" onClick={goNext}>Continue <Icon name="chevR" size={16} color="#fff" /></button>
             )}
           </div>
         </div>
@@ -101,7 +120,40 @@ function StewWizard() {
   );
 }
 
-function WizKey({ custody, setCustody }) {
+function WizBackup() {
+  const [shown, setShown] = React.useState(false);
+  const [saved, setSaved] = React.useState(false);
+  const phrase = (window.Steward && window.Steward.exportMnemonic && window.Steward.exportMnemonic()) || '';
+  const words = phrase.trim().split(/\s+/).filter(Boolean);
+  return (
+    <div style={{ marginTop: 24 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 12 }}>Back up your recovery phrase</div>
+      <div style={{ display: 'flex', gap: 10, padding: 14, borderRadius: 13, background: 'color-mix(in oklab, var(--gold) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, transparent)' }}>
+        <Icon name="key" size={18} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>These 12 words <b style={{ color: 'var(--ink)' }}>are</b> your church — the only way to recover this identity on another device. Write them down and keep them safe. There’s no reset.</div>
+      </div>
+      {!shown ? (
+        <button onClick={() => setShown(true)} className="sk-btn sk-btn--ghost" style={{ marginTop: 12, padding: '10px 14px', fontSize: 13.5 }}><Icon name="lock" size={15} color="currentColor" /> Reveal recovery phrase</button>
+      ) : (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+            {words.map((w, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 11px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700, width: 16 }}>{i + 1}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 600 }}>{w}</span>
+              </div>
+            ))}
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 12, cursor: 'pointer', fontSize: 13.5, color: 'var(--ink-2)', fontWeight: 600 }}>
+            <input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} /> I’ve written these down somewhere safe
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WizKey() {
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '', npub: '' };
   const name = church.name || 'Your church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -120,50 +172,18 @@ function WizKey({ custody, setCustody }) {
           <Icon name="copy" size={16} color="rgba(255,255,255,.5)" />
         </div>
       </div>
-      <div style={{ marginTop: 24, fontSize: 12.5, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 12 }}>Where should the secret key live?</div>
-      <SkToggle value={custody} onChange={setCustody} options={[{ value: 'extension', label: 'Browser extension', icon: 'lock' }, { value: 'phone', label: 'This phone (NIP-46)', icon: 'qr' }]} />
-      <div style={{ display: 'flex', gap: 10, marginTop: 14, padding: 14, borderRadius: 13, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, transparent)' }}>
-        <Icon name="shield" size={18} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>{custody === 'extension'
-          ? <>The <b style={{ color: 'var(--ink)' }}>TrinityOne Keykeeper</b> add-on holds your secret key on this computer and signs when you click Approve. The key never reaches our servers.</>
-          : <>Your secret key stays on your <b style={{ color: 'var(--ink)' }}>phone</b>. The console asks it to sign and you approve on the phone — like a 2-factor prompt. Sign in from any computer.</>}</div>
-      </div>
+      <WizBackup />
     </div>
   );
 }
 
-function WizIdentity({ verified, setVerified }) {
+function WizIdentity({ name, setName, nip05, setNip05 }) {
   return (
     <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This is what members see when they follow you. Claiming a verified name (NIP-05) puts a ✓ next to your church.</p>
-      <SkField label="Church name" value="Grace Chapel" />
-      <SkField label="Verified name · NIP-05" value="grace.org" hint={verified ? null : 'We’ll check for a small file at grace.org/.well-known/nostr.json'}
-        accessory={verified
-          ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, color: 'var(--sage)' }}><Icon name="check" size={16} stroke={2.6} color="var(--sage)" /> Verified</span>
-          : <button onClick={() => setVerified(true)} style={{ border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13, padding: '8px 14px', borderRadius: 9, cursor: 'pointer' }}>Verify</button>} />
-      <div>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 9 }}>Accent</div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          {['var(--clay)', 'var(--sage)', 'var(--gold)', '#5b6ea8', '#8a5ba8'].map((c, i) => (
-            <div key={i} style={{ width: 36, height: 36, borderRadius: 11, background: c, cursor: 'pointer', boxShadow: i === 0 ? '0 0 0 2.5px var(--paper), 0 0 0 4.5px var(--clay)' : 'none' }} />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function WizFund({ fundCustody, setFundCustody }) {
-  return (
-    <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>A fund is a signed pointer to where giving lands. Start with your general offering — you can add Building, Missions and more anytime.</p>
-      <SkField label="Fund name" value="General Tithes & Offerings" />
-      <SkField label="Lightning address" value="grace@strike.me" mono accessory={<Icon name="bolt" size={16} fill color="var(--gold)" />} />
-      <div>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 9 }}>Custody — where the money settles</div>
-        <SkToggle value={fundCustody} onChange={setFundCustody} options={[{ value: 'strike', label: 'Custodial · Strike', icon: 'wallet' }, { value: 'node', label: 'Self-hosted node', icon: 'bank' }]} />
-        <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.5 }}>{fundCustody === 'strike' ? 'Easiest to start — Strike holds and converts to your bank. Switch to self-custody later without members noticing.' : 'Full sovereignty — funds land on your own Lightning node (LND, Core Lightning, LNbits).'}</div>
-      </div>
+      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This is what members see when they follow you. You can change it later from Settings.</p>
+      <WizInput label="Church name" value={name} onChange={setName} placeholder="e.g. Trinity Church Littlehampton" autoFocus />
+      <WizInput label="Verified name · NIP-05 (optional)" value={nip05} onChange={setNip05} placeholder="yourchurch.org" mono
+        hint="Optional — adds a ✓ next to your name if you host a small verification file. Leave blank for now if you’re not sure." />
     </div>
   );
 }
@@ -171,19 +191,22 @@ function WizFund({ fundCustody, setFundCustody }) {
 function WizRelays({ ownRelay, setOwnRelay }) {
   return (
     <div style={{ marginTop: 18 }}>
-      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>Relays store and serve your church’s signed events. Your church already hosts its own — every message and member lives on infrastructure you control.</p>
+      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>Relays store and serve your church’s signed events. Your church runs on the shared <b style={{ color: 'var(--ink)' }}>TrinityOne community nodes</b> by default — nothing to set up, and if one’s down the others carry on.</p>
       <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {(window.Steward && window.Steward.relayList ? window.Steward.relayList() : []).map(url => (
+        {(window.Steward && window.Steward.relayList ? window.Steward.relayList() : []).map(url => {
+          const own = window.Steward && window.Steward.extraRelays && window.Steward.extraRelays().includes(url);
+          return (
           <div key={url} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)' }}>
             <Icon name="globe" size={18} color="var(--sage)" />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Your relay · self-hosted</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{own ? 'Your relay · self-hosted' : 'TrinityOne community node'}</div>
             </div>
-            <SkPill tint="clay">Yours</SkPill>
+            <SkPill tint={own ? 'clay' : 'sage'}>{own ? 'Yours' : 'Community'}</SkPill>
             <div style={{ width: 40, height: 24, borderRadius: 999, background: 'var(--sage)', position: 'relative' }}><span style={{ position: 'absolute', top: 3, right: 3, width: 18, height: 18, borderRadius: 999, background: '#fff' }} /></div>
           </div>
-        ))}
+          );
+        })}
       </div>
       {!ownRelay ? (
         <button onClick={() => setOwnRelay(true)} style={{ width: '100%', marginTop: 12, padding: 14, borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontFamily: 'var(--font-ui)' }}>
@@ -200,21 +223,13 @@ function WizRelays({ ownRelay, setOwnRelay }) {
 }
 
 function WizInvite() {
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   return (
     <div style={{ marginTop: 18 }}>
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--sage)', fontWeight: 700, fontSize: 15 }}><Icon name="check" size={18} stroke={2.6} color="var(--sage)" /> Grace Chapel is live on Nostr</div>
-      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0' }}>Hand this code or QR to your people. One scan follows your church and pulls in funds and groups — anonymously.</p>
-      <div style={{ marginTop: 22, display: 'flex', gap: 22, alignItems: 'center', padding: 24, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow-sm)' }}>
-        <div style={{ width: 132, height: 132, borderRadius: 16, background: '#fff', boxShadow: 'var(--shadow-md)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><SkQR size={108} /></div>
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Joining code</div>
-          <div style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 32, letterSpacing: '2px', margin: '4px 0 3px' }}>GRACE-7K2</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 600 }}>grace.org · 312 will be invited</div>
-          <div style={{ display: 'flex', gap: 9, marginTop: 16 }}>
-            <button className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="link" size={15} color="#fff" /> Copy link</button>
-            <button className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="receipt" size={15} color="currentColor" /> Print cards</button>
-          </div>
-        </div>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--sage)', fontWeight: 700, fontSize: 15 }}><Icon name="check" size={18} stroke={2.6} color="var(--sage)" /> {church.name || 'Your church'} is live on Nostr</div>
+      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0' }}>Hand this code or QR to your people. One scan follows your church and pulls in your groups — anonymously.</p>
+      <div style={{ marginTop: 22, padding: 24, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow-sm)' }}>
+        {window.JoinCard ? <JoinCard qrSize={120} /> : <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Your join code appears here once the console finishes loading.</div>}
       </div>
     </div>
   );

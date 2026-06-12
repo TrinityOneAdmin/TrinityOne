@@ -753,10 +753,11 @@ window.Steward = {
     // A LAN/localhost origin (plain http) isn't reachable by congregants off the church wifi, so
     // join links/QRs must use the stable PUBLIC url. An https origin (the public Funnel) is used as-is.
     const PUBLIC_BASE = 'https://trinityone.tailbeaac0.ts.net';
-    const base = o.startsWith('https://') ? o : PUBLIC_BASE;
-    // carry the church's public relay so a member who follows from anywhere connects to the right relay,
-    // not just whatever their app defaults to (lets churches run on their own relay).
-    const relay = base.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:') + '/relay';
+    const base = o.startsWith('https://') ? o : PUBLIC_BASE;   // the member-app URL members open
+    // carry the church's REAL relay so a member who follows from anywhere connects to the right place.
+    // ownRelay() is the church's relay (a TrinityOne community node on a static host, or the box's own
+    // relay when self-hosted) — NOT the page origin, which on a CDN host (pages.dev) has no relay.
+    const relay = ownRelay();
     return base + '/?follow=' + np + '&relay=' + encodeURIComponent(relay);
   },
   // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
