@@ -39,9 +39,15 @@ const _native = !!(typeof window !== 'undefined' && window.Capacitor && window.C
 const _staticHost = !!(_loc && _loc.host && /\.(github\.io|pages\.dev|netlify\.app)$/i.test(_loc.host));
 const _originRelay = (!_native && !_staticHost && _loc && _loc.host) ? (((_loc.protocol === 'https:') ? 'wss://' : 'ws://') + RELAY_BASE + '/relay') : null;
 const DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];   // native / static host = blank until a church is joined
-// The pilot's relay — used as a fallback when a church is joined by bare npub (no relay in the link)
-// and we have none yet (e.g. the CDN-hosted app), so its name + groups can resolve. Update if it moves.
-const CANONICAL_RELAY = 'wss://trinityone.tailbeaac0.ts.net/relay';
+// The TrinityOne shared-relay pool — relays we operate that every church can use out of the box.
+// Members fan out across all of them (publish + read), so the church stays reachable if any one is
+// down. Also the fallback when a church is joined by bare npub (no relay in the link) and we have none
+// yet (e.g. the CDN-hosted app), so its name + groups resolve. Add a host's wss URL here once it joins
+// the pool — these relays don't sync to each other, so clients write to all of them.
+const CANONICAL_RELAYS = [
+  'wss://trinityone.tailbeaac0.ts.net/relay',
+];
+const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
   try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r)) return r; } catch {}
@@ -98,6 +104,7 @@ window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch((
 window.Fellowship = {
   relays: loadRelays(),
   CANONICAL_RELAY,
+  CANONICAL_RELAYS,
   myPubkey: null,
   myProfile: null,
   churchPub: null,        // hex pubkey of the active church; messages are tagged ['p', churchPub]

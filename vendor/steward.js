@@ -8809,7 +8809,8 @@ zoo`.split("\n");
     a.push(rec);
     lsSet(NETKEYS_LS, JSON.stringify(a));
   }
-  var CANONICAL_RELAY = "wss://trinityone.tailbeaac0.ts.net/relay";
+  var CANONICAL_RELAYS = ["wss://trinityone.tailbeaac0.ts.net/relay"];
+  var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function ownRelay() {
     const l = typeof location !== "undefined" ? location : null;
     if (!l || !l.host) return "ws://127.0.0.1:8090/relay";
@@ -8833,6 +8834,11 @@ zoo`.split("\n");
   function relays() {
     const own = ownRelay();
     const out = [own];
+    if (own === CANONICAL_RELAY) {
+      for (const r of CANONICAL_RELAYS) {
+        if (r && !out.includes(r)) out.push(r);
+      }
+    }
     for (const r of extraRelays()) {
       if (r && r !== own && !out.includes(r)) out.push(r);
     }

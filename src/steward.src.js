@@ -44,11 +44,14 @@ function netKeys() { try { const a = JSON.parse(lsGet(NETKEYS_LS) || '[]'); retu
 function saveNetKey(rec) {
   const a = netKeys().filter(x => x.pub !== rec.pub); a.push(rec); lsSet(NETKEYS_LS, JSON.stringify(a));
 }
-const CANONICAL_RELAY = 'wss://trinityone.tailbeaac0.ts.net/relay';   // the pilot's relay (update when it moves to a domain)
+// The TrinityOne shared-relay pool — relays we operate that every church can use. On a static host
+// the steward publishes across all of them (they don't sync to each other). Add a URL here per host.
+const CANONICAL_RELAYS = ['wss://trinityone.tailbeaac0.ts.net/relay'];
+const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 function ownRelay() {
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.host) return 'ws://127.0.0.1:8090/relay';
-  // a static CDN host (GitHub Pages etc.) has no relay on its origin → publish to the canonical relay
+  // a static CDN host (GitHub Pages etc.) has no relay on its origin → publish to the shared pool
   if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return CANONICAL_RELAY;
   return ((l.protocol === 'https:') ? 'wss://' : 'ws://') + l.host + '/relay';
 }
@@ -65,6 +68,8 @@ function normRelay(input) {
 function relays() {
   const own = ownRelay();
   const out = [own];
+  // on a static CDN host the console has no relay of its own → fan out across the whole shared pool
+  if (own === CANONICAL_RELAY) { for (const r of CANONICAL_RELAYS) { if (r && !out.includes(r)) out.push(r); } }
   for (const r of extraRelays()) { if (r && r !== own && !out.includes(r)) out.push(r); }
   return out;
 }

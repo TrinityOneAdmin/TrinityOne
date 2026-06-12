@@ -314,10 +314,11 @@ function App() {
   useAE(() => {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
     const followed = churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0);
-    // previously-followed church but no relay yet (e.g. the CDN app, reloaded) → add the canonical relay
+    // previously-followed church but no relay yet (e.g. the CDN app, reloaded) → add the shared pool
     // so its name/groups resolve. Relay still only lands when a church is/was joined.
-    if (followed.length && window.Fellowship.addRelay && window.Fellowship.CANONICAL_RELAY && !(window.Fellowship.relays || []).length) {
-      window.Fellowship.addRelay(window.Fellowship.CANONICAL_RELAY);
+    if (followed.length && window.Fellowship.addRelay && !(window.Fellowship.relays || []).length) {
+      const pool = window.Fellowship.CANONICAL_RELAYS || (window.Fellowship.CANONICAL_RELAY ? [window.Fellowship.CANONICAL_RELAY] : []);
+      pool.forEach(r => window.Fellowship.addRelay(r));
     }
     const offs = followed.map(c =>
       window.Fellowship.subscribeChurchProfile(c.npub || c.id, (p) => {
@@ -340,10 +341,11 @@ function App() {
     const rm = String(raw || '').match(/[?&]relay=([^&\s]+)/);
     if (rm && window.Fellowship && window.Fellowship.addRelay) {
       try { const relay = decodeURIComponent(rm[1]); if (/^wss?:\/\//i.test(relay)) window.Fellowship.addRelay(relay); } catch (e) {}
-    } else if (window.Fellowship && window.Fellowship.addRelay && window.Fellowship.CANONICAL_RELAY && !(window.Fellowship.relays || []).length) {
+    } else if (window.Fellowship && window.Fellowship.addRelay && !(window.Fellowship.relays || []).length) {
       // bare npub (no relay in the link) and no relay yet (e.g. the CDN-hosted app) → fall back to the
-      // pilot relay so the church's name + groups can resolve.
-      window.Fellowship.addRelay(window.Fellowship.CANONICAL_RELAY);
+      // shared pool so the church's name + groups can resolve.
+      const pool = window.Fellowship.CANONICAL_RELAYS || (window.Fellowship.CANONICAL_RELAY ? [window.Fellowship.CANONICAL_RELAY] : []);
+      pool.forEach(r => window.Fellowship.addRelay(r));
     }
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
