@@ -26,3 +26,4 @@ relay/church.json.tmp
 relay/admin.json
 relay/vapid.json
 relay/push-subs.json
+pages-dist/
