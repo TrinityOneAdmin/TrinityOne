@@ -1225,7 +1225,9 @@ function DashDevotionals() {
   const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: i }); }); };
   // sort the list and bake it into the saved order (so the member app shows the same). "number" is a
   // numeric-aware title sort, so "Day 2" comes before "Day 10".
-  const numIn = (s) => { const m = String(s || '').match(/\d+/); return m ? parseInt(m[0], 10) : Infinity; };
+  // pull the SERIES number from a title ("Series 3", "Series #3", "Series03"); fall back to a leading
+  // "#3", then the first number anywhere.
+  const numIn = (s) => { s = String(s || ''); const m = s.match(/series\s*#?\s*(\d+)/i) || s.match(/#\s*(\d+)/) || s.match(/(\d+)/); return m ? parseInt(m[1], 10) : Infinity; };
   const applySort = (mode) => {
     const arr = devos.slice();
     if (mode === 'number') arr.sort((a, b) => numIn(a.title) - numIn(b.title) || String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true }));
@@ -1261,7 +1263,7 @@ function DashDevotionals() {
           <React.Fragment>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px 10px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="dots" size={13} color="var(--ink-3)" /> Drag to reorder, or sort:</span>
-            {[['number', 'By number'], ['title', 'A→Z'], ['newest', 'Newest']].map(([m, lbl]) => (
+            {[['number', 'By series #'], ['title', 'A→Z'], ['newest', 'Newest']].map(([m, lbl]) => (
               <button key={m} onClick={() => applySort(m)} title="Sets the order your members see" style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 8, padding: '4px 9px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{lbl}</button>
             ))}
           </div>
