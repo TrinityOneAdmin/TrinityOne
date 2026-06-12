@@ -295,28 +295,45 @@ function serveStatic(req, res) {
   // browser setup wizard: read/write the relay's write policy (church.json). Auth required (token or
   // loopback). The control dashboard uses this so a steward never has to SSH in and edit a file.
   if (route === '/config') {
-    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    // token-gated, so cross-origin is fine (the steward console on pages.dev registers its church here)
+    const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' };
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS, ...CORS };
+    if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    const curChurches = () => [...CHURCH_PUBS].map(p => ({ npub: npubEncode(p), name: CHURCH_NAMES.get(p) || '' }));
+    const writeChurches = (list) => { const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches: list }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE); loadChurches(); };
     if (req.method === 'GET') {
       res.writeHead(200, H);
-      res.end(JSON.stringify({ ok: true, port: PORT, configured: CHURCH_PUBS.size > 0, churches: [...CHURCH_PUBS].map(p => ({ npub: npubEncode(p), name: CHURCH_NAMES.get(p) || '' })) }));
+      res.end(JSON.stringify({ ok: true, port: PORT, configured: CHURCH_PUBS.size > 0, churches: curChurches() }));
       return;
     }
     if (req.method === 'POST') {
       let body = ''; req.on('data', c => { body += c; if (body.length > 1e5) req.destroy(); });
       req.on('end', () => {
         try {
-          const churches = JSON.parse(body || '{}').churches;
-          if (!Array.isArray(churches)) throw new Error('expected { churches: [...] }');
+          const parsed = JSON.parse(body || '{}');
+          // addChurch: idempotent append (used by the steward console to self-register without clobbering others)
+          if (parsed.addChurch) {
+            const hex = toHexPub(String(parsed.addChurch.npub || '').trim());
+            if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub' })); return; }
+            const list = curChurches();
+            const name = String(parsed.addChurch.name || '').slice(0, 80);
+            const existing = list.find(c => toHexPub(c.npub) === hex);
+            if (existing) { if (name) existing.name = name; } else { list.push({ npub: npubEncode(hex), name }); }
+            writeChurches(list);
+            res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: list }));
+            return;
+          }
+          // full replace
+          const churches = parsed.churches;
+          if (!Array.isArray(churches)) throw new Error('expected { churches: [...] } or { addChurch: {…} }');
           const clean = [];
           for (const c of churches.slice(0, 50)) {
-            const npub = String((c && c.npub) || '').trim();
-            const hex = toHexPub(npub);
-            if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub: ' + npub.slice(0, 24) })); return; }
+            const hex = toHexPub(String((c && c.npub) || '').trim());
+            if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub: ' + String((c && c.npub) || '').slice(0, 24) })); return; }
             clean.push({ npub: npubEncode(hex), name: String((c && c.name) || '').slice(0, 80) });
           }
-          const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches: clean }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
-          loadChurches();   // apply live — no restart needed
+          writeChurches(clean);
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, configured: CHURCH_PUBS.size > 0, churches: clean }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });

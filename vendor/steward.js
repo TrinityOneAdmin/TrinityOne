@@ -9764,6 +9764,30 @@ zoo`.split("\n");
     extraRelays() {
       return extraRelays();
     },
+    // register THIS church with the relay's write policy so it stops rejecting our publishes. Needs the
+    // relay's admin token (the steward running the relay has it — relay/admin.json / installer output).
+    // Idempotent; works cross-origin (the relay's /config sends CORS + is token-gated).
+    configBase() {
+      return ownRelay().replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "");
+    },
+    async registerWithRelay(token, name) {
+      const url = window.Steward.configBase() + "/config";
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + String(token || "").trim() },
+        body: JSON.stringify({ addChurch: { npub: window.Steward.npub, name: name || "" } })
+      });
+      if (r.status === 401) throw new Error("That admin token wasn\u2019t accepted.");
+      if (!r.ok) {
+        let m = "";
+        try {
+          m = (await r.json()).error;
+        } catch {
+        }
+        throw new Error(m || "the relay responded " + r.status);
+      }
+      return r.json();
+    },
     // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)
     addRelay(input) {
       const url = normRelay(input);

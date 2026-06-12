@@ -105,7 +105,7 @@ function WizShell({ step, title, sub, children, footer }) {
     <div style={{ position: 'absolute', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 42%, transparent)', backdropFilter: 'blur(4px)', animation: 'lumenFade .18s ease both' }}>
       <div className="no-scrollbar" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ padding: '26px 28px 0' }}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '-.4px' }}>{title}</div>
           {sub ? <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 0' }}>{sub}</div> : null}
           <div style={{ marginTop: 18 }}>{children}</div>
@@ -131,6 +131,22 @@ function StewSetupWizard({ church, onDone, onTab }) {
   ];
   const [picks, setPicks] = React.useState(() => new Set(['whole', 'prayer']));
   const toggle = (id) => setPicks(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  // step 1 — key backup + optional relay registration
+  const [saved, setSaved] = React.useState(false);
+  const [keyCopied, setKeyCopied] = React.useState(false);
+  const [relayOpen, setRelayOpen] = React.useState(false);
+  const [relayToken, setRelayToken] = React.useState('');
+  const [relayMsg, setRelayMsg] = React.useState('');
+  const [relayBusy, setRelayBusy] = React.useState(false);
+  const phrase = (() => { try { return window.Steward.exportMnemonic() || ''; } catch { return ''; } })();
+  const npub = church.npub || window.Steward.npub || '';
+  const doRegister = async () => {
+    if (!relayToken.trim()) return;
+    setRelayBusy(true); setRelayMsg('Connecting…');
+    try { await window.Steward.registerWithRelay(relayToken.trim(), name.trim() || church.name); setRelayMsg('✓ Registered — this relay will accept your church now.'); }
+    catch (e) { setRelayMsg('✗ ' + (e.message || 'Couldn’t reach the relay.')); }
+    setRelayBusy(false);
+  };
   const next = () => setStep(s => s + 1);
   const fld = { width: '100%', boxSizing: 'border-box', height: 48, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 };
@@ -152,9 +168,43 @@ function StewSetupWizard({ church, onDone, onTab }) {
   );
 
   if (step === 1) return (
-    <WizShell step={step} title="Create a few spaces" sub="Groups are chat rooms (or announcement channels) your members join. Pick a few to start — you can add or remove any time."
+    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words ARE your church — they sign everything you post. Write them on paper and keep them safe: without them the church can’t be recovered, and no one (not even us) can reset it for you."
       footer={<React.Fragment>
         <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => saved && next()} disabled={!saved} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: saved ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
+      </React.Fragment>}>
+      <div style={lbl}>RECOVERY PHRASE — 12 WORDS</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 14.5, lineHeight: 1.8, wordSpacing: 3, color: 'var(--ink)', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', borderRadius: 12, padding: '14px 16px' }}>{phrase || 'No recovery phrase available for this key.'}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 2px' }}>
+        {phrase ? <button onClick={() => { copyText(phrase); setKeyCopied(true); setTimeout(() => setKeyCopied(false), 1400); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name={keyCopied ? 'check' : 'receipt'} size={14} color="currentColor" /> {keyCopied ? 'Copied' : 'Copy'}</button> : null}
+        <span style={{ fontSize: 12, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{npub.slice(0, 22)}…</span>
+      </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', fontSize: 13.5, fontWeight: 600 }}>
+        <input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
+        I’ve written these 12 words on paper and stored them safely
+      </label>
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+        {!relayOpen ? (
+          <button onClick={() => setRelayOpen(true)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', padding: 0 }}>Running your own relay? Connect it →</button>
+        ) : (
+          <div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Paste your relay’s <b>admin token</b> (from the installer output, or <span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>journalctl -u trinityone-relay | grep "admin token"</span>) to register your church so the relay stops rejecting it.</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={relayToken} onChange={e => setRelayToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doRegister(); }} type="password" placeholder="relay admin token" autoComplete="off" style={{ ...fld, height: 44, fontWeight: 400 }} />
+              <button onClick={doRegister} disabled={relayBusy || !relayToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (relayBusy || !relayToken.trim()) ? .5 : 1 }}>Connect</button>
+            </div>
+            {relayMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: relayMsg[0] === '✓' ? 'var(--sage)' : relayMsg[0] === '✗' ? 'var(--clay)' : 'var(--ink-3)' }}>{relayMsg}</div> : null}
+          </div>
+        )}
+      </div>
+    </WizShell>
+  );
+
+  if (step === 2) return (
+    <WizShell step={step} title="Create a few spaces" sub="Groups are chat rooms (or announcement channels) your members join. Pick a few to start — you can add or remove any time."
+      footer={<React.Fragment>
+        <button onClick={() => setStep(1)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={saveGroups} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{picks.size ? `Create ${picks.size} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="#fff" /></button>
       </React.Fragment>}>
@@ -176,10 +226,10 @@ function StewSetupWizard({ church, onDone, onTab }) {
     </WizShell>
   );
 
-  if (step === 2) return (
+  if (step === 3) return (
     <WizShell step={step} title="Serving rota" sub="Teams are who serves on a Sunday — welcome, kids, sound, and so on. Start one now if you like, or set this up later in the Rota tab."
       footer={<React.Fragment>
-        <button onClick={() => setStep(1)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        <button onClick={() => setStep(2)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={saveTeam} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{teamName.trim() ? 'Create team & continue' : 'I’ll do this later'} <Icon name="chevR" size={15} color="#fff" /></button>
       </React.Fragment>}>
