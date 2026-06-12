@@ -8809,9 +8809,11 @@ zoo`.split("\n");
     a.push(rec);
     lsSet(NETKEYS_LS, JSON.stringify(a));
   }
+  var CANONICAL_RELAY = "wss://trinityone.tailbeaac0.ts.net/relay";
   function ownRelay() {
     const l = typeof location !== "undefined" ? location : null;
     if (!l || !l.host) return "ws://127.0.0.1:8090/relay";
+    if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return CANONICAL_RELAY;
     return (l.protocol === "https:" ? "wss://" : "ws://") + l.host + "/relay";
   }
   function extraRelays() {

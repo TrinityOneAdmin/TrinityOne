@@ -44,9 +44,12 @@ function netKeys() { try { const a = JSON.parse(lsGet(NETKEYS_LS) || '[]'); retu
 function saveNetKey(rec) {
   const a = netKeys().filter(x => x.pub !== rec.pub); a.push(rec); lsSet(NETKEYS_LS, JSON.stringify(a));
 }
+const CANONICAL_RELAY = 'wss://trinityone.tailbeaac0.ts.net/relay';   // the pilot's relay (update when it moves to a domain)
 function ownRelay() {
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.host) return 'ws://127.0.0.1:8090/relay';
+  // a static CDN host (GitHub Pages etc.) has no relay on its origin → publish to the canonical relay
+  if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return CANONICAL_RELAY;
   return ((l.protocol === 'https:') ? 'wss://' : 'ws://') + l.host + '/relay';
 }
 function extraRelays() {

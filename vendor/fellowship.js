@@ -4967,7 +4967,8 @@
   var _loc = typeof location !== "undefined" ? location : null;
   var RELAY_BASE = _loc && _loc.host ? _loc.host : "127.0.0.1:8090";
   var _native = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  var _originRelay = !_native && _loc && _loc.host ? (_loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay" : null;
+  var _staticHost = !!(_loc && _loc.host && /\.(github\.io|pages\.dev|netlify\.app)$/i.test(_loc.host));
+  var _originRelay = !_native && !_staticHost && _loc && _loc.host ? (_loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay" : null;
   var DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
