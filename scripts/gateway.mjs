@@ -13,6 +13,7 @@ import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { verifyEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
 import { randomBytes, timingSafeEqual } from 'crypto';
+import { spawn } from 'child_process';
 
 const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
@@ -291,6 +292,17 @@ function serveStatic(req, res) {
       // the list from the token-gated /config; /status carries only non-sensitive counts.
       counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: events.length, connections: wss ? wss.clients.size : 0 },
     }));
+    return;
+  }
+  // self-host bundle: a fresh tarball of the committed code, so a new relay box can install straight
+  // from this funnel instead of the (private) GitHub repo. `git archive` only emits tracked files —
+  // relay/ secrets are gitignored, so nothing sensitive ships. Public on purpose (the installer curls it).
+  if (route === '/relay-app/bundle.tgz') {
+    res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="trinityone.tar.gz"' });
+    const git = spawn('git', ['-C', ROOT, 'archive', '--format=tar.gz', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    git.stdout.pipe(res);
+    git.on('error', () => { try { res.destroy(); } catch {} });
+    git.on('close', (code) => { if (code !== 0) { try { res.destroy(); } catch {} } });
     return;
   }
   // browser setup wizard: read/write the relay's write policy (church.json). Auth required (token or

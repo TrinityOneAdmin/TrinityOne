@@ -401,6 +401,7 @@ function App() {
   const [churchEvents, setChurchEvents] = useA([]);
   const [myRsvps, setMyRsvps] = useA({});       // { eventId: 'going'|'maybe'|'no' }
   const [openServing, setOpenServing] = useA(servingParam === '1');
+  const [eventOv, setEventOv] = useA(null);   // focused event-detail sheet
   useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyServingRequests) return window.Fellowship.subscribeMyServingRequests(setServReqs); }, [activeChurch, idTick, connTick]);
   useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyReqReplies) return window.Fellowship.subscribeMyReqReplies(setServReplies); }, [activeChurch, idTick, connTick]);
   useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyRsvps) return window.Fellowship.subscribeMyRsvps(setMyRsvps); }, [activeChurch, idTick, connTick]);
@@ -717,6 +718,7 @@ function App() {
     publishGroupEvent: (groupId, ev) => { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return window.Fellowship.publishGroupEvent(np, groupId, ev); },
     churchNetworks: churchNetworks.map(n => ({ ...n, name: networkNames[n.networkPub] || '', following: !!churches.find(c => c.id === n.npub) })),
     openServing: () => setOpenServing(true),
+    openEvent: (e) => setEventOv(e),
     respondServing: (item, verdict, swapTo) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
       // item may be a request, or a rota-derived slot that carries its matching request in .req
@@ -756,7 +758,7 @@ function App() {
       [notif, () => setNotif(false)], [allUses, () => setAllUses(null)], [concord, () => setConcord(false)],
       [video, () => setVideo(null)], [book, () => setBook(null)], [collection, () => setCollection(null)],
       [module, () => setModule(null)], [journalEditor, () => setJournalEditor(null)], [journal, () => setJournal(null)],
-      [openServing, () => setOpenServing(false)], [openDevo, () => setOpenDevo(null)], [plan, () => setPlan(null)],
+      [eventOv, () => setEventOv(null)], [openServing, () => setOpenServing(false)], [openDevo, () => setOpenDevo(null)], [plan, () => setPlan(null)],
       [devo, () => setDevo(false)], [shareSheet, () => setShareSheet(null)], [share, () => setShare(null)],
       [dmPeer, () => setDmPeer(null)], [dmInbox, () => setDmInbox(false)], [group, () => setGroup(null)],
     ];
@@ -835,6 +837,7 @@ function App() {
             <PlanDetail plan={plan} open={!!plan} onClose={() => setPlan(null)} ctx={ctx} />
             <ChurchDevoView devo={openDevo} open={!!openDevo} onClose={() => setOpenDevo(null)} ctx={ctx} />
             <ServingScreen open={openServing} onClose={() => setOpenServing(false)} ctx={ctx} />
+            <EventDetail event={eventOv} open={!!eventOv} onClose={() => setEventOv(null)} ctx={ctx} />
             <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} ctx={ctx} />
             <JournalEditor entry={journalEditor} open={!!journalEditor} onClose={() => setJournalEditor(null)} ctx={ctx} />
             <ModuleView module={module} open={!!module} onClose={() => setModule(null)} ctx={ctx} />

@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # TrinityOne Relay — one-line installer for any Debian/Ubuntu/Raspberry Pi OS box.
 #
-#   curl -fsSL https://raw.githubusercontent.com/swasb-altFreeBird/TrinityOne/main/relay-app/install.sh | sudo bash
+#   curl -fsSL https://trinityone.tailbeaac0.ts.net/relay-app/install.sh | sudo bash
 #
 # Sets up the gateway (relay + app + browser control dashboard) as a systemd service that starts on
 # boot, then optionally brings up a tunnel so the relay is reachable from outside the church LAN.
 # Not Pi-specific — it just needs an apt-based Linux box (a Pi, mini-PC, old laptop, or a VPS).
+#
+# The code is fetched as a tarball from the same host this script came from (the network's gateway),
+# so it works without any GitHub access (the repo is private during the pilot).
 #
 # Flags (all optional; prompts on a TTY when omitted):
 #   --church <npub[,npub...]>   church key(s) allowed to publish (the relay's write policy)
@@ -13,12 +16,12 @@
 #   --tunnel <tailscale|cloudflared|none>   how to expose it (default: ask, else none/LAN-only)
 #   --port   <n>                listen port (default 8000)
 #   --dir    <path>             install dir (default /opt/trinityone)
-#   --branch <name>             git branch to install (default main)
+#   --src    <https://host>     where to fetch the code bundle from (default the pilot gateway)
 #   -y                          non-interactive: accept defaults, no prompts
 set -euo pipefail
 
-REPO="https://github.com/swasb-altFreeBird/TrinityOne"
-DIR="/opt/trinityone"; PORT="8000"; BRANCH="main"
+SRC="https://trinityone.tailbeaac0.ts.net"
+DIR="/opt/trinityone"; PORT="8000"
 CHURCH=""; CHURCH_NAME=""; TUNNEL=""; ASSUME_YES=0
 SVC_USER="trinityone"; SVC="trinityone-relay"
 
@@ -29,7 +32,7 @@ while [ $# -gt 0 ]; do
     --tunnel) TUNNEL="$2"; shift 2;;
     --port)   PORT="$2"; shift 2;;
     --dir)    DIR="$2"; shift 2;;
-    --branch) BRANCH="$2"; shift 2;;
+    --src)    SRC="${2%/}"; shift 2;;
     -y|--yes) ASSUME_YES=1; shift;;
     *) echo "unknown option: $1" >&2; exit 1;;
   esac
@@ -62,8 +65,6 @@ else
   apt-get install -y nodejs >/dev/null
   ok "Node $(node -v) installed"
 fi
-command -v git >/dev/null 2>&1 || { apt-get install -y git >/dev/null; ok "git installed"; }
-
 # ── service user ────────────────────────────────────────────────────────────────
 if ! id "$SVC_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$DIR" --shell /usr/sbin/nologin "$SVC_USER"
@@ -71,9 +72,14 @@ if ! id "$SVC_USER" >/dev/null 2>&1; then
 fi
 
 # ── fetch / update the app ──────────────────────────────────────────────────────
-say "Fetching the app into $DIR (branch: $BRANCH)"
-if [ -d "$DIR/.git" ]; then git -C "$DIR" fetch --depth 1 origin "$BRANCH" -q && git -C "$DIR" checkout -q -f "$BRANCH" && git -C "$DIR" reset --hard -q "origin/$BRANCH"; ok "updated existing install"
-else mkdir -p "$DIR"; git clone --depth 1 -b "$BRANCH" "$REPO" "$DIR" -q; ok "cloned"; fi
+# Pull a fresh code tarball from the gateway ($SRC/relay-app/bundle.tgz). The relay/ secrets live
+# outside the bundle, so updating never clobbers this box's church.json / admin token / push keys.
+say "Fetching the app into $DIR (from $SRC)"
+mkdir -p "$DIR"
+TARBALL="$(mktemp)"; trap 'rm -f "$TARBALL"' EXIT
+curl -fsSL "$SRC/relay-app/bundle.tgz" -o "$TARBALL" || die "couldn't download the code bundle from $SRC/relay-app/bundle.tgz"
+tar -xzf "$TARBALL" -C "$DIR" --exclude='relay/*' || die "couldn't unpack the code bundle"
+ok "code unpacked"
 
 say "Installing the relay's runtime dependencies (ws, web-push, nostr-tools)"
 ( cd "$DIR" && npm install --no-audit --no-fund --no-save ws web-push nostr-tools >/dev/null 2>&1 ) || die "npm install failed"

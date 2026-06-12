@@ -1189,6 +1189,7 @@ function BulkUploadModal({ kind, onClose }) {
   const [drag, setDrag] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [done, setDone] = React.useState(0);
+  const [rejected, setRejected] = React.useState([]);   // names of non-text files we couldn't read
   const inputRef = React.useRef(null);
 
   const parse = (name, raw) => {
@@ -1206,7 +1207,10 @@ function BulkUploadModal({ kind, onClose }) {
     return { name, title: (h ? h[1].trim() : baseTitle), ref: rf ? rf[0].trim() : '', text, error: text ? '' : 'empty file' };
   };
   const addFiles = (list) => {
-    const files = [...list].filter(f => /\.(txt|md|markdown)$/i.test(f.name)).slice(0, 200);
+    const all = [...list];
+    const files = all.filter(f => /\.(txt|md|markdown)$/i.test(f.name)).slice(0, 200);
+    const bad = all.filter(f => !/\.(txt|md|markdown)$/i.test(f.name)).map(f => f.name);
+    setRejected(bad);
     if (!files.length) return;
     Promise.all(files.map(f => new Promise(res => { const r = new FileReader(); r.onload = () => res(parse(f.name, String(r.result || ''))); r.onerror = () => res({ name: f.name, title: f.name, error: 'unreadable' }); r.readAsText(f); })))
       .then(parsed => setItems(prev => { const seen = new Set(prev.map(p => p.name)); return [...prev, ...parsed.filter(p => !seen.has(p.name))]; }));
@@ -1240,6 +1244,14 @@ function BulkUploadModal({ kind, onClose }) {
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 3 }}>.md · .markdown · .txt</div>
             <input ref={inputRef} type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" multiple onChange={e => { addFiles(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
           </div>
+          {rejected.length ? (
+            <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', marginTop: 10, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))' }}>
+              <Icon name="info" size={16} color="var(--clay)" />
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+                <b style={{ color: 'var(--ink)' }}>{rejected.length} file{rejected.length === 1 ? '' : 's'} skipped</b> — only plain-text <b>.txt</b>, <b>.md</b> or <b>.markdown</b> files work here. Word/PDF documents can’t be read. {rejected.slice(0, 3).join(', ')}{rejected.length > 3 ? ` +${rejected.length - 3} more` : ''}
+              </div>
+            </div>
+          ) : null}
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: items.length ? '14px 26px 4px' : 0 }}>
           {items.map((it, i) => (

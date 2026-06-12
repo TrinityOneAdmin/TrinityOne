@@ -200,6 +200,41 @@ function UnavailSheet({ open, onClose, ctx }) {
 }
 
 // ════════════════ member month calendar: my serving + church events ════════════════
+// Focused detail sheet for one event (opened from anywhere an event is tapped) — full details + RSVP,
+// instead of dumping the member at the top of the Serving screen.
+function EventDetail({ event, open, onClose, ctx }) {
+  const e = event || {};
+  const rsvps = ctx.myRsvps || {};
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      {event ? (
+        <div style={{ paddingBottom: 8 }}>
+          {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 170, objectFit: 'cover', borderRadius: 16, display: 'block', marginBottom: 14 }} /> : null}
+          <div style={{ display: 'flex', gap: 13 }}>
+            <ServDateBlock iso={e.date} accent={e.accent || 'var(--clay)'} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, lineHeight: 1.12 }}>{e.title || 'Event'}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 6, flexWrap: 'wrap' }}>
+                {e.time ? <React.Fragment><Icon name="clock" size={14} color="var(--ink-3)" /> {e.time}</React.Fragment> : null}
+                {e.where ? <React.Fragment>{e.time ? <span style={{ opacity: .5 }}>·</span> : null}<Icon name="pin" size={14} color="var(--ink-3)" /> {e.where}</React.Fragment> : null}
+              </div>
+            </div>
+          </div>
+          {e.blurb ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink-2)', margin: '14px 0 4px', textWrap: 'pretty' }}>{e.blurb}</p> : null}
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' }}>Will you be there?</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[['going', 'Going', 'var(--sage)'], ['maybe', 'Maybe', 'var(--gold)'], ['no', 'Can’t', 'var(--ink-3)']].map(([v, lbl, c]) => {
+              const on = rsvps[e.id] === v;
+              return <button key={v} onClick={() => ctx.setRsvp && ctx.setRsvp(e.id, v)} style={{ flex: 1, padding: '13px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, border: on ? 'none' : '1px solid var(--line)', background: on ? c : 'var(--surface)', color: on ? (v === 'maybe' ? 'var(--midnight)' : '#fff') : 'var(--ink-2)' }}>{lbl}</button>;
+            })}
+          </div>
+        </div>
+      ) : null}
+    </BottomSheet>
+  );
+}
+window.EventDetail = EventDetail;
+
 function svEventRsvpRow({ e, rsvps, ctx }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
