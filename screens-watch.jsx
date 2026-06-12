@@ -1,4 +1,4 @@
-// screens-watch.jsx — "Watch" tab: Trinity Church Littlehampton's YouTube videos.
+// screens-watch.jsx — "Watch" tab: the church's YouTube videos.
 // Data comes from the bundled trinity-videos.json (window.Bible.getVideos());
 // inside the APK that can refresh live from the channel RSS feed.
 const { useState: useW } = React;

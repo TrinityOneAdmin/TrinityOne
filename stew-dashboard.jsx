@@ -163,7 +163,7 @@ function StewSetupWizard({ church, onDone, onTab }) {
         <button onClick={saveName} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (busy || !name.trim()) ? .5 : 1 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
       </React.Fragment>}>
       <div style={lbl}>CHURCH NAME</div>
-      <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && name.trim()) saveName(); }} placeholder="e.g. Trinity Church Littlehampton" style={fld} />
+      <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && name.trim()) saveName(); }} placeholder="Your church’s name" style={fld} />
     </WizShell>
   );
 

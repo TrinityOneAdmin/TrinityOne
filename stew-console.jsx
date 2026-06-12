@@ -181,7 +181,7 @@ function WizIdentity({ name, setName, nip05, setNip05 }) {
   return (
     <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
       <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This is what members see when they follow you. You can change it later from Settings.</p>
-      <WizInput label="Church name" value={name} onChange={setName} placeholder="e.g. Trinity Church Littlehampton" autoFocus />
+      <WizInput label="Church name" value={name} onChange={setName} placeholder="Your church’s name" autoFocus />
       <WizInput label="Verified name · NIP-05 (optional)" value={nip05} onChange={setNip05} placeholder="yourchurch.org" mono
         hint="Optional — adds a ✓ next to your name if you host a small verification file. Leave blank for now if you’re not sure." />
     </div>
