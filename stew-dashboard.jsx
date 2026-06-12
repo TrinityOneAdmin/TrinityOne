@@ -31,7 +31,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
         <SkBadge initials={initials} size={34} radius={10} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{churchName}</span>{church.name ? <Icon name="check" size={12} stroke={3} color="var(--sage)" /> : null}</div>
-          <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{church.npub ? church.npub.slice(0, 18) + '…' : 'no key'}</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: church.nip05 ? 'var(--font-ui)' : 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{church.nip05 ? '@' + String(church.nip05).split('@')[0] : (church.npub ? church.npub.slice(0, 18) + '…' : 'no key')}</div>
         </div>
         <Icon name="pen" size={14} color="var(--ink-3)" />
       </button>
@@ -738,7 +738,7 @@ function NewGroupModal({ open, onClose }) {
                         <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                           <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
                           <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
-                          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)', marginLeft: 'auto' }}>{shortNpub(m.npub)}</span>
+                          <span style={{ fontSize: 11, color: m.nip05 ? 'var(--sage)' : 'var(--ink-3)', fontWeight: m.nip05 ? 700 : 400, fontFamily: m.nip05 ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{m.nip05 ? '@' + String(m.nip05).split('@')[0] : shortNpub(m.npub)}</span>
                         </button>
                       ); })}
                     </div>

@@ -656,7 +656,7 @@ function App() {
     if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; }
     // stewards run their church from the separate Steward console — ordinary members aren't stewards,
     // so the member app hides steward-only tools (e.g. the invite generator).
-    return { name, avatar, npub: cur.npub || '', handle: cur.handle || 'Anonymous', steward: false };
+    return { name, avatar, npub: cur.npub || '', handle: cur.handle || 'Anonymous', nip05: (FS && FS.myProfile && FS.myProfile.nip05) || '', steward: false };
   })();
   // saving a profile publishes name + mark to the user's key (kind-0)
   const saveIdentity = (patch) => {
