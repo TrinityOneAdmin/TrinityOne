@@ -546,16 +546,17 @@ function App() {
   const [giving, setGiving] = useA(window.TrinityData.GIVING_HISTORY);
   const [funds, setFunds] = useA(window.TrinityData.FUNDS);   // giving funds (stewards can add)
 
-  // Real-device full-screen mode: the native app, an installed PWA, or a phone-sized viewport fills
-  // the screen. Only a wide desktop browser gets the scaled phone-frame mockup. (Also fixes the APK
-  // blank screen: the webview can boot with innerHeight 0, which made the fit() scale go negative.)
-  const fullscreen = (typeof window !== 'undefined') && (
+  // The app fills the whole browser by default. The scaled phone-frame mockup is opt-in via ?frame=1
+  // (for demos / marketing screenshots) and never applies to the native app, an installed PWA, or a
+  // phone-sized viewport. (Full-screen also sidesteps the APK blank screen, where a webview booting
+  // with innerHeight 0 made the fit() scale go negative.)
+  const framePreview = (typeof location !== 'undefined') && /[?&]frame=1(?:&|$)/.test(location.search);
+  const fullscreen = (typeof window !== 'undefined') && (!framePreview || (
     !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ||
     !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
     !!(window.navigator && window.navigator.standalone) ||
-    (typeof location !== 'undefined' && /[?&]app=1(?:&|$)/.test(location.search)) ||   // ?app=1 → unframed full-screen (marketing "Launch the web app")
     window.innerWidth <= 500
-  );
+  ));
   // scaling to viewport (desktop preview only)
   const wrapRef = useAR();
   useAE(() => {
