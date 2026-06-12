@@ -123,10 +123,10 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
 }
 
 // ── word study (real lexicon via window.Bible.lex) ──
-function WordStudySheet({ id, open, onClose }) {
+function WordStudySheet({ id, open, onClose, docked }) {
   const e = id ? window.Bible.lex(id) : null;
   return (
-    <BottomSheet open={open} onClose={onClose}>
+    <BottomSheet open={open} onClose={onClose} docked={docked}>
       {e ? <div style={{ paddingBottom: 6 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <div>

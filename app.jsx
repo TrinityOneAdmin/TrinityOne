@@ -800,6 +800,21 @@ function App() {
                       )}
                     </div>
                   </div>
+                ) : tab === 'read' && readView === 'bible' ? (
+                  <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
+                    <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0, borderRight: '1px solid var(--line)' }}>
+                      <div style={{ position: 'relative', width: '100%', maxWidth: 760 }}>{screens.read}</div>
+                    </div>
+                    <div style={{ width: 380, flexShrink: 0, position: 'relative', background: 'var(--surface)' }}>
+                      {wordOv ? <WordStudySheet id={wordOv} open={true} onClose={() => setWordOv(null)} docked /> : (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: 'var(--ink-3)', textAlign: 'center', padding: 28 }}>
+                          <Icon name="study" size={40} stroke={1.4} color="var(--ink-3)" />
+                          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink-2)' }}>Word study</div>
+                          <div style={{ fontSize: 13.5, maxWidth: 240, lineHeight: 1.5 }}>Tap any word in the passage for its Greek or Hebrew root, definition and cross-references.</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ) : (
                   <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-start', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ position: 'relative', width: '100%', maxWidth: 920, borderRight: '1px solid var(--line)' }}>{screens[tab]}</div>
@@ -826,7 +841,7 @@ function App() {
             <CollectionView coll={collection} open={!!collection} onClose={() => setCollection(null)} ctx={ctx} />
             <BookReader book={book} open={!!book} onClose={() => setBook(null)} ctx={ctx} />
             <VideoPlayer video={video} open={!!video} onClose={() => setVideo(null)} ctx={ctx} />
-            <WordStudySheet id={wordOv} open={!!wordOv} onClose={() => setWordOv(null)} />
+            <WordStudySheet id={wordOv} open={!!wordOv && !(desktop && tab === 'read' && readView === 'bible')} onClose={() => setWordOv(null)} />
             <ConcordanceIndex open={concord} onClose={() => setConcord(false)} ctx={ctx} />
             <AllUsesView id={allUses} open={!!allUses} onClose={() => setAllUses(null)} ctx={ctx} />
             <NotificationsScreen open={notif} onClose={() => setNotif(false)} ctx={ctx} />

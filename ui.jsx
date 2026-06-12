@@ -173,11 +173,20 @@ window.trinityGoBack = function () {
   return false;
 };
 
-function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z = 50 }) {
-  useBackLayer(open, onClose);
+function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z = 50, docked }) {
+  // docked = rendered inside a desktop side panel (e.g. reader study panel): fill the pane, no
+  // backdrop/slide/handle, no backstack.
+  useBackLayer(open && !docked, onClose);
   const [mounted, setMounted] = useState(open);
   useEffect(() => { if (open) setMounted(true); }, [open]);
   if (!mounted && !open) return null;
+  if (docked) {
+    return (
+      <div className="no-scrollbar" style={{ position: 'absolute', inset: 0, overflow: 'auto', background: 'var(--surface)', padding: pad ? '18px 20px' : 0 }}>
+        {children}
+      </div>
+    );
+  }
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: z, pointerEvents: open ? 'auto' : 'none' }}>
       <div onClick={onClose} style={{
