@@ -635,6 +635,7 @@ function App() {
     removeTranslation: (abbr) => Bible.removeModule(abbr),
     openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
     openGroup: (g) => setGroup(g),
+    desktop, openGroupId: group && group.id,
     openDM: (peer) => setDmPeer(peer), openDMInbox: () => setDmInbox(true),
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
@@ -776,9 +777,24 @@ function App() {
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
                 <DesktopNav active={tab} onChange={setTab} />
-                <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-start', minWidth: 0, background: 'var(--paper)' }}>
-                  <div style={{ position: 'relative', width: '100%', maxWidth: 920, borderRight: '1px solid var(--line)' }}>{screens[tab]}</div>
-                </div>
+                {tab === 'chat' ? (
+                  <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
+                    <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
+                    <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+                      {group ? <ChatRoom group={group} open={true} onClose={() => setGroup(null)} ctx={ctx} docked /> : (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>
+                          <Icon name="chat" size={46} stroke={1.4} color="var(--ink-3)" />
+                          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, color: 'var(--ink-2)' }}>Pick a conversation</div>
+                          <div style={{ fontSize: 13.5, maxWidth: 260, lineHeight: 1.5 }}>Choose a group or prayer room on the left to open it here.</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-start', minWidth: 0, background: 'var(--paper)' }}>
+                    <div style={{ position: 'relative', width: '100%', maxWidth: 920, borderRight: '1px solid var(--line)' }}>{screens[tab]}</div>
+                  </div>
+                )}
               </div>
             ) : (
               <React.Fragment>
@@ -813,7 +829,7 @@ function App() {
             <InviteSheet open={idSheet === 'invite'} onClose={() => setIdSheet(null)} identity={identity} ctx={ctx} />
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
-            <ChatRoom group={group} open={!!group} onClose={() => setGroup(null)} ctx={ctx} />
+            <ChatRoom group={group} open={!!group && !(desktop && tab === 'chat')} onClose={() => setGroup(null)} ctx={ctx} />
             <DMInbox open={dmInbox} onClose={() => setDmInbox(false)} ctx={ctx} />
             <DMThread peer={dmPeer} open={!!dmPeer} onClose={() => setDmPeer(null)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx} initialMode={churchSwitcherMode}

@@ -205,11 +205,19 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
 }
 
 // ── Full overlay (slides up, opaque) ──
-function Overlay({ open, onClose, children }) {
-  useBackLayer(open, onClose);
+function Overlay({ open, onClose, children, docked }) {
+  // docked = rendered inside a desktop pane (e.g. two-pane chat): fill the pane, no slide/backstack.
+  useBackLayer(open && !docked, onClose);
   const [mounted, setMounted] = useState(open);
   useEffect(() => { if (open) setMounted(true); }, [open]);
   if (!mounted && !open) return null;
+  if (docked) {
+    return (
+      <div style={{ position: 'absolute', inset: 0, background: 'var(--paper)', display: 'flex', flexDirection: 'column' }}>
+        {children}
+      </div>
+    );
+  }
   return (
     <div onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
       position: 'absolute', inset: 0, zIndex: 55, background: 'var(--paper)',

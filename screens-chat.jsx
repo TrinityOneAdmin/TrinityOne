@@ -300,7 +300,8 @@ function ChatScreen({ ctx }) {
   const groupCard = (g) => (
     <div key={g.id} onClick={() => openGroup(g)} style={{
       display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
-      background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)',
+      background: ctx.openGroupId === g.id ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface)',
+      border: '1px solid ' + (ctx.openGroupId === g.id ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', boxShadow: 'var(--shadow)',
     }}>
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <div style={{ width: 50, height: 50, borderRadius: 16, background: `color-mix(in oklab, ${g.accent} 16%, var(--surface))`,
@@ -708,7 +709,7 @@ function GroupEventComposer({ group, ctx, onClose }) {
   );
 }
 
-function ChatRoom({ group, open, onClose, ctx }) {
+function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
   const [prayerOn, setPrayerOn] = useC(false);   // attach a "prayer request" flag to this message
@@ -782,11 +783,11 @@ function ChatRoom({ group, open, onClose, ctx }) {
     .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);
 
   return (
-    <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)',
+    <Overlay open={open} onClose={onClose} docked={docked}>
+      <div style={{ paddingTop: docked ? 12 : 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)',
         backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
-          <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
+          {!docked ? <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button> : null}
           <div style={{ width: 40, height: 40, borderRadius: 13, background: `color-mix(in oklab, ${group.accent} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: group.accent, flexShrink: 0 }}>
             <Icon name={group.prayer ? 'pray' : 'chat'} size={22} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
