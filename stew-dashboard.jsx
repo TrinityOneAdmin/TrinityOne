@@ -1228,9 +1228,10 @@ function DashDevotionals() {
   // pull the SERIES number from a title ("Series 3", "Series #3", "Series03"); fall back to a leading
   // "#3", then the first number anywhere.
   const numIn = (s) => { s = String(s || ''); const m = s.match(/series\s*#?\s*(\d+)/i) || s.match(/#\s*(\d+)/) || s.match(/(\d+)/); return m ? parseInt(m[1], 10) : Infinity; };
+  const seriesOf = (d) => numIn((d.ref || '') + ' ' + (d.title || ''));   // "Series N" lives in ref (or title)
   const applySort = (mode) => {
     const arr = devos.slice();
-    if (mode === 'number') arr.sort((a, b) => numIn(a.title) - numIn(b.title) || String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true }));
+    if (mode === 'number') arr.sort((a, b) => seriesOf(a) - seriesOf(b) || String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true }));
     else if (mode === 'title') arr.sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true }));
     else if (mode === 'newest') arr.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     persist(arr);
