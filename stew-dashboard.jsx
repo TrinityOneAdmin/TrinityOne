@@ -98,6 +98,37 @@ function PublishErrorBanner() {
   );
 }
 
+// toasts the steward when a brand-new member joins. A 4s settle window lets the existing roster stream
+// in first (so the backfill doesn't alert), and we key off new pubkeys — not the `joined` timestamp —
+// so a returning member's heartbeat never looks like a fresh join.
+function JoinNotifier() {
+  const [toast, setToast] = React.useState('');
+  const tmr = React.useRef(null);
+  React.useEffect(() => {
+    if (!(window.Steward && window.Steward.subscribeMembers)) return;
+    let known = new Set(), ready = false;
+    const settle = setTimeout(() => { ready = true; }, 4000);
+    const off = window.Steward.subscribeMembers((members) => {
+      if (!ready) { known = new Set(members.map(m => m.pubkey)); return; }
+      const fresh = members.filter(m => !known.has(m.pubkey));
+      if (!fresh.length) return;
+      fresh.forEach(m => known.add(m.pubkey));
+      const last = fresh[fresh.length - 1];
+      setToast(fresh.length > 1 ? `${fresh.length} people just joined your church 🎉` : `${last.name || 'Someone'} just joined your church 🎉`);
+      clearTimeout(tmr.current); tmr.current = setTimeout(() => setToast(''), 9000);
+    });
+    return () => { clearTimeout(settle); clearTimeout(tmr.current); try { off && off(); } catch (e) {} };
+  }, []);
+  if (!toast) return null;
+  return (
+    <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 141, maxWidth: 520, width: 'calc(100% - 32px)', display: 'flex', alignItems: 'center', gap: 10, padding: '12px 15px', borderRadius: 13, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 42%, transparent)', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
+      <Icon name="users" size={17} color="var(--sage)" style={{ flexShrink: 0 }} />
+      <div style={{ flex: 1, fontSize: 13, color: 'var(--ink)', lineHeight: 1.4, fontWeight: 700 }}>{toast}</div>
+      <button onClick={() => setToast('')} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} /></button>
+    </div>
+  );
+}
+
 // wizard step chrome — module-level so its component type is stable across renders
 // (defining it inside StewSetupWizard would remount on every keystroke and blur the inputs).
 function WizShell({ step, title, sub, children, footer }) {
@@ -316,7 +347,7 @@ function StewDashboard({ initial = 'overview' }) {
         {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
         <MemberChatDock />
-        <PublishErrorBanner />
+        <PublishErrorBanner /><JoinNotifier />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
@@ -353,7 +384,7 @@ function StewDashboard({ initial = 'overview' }) {
       {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
-        <PublishErrorBanner />
+        <PublishErrorBanner /><JoinNotifier />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
