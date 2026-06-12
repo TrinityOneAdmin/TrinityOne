@@ -17,6 +17,7 @@ import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
+import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import qrcode from 'qrcode-generator';
 
 const NET = 'trinityone';
@@ -33,6 +34,20 @@ const REQUEST_D = 'trinityone/request:';    // steward -> member "can you serve?
 const REQREPLY_D = 'trinityone/reqreply:';  // member -> steward accept/decline/swap (member, p=church)
 const NETWORK_D = 'trinityone/network:';    // church -> network membership ("we belong to X"), p=network
 const BLOCKED_D = 'trinityone/blocked:';    // this church's blocklist (banned member pubkeys), d=blocked:<churchpub>
+const GROUPKEY_D = 'trinityone/groupkey:'; // church-signed key envelope for an encrypted group
+const _skeys = {};   // groupId -> Uint8Array(32) group key (church-side cache)
+const _srev = {};    // groupId -> envelope revision (bumped on rotate)
+const _senvTs = {};  // groupId -> latest envelope created_at (ignore stale/out-of-order)
+const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
+const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
+// the church unwraps its OWN entry from a key envelope (it wraps the key to itself too), and caches it
+function stewIngestKey(e) {
+  const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(GROUPKEY_D)) return;
+  const gid = d.slice(GROUPKEY_D.length);
+  if ((_senvTs[gid] || 0) > (e.created_at || 0)) return;   // ignore an older envelope arriving late
+  _senvTs[gid] = e.created_at || 0;
+  try { const env = JSON.parse(e.content || '{}'); _srev[gid] = env.rev || 1; const mine = env.keys && churchPub && env.keys[churchPub]; if (mine && churchSk) _skeys[gid] = _unhex(nip44d(mine, nip44ck(churchSk, e.pubkey))); } catch {}
+}
 const now = () => Math.floor(Date.now() / 1000);
 function toPubHex(npubOrHex) { try { if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase(); const d = nip19decode(npubOrHex); return d && d.type === 'npub' ? d.data : null; } catch { return null; } }
 
@@ -175,7 +190,10 @@ window.Steward = {
   // subscribeGroup scopes by it, so without it the post is invisible to members (was the bug).
   publishPost(content, group) {
     if (!sk) return Promise.resolve(null);
-    return publish(finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub]], content: content || '' }, sk));
+    let body = content || '', encTag = [];
+    const gkey = group && _skeys[group];   // encrypted group → seal the post
+    if (gkey) { try { body = nip44e(content || '', gkey); encTag = [['enc', '1']]; } catch (e) {} }
+    return publish(finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag], content: body }, sk));
   },
   // read a group/team's chat (kind-1 tagged with the group id, scoped to this church) — for the console chat view.
   // Folds in kind-7 reactions (same shape the member app posts) so the console shows + sets reactions too.
@@ -196,7 +214,9 @@ window.Steward = {
         }
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
         if (!e.tags.some(t => t[0] === 'p' && t[1] === pub)) return;   // this church's scope
-        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text: e.content, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '' });
+        let text = e.content;
+        if (e.tags.some(t => t[0] === 'enc')) { const k = _skeys[groupId]; if (!k) return; try { text = nip44d(e.content, k); } catch { return; } }
+        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '' });
         emit();
       },
       oneose() { emit(); },
@@ -291,7 +311,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const id = group.id || ('grp' + Date.now());
     const inviteOnly = group.visibility === 'invite';
-    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '', leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === 'number' ? group.order : undefined, visibility: inviteOnly ? 'invite' : undefined, members: inviteOnly && Array.isArray(group.members) ? group.members : undefined });
+    const content = JSON.stringify({ name: group.name || 'Group', kind: group.kind || 'group', sub: group.sub || '', icon: group.icon || '', accent: group.accent || '', leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === 'number' ? group.order : undefined, visibility: inviteOnly ? 'invite' : undefined, members: inviteOnly && Array.isArray(group.members) ? group.members : undefined, encrypted: group.encrypted ? true : undefined });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET]], content }, sk))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },
@@ -302,6 +322,21 @@ window.Steward = {
   removeGroup(id) {
     if (!sk) return Promise.resolve(null);
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + id], ['t', NET], ['deleted', '1']], content: '' }, sk));
+  },
+  // ---- encrypted groups: publish/refresh the key envelope (the group key wrapped per-member via NIP-44).
+  // Reuses the existing key on add (so new members read history); pass {rotate:true} to mint a fresh key
+  // (used on removal so the removed member can't read future messages). The church wraps to itself too. ----
+  publishGroupKey(groupId, memberPubs, opts = {}) {
+    if (!churchSk || !churchPub) return Promise.resolve(null);
+    const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toHexPub(p) || p).filter(Boolean)])];
+    let key = _skeys[groupId];
+    if (opts.rotate || !key) { key = crypto.getRandomValues(new Uint8Array(32)); _srev[groupId] = (_srev[groupId] || 0) + 1; }
+    _skeys[groupId] = key;
+    const rev = _srev[groupId] || 1; _srev[groupId] = rev;
+    const keys = {};
+    for (const pk of recips) { try { keys[pk] = nip44e(_hex(key), nip44ck(churchSk, pk)); } catch (e) {} }
+    _senvTs[groupId] = now();
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content: JSON.stringify({ rev, keys }) }, churchSk));
   },
   // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
   // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
@@ -331,6 +366,7 @@ window.Steward = {
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d.startsWith(GROUPKEY_D)) { stewIngestKey(e); return; }   // cache the church's own group keys
         if (!d.startsWith(GROUP_D)) return;
         const id = d.slice(GROUP_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }

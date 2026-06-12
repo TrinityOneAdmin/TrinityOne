@@ -5,6 +5,7 @@
 // hosted NIP-29 relay later (the app only ever talks to window.Fellowship).
 import { SimplePool } from 'nostr-tools/pool';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
+import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
@@ -16,6 +17,30 @@ function toPub(npubOrHex) {
   try { const d = nip19decode(npubOrHex); return d.type === 'npub' ? d.data : null; } catch { return null; }
 }
 const GROUP_D = 'trinityone/group:';
+const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the group key wrapped to each member
+const _gkeys = {};   // groupId -> Uint8Array(32) group key, unwrapped from the church's envelope for me
+const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
+const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
+// unwrap my entry from a key envelope and cache the group key (NIP-44, church<->me conversation key)
+function _ingestGroupKey(e) {
+  const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(GROUPKEY_D)) return;
+  const gid = d.slice(GROUPKEY_D.length);
+  try {
+    const env = JSON.parse(e.content || '{}');
+    const mine = env.keys && pub && env.keys[pub];
+    if (mine && sk) _gkeys[gid] = _unhex(nip44d(mine, nip44ck(sk, e.pubkey)));
+    else if (!mine) delete _gkeys[gid];   // dropped from the group (rotation) → lose the key
+  } catch {}
+}
+// transparently decrypt an encrypted group message → event with plaintext content; null if it's
+// encrypted and I don't hold the key (so the UI simply never sees it).
+function _decEvt(e) {
+  if (!e.tags || !e.tags.some(t => t[0] === 'enc')) return e;
+  const gid = (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1];
+  const key = gid && _gkeys[gid];
+  if (!key) return null;
+  try { return { ...e, content: nip44d(e.content, key) }; } catch { return null; }
+}
 
 const NET = 'trinityone';                       // network-wide tag
 // Relays are configurable + persisted, so pointing at a hosted wss:// relay is a settings
@@ -224,9 +249,12 @@ window.Fellowship = {
   async publishMessage(groupId, content, extraTags = []) {
     if (!sk) await window.Fellowship.ready;
     const churchTag = window.Fellowship.churchPub ? [['p', window.Fellowship.churchPub]] : [];
+    let body = content, encTag = [];
+    const gkey = _gkeys[groupId];   // encrypted group → seal the content so even the relay can't read it
+    if (gkey) { try { body = nip44e(content, gkey); encTag = [['enc', '1']]; } catch (e) {} }
     const evt = finalizeEvent({
       kind: 1, created_at: Math.floor(Date.now() / 1000),
-      tags: [['t', NET], ['t', groupId], ...churchTag, ...extraTags], content,
+      tags: [['t', NET], ['t', groupId], ...churchTag, ...encTag, ...extraTags], content: body,
     }, sk);
     try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); }
     catch (e) { console.warn('[fellowship] publish failed', e); }
@@ -326,7 +354,7 @@ window.Fellowship = {
         const cp = window.Fellowship.churchPub;
         if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
         const gid = (e.tags.find(t => t[0] === 't' && set.has(t[1])) || [])[1];
-        if (gid) { try { onEvent(gid, e); } catch (err) { console.error(err); } }
+        if (gid) { const dec = _decEvt(e); if (!dec) return; try { onEvent(gid, dec); } catch (err) { console.error(err); } }
       },
       oneose() {},
     });
@@ -365,7 +393,8 @@ window.Fellowship = {
         // and only this church's messages (when scoped) — avoids cross-church group-id collisions
         const cp = window.Fellowship.churchPub;
         if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
-        try { onEvent(e); } catch (err) { console.error(err); }
+        const dec = _decEvt(e); if (!dec) return;   // encrypted + I'm not a member (no key) → don't show
+        try { onEvent(dec); } catch (err) { console.error(err); }
       },
       oneose() {},
     });
@@ -383,6 +412,7 @@ window.Fellowship = {
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(e); return; }   // an encrypted group's key envelope
         if (!d.startsWith(GROUP_D)) return;
         const id = d.slice(GROUP_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
