@@ -1443,7 +1443,9 @@ function DashMembers() {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <span style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{shortNpub(m.npub)}</span>
+            {m.nip05
+              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage)', fontWeight: 700 }} title={m.nip05}>@{String(m.nip05).split('@')[0]} <Icon name="check" size={11} stroke={3} color="var(--sage)" /></span>
+              : <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }} title={m.npub}>{shortNpub(m.npub)}</span>}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
         </div>

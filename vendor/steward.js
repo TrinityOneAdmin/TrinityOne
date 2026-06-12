@@ -8940,7 +8940,13 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       lastProfile = { ...lastProfile, ...meta };
       const m = lastProfile;
-      const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05: m.nip05 || "", picture: m.picture || "", channel: m.channel || "", audioFeed: m.audioFeed || "" });
+      let nip05 = m.nip05 || "";
+      if (!nip05 && m.name) {
+        const local = String(m.name).toLowerCase().replace(/[^a-z0-9._-]+/g, "").slice(0, 30);
+        const host = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
+        if (local && host) nip05 = local + "@" + host;
+      }
+      const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", channel: m.channel || "", audioFeed: m.audioFeed || "" });
       return publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content }, sk));
     },
     publishFund(fund) {
@@ -9548,6 +9554,7 @@ zoo`.split("\n");
               if (m) {
                 m.name = meta.name || meta.display_name || "";
                 m.picture = meta.picture || "";
+                m.nip05 = meta.nip05 || "";
                 emit();
               }
             } catch {

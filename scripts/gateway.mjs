@@ -518,6 +518,28 @@ function serveStatic(req, res) {
     });
     return;
   }
+  // NIP-05: serve verified `name@thisrelay` handles for this relay's people (the church + its members),
+  // resolved from their kind-0 profiles. First-come on a slug; the church outranks members. So a member
+  // gets a real verified handle for free — no third-party domain.
+  if (route === '/.well-known/nostr.json') {
+    let qName = ''; try { qName = (new URL(req.url, 'http://x').searchParams.get('name') || '').toLowerCase().trim(); } catch {}
+    const host = (req.headers.host || '').split(',')[0].trim();
+    const relayUrl = host ? 'wss://' + host + '/relay' : '';
+    const slug = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
+    const names = {}, relays = {}, claimed = new Set();
+    // churches first (priority), then members; earliest profile wins a contested slug
+    const k0 = events.filter(e => e.kind === 0).sort((a, b) => (CHURCH_PUBS.has(b.pubkey) - CHURCH_PUBS.has(a.pubkey)) || ((a.created_at || 0) - (b.created_at || 0)));
+    for (const e of k0) {
+      if (BLOCKED.has(e.pubkey)) continue;
+      let meta = {}; try { meta = JSON.parse(e.content); } catch {}
+      let local = (meta.nip05 && String(meta.nip05).includes('@')) ? slug(String(meta.nip05).split('@')[0]) : slug(meta.name);
+      if (!local || claimed.has(local)) continue;
+      claimed.add(local); names[local] = e.pubkey; if (relayUrl) relays[e.pubkey] = [relayUrl];
+    }
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+    if (qName) { const pk = names[qName]; res.writeHead(200, H); res.end(JSON.stringify(pk ? { names: { [qName]: pk }, relays: relayUrl ? { [pk]: [relayUrl] } : {} } : { names: {} })); return; }
+    res.writeHead(200, H); res.end(JSON.stringify({ names, relays })); return;
+  }
   let p; try { p = decodeURIComponent(route); } catch { res.writeHead(400).end('bad request'); return; }
   if (p === '/' || p.endsWith('/')) p += 'index.html';
   const file = normalize(join(ROOT, p));

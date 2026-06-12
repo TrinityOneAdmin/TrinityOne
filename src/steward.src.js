@@ -148,7 +148,14 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     lastProfile = { ...lastProfile, ...meta };   // merge so a partial edit (e.g. name) keeps channel etc.
     const m = lastProfile;
-    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05: m.nip05 || '', picture: m.picture || '', channel: m.channel || '', audioFeed: m.audioFeed || '' });
+    // auto-claim a verified NIP-05 handle on the relay if the steward didn't enter their own domain
+    let nip05 = m.nip05 || '';
+    if (!nip05 && m.name) {
+      const local = String(m.name).toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
+      const host = (CANONICAL_RELAY || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '');
+      if (local && host) nip05 = local + '@' + host;
+    }
+    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', channel: m.channel || '', audioFeed: m.audioFeed || '' });
     return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
   },
   publishFund(fund) {
@@ -550,7 +557,7 @@ window.Steward = {
     const ensureProfile = (pk) => {
       if (profSubs.has(pk)) return;
       const s = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pk] }], {
-        onevent(e) { try { const meta = JSON.parse(e.content); const m = byPub.get(pk); if (m) { m.name = meta.name || meta.display_name || ''; m.picture = meta.picture || ''; emit(); } } catch {} },
+        onevent(e) { try { const meta = JSON.parse(e.content); const m = byPub.get(pk); if (m) { m.name = meta.name || meta.display_name || ''; m.picture = meta.picture || ''; m.nip05 = meta.nip05 || ''; emit(); } } catch {} },
         oneose() {},
       });
       profSubs.set(pk, s);

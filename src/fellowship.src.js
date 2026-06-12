@@ -189,6 +189,12 @@ window.Fellowship = {
       picture: (meta.picture != null ? meta.picture : (prev.picture || '')).trim(),
     };
     if (meta.av || prev.av) p.av = meta.av || prev.av;   // chosen symbol/monogram avatar
+    // auto-claim a verified NIP-05 handle on the church's relay: <name>@<relay-host>. The relay serves
+    // /.well-known/nostr.json, so the member gets a real verified name — no third-party domain needed.
+    const handleLocal = p.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
+    const relayHost = (CANONICAL_RELAY || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '');
+    if (handleLocal && relayHost) p.nip05 = handleLocal + '@' + relayHost;
+    else if (prev.nip05) p.nip05 = prev.nip05;
     const evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify(p) }, sk);
     try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] profile publish failed', e); }
     profiles[pub] = p; window.Fellowship.myProfile = p;

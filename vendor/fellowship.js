@@ -5166,6 +5166,10 @@
         picture: (meta.picture != null ? meta.picture : prev.picture || "").trim()
       };
       if (meta.av || prev.av) p.av = meta.av || prev.av;
+      const handleLocal = p.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "").slice(0, 30);
+      const relayHost = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
+      if (handleLocal && relayHost) p.nip05 = handleLocal + "@" + relayHost;
+      else if (prev.nip05) p.nip05 = prev.nip05;
       const evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: JSON.stringify(p) }, sk);
       try {
         await Promise.any(pool.publish(window.Fellowship.relays, evt));
