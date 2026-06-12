@@ -914,6 +914,17 @@ function DashRelaysCard() {
     if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); return; }
     setDraft(''); setErr('');
   };
+  const [regOpen, setRegOpen] = React.useState(false);
+  const [regToken, setRegToken] = React.useState('');
+  const [regMsg, setRegMsg] = React.useState('');
+  const [regBusy, setRegBusy] = React.useState(false);
+  const register = async () => {
+    if (!regToken.trim()) return;
+    setRegBusy(true); setRegMsg('Registering…');
+    try { await window.Steward.registerWithRelay(regToken.trim()); setRegMsg('✓ Registered — the relay will accept this church now.'); }
+    catch (e) { setRegMsg('✗ ' + (e.message || 'Couldn’t reach the relay.')); }
+    setRegBusy(false);
+  };
   return (
       <Panel title="Relays" action={!checking ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: allUp ? 'var(--sage)' : 'var(--clay)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: allUp ? 'var(--sage)' : 'var(--clay)' }} /> {online}/{status.length} online</span> : null}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where your church publishes. It hosts its own relay; add public relays for redundancy in case yours is ever offline.</div>
@@ -945,6 +956,21 @@ function DashRelaysCard() {
             <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Add relay</button>
           </div>
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+        </div>
+        {/* register this church with the relay's write policy — fixes "Changes weren't saved: different church" */}
+        <div style={{ marginTop: 12 }}>
+          {!regOpen ? (
+            <button onClick={() => setRegOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Register this church with the relay</button>
+          ) : (
+            <div style={{ padding: 13, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>If the relay rejects your changes (“set up for a different church”), add this church to its allow-list. Paste the relay’s <b>admin token</b> (installer output, or <span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>journalctl -u trinityone-relay | grep "admin token"</span>).</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={regToken} onChange={e => setRegToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') register(); }} type="password" placeholder="relay admin token" autoComplete="off" style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
+                <button onClick={register} disabled={regBusy || !regToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (regBusy || !regToken.trim()) ? .5 : 1 }}>Register</button>
+              </div>
+              {regMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: regMsg[0] === '✓' ? 'var(--sage)' : regMsg[0] === '✗' ? 'var(--clay)' : 'var(--ink-3)' }}>{regMsg}</div> : null}
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
           <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church hosts its own relay — every message, group, and member lives on infrastructure you control. Members reach it wherever you serve the app.</div>
