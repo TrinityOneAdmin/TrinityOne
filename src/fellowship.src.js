@@ -222,6 +222,29 @@ window.Fellowship = {
     return evt;
   },
 
+  // live count of a church's members — matches the steward's rule: distinct people (not the church)
+  // who posted (kind-1) or explicitly joined (member:<church>), minus those who left without posting.
+  subscribeChurchMemberCount(churchNpub, cb) {
+    const cp = toPub(churchNpub); if (!cp) { cb(0); return () => {}; }
+    const MEMBER_D = 'trinityone/member:';
+    const ppl = new Map();   // pubkey -> { msgs, joined }
+    const tally = () => { let n = 0; for (const v of ppl.values()) if (v.msgs > 0 || v.joined) n++; cb(n); };
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
+      onevent(e) {
+        if (e.pubkey === cp) return;
+        const m = ppl.get(e.pubkey) || { msgs: 0, joined: false };
+        if (e.kind === 30078) {
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          if (d.indexOf(MEMBER_D) !== 0) return;
+          m.joined = !(e.tags.some(t => t[0] === 'deleted') || !e.content);
+        } else { m.msgs++; }
+        ppl.set(e.pubkey, m); tally();
+      },
+      oneose() { tally(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+
   // relay configuration (persisted) — accepts ws:// or wss:// URLs
   setRelays(urls) {
     const list = [...new Set((urls || []).map(u => (u || '').trim()).filter(u => /^wss?:\/\//i.test(u)))];

@@ -425,6 +425,12 @@ function App() {
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchPlans)) { setChurchPlans([]); return; }
     return window.Fellowship.subscribeChurchPlans(np, setChurchPlans);
   }, [activeChurch, churches, connTick]);
+  // live member count for the active church (so the switcher doesn't read "0 members")
+  useAE(() => {
+    const c = churches.find(x => x.id === activeChurch);
+    if (!c || !c.npub || !(window.Fellowship && window.Fellowship.subscribeChurchMemberCount)) return;
+    return window.Fellowship.subscribeChurchMemberCount(c.npub, (n) => setChurches(cs => cs.map(x => x.id === activeChurch ? { ...x, members: n } : x)));
+  }, [activeChurch, connTick]);
   // devotionals the active church shares (text/Markdown reflections)
   const [churchDevos, setChurchDevos] = useA([]);
   const [openDevo, setOpenDevo] = useA(null);   // a church devotional opened for reading
