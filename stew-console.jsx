@@ -52,6 +52,10 @@ function StewWizard({ onDone }) {
   const [nip05, setNip05] = React.useState('');
   const [ownRelay, setOwnRelay] = React.useState(false);
   const last = step === WIZ_STEPS.length - 1;
+  // responsive: a phone/narrow window swaps the 296px step-rail for a compact top progress bar
+  const [vw, setVw] = React.useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  React.useEffect(() => { const f = () => setVw(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
+  const narrow = vw < 760;
   // publish the church's profile when leaving the identity step, so its name resolves for members
   const publishIdentity = () => {
     if (window.Steward && window.Steward.publishProfile) {
@@ -63,8 +67,20 @@ function StewWizard({ onDone }) {
 
   return (
     <ConsoleChrome>
-      <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
-        {/* rail */}
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: narrow ? 'column' : 'row' }}>
+        {/* mobile: compact top bar with a step-progress indicator (replaces the rail) */}
+        {narrow ? (
+          <div style={{ flexShrink: 0, borderBottom: '1px solid var(--line)', background: 'var(--surface)', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Halo size={22} color="var(--ink)" spark="var(--clay)" />
+            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
+            <div style={{ flex: 1 }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              {WIZ_STEPS.map((s, i) => <div key={s.key} style={{ width: i === step ? 18 : 7, height: 7, borderRadius: 999, background: i < step ? 'var(--sage)' : i === step ? 'var(--clay)' : 'var(--surface-2)', border: i > step ? '1px solid var(--line)' : 'none', transition: 'width .2s' }} />)}
+            </div>
+          </div>
+        ) : null}
+        {/* rail (desktop) */}
+        {!narrow ? (
         <div style={{ width: 296, flexShrink: 0, borderRight: '1px solid var(--line)', background: 'var(--surface)', padding: '34px 28px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 30 }}>
             <Halo size={30} color="var(--ink)" spark="var(--clay)" />
@@ -90,13 +106,14 @@ function StewWizard({ onDone }) {
             <Icon name="shield" size={15} color="var(--sage)" /> Takes about 10 minutes. Nothing is published until you’re ready.
           </div>
         </div>
+        ) : null}
 
         {/* body */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: '40px 48px' }}>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: narrow ? '22px 18px 28px' : '40px 48px' }}>
             <div style={{ maxWidth: 560 }}>
               <SkPill tint={last ? 'sage' : 'clay'}>Step {step + 1} of {WIZ_STEPS.length}</SkPill>
-              <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 34, letterSpacing: '-1px', margin: '16px 0 0', lineHeight: 1.05 }}>{WIZ_STEPS[step].t}</h1>
+              <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: narrow ? 25 : 34, letterSpacing: '-1px', margin: '14px 0 0', lineHeight: 1.06 }}>{WIZ_STEPS[step].t}</h1>
               {step === 0 && <WizKey />}
               {step === 1 && <WizIdentity name={name} setName={setName} nip05={nip05} setNip05={setNip05} />}
               {step === 2 && <WizRelays ownRelay={ownRelay} setOwnRelay={setOwnRelay} />}
@@ -104,7 +121,7 @@ function StewWizard({ onDone }) {
             </div>
           </div>
           {/* footer */}
-          <div style={{ flexShrink: 0, height: 78, borderTop: '1px solid var(--line)', background: 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 48px' }}>
+          <div style={{ flexShrink: 0, height: 72, borderTop: '1px solid var(--line)', background: 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: narrow ? '0 18px' : '0 48px' }}>
             <button className="sk-btn sk-btn--ghost" onClick={() => setStep(s => Math.max(0, s - 1))} style={{ visibility: step === 0 ? 'hidden' : 'visible' }}>
               <Icon name="chevL" size={16} color="currentColor" /> Back
             </button>
