@@ -6201,8 +6201,17 @@
         pendingProf = /* @__PURE__ */ new Set();
         if (!authors.length) return;
         authors.forEach((pk) => askedProf.add(pk));
+        try {
+          console.log("[TO names] querying", authors.length, "profiles over", churchRelays().length, "relays:", churchRelays().join(","));
+        } catch {
+        }
         let s = null;
         const done = () => {
+          const named = authors.filter((pk) => profiles[pk] && profiles[pk].name).length;
+          try {
+            console.log("[TO names] batch done:", named, "of", authors.length, "resolved");
+          } catch {
+          }
           authors.forEach((pk) => askedProf.delete(pk));
           try {
             s && s.close();
