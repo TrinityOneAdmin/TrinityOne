@@ -1226,10 +1226,10 @@ function NewPlanModal({ onClose }) {
   const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
   const isFuture = schedAt && schedAt * 1000 > Date.now();
   const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
-  const create = () => {
+  const create = (asDraft) => {
     if (!name.trim() || !lines.length) return;
     const days = lines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
-    window.Steward.publishPlan({ id: 'custom-' + Date.now().toString(36), title: name.trim(), sub: days.length + ' day' + (days.length === 1 ? '' : 's'), tag: tag.trim() || 'Custom', accent: 'var(--clay)', blurb: '', days, publishAt: isFuture ? schedAt : 0 });
+    window.Steward.publishPlan({ id: 'custom-' + Date.now().toString(36), title: name.trim(), sub: days.length + ' day' + (days.length === 1 ? '' : 's'), tag: tag.trim() || 'Custom', accent: 'var(--clay)', blurb: '', days, publishAt: isFuture ? schedAt : 0, draft: !!asDraft });
     onClose();
   };
   return (
@@ -1255,8 +1255,9 @@ function NewPlanModal({ onClose }) {
           </React.Fragment>
         ) : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={create} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }}><Icon name="check" size={16} color="#fff" /> Create &amp; share</button>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
+          <button onClick={() => create(true)} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }} title="Hold it — members won’t see it until you publish">Save as draft</button>
+          <button onClick={() => create(false)} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }}><Icon name="send" size={15} color="#fff" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
         </div>
       </div>
     </div>
@@ -1269,16 +1270,19 @@ function DashPlans() {
   const sharedIds = new Set(shared.map(p => p.id));
   const library = (window.SK && window.SK.planLibrary) || [];
   const available = library.filter(p => !sharedIds.has(p.id));
+  const planDrafts = shared.filter(p => p.draft);
   const PlanRow = ({ p, isShared }) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
       <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: p.accent || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14.5, display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title}</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: isShared && p.draft ? 0.7 : 1 }}>{p.title}</span>
+          {isShared && p.draft ? <span title="Hidden from members — press Publish to make it live" style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 800, letterSpacing: '.3px', color: 'var(--ink-2)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, padding: '2px 8px' }}><Icon name="pen" size={10} color="var(--ink-3)" /> DRAFT</span> : null}
           {isShared && p.publishAt && p.publishAt * 1000 > Date.now() ? <span title={'Members see it on ' + new Date(p.publishAt * 1000).toLocaleString()} style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 800, letterSpacing: '.3px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 8px' }}><Icon name="clock" size={11} color="var(--clay)" /> SCHEDULED</span> : null}
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{p.sub || (p.days ? p.days.length + ' days' : '')}{p.tag ? ' · ' + p.tag : ''}{isShared && p.publishAt && p.publishAt * 1000 > Date.now() ? ' · ' + new Date(p.publishAt * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</div>
       </div>
+      {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="#fff" /> Publish</button> : null}
       {isShared
         ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
         : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="#fff" /> Share</button>}
@@ -1288,7 +1292,10 @@ function DashPlans() {
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
       {creating ? <NewPlanModal onClose={() => setCreating(false)} /> : null}
       <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}
-        action={<button onClick={() => setCreating(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New plan</button>}>
+        action={<div style={{ display: 'flex', gap: 8 }}>
+          {planDrafts.length > 0 ? <button onClick={() => { if (confirm(`Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="#fff" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}
+          <button onClick={() => setCreating(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New plan</button>
+        </div>}>
         {shared.length === 0
           ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>No plans shared yet — make your own with “New plan”, or pick one from the library below.</div>
           : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{shared.map(p => <PlanRow key={p.id} p={p} isShared />)}</div>}
@@ -1329,12 +1336,14 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
     if (!title.trim()) setTitle(f.name.replace(/\.(txt|md|markdown)$/i, ''));
   };
   const canSave = title.trim() && (file ? !file.error : !!editing) && !busy;   // new needs a file; edit can reuse the old text
-  const create = () => {
+  const wasDraft = !editing || !!editing.draft;   // new uploads + held items default to draft; a live item stays live
+  // asDraft: true holds it (hidden from members); false publishes it (live now or on its schedule)
+  const create = (asDraft) => {
     if (!canSave) return;
     setBusy(true);
     const text = file ? file.text : (editing ? editing.text : '');
     const type = file ? file.type : (editing ? editing.type : 'txt');
-    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, type, text: text || '', order: editing ? editing.order : undefined })).then(() => onClose());
+    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, draft: !!asDraft, type, text: text || '', order: editing ? editing.order : undefined })).then(() => onClose());
   };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1368,8 +1377,15 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
           <input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" onChange={e => pick(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
         </label>
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={create} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: canSave ? 1 : 0.55 }}><Icon name={editing ? 'check' : 'send'} size={16} color="#fff" /> {busy ? 'Saving…' : (editing ? 'Save changes' : 'Share devotional')}</button>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
+          {wasDraft ? (
+            <React.Fragment>
+              <button onClick={() => create(true)} disabled={!canSave} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canSave ? 1 : 0.55 }} title="Hold it — members won’t see it until you publish">{busy ? '…' : 'Save as draft'}</button>
+              <button onClick={() => create(false)} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canSave ? 1 : 0.55 }}><Icon name="send" size={15} color="#fff" /> {busy ? 'Saving…' : (isFuture ? 'Schedule' : 'Publish now')}</button>
+            </React.Fragment>
+          ) : (
+            <button onClick={() => create(false)} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: canSave ? 1 : 0.55 }}><Icon name="check" size={16} color="#fff" /> {busy ? 'Saving…' : 'Save changes'}</button>
+          )}
         </div>
       </div>
     </div>
@@ -1387,6 +1403,7 @@ function DashDevotionals() {
   const [seriesSchedule, setSeriesSchedule] = React.useState(null);   // { items, label } when drip-scheduling a series
   // the list to show: the live order, unless we're mid-drag with a local working order
   const list = order || devos;
+  const draftCount = devos.filter(d => d.draft).length;   // held items not yet visible to members
   const [seriesOpen, setSeriesOpen] = React.useState({});   // collapsible series sections (keyed by series id)
   const [churchName, setChurchName] = React.useState('');   // labels a series group by the church that uploaded it
   React.useEffect(() => {
@@ -1409,15 +1426,21 @@ function DashDevotionals() {
     out.forEach(g => { if (!g.series) return; g.label = (g.named ? g.key.slice(5) : '') || churchName || 'Devotionals'; });
     return out;
   })();
+  // re-publish a devotional carrying ALL its fields, with optional overrides — so an edit to order/series/
+  // schedule never silently drops the draft state, text, or anything else.
+  const republish = (d, over) => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: d.series, publishAt: d.publishAt, draft: d.draft, ...over });
   // give a group an explicit name (also migrates a legacy "Series N" group): re-publish each with the new series
-  const renameSeries = (items, name) => { items.forEach(d => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: name, publishAt: d.publishAt })); };
+  const renameSeries = (items, name) => { items.forEach(d => republish(d, { series: name })); };
   // drip-release a series: stagger each item's publishAt by `interval` seconds from `startSec`, in display
-  // order. A start at/below now means the first item publishes immediately; the rest land on the cadence.
-  const scheduleSeries = (items, startSec, intervalSec) => { items.forEach((d, i) => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: d.series, publishAt: startSec + i * intervalSec })); };
-  // clear all schedules in a series (publish everything now)
-  const unscheduleSeries = (items) => { items.forEach(d => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: d.series, publishAt: 0 })); };
-  // persist a new order: number each devotional by position, re-publish only the ones that changed (keep series)
-  const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, series: d.series, order: i, publishAt: d.publishAt }); }); };
+  // order. Keeps draft state — the steward still presses Publish to make the schedule live.
+  const scheduleSeries = (items, startSec, intervalSec) => { items.forEach((d, i) => republish(d, { publishAt: startSec + i * intervalSec })); };
+  // "Publish all now" from the schedule dialog: clear schedules AND go live (drop draft)
+  const unscheduleSeries = (items) => { items.forEach(d => republish(d, { publishAt: 0, draft: false })); };
+  // master publish: take held drafts live, keeping each one's schedule (a scheduled draft stays hidden
+  // until its date; an unscheduled one goes live now)
+  const publishDrafts = (items) => { items.filter(d => d.draft).forEach(d => republish(d, { draft: false })); };
+  // persist a new order: number each devotional by position, re-publish only the ones that changed (keep series + draft)
+  const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) republish(d, { order: i }); }); };
   // sort the list and bake it into the saved order (so the member app shows the same). "number" is a
   // numeric-aware title sort, so "Day 2" comes before "Day 10".
   // pull the SERIES number from a title ("Series 3", "Series #3", "Series03"); fall back to a leading
@@ -1452,6 +1475,7 @@ function DashDevotionals() {
       {seriesSchedule ? <SeriesScheduleModal label={seriesSchedule.label} count={seriesSchedule.items.length} onApply={(start, interval) => scheduleSeries(seriesSchedule.items, start, interval)} onClear={() => unscheduleSeries(seriesSchedule.items)} onClose={() => setSeriesSchedule(null)} /> : null}
       <Panel scroll title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
+          {draftCount > 0 ? <button onClick={() => { if (confirm(`Publish ${draftCount} draft${draftCount === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) publishDrafts(devos); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held drafts live (keeping any schedules)"><Icon name="send" size={15} color="#fff" /> Publish {draftCount} draft{draftCount === 1 ? '' : 's'}</button> : null}
           <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
           <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Upload devotional</button>
         </div>} style={{ height: '100%' }}>
@@ -1483,11 +1507,13 @@ function DashDevotionals() {
                 <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14.5, display: 'flex', alignItems: 'center', gap: 7 }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: d.draft ? 0.7 : 1 }}>{d.title}</span>
+                    {d.draft ? <span title="Hidden from members — press Publish to make it live" style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 800, letterSpacing: '.3px', color: 'var(--ink-2)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, padding: '2px 8px' }}><Icon name="pen" size={10} color="var(--ink-3)" /> DRAFT</span> : null}
                     {d.publishAt && d.publishAt * 1000 > Date.now() ? <span title={'Members see it on ' + new Date(d.publishAt * 1000).toLocaleString()} style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 800, letterSpacing: '.3px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 8px' }}><Icon name="clock" size={11} color="var(--clay)" /> SCHEDULED</span> : null}
                   </div>
                   <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[d.ref, (d.type || '').toUpperCase(), d.publishAt && d.publishAt * 1000 > Date.now() ? new Date(d.publishAt * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''].filter(Boolean).join(' · ')}</div>
                 </div>
+                {d.draft ? <button onClick={() => republish(d, { draft: false })} title="Publish this one now" style={{ border: 'none', background: 'var(--clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: '#fff', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="send" size={13} color="#fff" /> Publish</button> : null}
                 <button onClick={() => setEditing(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
                 <button onClick={() => window.Steward.removeDevotional(d.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
               </div>
@@ -1499,7 +1525,7 @@ function DashDevotionals() {
                     <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={17} color="currentColor" /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.label}</div>
-                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.items.length} devotionals{g.named ? '' : ' · unnamed'}</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.items.length} devotionals{g.named ? '' : ' · unnamed'}{g.items.some(d => d.draft) ? ` · ${g.items.filter(d => d.draft).length} draft` : ''}</div>
                     </div>
                     <button onClick={(e) => { e.stopPropagation(); setSeriesSchedule({ items: g.items, label: g.label }); }}
                       title="Drip-release this series on a cadence" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="clock" size={13} color="currentColor" /> Schedule</button>
@@ -1559,8 +1585,10 @@ function BulkUploadModal({ kind, onClose }) {
     for (let i = 0; i < valid.length; i++) {
       const it = valid[i];
       try {
-        if (isPlans) await Promise.resolve(window.Steward.publishPlan({ id: 'bulk-' + Date.now().toString(36) + i, title: it.title, sub: it.count + ' day' + (it.count === 1 ? '' : 's'), tag: 'Custom', accent: 'var(--clay)', blurb: '', days: it.days }));
-        else await Promise.resolve(window.Steward.publishDevotional({ title: it.title, ref: it.ref || '', type: 'txt', text: it.text }));
+        // bulk uploads land as DRAFTS so the steward can arrange + schedule a series before any of it
+        // reaches members — then they publish (or schedule) it deliberately.
+        if (isPlans) await Promise.resolve(window.Steward.publishPlan({ id: 'bulk-' + Date.now().toString(36) + i, title: it.title, sub: it.count + ' day' + (it.count === 1 ? '' : 's'), tag: 'Custom', accent: 'var(--clay)', blurb: '', days: it.days, draft: true }));
+        else await Promise.resolve(window.Steward.publishDevotional({ title: it.title, ref: it.ref || '', type: 'txt', text: it.text, draft: true }));
       } catch (e) {}
       setDone(d => d + 1);
     }
@@ -1572,7 +1600,7 @@ function BulkUploadModal({ kind, onClose }) {
       <div onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '96%', maxHeight: '90%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenScale .2s ease both' }}>
         <div style={{ padding: '24px 26px 0' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Bulk upload {isPlans ? 'reading plans' : 'devotionals'}</div>
-          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Drop one or more text files — each file becomes a plan, with one Bible reference per line (a “# Title” first line is used as the name).' : 'Drop one or more Markdown / text files — each becomes a devotional. The first “# Heading” (or the filename) is the title.'}</p>
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Drop one or more text files — each file becomes a plan, with one Bible reference per line (a “# Title” first line is used as the name).' : 'Drop one or more Markdown / text files — each becomes a devotional. The first “# Heading” (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
         </div>
         <div style={{ padding: '0 26px' }}>
           <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }} onClick={() => inputRef.current && inputRef.current.click()}
@@ -1606,7 +1634,7 @@ function BulkUploadModal({ kind, onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 26px 20px', borderTop: '1px solid var(--line)' }}>
           <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink-3)' }}>{busy ? `Publishing… ${done}/${valid.length}` : (valid.length ? `${valid.length} ready${items.length - valid.length ? ` · ${items.length - valid.length} skipped` : ''}` : 'No files yet')}</div>
           <button onClick={onClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, opacity: busy ? .5 : 1 }}>Cancel</button>
-          <button onClick={publishAll} disabled={busy || !valid.length} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 13.5, opacity: (busy || !valid.length) ? .5 : 1 }}><Icon name="send" size={15} color="#fff" /> Publish {valid.length || ''}</button>
+          <button onClick={publishAll} disabled={busy || !valid.length} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 13.5, opacity: (busy || !valid.length) ? .5 : 1 }}><Icon name="plus" size={15} color="#fff" /> Add {valid.length || ''} as draft{valid.length === 1 ? '' : 's'}</button>
         </div>
       </div>
     </div>

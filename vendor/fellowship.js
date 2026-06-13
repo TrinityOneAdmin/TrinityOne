@@ -5789,7 +5789,7 @@
   var NET = "trinityone";
   function scheduleVisible(list) {
     const nowS = Math.floor(Date.now() / 1e3);
-    return list.filter((m) => !m.publishAt || m.publishAt <= nowS);
+    return list.filter((m) => !m.draft && (!m.publishAt || m.publishAt <= nowS));
   }
   function scheduleNextReveal(list, timer, emit) {
     if (timer) {

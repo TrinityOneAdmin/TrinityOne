@@ -50,7 +50,7 @@ const NET = 'trinityone';                       // network-wide tag
 // reveals it on time, no reload). Items with no publishAt (or one already past) are always visible.
 function scheduleVisible(list) {
   const nowS = Math.floor(Date.now() / 1000);
-  return list.filter(m => !m.publishAt || m.publishAt <= nowS);
+  return list.filter(m => !m.draft && (!m.publishAt || m.publishAt <= nowS));
 }
 function scheduleNextReveal(list, timer, emit) {
   if (timer) { clearTimeout(timer); timer = null; }

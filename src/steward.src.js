@@ -434,7 +434,7 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = plan.id || ('plan' + Date.now());
     const pubAt = plan.publishAt && plan.publishAt > now() ? Math.floor(plan.publishAt) : 0;   // schedule: members hide until this unix-sec time
-    const content = JSON.stringify({ id, title: plan.title || 'Plan', sub: plan.sub || '', tag: plan.tag || '', accent: plan.accent || 'var(--clay)', blurb: plan.blurb || '', days: plan.days || [], publishAt: pubAt });
+    const content = JSON.stringify({ id, title: plan.title || 'Plan', sub: plan.sub || '', tag: plan.tag || '', accent: plan.accent || 'var(--clay)', blurb: plan.blurb || '', days: plan.days || [], publishAt: pubAt, draft: !!plan.draft });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', PLAN_D + id], ['t', NET]], content }, signer))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },
@@ -467,6 +467,7 @@ window.Steward = {
     if (typeof devo.order === 'number') base.order = devo.order;   // steward-controlled display order (lower = first)
     if (devo.series) base.series = String(devo.series).slice(0, 80);   // the named series this devotional belongs to (groups it in both apps)
     if (devo.publishAt && devo.publishAt > now()) base.publishAt = Math.floor(devo.publishAt);   // schedule: members hide it until this unix-sec time; the steward still sees it
+    if (devo.draft) base.draft = true;   // held: hidden from members until the steward publishes (regardless of publishAt)
     const content = JSON.stringify(base);
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', DEVO_D + id], ['t', NET]], content }, sk))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
@@ -486,7 +487,7 @@ window.Steward = {
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', publishAt: c.publishAt || 0, hasFile: !!c.text, ts: e.created_at }); emit(); } catch {}
+        try { const c = JSON.parse(e.content); byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });

@@ -10149,7 +10149,7 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = plan.id || "plan" + Date.now();
       const pubAt = plan.publishAt && plan.publishAt > now() ? Math.floor(plan.publishAt) : 0;
-      const content = JSON.stringify({ id, title: plan.title || "Plan", sub: plan.sub || "", tag: plan.tag || "", accent: plan.accent || "var(--clay)", blurb: plan.blurb || "", days: plan.days || [], publishAt: pubAt });
+      const content = JSON.stringify({ id, title: plan.title || "Plan", sub: plan.sub || "", tag: plan.tag || "", accent: plan.accent || "var(--clay)", blurb: plan.blurb || "", days: plan.days || [], publishAt: pubAt, draft: !!plan.draft });
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", PLAN_D + id], ["t", NET]], content }, signer)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
     removePlan(id) {
@@ -10195,6 +10195,7 @@ zoo`.split("\n");
       if (typeof devo.order === "number") base.order = devo.order;
       if (devo.series) base.series = String(devo.series).slice(0, 80);
       if (devo.publishAt && devo.publishAt > now()) base.publishAt = Math.floor(devo.publishAt);
+      if (devo.draft) base.draft = true;
       const content = JSON.stringify(base);
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", DEVO_D + id], ["t", NET]], content }, sk)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
@@ -10218,7 +10219,7 @@ zoo`.split("\n");
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, series: c.series || "", publishAt: c.publishAt || 0, hasFile: !!c.text, ts: e.created_at });
+            byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, series: c.series || "", publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at });
             emit();
           } catch {
           }
