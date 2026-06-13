@@ -153,6 +153,14 @@ pool.automaticallyAuth = () => async (authEvent) => {
   if (!sk) throw new Error('no key');
   return finalizeEvent(authEvent, sk);
 };
+// NIP-42 auth is best-effort: public church reads are NOT auth-gated, so a slow/failed auth handshake
+// (e.g. "auth timed out" over a tunnel) must never surface as an uncaught error or block anything.
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (e) => {
+    const m = e && e.reason && (e.reason.message || String(e.reason));
+    if (m && /auth[\s-]?(timed out|required|failed)|no key/i.test(m)) e.preventDefault();
+  });
+}
 
 // kind-0 profile metadata cache (pubkey -> {name, picture, about, nip05}). Persisted to localStorage so
 // names/handles show INSTANTLY on the next load (chat, the People directory) instead of resolving fresh.

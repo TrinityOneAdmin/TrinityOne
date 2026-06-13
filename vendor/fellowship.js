@@ -5888,6 +5888,12 @@
     if (!sk) throw new Error("no key");
     return finalizeEvent2(authEvent, sk);
   };
+  if (typeof window !== "undefined") {
+    window.addEventListener("unhandledrejection", (e) => {
+      const m = e && e.reason && (e.reason.message || String(e.reason));
+      if (m && /auth[\s-]?(timed out|required|failed)|no key/i.test(m)) e.preventDefault();
+    });
+  }
   var profiles = {};
   var pendingProfiles = /* @__PURE__ */ new Set();
   var PROFILE_KEY = "trinityone.profile";

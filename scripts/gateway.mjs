@@ -634,7 +634,10 @@ wss.on('connection', ws => {
   ws.isAlive = true;
   ws._auth = null;                                    // pubkey once the client proves it via NIP-42 AUTH
   ws._challenge = randomBytes(16).toString('hex');    // per-connection nonce
-  try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {}   // invite-only reads need an authed connection
+  // Only challenge for auth if this relay actually hosts an invite-only group — otherwise every member
+  // pays a NIP-42 auth round-trip (which times out over a slow tunnel and stalls the load) for nothing.
+  const _hasInviteGroups = [...GROUP_VIS.values()].some(v => v === 'invite');
+  if (_hasInviteGroups) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', raw => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
