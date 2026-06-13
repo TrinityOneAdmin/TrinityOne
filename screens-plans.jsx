@@ -67,6 +67,52 @@ function DevoSeries({ group, ctx }) {
   );
 }
 
+// a church devotional series as a featured hero (like the plan hero): Begin/Continue opens the next
+// unread devotional; "See all" expands the full list with read-ticks.
+function DevoSeriesHero({ group, ctx }) {
+  const [open, setOpen] = React.useState(false);
+  const prog = ctx.devoProgress || {};
+  const read = (d) => !!(prog[d.id] && prog[d.id].length);
+  const next = group.items.find(d => !read(d)) || group.items[0];
+  const started = group.items.some(read);
+  return (
+    <div style={{ marginBottom: 16, animation: 'trinityFade .5s ease .06s both' }}>
+      <div onClick={() => ctx.openChurchDevo(next)} style={{
+        borderRadius: 24, padding: 20, cursor: 'pointer', position: 'relative', overflow: 'hidden',
+        background: 'linear-gradient(150deg, var(--sage), #2f5640)', color: '#fff', boxShadow: 'var(--shadow-lg)',
+      }}>
+        <div style={{ position: 'absolute', right: -30, top: -30, opacity: .16 }}><Icon name="read" size={170} stroke={1.2} color="#fff" /></div>
+        <div style={{ position: 'relative' }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>Devotional series</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '6px 0 2px', lineHeight: 1.1 }}>{group.name}</div>
+          <div style={{ fontSize: 13.5, opacity: .92, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.items.length} devotionals · {next.title}</div>
+          <button onClick={(e) => { e.stopPropagation(); ctx.openChurchDevo(next); }} style={{ marginTop: 16, width: '100%', padding: '12px', borderRadius: 14, border: 'none',
+            background: '#fff', color: '#2f5640', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {started ? 'Continue' : 'Begin'} · {next.title}
+          </button>
+        </div>
+      </div>
+      <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', marginTop: 8, padding: '9px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+        {open ? 'Hide list' : `See all ${group.items.length}`} <Icon name={open ? 'chevU' : 'chevD'} size={15} color="var(--clay)" />
+      </button>
+      {open ? (
+        <div style={{ marginTop: 8, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', overflow: 'hidden' }}>
+          {group.items.map((d, i) => (
+            <div key={d.id} onClick={() => ctx.openChurchDevo(d)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 12px', borderTop: i ? '1px solid var(--line)' : 'none', cursor: 'pointer' }}>
+              <div style={{ width: 26, height: 26, borderRadius: 8, flexShrink: 0, background: read(d) ? 'var(--sage)' : 'var(--surface-2)', color: read(d) ? '#fff' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 12 }}>{read(d) ? <Icon name="check" size={14} stroke={2.6} color="#fff" /> : i + 1}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{d.ref || 'A reflection'}</div>
+              </div>
+              <Icon name="chevR" size={15} color="var(--ink-3)" />
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PlanCard({ p, ctx, onClick, corner }) {
   const done = doneDays(ctx, p.id).length;
   const pct = p.len ? done / p.len : 0;
@@ -194,7 +240,7 @@ function PlansScreen({ ctx }) {
             return (
               <React.Fragment>
                 <SectionLabel>Devotionals from {churchName}</SectionLabel>
-                {groups.length ? <div style={{ marginBottom: singles.length ? 12 : 22 }}>{groups.map(g => <DevoSeries key={g.name} group={g} ctx={ctx} />)}</div> : null}
+                {groups.length ? <div style={{ marginBottom: singles.length ? 12 : 22 }}>{groups.map(g => <DevoSeriesHero key={g.name} group={g} ctx={ctx} />)}</div> : null}
                 {singles.length ? (
                   <div style={{ ...grid, animationDelay: '.1s' }}>
                     {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
@@ -218,6 +264,20 @@ function PlansScreen({ ctx }) {
           <div style={{ ...grid, animationDelay: '.1s' }}>
             {D.PLANS.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, inMine(p))} />)}
           </div>
+          {(ctx.churchDevos || []).length ? (() => {
+            const { groups, singles } = groupDevosBySeries(ctx.churchDevos);
+            return (
+              <React.Fragment>
+                <SectionLabel>{churchName} devotionals</SectionLabel>
+                {groups.map(g => <DevoSeries key={g.name} group={g} ctx={ctx} />)}
+                {singles.length ? (
+                  <div style={{ ...grid, animationDelay: '.1s' }}>
+                    {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
+                  </div>
+                ) : null}
+              </React.Fragment>
+            );
+          })() : null}
         </React.Fragment>
       )}
     </ScreenScroll>
