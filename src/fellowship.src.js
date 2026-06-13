@@ -98,10 +98,18 @@ pool.automaticallyAuth = () => async (authEvent) => {
   return finalizeEvent(authEvent, sk);
 };
 
-// kind-0 profile metadata cache (pubkey -> {name, picture, about})
+// kind-0 profile metadata cache (pubkey -> {name, picture, about, nip05}). Persisted to localStorage so
+// names/handles show INSTANTLY on the next load (chat, the People directory) instead of resolving fresh.
 const profiles = {};
 const pendingProfiles = new Set();
 const PROFILE_KEY = 'trinityone.profile';   // own display name (public; ok in localStorage)
+const PROFILES_KEY = 'trinityone.profiles'; // cache of OTHER people's resolved profiles
+try { const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || '{}'); if (c && typeof c === 'object') Object.assign(profiles, c); } catch {}
+let _profSaveT = null;
+function saveProfiles() {
+  if (_profSaveT) return;
+  _profSaveT = setTimeout(() => { _profSaveT = null; try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)); } catch {} }, 800);
+}
 
 const AV_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 'crook', 'chalice', 'olive', 'mountain', 'well', 'star'];
 // resolved display = kind-0 name/avatar if known, else a deterministic anonymous handle + symbol
@@ -245,6 +253,42 @@ window.Fellowship = {
     return () => { try { sub.close(); } catch {} };
   },
 
+  // the church's people, for a member-facing directory: distinct folks (not the church) who joined
+  // (member:<church>) or posted (kind-1 p-tagged), with their kind-0 profile resolved. Same rule the
+  // steward uses. Blocked members are withheld by the relay. The UI filters out the current user.
+  subscribeChurchMembers(churchNpub, onMembers) {
+    const cp = toPub(churchNpub); if (!cp) { onMembers([]); return () => {}; }
+    const MEMBER_D = 'trinityone/member:';
+    const byPub = new Map();          // pubkey -> { pubkey, npub, name, nip05, picture, joined, lastTs, msgs }
+    const profSubs = new Map();
+    const emit = (done) => onMembers([...byPub.values()].filter(m => m.joined || m.msgs > 0).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)), !!done);
+    // seed name/nip05 from the persisted profile cache so known members render instantly (no resolve lag)
+    const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || '', nip05: (profiles[pk] || {}).nip05 || '', picture: (profiles[pk] || {}).picture || '', joined: 0, lastTs: 0, msgs: 0 };
+    const ensureProfile = (pk) => {
+      if (profSubs.has(pk)) return;
+      const s = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pk] }], {
+        onevent(e) { try { const meta = JSON.parse(e.content); profiles[pk] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', av: meta.av || undefined }; saveProfiles(); const m = byPub.get(pk); if (m) { m.name = profiles[pk].name; m.picture = profiles[pk].picture; m.nip05 = profiles[pk].nip05; emit(); } } catch {} },
+        oneose() {},
+      });
+      profSubs.set(pk, s);
+    };
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
+      onevent(e) {
+        if (e.pubkey === cp) return;
+        const m = get(e.pubkey);
+        if (e.kind === 30078) {
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          if (d.indexOf(MEMBER_D) !== 0) return;
+          const left = e.tags.some(t => t[0] === 'deleted') || !e.content;
+          if (left) m.joined = 0; else { let j = e.created_at; try { j = JSON.parse(e.content).joined || e.created_at; } catch {} m.joined = j; }
+        } else { m.msgs++; if (e.created_at > m.lastTs) m.lastTs = e.created_at; }
+        byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit();
+      },
+      oneose() { emit(true); },   // initial load complete
+    });
+    return () => { try { sub.close(); } catch {} for (const s of profSubs.values()) { try { s.close(); } catch {} } };
+  },
+
   // relay configuration (persisted) — accepts ws:// or wss:// URLs
   setRelays(urls) {
     const list = [...new Set((urls || []).map(u => (u || '').trim()).filter(u => /^wss?:\/\//i.test(u)))];
@@ -282,14 +326,16 @@ window.Fellowship = {
 
   // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
   requestProfiles(pubkeys) {
-    const need = [...new Set(pubkeys)].filter(pk => pk && !(pk in profiles) && !pendingProfiles.has(pk));
+    // refetch when unknown, or cached-without-a-name (so a member who later picks a name updates)
+    const need = [...new Set(pubkeys)].filter(pk => pk && !pendingProfiles.has(pk) && (!(pk in profiles) || !(profiles[pk] && profiles[pk].name)));
     if (!need.length) return;
     need.forEach(pk => pendingProfiles.add(pk));
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: need }], {
       onevent(e) {
         try {
           const m = JSON.parse(e.content);
-          profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '', av: m.av || undefined };
+          profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', av: m.av || undefined };
+          saveProfiles();
           window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } }));
         } catch {}
       },

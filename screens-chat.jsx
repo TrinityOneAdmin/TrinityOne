@@ -452,6 +452,15 @@ function ChatScreen({ ctx }) {
       <React.Fragment>
       <ServingEntry ctx={ctx} />
 
+      <button onClick={() => ctx.openPeople()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '13px 14px', marginBottom: 22, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
+        <div style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="users" size={20} color="currentColor" /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>People</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Find someone in your church and message them</div>
+        </div>
+        <Icon name="chevR" size={18} color="var(--ink-3)" />
+      </button>
+
       {teamGroups.length ? (
         <React.Fragment>
           <SectionLabel>Teams</SectionLabel>
@@ -1105,4 +1114,83 @@ function DMInbox({ open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { ChatScreen, ChatRoom, VerseShareSheet, DMThread, DMInbox });
+// ── People: the church directory — find a member and message them ──
+function PeopleScreen({ open, onClose, ctx }) {
+  const FS = window.Fellowship;
+  const [members, setMembers] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [q, setQ] = React.useState('');
+  const np = ctx.church && ctx.church.npub;
+  React.useEffect(() => {
+    if (!open || !np || !FS || !FS.subscribeChurchMembers) { setMembers([]); setLoading(false); return; }
+    setLoading(true);
+    const t = setTimeout(() => setLoading(false), 9000);   // safety: stop spinning even on a slow relay
+    const off = FS.subscribeChurchMembers(np, (m, done) => { setMembers(m); if (done) { setLoading(false); clearTimeout(t); } });
+    return () => { clearTimeout(t); if (off) off(); };
+  }, [open, np]);
+  const me = FS && FS.myPubkey;
+  // a member's display: their chosen name, else their @handle (nip05 local part), else the anonymous handle
+  const nameOf = (m) => (m.name && m.name.trim()) || (m.nip05 ? String(m.nip05).split('@')[0] : '') || FS.displayFor(m.pubkey).handle;
+  const ql = q.trim().toLowerCase();
+  const people = members.filter(m => m.pubkey !== me);
+  const list = people.filter(m => !ql || nameOf(m).toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql));
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
+          <IconBtn name="chevL" onClick={onClose} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700 }}>People</h1>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{(ctx.church && ctx.church.name) || 'Your church'} · {people.length} {people.length === 1 ? 'person' : 'people'}</div>
+          </div>
+        </div>
+        <div style={{ padding: '6px 16px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 13px', height: 44, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            <Icon name="study" size={17} color="var(--ink-3)" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search people…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
+          </div>
+        </div>
+      </div>
+      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 16px 30px' }}>
+        {(!FS.myProfile || !(FS.myProfile.name && FS.myProfile.name.trim())) ? (
+          <div onClick={() => { onClose(); ctx.openProfile(); }} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', margin: '4px 0 12px', borderRadius: 14, cursor: 'pointer', background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)' }}>
+            <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, background: 'var(--clay)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pen" size={17} color="#fff" /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>Add your name</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.4 }}>You’re showing as “{me ? FS.displayFor(me).handle : 'Anonymous'}”. A name helps your church know you.</div>
+            </div>
+            <Icon name="chevR" size={17} color="var(--clay)" />
+          </div>
+        ) : null}
+        {loading && people.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '54px 24px', color: 'var(--ink-3)' }}>
+            <div style={{ width: 26, height: 26, margin: '0 auto', borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+            <p style={{ marginTop: 14, fontSize: 14 }}>Loading people…</p>
+          </div>
+        ) : list.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '54px 24px', color: 'var(--ink-3)' }}>
+            <Icon name="users" size={30} color="var(--ink-3)" />
+            <p style={{ margin: '12px 0 0', fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.5, maxWidth: 260, marginLeft: 'auto', marginRight: 'auto' }}>{q ? 'No one matches that.' : 'No one else has joined yet. As your church follows along, they’ll show up here to chat with.'}</p>
+          </div>
+        ) : list.map(m => {
+          const d = FS.displayFor(m.pubkey);
+          const name = nameOf(m);
+          const local = m.nip05 ? String(m.nip05).split('@')[0] : '';
+          const dup = local && name.toLowerCase().replace(/[^a-z0-9]+/g, '') === local.toLowerCase();   // name already is the handle
+          return (
+            <div key={m.pubkey} onClick={() => { onClose(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 6px', borderBottom: '1px solid var(--line-2)', cursor: 'pointer' }}>
+              <UserAvatar av={avOf(d)} name={name} size={44} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+                {local && !dup ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--ink-3)' }}>@{local}<Icon name="check" size={11} stroke={3} color="var(--sage)" /></div> : null}
+              </div>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', borderRadius: 999, padding: '7px 12px', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}><Icon name="chat" size={14} color="currentColor" /> Message</span>
+            </div>
+          );
+        })}
+      </div>
+    </Overlay>
+  );
+}
+
+Object.assign(window, { ChatScreen, ChatRoom, VerseShareSheet, DMThread, DMInbox, PeopleScreen });
