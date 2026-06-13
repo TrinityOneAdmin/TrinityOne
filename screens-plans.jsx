@@ -27,7 +27,7 @@ function DevoCard({ d, onClick }) {
   );
 }
 
-function PlanCard({ p, ctx, onClick }) {
+function PlanCard({ p, ctx, onClick, corner }) {
   const done = doneDays(ctx, p.id).length;
   const pct = p.len ? done / p.len : 0;
   return (
@@ -35,6 +35,7 @@ function PlanCard({ p, ctx, onClick }) {
       borderRadius: 22, overflow: 'hidden', cursor: 'pointer', position: 'relative',
       background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)',
     }}>
+      {corner ? <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 2 }}>{corner}</div> : null}
       <div style={{ height: 80, background: p.accent, position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 80% 0%, rgba(255,255,255,.3), transparent 55%)' }} />
         <div style={{ position: 'absolute', right: -16, bottom: -22, opacity: .2 }}><Icon name="read" size={120} stroke={1.3} color="#fff" /></div>
@@ -61,16 +62,40 @@ function PlanCard({ p, ctx, onClick }) {
 
 function PlansScreen({ ctx }) {
   const D = window.TrinityData;
-  const [discoverOpen, setDiscoverOpen] = useP(false);   // expand the full "Discover plans" grid
+  const [tab, setTab] = useP('mine');                  // 'mine' | 'browse'
   const churchPlans = ctx.churchPlans || [];           // plans the church's steward shared
   const churchName = (ctx.church && ctx.church.name) || 'your church';
   const allPlans = [...churchPlans, ...D.PLANS];
-  // active = most-progressed started plan, else the first
-  const started = allPlans.filter(p => doneDays(ctx, p.id).length > 0);
-  const active = (started.sort((a, b) => doneDays(ctx, b.id).length - doneDays(ctx, a.id).length)[0]) || allPlans[0];
-  const aDone = doneDays(ctx, active.id).length;
-  const aPct = active.len ? aDone / active.len : 0;
-  const aNext = nextDay(active, new Set(doneDays(ctx, active.id)));
+  const isChurch = (p) => churchPlans.some(c => c.id === p.id);
+  const followed = ctx.plansFollowed || [], hidden = ctx.plansHidden || [];
+  // My Plans = church plans (unless the member removed one) + discover plans the member added
+  const inMine = (p) => isChurch(p) ? !hidden.includes(p.id) : followed.includes(p.id);
+  const myPlans = allPlans.filter(inMine);
+  // featured = the steward's NEXT plan — the first church plan in My Plans that isn't finished; failing
+  // that, the most-progressed plan I'm in, else the first available.
+  const fin = (p) => p.len && doneDays(ctx, p.id).length >= p.len;
+  const startedMine = myPlans.filter(p => doneDays(ctx, p.id).length > 0).sort((a, b) => doneDays(ctx, b.id).length - doneDays(ctx, a.id).length);
+  const featured = churchPlans.filter(inMine).find(p => !fin(p)) || startedMine[0] || myPlans[0] || allPlans[0];
+  const fDone = featured ? doneDays(ctx, featured.id).length : 0;
+  const fPct = featured && featured.len ? fDone / featured.len : 0;
+  const fNext = featured ? nextDay(featured, new Set(doneDays(ctx, featured.id))) : null;
+  const rest = myPlans.filter(p => !featured || p.id !== featured.id);
+
+  // a small corner button on a card: remove (✕) in My Plans, add/added (＋/✓) in Browse
+  const cornerBtn = (p, added) => (
+    <button onClick={(e) => { e.stopPropagation(); ctx.setPlanInMine(p.id, !added, isChurch(p)); }}
+      title={added ? 'Remove from My Plans' : 'Add to My Plans'} aria-label={added ? 'Remove from My Plans' : 'Add to My Plans'}
+      style={{ width: 30, height: 30, borderRadius: 999, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: added ? 'var(--sage)' : 'rgba(0,0,0,.4)', color: '#fff', backdropFilter: 'blur(3px)' }}>
+      <Icon name={added ? 'check' : 'plus'} size={15} stroke={added ? 3 : 2.4} color="#fff" />
+    </button>
+  );
+  const grid = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22, animation: 'trinityFade .5s ease .08s both' };
+  const seg = { display: 'flex', gap: 4, padding: 4, borderRadius: 15, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 22 };
+  const segBtn = (k, label) => (
+    <button key={k} onClick={() => setTab(k)} style={{ flex: 1, padding: '10px', borderRadius: 11, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5,
+      background: tab === k ? 'var(--surface)' : 'transparent', color: tab === k ? 'var(--ink)' : 'var(--ink-3)', boxShadow: tab === k ? 'var(--shadow)' : 'none' }}>{label}</button>
+  );
 
   return (
     <ScreenScroll>
@@ -78,57 +103,77 @@ function PlansScreen({ ctx }) {
       <h1 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'trinityFade .5s ease both' }}>Reading Plans</h1>
       <p style={{ margin: '0 0 20px', color: 'var(--ink-2)', fontSize: 14.5, lineHeight: 1.4 }}>A little every day. Pick a path and let it carry you.</p>
 
-      {/* active plan */}
-      <div onClick={() => ctx.openPlan(active)} style={{
-        borderRadius: 24, padding: 20, cursor: 'pointer', marginBottom: 24, position: 'relative', overflow: 'hidden',
-        background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow-lg)',
-        animation: 'trinityFade .5s ease .05s both',
-      }}>
-        <div style={{ position: 'absolute', right: -30, top: -30, opacity: .16 }}><Icon name="read" size={170} stroke={1.2} color="#fff" /></div>
-        <div style={{ position: 'relative' }}>
-          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>{aDone ? 'Currently reading' : 'Start a plan'}</div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, margin: '6px 0 2px' }}>{active.title}</div>
-          <div style={{ fontSize: 13.5, opacity: .92 }}>Day {aNext.d} · {aNext.label}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16 }}>
-            <div style={{ flex: 1, height: 7, borderRadius: 4, background: 'rgba(255,255,255,.25)', overflow: 'hidden' }}>
-              <div style={{ width: `${aPct * 100}%`, height: '100%', background: '#fff', borderRadius: 4 }} />
+      <div style={seg}>{segBtn('mine', 'My Plans')}{segBtn('browse', 'Browse')}</div>
+
+      {tab === 'mine' ? (
+        <React.Fragment>
+          {featured ? (
+            <div onClick={() => ctx.openPlan(featured)} style={{
+              borderRadius: 24, padding: 20, cursor: 'pointer', marginBottom: 24, position: 'relative', overflow: 'hidden',
+              background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow-lg)',
+              animation: 'trinityFade .5s ease .05s both',
+            }}>
+              <div style={{ position: 'absolute', right: -30, top: -30, opacity: .16 }}><Icon name="read" size={170} stroke={1.2} color="#fff" /></div>
+              <div style={{ position: 'relative' }}>
+                <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>{isChurch(featured) ? `Next from ${churchName}` : (fDone ? 'Currently reading' : 'Start a plan')}</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, margin: '6px 0 2px' }}>{featured.title}</div>
+                <div style={{ fontSize: 13.5, opacity: .92 }}>Day {fNext.d} · {fNext.label}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16 }}>
+                  <div style={{ flex: 1, height: 7, borderRadius: 4, background: 'rgba(255,255,255,.25)', overflow: 'hidden' }}>
+                    <div style={{ width: `${fPct * 100}%`, height: '100%', background: '#fff', borderRadius: 4 }} />
+                  </div>
+                  <span style={{ fontWeight: 700, fontSize: 13 }}>{Math.round(fPct * 100)}%</span>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); ctx.openPlanDay(featured, fNext); }} style={{ marginTop: 16, width: '100%', padding: '12px', borderRadius: 14, border: 'none',
+                  background: '#fff', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+                  {fDone ? `Continue · Day ${fNext.d}` : `Begin · Day ${fNext.d}`}
+                </button>
+              </div>
             </div>
-            <span style={{ fontWeight: 700, fontSize: 13 }}>{Math.round(aPct * 100)}%</span>
-          </div>
-          <button onClick={(e) => { e.stopPropagation(); ctx.openPlanDay(active, aNext); }} style={{ marginTop: 16, width: '100%', padding: '12px', borderRadius: 14, border: 'none',
-            background: '#fff', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
-            {aDone ? `Continue · Day ${aNext.d}` : `Begin · Day ${aNext.d}`}
-          </button>
-        </div>
-      </div>
+          ) : null}
 
-      {churchPlans.length ? (
+          {rest.length ? (
+            <React.Fragment>
+              <SectionLabel>My plans</SectionLabel>
+              <div style={grid}>
+                {rest.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, true)} />)}
+              </div>
+            </React.Fragment>
+          ) : null}
+
+          {!featured ? (
+            <div style={{ textAlign: 'center', padding: '20px 16px 28px', color: 'var(--ink-2)' }}>
+              <Icon name="read" size={40} stroke={1.4} color="var(--ink-3)" />
+              <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '8px auto 14px' }}>No plans yet. Browse and add one to start reading a little every day.</p>
+              <button onClick={() => setTab('browse')} style={{ padding: '11px 18px', borderRadius: 13, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Browse plans</button>
+            </div>
+          ) : null}
+
+          {(ctx.churchDevos || []).length ? (
+            <React.Fragment>
+              <SectionLabel>Devotionals from {churchName}</SectionLabel>
+              <div style={{ ...grid, animationDelay: '.1s' }}>
+                {ctx.churchDevos.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
+              </div>
+            </React.Fragment>
+          ) : null}
+        </React.Fragment>
+      ) : (
         <React.Fragment>
-          <SectionLabel>Plans from {churchName}</SectionLabel>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22, animation: 'trinityFade .5s ease .08s both' }}>
-            {churchPlans.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} />)}
+          {churchPlans.length ? (
+            <React.Fragment>
+              <SectionLabel>From {churchName}</SectionLabel>
+              <div style={grid}>
+                {churchPlans.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, inMine(p))} />)}
+              </div>
+            </React.Fragment>
+          ) : null}
+          <SectionLabel>Discover plans</SectionLabel>
+          <div style={{ ...grid, animationDelay: '.1s' }}>
+            {D.PLANS.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, inMine(p))} />)}
           </div>
         </React.Fragment>
-      ) : null}
-
-      {(ctx.churchDevos || []).length ? (
-        <React.Fragment>
-          <SectionLabel>Devotionals from {churchName}</SectionLabel>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22, animation: 'trinityFade .5s ease .1s both' }}>
-            {ctx.churchDevos.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
-          </div>
-        </React.Fragment>
-      ) : null}
-
-      <SectionLabel>Discover plans</SectionLabel>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'trinityFade .5s ease .1s both' }}>
-        {(discoverOpen ? D.PLANS : D.PLANS.slice(0, 4)).map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} />)}
-      </div>
-      {D.PLANS.length > 4 ? (
-        <button onClick={() => setDiscoverOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, width: '100%', marginTop: 12, padding: '12px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
-          {discoverOpen ? 'Show fewer' : `Show all ${D.PLANS.length} plans`} <Icon name={discoverOpen ? 'chevU' : 'chevD'} size={17} color="var(--clay)" />
-        </button>
-      ) : null}
+      )}
     </ScreenScroll>
   );
 }

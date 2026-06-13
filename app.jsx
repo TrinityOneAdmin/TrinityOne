@@ -227,6 +227,8 @@ function App() {
   const bookmarks = MD.list('bookmarks').map(b => b.ref);                                      // [ref]
   const planProgress = MD.settings.get('plans', {});                                           // planId -> [done days]
   const devoProgress = MD.settings.get('devos', {});                                            // devoId -> [done days]
+  const plansFollowed = MD.settings.get('plansFollowed', []);                                   // discover-plan ids the member added to My Plans
+  const plansHidden = MD.settings.get('plansHidden', []);                                       // church-plan ids the member removed from My Plans
 
   // overlays
   const [share, setShare] = useA(null);
@@ -794,6 +796,18 @@ function App() {
       const prev = MD.settings.get('devos', {});
       const set = new Set(prev[did] || []); set.has(day) ? set.delete(day) : set.add(day);
       MD.settings.set('devos', { ...prev, [did]: [...set].sort((a, b) => a - b) });
+    },
+    plansFollowed,
+    plansHidden,
+    // add/remove a plan from "My Plans". Church plans are followed by default, so removing one hides it
+    // (recorded in plansHidden); discover plans are opt-in (recorded in plansFollowed). Re-addable either way.
+    setPlanInMine: (id, inMine, isChurch) => {
+      const key = isChurch ? 'plansHidden' : 'plansFollowed';
+      const prev = MD.settings.get(key, []);
+      // plansHidden stores the REMOVED church plans, so its membership is inverted vs. plansFollowed
+      const present = isChurch ? !inMine : inMine;
+      const next = present ? [...new Set([...prev, id])] : prev.filter(x => x !== id);
+      MD.settings.set(key, next);
     },
   };
 
