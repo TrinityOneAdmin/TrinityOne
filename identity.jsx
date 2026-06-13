@@ -21,13 +21,13 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
         <h1 style={{ margin: '0 14px', fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 700, letterSpacing: '-.5px', lineHeight: 1.1 }}>
           What should your<br/>church call you?</h1>
         <p style={{ margin: '10px 26px 0', fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)', textWrap: 'pretty' }}>
-          Pick a name and a mark so your church family recognises you. No email, no phone — and you can keep it private if you’d rather.</p>
+          A name helps your church family recognise you and makes the chat feel like community. No email, no phone — you can stay private if you’d rather.</p>
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '6px 22px 12px' }}>
         {/* name field */}
         <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '8px 0 8px' }}>DISPLAY NAME</label>
-        <input value={name} onChange={e => setName(e.target.value.slice(0, 24))} autoFocus placeholder="e.g. Maria, or leave blank" style={{
+        <input value={name} onChange={e => setName(e.target.value.slice(0, 24))} autoFocus placeholder="e.g. Maria" style={{
           width: '100%', height: 54, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)',
           padding: '0 18px', fontSize: 18, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none',
           boxShadow: 'var(--shadow)',
@@ -42,12 +42,13 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
       <div style={{ padding: '12px 22px 26px', borderTop: '1px solid var(--line-2)', background: 'var(--paper)' }}>
         <button onClick={() => onSave({ name: name.trim(), avatar: av })} style={{
           width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', marginBottom: 10,
-          background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
-        }}>{name.trim() ? `Continue as ${name.trim()}` : 'Continue'}</button>
+          background: name.trim() ? 'var(--clay)' : 'var(--surface-2)', color: name.trim() ? '#fff' : 'var(--ink-3)',
+          boxShadow: name.trim() ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
+        }}>{name.trim() ? `Continue as ${name.trim()}` : 'Continue without a name'}</button>
         <button onClick={onSkip} style={{
           width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer',
-          color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)',
-        }}>Skip for now</button>
+          color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)',
+        }}>Skip setup for now</button>
       </div>
     </div>
   );
@@ -166,7 +167,7 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
 
         <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '6px 22px 12px' }}>
           <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '8px 0 8px' }}>DISPLAY NAME</label>
-          <input value={name} onChange={e => setName(e.target.value.slice(0, 24))} autoFocus placeholder="e.g. Maria, or leave blank" style={{
+          <input value={name} onChange={e => setName(e.target.value.slice(0, 24))} autoFocus placeholder="e.g. Maria" style={{
             width: '100%', height: 54, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)',
             padding: '0 18px', fontSize: 18, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)' }} />
           <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 12px' }}>CHOOSE YOUR MARK</label>

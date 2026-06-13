@@ -5836,6 +5836,23 @@
   var profiles = {};
   var pendingProfiles = /* @__PURE__ */ new Set();
   var PROFILE_KEY = "trinityone.profile";
+  var PROFILES_KEY = "trinityone.profiles";
+  try {
+    const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}");
+    if (c && typeof c === "object") Object.assign(profiles, c);
+  } catch {
+  }
+  var _profSaveT = null;
+  function saveProfiles() {
+    if (_profSaveT) return;
+    _profSaveT = setTimeout(() => {
+      _profSaveT = null;
+      try {
+        localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+      } catch {
+      }
+    }, 800);
+  }
   var AV_SYMBOLS = ["halo", "dove", "fish", "flame", "vine", "wheat", "anchor", "crook", "chalice", "olive", "mountain", "well", "star"];
   function displayFor(pubkey) {
     const base = profile(pubkey);
@@ -6020,18 +6037,20 @@
       const byPub = /* @__PURE__ */ new Map();
       const profSubs = /* @__PURE__ */ new Map();
       const emit = () => onMembers([...byPub.values()].filter((m) => m.joined || m.msgs > 0).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)));
-      const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: "", nip05: "", picture: "", joined: 0, lastTs: 0, msgs: 0 };
+      const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || "", nip05: (profiles[pk] || {}).nip05 || "", picture: (profiles[pk] || {}).picture || "", joined: 0, lastTs: 0, msgs: 0 };
       const ensureProfile = (pk) => {
         if (profSubs.has(pk)) return;
         const s = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pk] }], {
           onevent(e) {
             try {
               const meta = JSON.parse(e.content);
+              profiles[pk] = { name: meta.name || meta.display_name || "", picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", av: meta.av || void 0 };
+              saveProfiles();
               const m = byPub.get(pk);
               if (m) {
-                m.name = meta.name || meta.display_name || "";
-                m.picture = meta.picture || "";
-                m.nip05 = meta.nip05 || "";
+                m.name = profiles[pk].name;
+                m.picture = profiles[pk].picture;
+                m.nip05 = profiles[pk].nip05;
                 emit();
               }
             } catch {
@@ -6132,14 +6151,15 @@
     },
     // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
     requestProfiles(pubkeys) {
-      const need = [...new Set(pubkeys)].filter((pk) => pk && !(pk in profiles) && !pendingProfiles.has(pk));
+      const need = [...new Set(pubkeys)].filter((pk) => pk && !pendingProfiles.has(pk) && (!(pk in profiles) || !(profiles[pk] && profiles[pk].name)));
       if (!need.length) return;
       need.forEach((pk) => pendingProfiles.add(pk));
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: need }], {
         onevent(e) {
           try {
             const m = JSON.parse(e.content);
-            profiles[e.pubkey] = { name: m.name || m.display_name || "", picture: m.picture || "", about: m.about || "", av: m.av || void 0 };
+            profiles[e.pubkey] = { name: m.name || m.display_name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", av: m.av || void 0 };
+            saveProfiles();
             window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
           } catch {
           }

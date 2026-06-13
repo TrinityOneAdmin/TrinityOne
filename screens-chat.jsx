@@ -1148,6 +1148,16 @@ function PeopleScreen({ open, onClose, ctx }) {
         </div>
       </div>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 16px 30px' }}>
+        {(!FS.myProfile || !(FS.myProfile.name && FS.myProfile.name.trim())) ? (
+          <div onClick={() => { onClose(); ctx.openProfile(); }} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', margin: '4px 0 12px', borderRadius: 14, cursor: 'pointer', background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)' }}>
+            <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, background: 'var(--clay)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pen" size={17} color="#fff" /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>Add your name</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.4 }}>You’re showing as “{me ? FS.displayFor(me).handle : 'Anonymous'}”. A name helps your church know you.</div>
+            </div>
+            <Icon name="chevR" size={17} color="var(--clay)" />
+          </div>
+        ) : null}
         {list.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '54px 24px', color: 'var(--ink-3)' }}>
             <Icon name="users" size={30} color="var(--ink-3)" />
