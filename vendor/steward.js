@@ -9649,6 +9649,18 @@ zoo`.split("\n");
     if (!/^wss?:\/\//i.test(v)) v = "wss://" + v.replace(/^\/+/, "");
     return v.replace(/\/+$/, "");
   }
+  function cleanNip05(raw, name) {
+    let s = String(raw || "").trim().toLowerCase().replace(/\s+/g, "").replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+    if (!s) return "";
+    if (s.includes("@")) {
+      const [l, d] = s.split("@");
+      const local = l.replace(/[^a-z0-9._-]/g, ""), domain = d.replace(/^www\./, "");
+      return local && /\./.test(domain) ? local + "@" + domain : "";
+    }
+    if (!/\./.test(s)) return "";
+    const slug = String(name || "").toLowerCase().replace(/[^a-z0-9._-]+/g, "").slice(0, 30);
+    return slug ? slug + "@" + s : "";
+  }
   function relays() {
     const own = ownRelay();
     const out = [own];
@@ -9757,7 +9769,7 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       lastProfile = { ...lastProfile, ...meta };
       const m = lastProfile;
-      let nip05 = m.nip05 || "";
+      let nip05 = cleanNip05(m.nip05, m.name);
       if (!nip05 && m.name) {
         const local = String(m.name).toLowerCase().replace(/[^a-z0-9._-]+/g, "").slice(0, 30);
         const host = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");

@@ -31,7 +31,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
         <SkBadge initials={initials} size={34} radius={10} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{churchName}</span>{church.name ? <Icon name="check" size={12} stroke={3} color="var(--sage)" /> : null}</div>
-          <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: church.nip05 ? 'var(--font-ui)' : 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{church.nip05 ? '@' + String(church.nip05).split('@')[0] : (church.npub ? church.npub.slice(0, 18) + '…' : 'no key')}</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: churchHandle(church) ? 'var(--font-ui)' : 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchHandle(church) || (church.npub ? church.npub.slice(0, 18) + '…' : 'no key')}</div>
         </div>
         <Icon name="pen" size={14} color="var(--ink-3)" />
       </button>
@@ -462,9 +462,17 @@ function StewDashboard({ initial = 'overview' }) {
 
 // ---- the join flow: a real QR + code members scan/paste to follow this church ----
 function shortNpub(np) { return np ? np.slice(0, 14) + '…' + np.slice(-6) : '—'; }
-// a member's handle local-part: their NIP-05 if set, else derived from their display name (the relay
-// resolves name@host either way). '' only when they have no name at all (truly anonymous).
-function nameHandle(m) { if (!m) return ''; if (m.nip05) return String(m.nip05).split('@')[0]; return m.name ? String(m.name).toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30) : ''; }
+// the resolvable handle local-part: the NIP-05 local part if it's a real "local@domain", else a slug of
+// the display name (the relay resolves either way). A pasted URL has no '@', so it falls back to the name
+// slug — never surfaces "http…" junk. '' only when there's no name at all.
+function handleLocal(nip05, name) {
+  const slug = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
+  const n5 = String(nip05 || '');
+  return n5.includes('@') ? slug(n5.split('@')[0]) : slug(name);
+}
+function nameHandle(m) { return m ? handleLocal(m.nip05, m.name) : ''; }
+// a church's resolvable joining handle, e.g. "@trinitychurchlittlehampton"
+function churchHandle(church) { const l = church ? handleLocal(church.nip05, church.name) : ''; return l ? '@' + l : ''; }
 function copyText(t) {
   if (!t) return false;
   // navigator.clipboard only works in a secure context (https / localhost). Over plain http on the
@@ -486,7 +494,7 @@ function JoinCard({ qrSize = 92, center = false }) {
   const np = church.npub || '';
   const url = np ? window.Steward.joinUrl() : '';
   const svg = np ? window.Steward.joinQR() : '';
-  const nice = church.nip05 ? '@' + String(church.nip05).split('@')[0] : '';   // friendly handle members can type
+  const nice = churchHandle(church);   // resolvable @handle members can type (from name slug / clean nip05)
   const codeText = nice || np;
   const [copied, setCopied] = React.useState('');
   const doCopy = (what, text) => { copyText(text); setCopied(what); setTimeout(() => setCopied(''), 1400); };
@@ -1951,12 +1959,42 @@ function SeriesNameModal({ current, count, onSave, onClose }) {
   );
 }
 
+// edit the church's web address / NIP-05 domain. The engine cleans whatever's typed (strips http/www);
+// blank reverts to the relay-served default handle. Members join with the @handle either way.
+function WebAddressModal({ church, onClose }) {
+  const cur = String(church.nip05 || '');
+  const initial = cur.includes('@') ? cur.split('@')[1] : cur.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+  const [val, setVal] = React.useState(initial || '');
+  const [busy, setBusy] = React.useState(false);
+  const save = async (v) => { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: church.name, nip05: v })); setBusy(false); onClose(); };
+  const custom = cur.includes('@');
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={21} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Church web address</div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Your church’s own domain (optional). Just the domain — no <span style={{ fontFamily: 'var(--mono)' }}>https://</span>. Members always join with your <b>{churchHandle(church) || '@handle'}</b>; leave this blank to use the default.</p>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Web address</div>
+        <input value={val} onChange={e => setVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(val); }} autoFocus placeholder="trinitylittlehampton.co.uk" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
+          {custom ? <button onClick={() => save('')} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Use default</button> : null}
+          <button onClick={() => save(val)} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashSettings({ onTab }) {
   const church = window.useStewardChurch();   // real church name + npub
   const [revealed, setRevealed] = React.useState(false);
   const [phrase, setPhrase] = React.useState('');
   const [copied, setCopied] = React.useState(false);
   const [editingName, setEditingName] = React.useState(false);
+  const [editingWeb, setEditingWeb] = React.useState(false);
   const saveName = (n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }));
   const reveal = () => { try { setPhrase(window.Steward.exportMnemonic() || ''); } catch {} setRevealed(true); };
   const [restoreOpen, setRestoreOpen] = React.useState(false);
@@ -1984,6 +2022,7 @@ function DashSettings({ onTab }) {
     <div className="no-scrollbar sk-masonry" style={{ height: '100%', overflowY: 'auto', paddingBottom: 4 }}>
       {backupOpen ? <StewBackupModal church={church} onClose={() => setBackupOpen(false)} /> : null}
       {editingName ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={saveName} onClose={() => setEditingName(false)} /> : null}
+      {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
           <SkBadge initials={(church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase()} size={44} radius={13} />
@@ -1993,6 +2032,14 @@ function DashSettings({ onTab }) {
           </div>
         </div>
         <SkKey value={church.npub || '—'} label="npub" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <Icon name="globe" size={18} color="var(--sage)" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Joining handle{(church.nip05 && church.nip05.includes('@')) ? ' · web address' : ''}</div>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={church.nip05 || ''}>{churchHandle(church) || '—'}{(church.nip05 && church.nip05.includes('@')) ? ' · ' + church.nip05.split('@')[1] : ''}</div>
+          </div>
+          <button onClick={() => setEditingWeb(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> Edit</button>
+        </div>
       </Panel>
 
       <DashChannelPanel church={church} />

@@ -81,6 +81,21 @@ function normRelay(input) {
   if (!/^wss?:\/\//i.test(v)) v = 'wss://' + v.replace(/^\/+/, '');
   return v.replace(/\/+$/, '');
 }
+// normalise a steward-typed NIP-05 / web address into a clean handle: strip protocol/www/path. A
+// "local@domain" is kept; a bare "yourchurch.org" becomes "<name-slug>@yourchurch.org" so it stays
+// resolvable (the relay's NIP-05 serves the local part's slug, = the name slug). Junk/URLs → ''.
+function cleanNip05(raw, name) {
+  let s = String(raw || '').trim().toLowerCase().replace(/\s+/g, '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+  if (!s) return '';
+  if (s.includes('@')) {
+    const [l, d] = s.split('@');
+    const local = l.replace(/[^a-z0-9._-]/g, ''), domain = d.replace(/^www\./, '');
+    return (local && /\./.test(domain)) ? local + '@' + domain : '';
+  }
+  if (!/\./.test(s)) return '';   // not a domain
+  const slug = String(name || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
+  return slug ? slug + '@' + s : '';
+}
 function relays() {
   const own = ownRelay();
   const out = [own];
@@ -163,8 +178,8 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     lastProfile = { ...lastProfile, ...meta };   // merge so a partial edit (e.g. name) keeps channel etc.
     const m = lastProfile;
-    // auto-claim a verified NIP-05 handle on the relay if the steward didn't enter their own domain
-    let nip05 = m.nip05 || '';
+    // clean any steward-typed address (strip http/www/path); auto-claim a relay handle if none is set
+    let nip05 = cleanNip05(m.nip05, m.name);
     if (!nip05 && m.name) {
       const local = String(m.name).toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
       const host = (CANONICAL_RELAY || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '');
