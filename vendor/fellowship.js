@@ -6006,6 +6006,84 @@
       }
       return evt;
     },
+    // the church's people, for a member-facing directory: distinct folks (not the church) who joined
+    // (member:<church>) or posted (kind-1 p-tagged), with their kind-0 profile resolved. Same rule the
+    // steward uses. Blocked members are withheld by the relay. The UI filters out the current user.
+    subscribeChurchMembers(churchNpub, onMembers) {
+      const cp = toPub(churchNpub);
+      if (!cp) {
+        onMembers([]);
+        return () => {
+        };
+      }
+      const MEMBER_D = "trinityone/member:";
+      const byPub = /* @__PURE__ */ new Map();
+      const profSubs = /* @__PURE__ */ new Map();
+      const emit = () => onMembers([...byPub.values()].filter((m) => m.joined || m.msgs > 0).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)));
+      const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: "", nip05: "", picture: "", joined: 0, lastTs: 0, msgs: 0 };
+      const ensureProfile = (pk) => {
+        if (profSubs.has(pk)) return;
+        const s = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pk] }], {
+          onevent(e) {
+            try {
+              const meta = JSON.parse(e.content);
+              const m = byPub.get(pk);
+              if (m) {
+                m.name = meta.name || meta.display_name || "";
+                m.picture = meta.picture || "";
+                m.nip05 = meta.nip05 || "";
+                emit();
+              }
+            } catch {
+            }
+          },
+          oneose() {
+          }
+        });
+        profSubs.set(pk, s);
+      };
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }], {
+        onevent(e) {
+          if (e.pubkey === cp) return;
+          const m = get(e.pubkey);
+          if (e.kind === 30078) {
+            const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+            if (d.indexOf(MEMBER_D) !== 0) return;
+            const left = e.tags.some((t) => t[0] === "deleted") || !e.content;
+            if (left) m.joined = 0;
+            else {
+              let j = e.created_at;
+              try {
+                j = JSON.parse(e.content).joined || e.created_at;
+              } catch {
+              }
+              m.joined = j;
+            }
+          } else {
+            m.msgs++;
+            if (e.created_at > m.lastTs) m.lastTs = e.created_at;
+          }
+          byPub.set(e.pubkey, m);
+          ensureProfile(e.pubkey);
+          emit();
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+        for (const s of profSubs.values()) {
+          try {
+            s.close();
+          } catch {
+          }
+        }
+      };
+    },
     // relay configuration (persisted) — accepts ws:// or wss:// URLs
     setRelays(urls) {
       const list = [...new Set((urls || []).map((u) => (u || "").trim()).filter((u) => /^wss?:\/\//i.test(u)))];

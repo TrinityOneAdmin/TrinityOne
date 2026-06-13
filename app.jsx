@@ -590,6 +590,7 @@ function App() {
   const [group, setGroup] = useA(null);
   const [dmPeer, setDmPeer] = useA(null);   // direct-message thread with a pubkey
   const [dmInbox, setDmInbox] = useA(false); // direct-message conversation list
+  const [people, setPeople] = useA(false);  // church People directory
   const [walletSats, setWalletSats] = useA(window.TrinityData.WALLET.sats);
   const [giving, setGiving] = useA(window.TrinityData.GIVING_HISTORY);
   const [funds, setFunds] = useA(window.TrinityData.FUNDS);   // giving funds (stewards can add)
@@ -686,7 +687,7 @@ function App() {
     openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
     openGroup: (g) => setGroup(g),
     desktop, openGroupId: group && group.id,
-    openDM: (peer) => setDmPeer(peer), openDMInbox: () => setDmInbox(true),
+    openDM: (peer) => setDmPeer(peer), openDMInbox: () => setDmInbox(true), openPeople: () => setPeople(true),
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
     readView, setReadView,
@@ -822,7 +823,7 @@ function App() {
       [module, () => setModule(null)], [journalEditor, () => setJournalEditor(null)], [journal, () => setJournal(null)],
       [eventOv, () => setEventOv(null)], [openServing, () => setOpenServing(false)], [openDevo, () => setOpenDevo(null)], [plan, () => setPlan(null)],
       [devo, () => setDevo(false)], [shareSheet, () => setShareSheet(null)], [share, () => setShare(null)],
-      [dmPeer, () => setDmPeer(null)], [dmInbox, () => setDmInbox(false)], [group, () => setGroup(null)],
+      [dmPeer, () => setDmPeer(null)], [dmInbox, () => setDmInbox(false)], [people, () => setPeople(false)], [group, () => setGroup(null)],
     ];
     for (const [open, close] of layers) { if (open) { close(); return true; } }
     return false;
@@ -922,6 +923,7 @@ function App() {
             <ChatRoom group={group} open={!!group && !(desktop && tab === 'chat')} onClose={() => setGroup(null)} ctx={ctx} />
             <DMInbox open={dmInbox} onClose={() => setDmInbox(false)} ctx={ctx} />
             <DMThread peer={dmPeer} open={!!dmPeer} onClose={() => setDmPeer(null)} ctx={ctx} />
+            <PeopleScreen open={people} onClose={() => setPeople(false)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx} initialMode={churchSwitcherMode}
               churches={churches} activeId={activeChurch}
               onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); }}
