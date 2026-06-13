@@ -634,10 +634,9 @@ wss.on('connection', ws => {
   ws.isAlive = true;
   ws._auth = null;                                    // pubkey once the client proves it via NIP-42 AUTH
   ws._challenge = randomBytes(16).toString('hex');    // per-connection nonce
-  // Only challenge for auth if this relay actually hosts an invite-only group — otherwise every member
-  // pays a NIP-42 auth round-trip (which times out over a slow tunnel and stalls the load) for nothing.
-  const _hasInviteGroups = [...GROUP_VIS.values()].some(v => v === 'invite');
-  if (_hasInviteGroups) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }
+  // LAZY NIP-42: we do NOT challenge on connect (that made every member pay a slow auth round-trip).
+  // We only send the AUTH challenge when a REQ actually tries to read invite-only content (below), so
+  // ordinary public reads have zero auth overhead and invite-group members auth exactly when needed.
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', raw => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
@@ -668,8 +667,14 @@ wss.on('connection', ws => {
       const mysubs = subs.get(ws);
       if (!mysubs.has(subId) && mysubs.size >= MAX_SUBS_PER_CONN) { ws.send(JSON.stringify(['CLOSED', subId, 'rate-limited: too many subscriptions'])); return; }
       mysubs.set(subId, filters);
-      // withhold a blocked member's events, and an invite-only group's messages from non-members (NIP-42)
+      // serve everything this connection may read now (blocked members withheld; invite-only group
+      // messages withheld from non-members per NIP-42)
       let matched = events.filter(e => matchAny(e, filters) && !BLOCKED.has(e.pubkey) && canRead(e, ws._auth));
+      // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
+      // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
+      // is NOT challenged — those messages are just silently withheld — so ordinary reads pay no auth cost.
+      const wantsInvite = !ws._auth && filters.some(f => (f['#t'] || []).some(t => GROUP_VIS.get(t) === 'invite'));
+      if (wantsInvite) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }
       const lim = Math.max(0, ...filters.map(f => f.limit || 0));
       if (lim) matched = matched.slice(-lim);
       for (const e of matched) ws.send(JSON.stringify(['EVENT', subId, e]));
@@ -682,6 +687,15 @@ wss.on('connection', ws => {
         const fresh = evt && Math.abs(Math.floor(Date.now() / 1000) - (evt.created_at || 0)) < 600;
         if (evt && evt.kind === 22242 && ch === ws._challenge && fresh && verifyEvent(evt)) {
           ws._auth = evt.pubkey; ws.send(JSON.stringify(['OK', evt.id, true, '']));
+          // now authed: replay the invite-only messages their open subs were waiting on (public events
+          // were already delivered at REQ time, so only re-send invite-group ones to avoid duplicates)
+          const mine = subs.get(ws);
+          if (mine) for (const [subId, filters] of mine) {
+            for (const e of events) {
+              if (BLOCKED.has(e.pubkey) || !matchAny(e, filters) || !canRead(e, ws._auth)) continue;
+              const g = gidOf(e); if (g && GROUP_VIS.get(g) === 'invite') ws.send(JSON.stringify(['EVENT', subId, e]));
+            }
+          }
         } else ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed: bad challenge or signature']));
       } catch { ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed'])); }
     } else if (type === 'CLOSE') { subs.get(ws)?.delete(rest[0]); }
