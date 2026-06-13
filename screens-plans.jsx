@@ -480,7 +480,9 @@ function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
 // Multi-day templates (### Day n markers) render as a Psalms-of-Comfort-style day index
 // grouped by week, with progress + a per-day prose reader. Plain .txt/.md falls back to a scroll.
 function ChurchDevoView({ devo, open, onClose, ctx }) {
-  const parsed = React.useMemo(() => (devo && devo.type === 'md' ? parseDevoDays(devo.text) : null), [devo]);
+  // parse the multi-week/day template from the content itself — bulk-uploaded devotionals are type 'txt'
+  // even when they're Markdown templates, so don't gate on type. parseDevoDays returns null for plain ones.
+  const parsed = React.useMemo(() => (devo ? parseDevoDays(devo.text) : null), [devo]);
   const [openDay, setOpenDay] = React.useState(null);
   const [collapsed, setCollapsed] = React.useState({});
   // expand the week holding the next-undone day on open; collapse the rest
@@ -497,7 +499,8 @@ function ChurchDevoView({ devo, open, onClose, ctx }) {
   ctx.openChurchDevoDay = (d) => setOpenDay(d);
 
   if (!parsed) {  // plain devotional — original single-scroll
-    const isMd = devo.type === 'md';
+    // render as Markdown if flagged 'md' OR the text clearly is Markdown (bulk uploads are all 'txt')
+    const isMd = devo.type === 'md' || /(^|\n)#{1,3}\s|\*\*[^*]+\*\*/.test(devo.text || '');
     return (
       <Overlay open={open} onClose={onClose}>
         <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
