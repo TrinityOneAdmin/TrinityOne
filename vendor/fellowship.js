@@ -6183,9 +6183,7 @@
       }
       const MEMBER_D = "trinityone/member:";
       const byPub = /* @__PURE__ */ new Map();
-      const profSubs = [];
-      let pendingProf = /* @__PURE__ */ new Set(), profTimer = null;
-      const askedProf = /* @__PURE__ */ new Set();
+      const profSubs = /* @__PURE__ */ new Map();
       for (const m of loadMembersCache(cp)) {
         if (m && m.pubkey) byPub.set(m.pubkey, m);
       }
@@ -6195,63 +6193,29 @@
         onMembers(visible, !!done);
       };
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || "", nip05: (profiles[pk] || {}).nip05 || "", picture: (profiles[pk] || {}).picture || "", hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
-      const flushProfiles = () => {
-        profTimer = null;
-        const authors = [...pendingProf].filter((pk) => !askedProf.has(pk) && !(profiles[pk] && profiles[pk].name));
-        pendingProf = /* @__PURE__ */ new Set();
-        if (!authors.length) return;
-        authors.forEach((pk) => askedProf.add(pk));
-        try {
-          console.log("[TO names] querying", authors.length, "profiles over", churchRelays().length, "relays:", churchRelays().join(","));
-        } catch {
-        }
-        let s = null;
-        const release = () => {
-          authors.forEach((pk) => askedProf.delete(pk));
-        };
-        const close = () => {
-          const named = authors.filter((pk) => profiles[pk] && profiles[pk].name).length;
-          try {
-            console.log("[TO names] batch done:", named, "of", authors.length, "resolved");
-          } catch {
-          }
-          try {
-            s && s.close();
-          } catch {
-          }
-          const i3 = profSubs.indexOf(s);
-          if (i3 >= 0) profSubs.splice(i3, 1);
-        };
-        s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
+      const ensureProfile = (pk) => {
+        if (profSubs.has(pk) || profiles[pk] && profiles[pk].name) return;
+        const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors: [pk] }], {
           onevent(e) {
             try {
               const meta = JSON.parse(e.content);
-              profiles[e.pubkey] = { name: meta.name || meta.display_name || "", picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
+              profiles[pk] = { name: meta.name || meta.display_name || "", picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
               saveProfiles();
-              const m = byPub.get(e.pubkey);
+              const m = byPub.get(pk);
               if (m) {
-                m.name = profiles[e.pubkey].name;
-                m.picture = profiles[e.pubkey].picture;
-                m.nip05 = profiles[e.pubkey].nip05;
+                m.name = profiles[pk].name;
+                m.picture = profiles[pk].picture;
+                m.nip05 = profiles[pk].nip05;
                 m.hidden = !!meta.hidden;
+                emit();
               }
-              emit();
             } catch {
             }
           },
           oneose() {
           }
-          // a relay finished its backlog — keep listening; slow relays are still delivering
         });
-        profSubs.push(s);
-        setTimeout(release, 5e3);
-        setTimeout(close, 12e3);
-      };
-      const ensureProfile = (pk) => {
-        if (profiles[pk] && profiles[pk].name) return;
-        if (askedProf.has(pk)) return;
-        pendingProf.add(pk);
-        if (!profTimer) profTimer = setTimeout(flushProfiles, 120);
+        profSubs.set(pk, s);
       };
       const makeSub = () => {
         const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }], {
@@ -6295,8 +6259,7 @@
       const stop = withReconnect(makeSub);
       return () => {
         stop();
-        if (profTimer) clearTimeout(profTimer);
-        for (const s of profSubs) {
+        for (const s of profSubs.values()) {
           try {
             s.close();
           } catch {
