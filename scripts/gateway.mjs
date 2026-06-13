@@ -497,6 +497,23 @@ function serveStatic(req, res) {
     getFeed(u).then(json).catch(e => json({ channel: { url: u, platform: 'link' }, videos: [], error: String((e && e.message) || e) }));
     return;
   }
+  // audio-bible chunk proxy: range-fetch a slice of a WHITELISTED public-domain WEB audio zip so the
+  // member app can pull a single chapter (CORS-free) and inflate it. Whitelist = SSRF guard; len-capped.
+  if (route === '/audiozip') {
+    const H = { 'Access-Control-Allow-Origin': '*' };
+    const SRC = { nt: 'https://www.audiotreasure.com/content/WEBD_AT/zipfiles/WEB_NT_Audio.zip', ot: 'https://www.audiotreasure.com/content/WEBD_AT/zipfiles/WEB_OT_Audio.zip' };
+    let q; try { q = new URL(req.url, 'http://x').searchParams; } catch { q = null; }
+    const t = q && q.get('t'); const start = q && parseInt(q.get('start'), 10); const len = q && parseInt(q.get('len'), 10);
+    if (!q || !SRC[t] || !Number.isFinite(start) || start < 0 || !Number.isFinite(len) || len <= 0 || len > 30 * 1024 * 1024) { res.writeHead(400, H); res.end('bad request'); return; }
+    fetch(SRC[t], { headers: { Range: 'bytes=' + start + '-' + (start + len - 1) } })
+      .then(async up => {
+        if (up.status !== 206 && up.status !== 200) { res.writeHead(502, H); res.end('upstream ' + up.status); return; }
+        const buf = Buffer.from(await up.arrayBuffer());
+        res.writeHead(200, { ...H, 'Content-Type': 'application/octet-stream', 'Cache-Control': 'public, max-age=31536000', 'Content-Length': buf.length });
+        res.end(buf);
+      }).catch(() => { try { res.writeHead(502, H); res.end('upstream error'); } catch {} });
+    return;
+  }
   // web-push: hand out the VAPID public key + accept member push subscriptions
   if (route === '/push/vapid') { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify({ publicKey: VAPID.publicKey })); return; }
   if (route === '/push/subscribe') {

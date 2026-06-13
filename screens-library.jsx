@@ -73,6 +73,18 @@ function LibraryHome({ ctx }) {
         } />)}
       </div>
 
+      <SectionLabel>Listen</SectionLabel>
+      <div style={{ marginBottom: 24, animation: 'lumenFade .5s ease .12s both' }}>
+        <button onClick={() => ctx.openAudioBibles()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow)', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
+          <div style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="headphones" size={22} color="currentColor" /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Audio Bibles</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Download the World English Bible to listen offline</div>
+          </div>
+          <Icon name="chevR" size={18} color="var(--ink-3)" />
+        </button>
+      </div>
+
       <SectionLabel action="+ New" onAction={() => ctx.newJournal()}>Recent journal</SectionLabel>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 11, animation: 'lumenFade .5s ease .15s both' }}>
         {(ctx.journalEntries || D.JOURNAL).length === 0 ? (

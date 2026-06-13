@@ -241,6 +241,7 @@ function App() {
   const extraParam = new URLSearchParams(location.search).get('extra');  // 'notif' | 'listen'
   const [notif, setNotif] = useA(extraParam === 'notif');   // notifications overlay
   const [listen, setListen] = useA(extraParam === 'listen'); // audio Listen overlay
+  const [audioBibles, setAudioBibles] = useA(false);   // Audio Bibles download library
   const concordParam = new URLSearchParams(location.search).get('concord');  // '1' = index, or a Strong's id (e.g. G5457)
   const [concord, setConcord] = useA(concordParam === '1');   // concordance index overlay
   const [allUses, setAllUses] = useA(/^[GH]\d/.test(concordParam || '') ? concordParam : null);  // per-lemma "all uses" (Strong's id)
@@ -673,6 +674,7 @@ function App() {
     setToastMsg(msg); clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToastMsg(''), 1900);
   };
+  window.trinityToast = toast;   // a few non-React globals (e.g. the audio engine) surface notices through this
 
   const ctx = {
     dark: t.dark,
@@ -720,6 +722,7 @@ function App() {
     openAllUses: (id) => setAllUses(id),
     openNotifications: () => setNotif(true),
     openListen: () => setListen(true),
+    openAudioBibles: () => setAudioBibles(true),
     // identity surfaces
     openProfile: () => setProfile(true),
     openMember: (name) => { const m = window.TrinityData.MEMBERS[name]; if (m) setMember(m); else toast('Opening ' + name); },
@@ -816,7 +819,7 @@ function App() {
   window.trinityGoBack = () => {
     const layers = [
       [wordOv, () => setWordOv(null)], [member, () => setMember(null)], [profile, () => setProfile(false)],
-      [idSheet, () => setIdSheet(null)], [searchOpen, () => setSearchOpen(false)], [listen, () => setListen(false)],
+      [idSheet, () => setIdSheet(null)], [searchOpen, () => setSearchOpen(false)], [listen, () => setListen(false)], [audioBibles, () => setAudioBibles(false)],
       [notif, () => setNotif(false)], [allUses, () => setAllUses(null)], [concord, () => setConcord(false)],
       [video, () => setVideo(null)], [book, () => setBook(null)], [collection, () => setCollection(null)],
       [module, () => setModule(null)], [journalEditor, () => setJournalEditor(null)], [journal, () => setJournal(null)],
@@ -912,6 +915,7 @@ function App() {
             <AllUsesView id={allUses} open={!!allUses} onClose={() => setAllUses(null)} ctx={ctx} />
             <NotificationsScreen open={notif} onClose={() => setNotif(false)} ctx={ctx} />
             <ListenScreen open={listen} onClose={() => setListen(false)} ctx={ctx} />
+            <AudioBiblesScreen open={audioBibles} onClose={() => setAudioBibles(false)} ctx={ctx} />
             <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} ctx={ctx} />
             {/* identity: hub + focused sheets (designer layout, real backend) */}
             <ProfileSheet open={profile} onClose={() => setProfile(false)} identity={identity} onSave={saveIdentity} ctx={ctx} />

@@ -403,11 +403,17 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
               </div>
             </React.Fragment>
           ) : null}
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9 }}>Audio Bible voice</div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {aOpts.readers.map(r => <button key={r.id} onClick={() => pickAudio(vt, r.id)} style={{ ...aBtn(vr === r.id), padding: '10px' }}>{r.name}</button>)}
-          </div>
-          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.45 }}>Public-domain narration. Applies the next time you tap Listen.</div>
+          {(aOpts.translations.find(t => t.id === vt) || {}).local ? (
+            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>Offline, matches the WEB text. Download books from the Library; until then, Listen plays Berean Standard.</div>
+          ) : (
+            <React.Fragment>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9 }}>Voice</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {aOpts.readers.map(r => <button key={r.id} onClick={() => pickAudio(vt, r.id)} style={{ ...aBtn(vr === r.id), padding: '10px' }}>{r.name}</button>)}
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.45 }}>Streams · public-domain narration. Applies the next time you tap Listen.</div>
+            </React.Fragment>
+          )}
         </div>
       ) : null}
 

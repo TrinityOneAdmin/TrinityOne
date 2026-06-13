@@ -1,7 +1,7 @@
 // TrinityOne service worker — makes the app boot offline.
 // The app SHELL (html/jsx/libs/fonts) is cached here; Bible MODULES live in IndexedDB (engine.js)
 // and chat goes over the relay WebSocket — neither is touched by this worker.
-const CACHE = 'trinity-shell-v79';   // bump on each app deploy so installed PWAs refresh the shell
+const CACHE = 'trinity-shell-v80';   // bump on each app deploy so installed PWAs refresh the shell
 
 // Precache the boot-critical core. Everything else same-origin is cached on first fetch, so one
 // online visit (to install / join) makes every screen available offline afterwards.
@@ -16,7 +16,7 @@ const CORE = [
   './screens-watch.jsx', './screens-search.jsx', './screens-concordance.jsx', './screens-audio.jsx', './screens-extras.jsx', './screens-giving.jsx',
   './screens-church.jsx', './screens-serving.jsx', './reminders.jsx', './backup.jsx', './screens-chat.jsx', './screens-onboarding.jsx', './help-illustrations.jsx', './help-data.jsx',
   './screens-help.jsx', './screens-help-main.jsx', './app.jsx',
-  './catalog.json', './manifest.json',
+  './catalog.json', './manifest.json', './web-audio-manifest.json',
 ];
 
 self.addEventListener('install', (e) => {
@@ -37,7 +37,7 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;   // POSTs, cross-origin: pass through
   // the relay (WebSocket), the large Bible modules (owned by IndexedDB) and the dynamic API endpoints
   // are left alone — never cached
-  if (/^\/(relay|modules\/|push\/|config|status|feed|audiofeed)/.test(url.pathname)) return;
+  if (/^\/(relay|modules\/|push\/|config|status|feed|audiofeed|audiozip)/.test(url.pathname)) return;
   // App shell (navigations + HTML/JSX source) is network-first, so a new deploy is picked up on the
   // next load instead of being pinned to the old cached copy; it falls back to cache when offline.
   const isShell = e.request.mode === 'navigate' || url.pathname === '/' || /\.(html|jsx)$/.test(url.pathname);
