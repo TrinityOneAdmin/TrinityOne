@@ -329,7 +329,8 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp) { onMembers([]); return () => {}; }
     const MEMBER_D = 'trinityone/member:';
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, nip05, picture, joined, lastTs, msgs }
-    const profSubs = new Map();
+    const profSubs = [];              // open batched kind-0 subscriptions, closed on cleanup
+    let pendingProf = new Set(), profTimer = null; const askedProf = new Set();
     // seed from the persisted roster so the list paints instantly on load (then live events refresh it)
     for (const m of loadMembersCache(cp)) { if (m && m.pubkey) byPub.set(m.pubkey, m); }
     // a member who opted out (kind-0 `hidden`) is withheld from the directory the others see
@@ -340,13 +341,24 @@ window.Fellowship = {
     };
     // seed name/nip05 from the persisted profile cache so known members render instantly (no resolve lag)
     const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || '', nip05: (profiles[pk] || {}).nip05 || '', picture: (profiles[pk] || {}).picture || '', hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
-    const ensureProfile = (pk) => {
-      if (profSubs.has(pk)) return;
-      const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors: [pk] }], {
-        onevent(e) { try { const meta = JSON.parse(e.content); profiles[pk] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(pk); if (m) { m.name = profiles[pk].name; m.picture = profiles[pk].picture; m.nip05 = profiles[pk].nip05; m.hidden = !!meta.hidden; emit(); } } catch {} },
+    // resolve names in BATCHES — one kind-0 query for the whole burst of members, not a separate
+    // subscription per person (which made the roster fill in slowly). Debounced so the initial load is
+    // a single round-trip across the relays.
+    const flushProfiles = () => {
+      profTimer = null;
+      const authors = [...pendingProf].filter(pk => !askedProf.has(pk)); pendingProf = new Set();
+      if (!authors.length) return;
+      authors.forEach(pk => askedProf.add(pk));
+      const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
+        onevent(e) { try { const meta = JSON.parse(e.content); profiles[e.pubkey] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(e.pubkey); if (m) { m.name = profiles[e.pubkey].name; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; } emit(); } catch {} },
         oneose() {},
       });
-      profSubs.set(pk, s);
+      profSubs.push(s);
+    };
+    const ensureProfile = (pk) => {
+      if (askedProf.has(pk) || (profiles[pk] && profiles[pk].name)) return;   // already resolving / already named
+      pendingProf.add(pk);
+      if (!profTimer) profTimer = setTimeout(flushProfiles, 120);
     };
     const makeSub = () => {
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
@@ -367,7 +379,7 @@ window.Fellowship = {
     };
     if (byPub.size) emit(false);   // paint the cached roster immediately, before the relay answers
     const stop = withReconnect(makeSub);
-    return () => { stop(); for (const s of profSubs.values()) { try { s.close(); } catch {} } };
+    return () => { stop(); if (profTimer) clearTimeout(profTimer); for (const s of profSubs) { try { s.close(); } catch {} } };
   },
 
   // relay configuration (persisted) — accepts ws:// or wss:// URLs

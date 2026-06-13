@@ -6175,7 +6175,9 @@
       }
       const MEMBER_D = "trinityone/member:";
       const byPub = /* @__PURE__ */ new Map();
-      const profSubs = /* @__PURE__ */ new Map();
+      const profSubs = [];
+      let pendingProf = /* @__PURE__ */ new Set(), profTimer = null;
+      const askedProf = /* @__PURE__ */ new Set();
       for (const m of loadMembersCache(cp)) {
         if (m && m.pubkey) byPub.set(m.pubkey, m);
       }
@@ -6185,29 +6187,38 @@
         onMembers(visible, !!done);
       };
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || "", nip05: (profiles[pk] || {}).nip05 || "", picture: (profiles[pk] || {}).picture || "", hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
-      const ensureProfile = (pk) => {
-        if (profSubs.has(pk)) return;
-        const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors: [pk] }], {
+      const flushProfiles = () => {
+        profTimer = null;
+        const authors = [...pendingProf].filter((pk) => !askedProf.has(pk));
+        pendingProf = /* @__PURE__ */ new Set();
+        if (!authors.length) return;
+        authors.forEach((pk) => askedProf.add(pk));
+        const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
           onevent(e) {
             try {
               const meta = JSON.parse(e.content);
-              profiles[pk] = { name: meta.name || meta.display_name || "", picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
+              profiles[e.pubkey] = { name: meta.name || meta.display_name || "", picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
               saveProfiles();
-              const m = byPub.get(pk);
+              const m = byPub.get(e.pubkey);
               if (m) {
-                m.name = profiles[pk].name;
-                m.picture = profiles[pk].picture;
-                m.nip05 = profiles[pk].nip05;
+                m.name = profiles[e.pubkey].name;
+                m.picture = profiles[e.pubkey].picture;
+                m.nip05 = profiles[e.pubkey].nip05;
                 m.hidden = !!meta.hidden;
-                emit();
               }
+              emit();
             } catch {
             }
           },
           oneose() {
           }
         });
-        profSubs.set(pk, s);
+        profSubs.push(s);
+      };
+      const ensureProfile = (pk) => {
+        if (askedProf.has(pk) || profiles[pk] && profiles[pk].name) return;
+        pendingProf.add(pk);
+        if (!profTimer) profTimer = setTimeout(flushProfiles, 120);
       };
       const makeSub = () => {
         const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }], {
@@ -6251,7 +6262,8 @@
       const stop = withReconnect(makeSub);
       return () => {
         stop();
-        for (const s of profSubs.values()) {
+        if (profTimer) clearTimeout(profTimer);
+        for (const s of profSubs) {
           try {
             s.close();
           } catch {

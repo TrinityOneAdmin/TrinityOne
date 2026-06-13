@@ -10,7 +10,7 @@ rm -rf "$WWW"
 mkdir -p "$WWW/modules" "$WWW/vendor"
 
 # app shell + code + bundled catalogs/snapshots
-cp index.html engine.js *.jsx catalog.json ebible-catalog.json trinity-videos.json "$WWW/"
+cp index.html engine.js *.jsx catalog.json ebible-catalog.json trinity-videos.json web-audio-manifest.json "$WWW/"
 # PWA assets (manifest + icons are referenced by index.html; sw.js is not registered under Capacitor)
 cp manifest.json sw.js "$WWW/" 2>/dev/null || true
 cp -r icons "$WWW/" 2>/dev/null || true

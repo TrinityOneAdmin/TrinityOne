@@ -705,7 +705,9 @@ function App() {
     dark: t.dark,
     toggleDark: () => setTweak('dark', !t.dark),
     accent: t.accent, setAccent: (a) => setTweak('accent', a),
-    go: setTab, toast,
+    // 'plans'/'bible' aren't top-level tabs — they're the Read tab's two views, so route them there
+    go: (t) => { if (t === 'plans') { setReadView('plans'); setTab('read'); } else if (t === 'bible') { setReadView('bible'); setTab('read'); } else setTab(t); },
+    toast,
     loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
     gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
     addModule: () => Bible.pickFile(),
