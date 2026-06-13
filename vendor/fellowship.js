@@ -6170,7 +6170,7 @@
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || "", nip05: (profiles[pk] || {}).nip05 || "", picture: (profiles[pk] || {}).picture || "", hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
       const ensureProfile = (pk) => {
         if (profSubs.has(pk) || profiles[pk] && profiles[pk].name) return;
-        const s = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pk] }], {
+        const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors: [pk] }], {
           onevent(e) {
             try {
               const meta = JSON.parse(e.content);

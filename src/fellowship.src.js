@@ -337,7 +337,9 @@ window.Fellowship = {
     // touch chattier than a batch, but it reliably fills names in; correctness over cleverness.
     const ensureProfile = (pk) => {
       if (profSubs.has(pk) || (profiles[pk] && profiles[pk].name)) return;
-      const s = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pk] }], {
+      // MUST be churchRelays() not window.Fellowship.relays — on a native install the latter is empty
+      // (no persisted relay), so the name query would hit no relays at all and every member stays anonymous.
+      const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors: [pk] }], {
         onevent(e) { try { const meta = JSON.parse(e.content); profiles[pk] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(pk); if (m) { m.name = profiles[pk].name; m.picture = profiles[pk].picture; m.nip05 = profiles[pk].nip05; m.hidden = !!meta.hidden; emit(); } } catch {} },
         oneose() {},
       });
