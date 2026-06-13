@@ -1311,15 +1311,19 @@ function DashDevotionals() {
   // the list to show: the live order, unless we're mid-drag with a local working order
   const list = order || devos;
   const [seriesOpen, setSeriesOpen] = React.useState({});   // collapsible series sections (keyed by series id)
+  const [churchName, setChurchName] = React.useState('');   // labels a series group by the church that uploaded it
+  React.useEffect(() => {
+    if (!window.Steward || !window.Steward.subscribeProfile) return;
+    return window.Steward.subscribeProfile(p => { if (p && p.name) setChurchName(p.name); });
+  }, []);
   // group devotionals into collapsible series for a tidier list. A devo is "in a series" when its ref names
-  // one; bare "Series N" devos all share one group, labelled by the titles' common "— suffix" (e.g. "Weekly
-  // Plans"). Global order is preserved; non-series devos render as their own plain row.
+  // one; bare "Series N" devos all share one group, labelled by the church that uploaded them (an explicitly
+  // named series keeps its own name). Global order is preserved; non-series devos render as their own row.
   const seriesKeyOf = (d) => { const r = String(d.ref || ''); const m = r.match(/^\s*(.+?)\s*[—\-–:]\s*series\b/i) || r.match(/series\s*:\s*(.+?)\s*$/i); if (m && m[1].trim()) return 'name:' + m[1].trim(); return /series/i.test(r) ? '__series__' : null; };
-  const dashSuffix = (titles) => { const tail = (t) => { const m = String(t || '').match(/[—\-–]\s*([^—\-–]+?)\s*$/); return m ? m[1].trim() : null; }; const ts = titles.map(tail); return ts.length && ts[0] && ts.every(x => x === ts[0]) ? ts[0] : ''; };
   const devoGroups = (() => {
     const out = [], idx = {};
     list.forEach(d => { const k = seriesKeyOf(d); const key = k == null ? 'solo:' + d.id : k; if (idx[key] == null) { idx[key] = out.length; out.push({ key, series: k != null, items: [] }); } out[idx[key]].items.push(d); });
-    out.forEach(g => { if (!g.series) return; const nm = g.key.indexOf('name:') === 0 ? g.key.slice(5) : ''; const sfx = nm ? '' : dashSuffix(g.items.map(d => d.title)); g.label = nm || (sfx ? (/s$/i.test(sfx) ? sfx : sfx + 's') : 'Series'); });
+    out.forEach(g => { if (!g.series) return; const nm = g.key.indexOf('name:') === 0 ? g.key.slice(5) : ''; g.label = nm || churchName || 'Devotionals'; });
     return out;
   })();
   // persist a new order: number each devotional by position, re-publish only the ones that changed
