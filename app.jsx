@@ -680,7 +680,7 @@ function App() {
     accent: t.accent, setAccent: (a) => setTweak('accent', a),
     go: setTab, toast,
     loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
-    gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setTab('read'); },
+    gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
     addModule: () => Bible.pickFile(),
     removeTranslation: (abbr) => Bible.removeModule(abbr),
     openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
@@ -711,7 +711,7 @@ function App() {
     openPlanDay: (plan, day) => {
       const loc = Bible.parseRef(day.ref);
       if (!loc || !Bible.books().includes(loc.book)) { toast(day.ref + ' isn’t in this translation'); return; }
-      setLoc({ book: loc.book, chap: loc.chap, verse: loc.verse }); setTab('read');
+      setLoc({ book: loc.book, chap: loc.chap, verse: loc.verse }); setReadView('bible'); setTab('read');
     },
     openJournal: (j) => setJournal(j),
     openVideo: (v) => setVideo(v),
