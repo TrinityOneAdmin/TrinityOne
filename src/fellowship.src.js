@@ -52,6 +52,35 @@ function scheduleVisible(list) {
   const nowS = Math.floor(Date.now() / 1000);
   return list.filter(m => !m.draft && (!m.publishAt || m.publishAt <= nowS));
 }
+// Re-fire a relay subscription when connectivity returns — a relay restart (e.g. the steward re-running
+// the installer) severs every websocket, and an open subscription won't re-deliver on its own, leaving
+// the list blank until a manual reload. makeSub() opens the relay subscription and returns its closer;
+// on `online` / window focus / tab-visible we swap in a fresh one (debounced) so it self-heals in a
+// second or two. Accumulator state lives in the caller's closure, so re-subscribing just refills it.
+function withReconnect(makeSub) {
+  let closer = makeSub();
+  let lastAt = Date.now();
+  const redo = () => {
+    if (Date.now() - lastAt < 1500) return;   // debounce online+focus+visibility firing together
+    lastAt = Date.now();
+    try { closer && closer(); } catch {}
+    closer = makeSub();
+  };
+  const onVis = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') redo(); };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', redo);
+    window.addEventListener('focus', redo);
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
+  }
+  return () => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', redo);
+      window.removeEventListener('focus', redo);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis);
+    }
+    try { closer && closer(); } catch {}
+  };
+}
 function scheduleNextReveal(list, timer, emit) {
   if (timer) { clearTimeout(timer); timer = null; }
   const nowMs = Date.now();
@@ -254,20 +283,23 @@ window.Fellowship = {
     const MEMBER_D = 'trinityone/member:';
     const ppl = new Map();   // pubkey -> { msgs, joined }
     const tally = () => { let n = 0; for (const v of ppl.values()) if (v.msgs > 0 || v.joined) n++; cb(n); };
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
-      onevent(e) {
-        if (e.pubkey === cp) return;
-        const m = ppl.get(e.pubkey) || { msgs: 0, joined: false };
-        if (e.kind === 30078) {
-          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-          if (d.indexOf(MEMBER_D) !== 0) return;
-          m.joined = !(e.tags.some(t => t[0] === 'deleted') || !e.content);
-        } else { m.msgs++; }
-        ppl.set(e.pubkey, m); tally();
-      },
-      oneose() { tally(); },
-    });
-    return () => { try { sub.close(); } catch {} };
+    const makeSub = () => {
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
+        onevent(e) {
+          if (e.pubkey === cp) return;
+          const m = ppl.get(e.pubkey) || { msgs: 0, joined: false };
+          if (e.kind === 30078) {
+            const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+            if (d.indexOf(MEMBER_D) !== 0) return;
+            m.joined = !(e.tags.some(t => t[0] === 'deleted') || !e.content);
+          } else { m.msgs++; }
+          ppl.set(e.pubkey, m); tally();
+        },
+        oneose() { tally(); },
+      });
+      return () => { try { sub.close(); } catch {} };
+    };
+    return withReconnect(makeSub);
   },
 
   // the church's people, for a member-facing directory: distinct folks (not the church) who joined
@@ -290,21 +322,25 @@ window.Fellowship = {
       });
       profSubs.set(pk, s);
     };
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
-      onevent(e) {
-        if (e.pubkey === cp) return;
-        const m = get(e.pubkey);
-        if (e.kind === 30078) {
-          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-          if (d.indexOf(MEMBER_D) !== 0) return;
-          const left = e.tags.some(t => t[0] === 'deleted') || !e.content;
-          if (left) m.joined = 0; else { let j = e.created_at; try { j = JSON.parse(e.content).joined || e.created_at; } catch {} m.joined = j; }
-        } else { m.msgs++; if (e.created_at > m.lastTs) m.lastTs = e.created_at; }
-        byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit();
-      },
-      oneose() { emit(true); },   // initial load complete
-    });
-    return () => { try { sub.close(); } catch {} for (const s of profSubs.values()) { try { s.close(); } catch {} } };
+    const makeSub = () => {
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
+        onevent(e) {
+          if (e.pubkey === cp) return;
+          const m = get(e.pubkey);
+          if (e.kind === 30078) {
+            const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+            if (d.indexOf(MEMBER_D) !== 0) return;
+            const left = e.tags.some(t => t[0] === 'deleted') || !e.content;
+            if (left) m.joined = 0; else { let j = e.created_at; try { j = JSON.parse(e.content).joined || e.created_at; } catch {} m.joined = j; }
+          } else { m.msgs++; if (e.created_at > m.lastTs) m.lastTs = e.created_at; }
+          byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit();
+        },
+        oneose() { emit(true); },   // initial load complete
+      });
+      return () => { try { sub.close(); } catch {} };
+    };
+    const stop = withReconnect(makeSub);
+    return () => { stop(); for (const s of profSubs.values()) { try { s.close(); } catch {} } };
   },
 
   // relay configuration (persisted) — accepts ws:// or wss:// URLs
@@ -527,18 +563,21 @@ window.Fellowship = {
     const byId = new Map();
     // honour the steward's chosen order (groups without an order fall to the end, by age)
     const emit = () => onGroups([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(e); return; }   // an encrypted group's key envelope
-        if (!d.startsWith(GROUP_D)) return;
-        const id = d.slice(GROUP_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
-      },
-      oneose() { emit(); },
-    });
-    return () => { try { sub.close(); } catch {} };
+    const makeSub = () => {
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(e); return; }   // an encrypted group's key envelope
+          if (!d.startsWith(GROUP_D)) return;
+          const id = d.slice(GROUP_D.length);
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+          try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        },
+        oneose() { emit(); },
+      });
+      return () => { try { sub.close(); } catch {} };
+    };
+    return withReconnect(makeSub);
   },
 
   // ── read the reading plans a church shares (kind-30078, d=plan:) ──
@@ -553,17 +592,21 @@ window.Fellowship = {
       onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
       timer = scheduleNextReveal(all, timer, emit);
     };
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (!d.startsWith(PLAN_D)) return;
-        const id = d.slice(PLAN_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
-      },
-      oneose() { emit(); },
-    });
-    return () => { try { sub.close(); } catch {} if (timer) clearTimeout(timer); };
+    const makeSub = () => {
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          if (!d.startsWith(PLAN_D)) return;
+          const id = d.slice(PLAN_D.length);
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+          try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        },
+        oneose() { emit(); },
+      });
+      return () => { try { sub.close(); } catch {} };
+    };
+    const stop = withReconnect(makeSub);
+    return () => { stop(); if (timer) clearTimeout(timer); };
   },
 
   // ── read the devotionals a church shares (kind-30078, d=devotional:) — full content for rendering ──
@@ -580,17 +623,21 @@ window.Fellowship = {
       onDevos(scheduleVisible(all).sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
       timer = scheduleNextReveal(all, timer, emit);
     };
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (!d.startsWith(DEVO_D)) return;
-        const id = d.slice(DEVO_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
-      },
-      oneose() { emit(); },
-    });
-    return () => { try { sub.close(); } catch {} if (timer) clearTimeout(timer); };
+    const makeSub = () => {
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          if (!d.startsWith(DEVO_D)) return;
+          const id = d.slice(DEVO_D.length);
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+          try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        },
+        oneose() { emit(); },
+      });
+      return () => { try { sub.close(); } catch {} };
+    };
+    const stop = withReconnect(makeSub);
+    return () => { stop(); if (timer) clearTimeout(timer); };
   },
 
   // ── generic reader for the church's own addressable docs with a given d-prefix ──
