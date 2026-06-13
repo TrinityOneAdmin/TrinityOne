@@ -1118,11 +1118,15 @@ function DMInbox({ open, onClose, ctx }) {
 function PeopleScreen({ open, onClose, ctx }) {
   const FS = window.Fellowship;
   const [members, setMembers] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
   const [q, setQ] = React.useState('');
   const np = ctx.church && ctx.church.npub;
   React.useEffect(() => {
-    if (!open || !np || !FS || !FS.subscribeChurchMembers) { setMembers([]); return; }
-    return FS.subscribeChurchMembers(np, setMembers);
+    if (!open || !np || !FS || !FS.subscribeChurchMembers) { setMembers([]); setLoading(false); return; }
+    setLoading(true);
+    const t = setTimeout(() => setLoading(false), 9000);   // safety: stop spinning even on a slow relay
+    const off = FS.subscribeChurchMembers(np, (m, done) => { setMembers(m); if (done) { setLoading(false); clearTimeout(t); } });
+    return () => { clearTimeout(t); if (off) off(); };
   }, [open, np]);
   const me = FS && FS.myPubkey;
   // a member's display: their chosen name, else their @handle (nip05 local part), else the anonymous handle
@@ -1158,7 +1162,12 @@ function PeopleScreen({ open, onClose, ctx }) {
             <Icon name="chevR" size={17} color="var(--clay)" />
           </div>
         ) : null}
-        {list.length === 0 ? (
+        {loading && people.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '54px 24px', color: 'var(--ink-3)' }}>
+            <div style={{ width: 26, height: 26, margin: '0 auto', borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+            <p style={{ marginTop: 14, fontSize: 14 }}>Loading people…</p>
+          </div>
+        ) : list.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '54px 24px', color: 'var(--ink-3)' }}>
             <Icon name="users" size={30} color="var(--ink-3)" />
             <p style={{ margin: '12px 0 0', fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.5, maxWidth: 260, marginLeft: 'auto', marginRight: 'auto' }}>{q ? 'No one matches that.' : 'No one else has joined yet. As your church follows along, they’ll show up here to chat with.'}</p>

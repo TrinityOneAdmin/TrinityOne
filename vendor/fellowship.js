@@ -6036,7 +6036,7 @@
       const MEMBER_D = "trinityone/member:";
       const byPub = /* @__PURE__ */ new Map();
       const profSubs = /* @__PURE__ */ new Map();
-      const emit = () => onMembers([...byPub.values()].filter((m) => m.joined || m.msgs > 0).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)));
+      const emit = (done) => onMembers([...byPub.values()].filter((m) => m.joined || m.msgs > 0).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)), !!done);
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || "", nip05: (profiles[pk] || {}).nip05 || "", picture: (profiles[pk] || {}).picture || "", joined: 0, lastTs: 0, msgs: 0 };
       const ensureProfile = (pk) => {
         if (profSubs.has(pk)) return;
@@ -6087,8 +6087,9 @@
           emit();
         },
         oneose() {
-          emit();
+          emit(true);
         }
+        // initial load complete
       });
       return () => {
         try {
