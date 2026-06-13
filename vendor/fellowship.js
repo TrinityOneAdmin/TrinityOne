@@ -5850,6 +5850,9 @@
     // dev box — secondary, for redundancy
   ];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
+  function churchRelays() {
+    return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
+  }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
     try {
@@ -5926,6 +5929,20 @@
   function saveCountCache(cp, n) {
     try {
       localStorage.setItem(MEMBERCOUNT_KEY + cp, String(n));
+    } catch {
+    }
+  }
+  function loadDocCache(prefix, cp) {
+    try {
+      const a = JSON.parse(localStorage.getItem("trinityone." + prefix + "." + cp) || "[]");
+      return Array.isArray(a) ? a : [];
+    } catch {
+      return [];
+    }
+  }
+  function saveDocCache(prefix, cp, list) {
+    try {
+      localStorage.setItem("trinityone." + prefix + "." + cp, JSON.stringify(list.slice(0, 300)));
     } catch {
     }
   }
@@ -6119,7 +6136,7 @@
         cb(n);
       };
       const makeSub = () => {
-        const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }], {
+        const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }], {
           onevent(e) {
             if (e.pubkey === cp) return;
             const m = ppl.get(e.pubkey) || { msgs: 0, joined: false };
@@ -6170,7 +6187,7 @@
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || "", nip05: (profiles[pk] || {}).nip05 || "", picture: (profiles[pk] || {}).picture || "", hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
       const ensureProfile = (pk) => {
         if (profSubs.has(pk)) return;
-        const s = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pk] }], {
+        const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors: [pk] }], {
           onevent(e) {
             try {
               const meta = JSON.parse(e.content);
@@ -6193,7 +6210,7 @@
         profSubs.set(pk, s);
       };
       const makeSub = () => {
-        const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }], {
+        const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }], {
           onevent(e) {
             if (e.pubkey === cp) return;
             const m = get(e.pubkey);
@@ -6606,9 +6623,15 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => onGroups([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
+      for (const g of loadDocCache("groups", pubk)) {
+        if (g && g.id) byId.set(g.id, g);
+      }
+      const emit = () => {
+        saveDocCache("groups", pubk, [...byId.values()]);
+        onGroups([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
+      };
       const makeSub = () => {
-        const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
+        const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (d.startsWith(GROUPKEY_D)) {
@@ -6639,6 +6662,7 @@
           }
         };
       };
+      if (byId.size) emit();
       return withReconnect(makeSub);
     },
     // ── read the reading plans a church shares (kind-30078, d=plan:) ──
@@ -6651,14 +6675,18 @@
       }
       const PLAN_D = "trinityone/plan:";
       const byId = /* @__PURE__ */ new Map();
+      for (const p of loadDocCache("plans", pubk)) {
+        if (p && p.id) byId.set(p.id, p);
+      }
       let timer = null;
       const emit = () => {
         const all = [...byId.values()];
+        saveDocCache("plans", pubk, all);
         onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
         timer = scheduleNextReveal(all, timer, emit);
       };
       const makeSub = () => {
-        const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
+        const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (!d.startsWith(PLAN_D)) return;
@@ -6685,6 +6713,7 @@
           }
         };
       };
+      if (byId.size) emit();
       const stop = withReconnect(makeSub);
       return () => {
         stop();
@@ -6701,15 +6730,19 @@
       }
       const DEVO_D = "trinityone/devotional:";
       const byId = /* @__PURE__ */ new Map();
+      for (const dv of loadDocCache("devos", pubk)) {
+        if (dv && dv.id) byId.set(dv.id, dv);
+      }
       const ord = (d) => typeof d.order === "number" ? d.order : Infinity;
       let timer = null;
       const emit = () => {
         const all = [...byId.values()];
+        saveDocCache("devos", pubk, all);
         onDevos(scheduleVisible(all).sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
         timer = scheduleNextReveal(all, timer, emit);
       };
       const makeSub = () => {
-        const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
+        const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (!d.startsWith(DEVO_D)) return;
@@ -6736,6 +6769,7 @@
           }
         };
       };
+      if (byId.size) emit();
       const stop = withReconnect(makeSub);
       return () => {
         stop();
@@ -6752,7 +6786,7 @@
       }
       const byId = /* @__PURE__ */ new Map();
       const emit = () => onItems([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(prefix)) return;

@@ -120,6 +120,11 @@ const CANONICAL_RELAYS = [
   'wss://trinityone.tailbeaac0.ts.net/relay',             // dev box — secondary, for redundancy
 ];
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
+// Church content (members, groups, plans, devotionals) must stay reachable on the church's SHARED relays
+// even when the member also runs a private/home relay — otherwise a relay split (groups on one relay,
+// member-joins on another) makes a screen load partial/empty. So we read church docs from the union of
+// the member's own relays + the canonical pool, fanning the query across all of them.
+function churchRelays() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
   try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r)) return r; } catch {}
@@ -165,6 +170,10 @@ function loadMembersCache(cp) { try { const a = JSON.parse(localStorage.getItem(
 function saveMembersCache(cp, list) { try { localStorage.setItem(MEMBERS_KEY + cp, JSON.stringify(list.slice(0, 500))); } catch {} }
 function loadCountCache(cp) { const n = parseInt(localStorage.getItem(MEMBERCOUNT_KEY + cp) || '', 10); return Number.isFinite(n) ? n : null; }
 function saveCountCache(cp, n) { try { localStorage.setItem(MEMBERCOUNT_KEY + cp, String(n)); } catch {} }
+// generic per-church doc cache (groups / plans / devotionals): paint the last-known set instantly on
+// load, then refresh live. `prefix` namespaces the kind of doc.
+function loadDocCache(prefix, cp) { try { const a = JSON.parse(localStorage.getItem('trinityone.' + prefix + '.' + cp) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
+function saveDocCache(prefix, cp, list) { try { localStorage.setItem('trinityone.' + prefix + '.' + cp, JSON.stringify(list.slice(0, 300))); } catch {} }
 
 const AV_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 'crook', 'chalice', 'olive', 'mountain', 'well', 'star'];
 // resolved display = kind-0 name/avatar if known, else a deterministic anonymous handle + symbol
@@ -295,7 +304,7 @@ window.Fellowship = {
     if (cached != null) cb(cached);   // show the last-known count instantly on load
     const tally = () => { let n = 0; for (const v of ppl.values()) if (v.msgs > 0 || v.joined) n++; saveCountCache(cp, n); cb(n); };
     const makeSub = () => {
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
         onevent(e) {
           if (e.pubkey === cp) return;
           const m = ppl.get(e.pubkey) || { msgs: 0, joined: false };
@@ -333,14 +342,14 @@ window.Fellowship = {
     const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || '', nip05: (profiles[pk] || {}).nip05 || '', picture: (profiles[pk] || {}).picture || '', hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
     const ensureProfile = (pk) => {
       if (profSubs.has(pk)) return;
-      const s = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pk] }], {
+      const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors: [pk] }], {
         onevent(e) { try { const meta = JSON.parse(e.content); profiles[pk] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(pk); if (m) { m.name = profiles[pk].name; m.picture = profiles[pk].picture; m.nip05 = profiles[pk].nip05; m.hidden = !!meta.hidden; emit(); } } catch {} },
         oneose() {},
       });
       profSubs.set(pk, s);
     };
     const makeSub = () => {
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
         onevent(e) {
           if (e.pubkey === cp) return;
           const m = get(e.pubkey);
@@ -579,10 +588,11 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onGroups([]); return () => {}; }
     const byId = new Map();
+    for (const g of loadDocCache('groups', pubk)) { if (g && g.id) byId.set(g.id, g); }   // paint cached instantly
     // honour the steward's chosen order (groups without an order fall to the end, by age)
-    const emit = () => onGroups([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
+    const emit = () => { saveDocCache('groups', pubk, [...byId.values()]); onGroups([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
     const makeSub = () => {
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(e); return; }   // an encrypted group's key envelope
@@ -595,6 +605,7 @@ window.Fellowship = {
       });
       return () => { try { sub.close(); } catch {} };
     };
+    if (byId.size) emit();   // paint cached groups before the relay answers
     return withReconnect(makeSub);
   },
 
@@ -604,14 +615,16 @@ window.Fellowship = {
     if (!pubk) { onPlans([]); return () => {}; }
     const PLAN_D = 'trinityone/plan:';
     const byId = new Map();
+    for (const p of loadDocCache('plans', pubk)) { if (p && p.id) byId.set(p.id, p); }   // paint cached instantly
     let timer = null;   // re-emit when the next scheduled item is due (drip release)
     const emit = () => {
       const all = [...byId.values()];
+      saveDocCache('plans', pubk, all);
       onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
       timer = scheduleNextReveal(all, timer, emit);
     };
     const makeSub = () => {
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           if (!d.startsWith(PLAN_D)) return;
@@ -623,6 +636,7 @@ window.Fellowship = {
       });
       return () => { try { sub.close(); } catch {} };
     };
+    if (byId.size) emit();   // paint cached plans before the relay answers
     const stop = withReconnect(makeSub);
     return () => { stop(); if (timer) clearTimeout(timer); };
   },
@@ -633,16 +647,18 @@ window.Fellowship = {
     if (!pubk) { onDevos([]); return () => {}; }
     const DEVO_D = 'trinityone/devotional:';
     const byId = new Map();
+    for (const dv of loadDocCache('devos', pubk)) { if (dv && dv.id) byId.set(dv.id, dv); }   // paint cached instantly
     // honour the steward's explicit order (lower = first); unordered devotionals fall back to newest-first
     const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
     let timer = null;   // re-emit when the next scheduled devotional is due (drip release)
     const emit = () => {
       const all = [...byId.values()];
+      saveDocCache('devos', pubk, all);
       onDevos(scheduleVisible(all).sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
       timer = scheduleNextReveal(all, timer, emit);
     };
     const makeSub = () => {
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           if (!d.startsWith(DEVO_D)) return;
@@ -654,6 +670,7 @@ window.Fellowship = {
       });
       return () => { try { sub.close(); } catch {} };
     };
+    if (byId.size) emit();   // paint cached devotionals before the relay answers
     const stop = withReconnect(makeSub);
     return () => { stop(); if (timer) clearTimeout(timer); };
   },
@@ -664,7 +681,7 @@ window.Fellowship = {
     if (!pubk) { onItems([]); return () => {}; }
     const byId = new Map();
     const emit = () => onItems([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
+    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(prefix)) return;
