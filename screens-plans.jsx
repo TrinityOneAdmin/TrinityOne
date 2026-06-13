@@ -27,6 +27,32 @@ function DevoCard({ d, onClick }) {
   );
 }
 
+// a church devotional SERIES as a 2-col card (same dimensions as a plan/devotional card) — opens the series
+function DevoSeriesCard({ group, ctx }) {
+  const prog = ctx.devoProgress || {};
+  const read = (d) => !!(prog[d.id] && prog[d.id].length);
+  const next = group.items.find(d => !read(d)) || group.items[0];
+  const started = group.items.some(read);
+  return (
+    <div onClick={() => ctx.openChurchDevo(next)} style={{
+      borderRadius: 22, overflow: 'hidden', cursor: 'pointer', position: 'relative',
+      background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)',
+    }}>
+      <div style={{ height: 80, background: 'var(--sage)', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 80% 0%, rgba(255,255,255,.3), transparent 55%)' }} />
+        <div style={{ position: 'absolute', right: -16, bottom: -22, opacity: .2 }}><Icon name="read" size={120} stroke={1.3} color="#fff" /></div>
+        <span style={{ position: 'absolute', top: 12, left: 14, background: 'rgba(255,255,255,.22)', color: '#fff',
+          padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, backdropFilter: 'blur(4px)' }}>Series</span>
+      </div>
+      <div style={{ padding: '13px 15px 15px' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700, lineHeight: 1.1, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{group.name}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3 }}>{group.items.length} devotionals</div>
+        <div style={{ marginTop: 11, fontSize: 12.5, color: 'var(--clay)', fontWeight: 700 }}>{started ? 'Continue →' : 'Begin →'}</div>
+      </div>
+    </div>
+  );
+}
+
 // group church devotionals by the steward's explicit Series field (mirrors the steward console). Devotionals
 // with no series, or a series of one, stay as standalone cards. Members' grouping == whatever the steward named.
 function groupDevosBySeries(devos) {
@@ -35,36 +61,6 @@ function groupDevosBySeries(devos) {
   const out = [];
   for (const g of groups.values()) { if (g.items.length < 2) singles.push(...g.items); else out.push(g); }
   return { groups: out, singles };
-}
-// a collapsible series: header (name + count) expanding to compact per-devotional rows
-function DevoSeries({ group, ctx }) {
-  const [open, setOpen] = React.useState(false);
-  return (
-    <div style={{ marginBottom: 12, border: '1px solid var(--line)', borderRadius: 18, background: 'var(--surface)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
-      <button onClick={() => setOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
-        <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="read" size={21} color="#fff" /></div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.name}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{group.items.length} devotionals</div>
-        </div>
-        <Icon name={open ? 'chevU' : 'chevD'} size={18} color="var(--ink-3)" />
-      </button>
-      {open ? (
-        <div style={{ padding: '0 12px 8px' }}>
-          {group.items.map((d, i) => (
-            <div key={d.id} onClick={() => ctx.openChurchDevo(d)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 8px', borderTop: '1px solid var(--line)', cursor: 'pointer' }}>
-              <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, color: 'var(--ink-3)' }}>{i + 1}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</div>
-                <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{d.ref || 'A reflection'}</div>
-              </div>
-              <Icon name="chevR" size={16} color="var(--ink-3)" />
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 // a church devotional series as a featured hero (like the plan hero): Begin/Continue opens the next
@@ -149,6 +145,7 @@ function PlanCard({ p, ctx, onClick, corner }) {
 function PlansScreen({ ctx }) {
   const D = window.TrinityData;
   const [tab, setTab] = useP('mine');                  // 'mine' | 'browse'
+  const [discoverOpen, setDiscoverOpen] = useP(false);   // collapse the Discover-plans grid in Browse
   const churchPlans = ctx.churchPlans || [];           // plans the church's steward shared
   const churchName = (ctx.church && ctx.church.name) || 'your church';
   const allPlans = [...churchPlans, ...D.PLANS];
@@ -252,32 +249,35 @@ function PlansScreen({ ctx }) {
         </React.Fragment>
       ) : (
         <React.Fragment>
+          {(ctx.churchDevos || []).length ? (() => {
+            const { groups, singles } = groupDevosBySeries(ctx.churchDevos);
+            return (
+              <React.Fragment>
+                <SectionLabel>{churchName} devotionals</SectionLabel>
+                <div style={grid}>
+                  {groups.map(g => <DevoSeriesCard key={g.name} group={g} ctx={ctx} />)}
+                  {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
+                </div>
+              </React.Fragment>
+            );
+          })() : null}
           {churchPlans.length ? (
             <React.Fragment>
-              <SectionLabel>From {churchName}</SectionLabel>
+              <SectionLabel>Plans from {churchName}</SectionLabel>
               <div style={grid}>
                 {churchPlans.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, inMine(p))} />)}
               </div>
             </React.Fragment>
           ) : null}
           <SectionLabel>Discover plans</SectionLabel>
-          <div style={{ ...grid, animationDelay: '.1s' }}>
-            {D.PLANS.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, inMine(p))} />)}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'trinityFade .5s ease .1s both' }}>
+            {(discoverOpen ? D.PLANS : D.PLANS.slice(0, 4)).map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, inMine(p))} />)}
           </div>
-          {(ctx.churchDevos || []).length ? (() => {
-            const { groups, singles } = groupDevosBySeries(ctx.churchDevos);
-            return (
-              <React.Fragment>
-                <SectionLabel>{churchName} devotionals</SectionLabel>
-                {groups.map(g => <DevoSeries key={g.name} group={g} ctx={ctx} />)}
-                {singles.length ? (
-                  <div style={{ ...grid, animationDelay: '.1s' }}>
-                    {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
-                  </div>
-                ) : null}
-              </React.Fragment>
-            );
-          })() : null}
+          {D.PLANS.length > 4 ? (
+            <button onClick={() => setDiscoverOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, width: '100%', marginTop: 12, padding: '12px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+              {discoverOpen ? 'Show fewer' : `Show all ${D.PLANS.length} plans`} <Icon name={discoverOpen ? 'chevU' : 'chevD'} size={17} color="var(--clay)" />
+            </button>
+          ) : null}
         </React.Fragment>
       )}
     </ScreenScroll>
