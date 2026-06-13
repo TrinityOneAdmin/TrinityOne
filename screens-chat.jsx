@@ -1125,10 +1125,11 @@ function PeopleScreen({ open, onClose, ctx }) {
     return FS.subscribeChurchMembers(np, setMembers);
   }, [open, np]);
   const me = FS && FS.myPubkey;
-  const handleOf = (m) => m.nip05 ? '@' + String(m.nip05).split('@')[0] : (m.name ? '@' + m.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30) : '');
+  // a member's display: their chosen name, else their @handle (nip05 local part), else the anonymous handle
+  const nameOf = (m) => (m.name && m.name.trim()) || (m.nip05 ? String(m.nip05).split('@')[0] : '') || FS.displayFor(m.pubkey).handle;
   const ql = q.trim().toLowerCase();
   const people = members.filter(m => m.pubkey !== me);
-  const list = people.filter(m => { if (!ql) return true; const d = FS.displayFor(m.pubkey); return (d.handle || '').toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql); });
+  const list = people.filter(m => !ql || nameOf(m).toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql));
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
@@ -1153,13 +1154,16 @@ function PeopleScreen({ open, onClose, ctx }) {
             <p style={{ margin: '12px 0 0', fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.5, maxWidth: 260, marginLeft: 'auto', marginRight: 'auto' }}>{q ? 'No one matches that.' : 'No one else has joined yet. As your church follows along, they’ll show up here to chat with.'}</p>
           </div>
         ) : list.map(m => {
-          const d = FS.displayFor(m.pubkey); const h = handleOf(m);
+          const d = FS.displayFor(m.pubkey);
+          const name = nameOf(m);
+          const local = m.nip05 ? String(m.nip05).split('@')[0] : '';
+          const dup = local && name.toLowerCase().replace(/[^a-z0-9]+/g, '') === local.toLowerCase();   // name already is the handle
           return (
             <div key={m.pubkey} onClick={() => { onClose(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 6px', borderBottom: '1px solid var(--line-2)', cursor: 'pointer' }}>
-              <UserAvatar av={avOf(d)} name={d.handle} size={44} />
+              <UserAvatar av={avOf(d)} name={name} size={44} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.handle}</div>
-                {h ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--ink-3)' }}>{h}{m.nip05 ? <Icon name="check" size={11} stroke={3} color="var(--sage)" /> : null}</div> : null}
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+                {local && !dup ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--ink-3)' }}>@{local}<Icon name="check" size={11} stroke={3} color="var(--sage)" /></div> : null}
               </div>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', borderRadius: 999, padding: '7px 12px', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}><Icon name="chat" size={14} color="currentColor" /> Message</span>
             </div>
