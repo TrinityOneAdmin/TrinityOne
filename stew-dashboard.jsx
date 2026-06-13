@@ -1312,6 +1312,7 @@ function DashDevotionals() {
   const [order, setOrder] = React.useState(null);   // local working order while dragging (array of devos)
   const [dragId, setDragId] = React.useState(null);
   const [overId, setOverId] = React.useState(null);
+  const [seriesRename, setSeriesRename] = React.useState(null);   // { items, current } when naming/renaming a series
   // the list to show: the live order, unless we're mid-drag with a local working order
   const list = order || devos;
   const [seriesOpen, setSeriesOpen] = React.useState({});   // collapsible series sections (keyed by series id)
@@ -1370,6 +1371,7 @@ function DashDevotionals() {
     <div style={{ position: 'relative', height: '100%' }}>
       {adding ? <NewDevotionalModal onClose={() => setAdding(false)} seriesOptions={seriesOptions} /> : null}
       {editing ? <NewDevotionalModal editing={editing} onClose={() => setEditing(null)} seriesOptions={seriesOptions} /> : null}
+      {seriesRename ? <SeriesNameModal current={seriesRename.current} count={seriesRename.items.length} onSave={(n) => renameSeries(seriesRename.items, n)} onClose={() => setSeriesRename(null)} /> : null}
       <Panel scroll title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
@@ -1418,7 +1420,7 @@ function DashDevotionals() {
                       <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.label}</div>
                       <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.items.length} devotionals{g.named ? '' : ' · unnamed'}</div>
                     </div>
-                    <button onClick={(e) => { e.stopPropagation(); const n = window.prompt(g.named ? 'Rename this series' : 'Name this series (groups these in members’ apps)', g.named ? g.label : ''); if (n && n.trim()) renameSeries(g.items, n.trim()); }}
+                    <button onClick={(e) => { e.stopPropagation(); setSeriesRename({ items: g.items, current: g.named ? g.label : '' }); }}
                       title={g.named ? 'Rename series' : 'Name this series'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> {g.named ? 'Rename' : 'Name'}</button>
                     <Icon name={seriesOpen[g.key] ? 'chevU' : 'chevD'} size={17} color="var(--ink-3)" />
                   </div>
@@ -1913,6 +1915,30 @@ function NameEditModal({ current, isNetwork, onSave, onClose }) {
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>This is the name your {isNetwork ? 'churches' : 'members'} see in the app. You can change it anytime.</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>{label} name</div>
         <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder={isNetwork ? 'e.g. Regions Beyond' : 'e.g. Grace Community Church'} style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
+          <button onClick={save} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !name.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// styled dialog for naming / renaming a devotional series (replaces window.prompt)
+function SeriesNameModal({ current, count, onSave, onClose }) {
+  const [name, setName] = React.useState(current || '');
+  const [busy, setBusy] = React.useState(false);
+  const save = async () => { if (!name.trim()) return; setBusy(true); await Promise.resolve(onSave(name.trim())); setBusy(false); onClose(); };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={21} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{current ? 'Rename series' : 'Name this series'}</div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Groups these {count} devotionals under one heading in your members’ apps. You can change it anytime.</p>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Series name</div>
+        <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. The Weekly Word" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
           <button onClick={save} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !name.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
