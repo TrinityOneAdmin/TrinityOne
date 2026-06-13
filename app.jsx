@@ -888,6 +888,7 @@ function App() {
             ) : (
               <React.Fragment>
                 <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>
+                <MiniPlayer ctx={ctx} />
                 <TabBar active={tab} onChange={setTab} />
               </React.Fragment>
             )}

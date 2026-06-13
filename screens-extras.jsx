@@ -117,10 +117,7 @@ function ListenScreen({ open, onClose, ctx }) {
   const audioFeed = (ctx.church && ctx.church.audioFeed) || '';
   const [data, setData] = useX(null);     // { channel, episodes }
   const [loading, setLoading] = useX(false);
-  const [cur, setCur] = useX(null);       // episode now playing
-  const [playing, setPlaying] = useX(false);
-  const [pos, setPos] = useX({ t: 0, d: 0 });
-  const audioRef = React.useRef(null);
+  const audio = useTrinityAudio();         // persistent player state — survives closing this screen
   const FS = window.Fellowship;
 
   React.useEffect(() => {
@@ -134,24 +131,20 @@ function ListenScreen({ open, onClose, ctx }) {
       .then(() => setLoading(false));
   }, [open, audioFeed]);
 
-  // pause playback when the screen is closed
-  React.useEffect(() => { if (!open && audioRef.current) { try { audioRef.current.pause(); } catch (e) {} setPlaying(false); } }, [open]);
-
   const episodes = (data && data.episodes) || [];
-  const playEp = (ep) => {
-    setCur(ep); setPlaying(true);
-    setTimeout(() => { const a = audioRef.current; if (a) { a.src = ep.audio; a.play().then(() => setPlaying(true)).catch(() => { setPlaying(false); ctx.toast('Couldn’t play that episode'); }); } }, 0);
-  };
-  const toggle = () => { const a = audioRef.current; if (!a || !cur) return; if (a.paused) { a.play().then(() => setPlaying(true)).catch(() => {}); } else { a.pause(); setPlaying(false); } };
-  const seek = (delta) => { const a = audioRef.current; if (a && a.duration) a.currentTime = Math.max(0, Math.min(a.duration, a.currentTime + delta)); };
-  const onBar = (e) => { const a = audioRef.current; if (!a || !a.duration) return; const r = e.currentTarget.getBoundingClientRect(); a.currentTime = ((e.clientX - r.left) / r.width) * a.duration; };
+  const chName = (data && data.channel && data.channel.name) || 'Sermons';
+  const trackOf = (ep) => ({ id: ep.id, title: ep.title, subtitle: [lsnPubDate(ep.published), chName].filter(Boolean).join(' · '), src: ep.audio, image: ep.image, album: chName });
+  const curId = audio.track && audio.track.id;
+  const cur = episodes.find(e => e.id === curId) || null;
+  const playing = audio.playing;
+  const pos = { t: audio.t, d: audio.d };
+  const playEp = (ep) => { if (!ep.audio) { ctx.toast('That episode has no audio'); return; } window.TrinityAudio.play(trackOf(ep), episodes.map(trackOf)); };
+  const toggle = () => window.TrinityAudio.toggle();
+  const seek = (delta) => window.TrinityAudio.seek(delta);
+  const onBar = (e) => { const r = e.currentTarget.getBoundingClientRect(); window.TrinityAudio.seekTo((e.clientX - r.left) / r.width); };
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <audio ref={audioRef} preload="none"
-        onTimeUpdate={() => { const a = audioRef.current; if (a) setPos({ t: a.currentTime, d: a.duration || 0 }); }}
-        onEnded={() => { setPlaying(false); const i = episodes.findIndex(e => e.id === (cur && cur.id)); if (i >= 0 && episodes[i + 1]) playEp(episodes[i + 1]); }}
-        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} style={{ display: 'none' }} />
       <div style={{ paddingTop: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
           <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)',
