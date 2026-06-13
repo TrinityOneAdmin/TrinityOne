@@ -357,7 +357,13 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
   const aOpts = window.AUDIO_BIBLE_OPTIONS || { translations: [], readers: [] };
   const [voice, setVoice] = React.useState(() => { const c = window.getAudioChoice ? window.getAudioChoice() : { translation: 'BSB', reader: 'david' }; return c.translation + '/' + c.reader; });
   const [vt, vr] = voice.split('/');
-  const pickAudio = (t, r) => { const v = t + '/' + r; lsSet('trinityone.audioVoice', v); setVoice(v); };
+  const pickAudio = (t, r) => {
+    const v = t + '/' + r; lsSet('trinityone.audioVoice', v); setVoice(v);
+    // if a chapter is loaded, reload it in the newly-chosen voice/translation so the change is audible now
+    const cur = window.TrinityAudio && window.TrinityAudio.current;
+    const m = cur && /^bible:(\d+):(\d+)$/.exec(cur.id || '');
+    if (m && window.playBibleChapter) window.playBibleChapter(+m[1], +m[2]);
+  };
   const aBtn = (on) => ({ flex: 1, padding: '11px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'var(--clay-soft)' : 'var(--surface-2)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' });
   return (
     <BottomSheet open={open} onClose={onClose}>
