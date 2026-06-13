@@ -208,6 +208,27 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
 window.NewIdentitySheet = NewIdentitySheet;
 
 // ════════ Profile sheet (reorganised) ════════
+// in-place switch: whether this member appears in their church's People directory. Default visible; turning
+// it off publishes `hidden` on the profile so other members' apps drop them from the list.
+function DirectoryToggle({ identity, onSave, ctx }) {
+  const [hidden, setHidden] = useId(!!identity.hidden);
+  useIdE(() => { setHidden(!!identity.hidden); }, [identity]);
+  const visible = !hidden;
+  const flip = () => { const nv = !hidden; setHidden(nv); onSave({ hidden: nv }); ctx.toast(nv ? 'Hidden from the church directory' : 'Visible in the church directory'); };
+  return (
+    <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left' }}>
+      <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface-2)', color: 'var(--ink-2)' }}>
+        <Icon name="users" size={19} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show me in the directory</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 1 }}>{visible ? 'Your church can find you in People' : 'Hidden — you can still message and be messaged'}</div>
+      </div>
+      <button onClick={flip} role="switch" aria-checked={visible} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', padding: 3, background: visible ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+        <div style={{ width: 22, height: 22, borderRadius: 999, background: '#fff', boxShadow: 'var(--shadow)', transform: visible ? 'translateX(18px)' : 'translateX(0)', transition: 'transform .15s' }} /></button>
+    </div>
+  );
+}
+
 function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   const D = window.TrinityData;
   const [edit, setEdit] = useId(false);
@@ -307,6 +328,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 4px 9px' }}>MY CHURCH</div>
         <Group>
           <Row icon="qr" label="Follow a church" sub="Scan a code or paste a church’s link" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openChurchSwitcher('follow'); }} />
+          <DirectoryToggle identity={identity} onSave={onSave} ctx={ctx} />
         </Group>
 
         {/* help & guides */}

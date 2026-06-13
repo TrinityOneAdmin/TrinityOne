@@ -106,6 +106,15 @@ function relays() {
 }
 
 const pool = new SimplePool();
+// decode a base64url VAPID key to the Uint8Array the Push API wants
+function _b64ToU8(base64) {
+  const pad = '='.repeat((4 - base64.length % 4) % 4);
+  const s = (base64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(s); const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
 let sk = null, pub = null;                 // the ACTIVE signing identity (church, or an owned network when toggled)
 // NIP-42: prove the church/network key when a relay challenges, so the console reads invite-only groups.
 pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); return finalizeEvent(authEvent, sk); };
@@ -171,6 +180,30 @@ window.Steward = {
     if (m.split(' ').length < 12) throw new Error('Enter the full 12-word recovery phrase.');
     setKey(m); lsSet(KEY_LS, m);   // setKey -> privateKeyFromSeedWords throws if the phrase is invalid
     return { npub: window.Steward.npub };
+  },
+
+  // ---- web push: notify the steward's phone when someone joins (PWA only; Capacitor → local notifs) ----
+  // The subscription is filed under the CHURCH key, so the gateway pushes church-targeted alerts (joins)
+  // to whichever devices proved that key. Returns a status string the UI can reflect.
+  async registerPush() {
+    try {
+      if (!churchPub || !churchSk) return 'no-key';
+      if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return 'native';
+      if (typeof navigator === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported';
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') { const ok = await Notification.requestPermission(); if (ok !== 'granted') return 'denied'; }
+      if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') return 'denied';
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        const vapid = await fetch('/push/vapid').then(r => r.json()).catch(() => null);
+        if (!vapid || !vapid.publicKey) return 'no-vapid';
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _b64ToU8(vapid.publicKey) });
+      }
+      // prove control of the church key (NIP-98), bound to this endpoint, so the gateway files it under churchPub
+      const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', sub.endpoint], ['method', 'POST']], content: '' }, churchSk);
+      const r = await fetch('/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sub, auth }) });
+      return r.ok ? 'on' : 'error';
+    } catch { return 'error'; }
   },
 
   // ---- publish (signed by the church) ----

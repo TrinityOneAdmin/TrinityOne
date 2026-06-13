@@ -599,6 +599,32 @@ function Panel({ title, action, children, style = {}, scroll = false }) {
   );
 }
 
+// lets the steward put join alerts on their phone (web-push, PWA). Silently re-registers if permission
+// is already granted; otherwise a tap prompts for it. Hidden on native (uses local notifs) / unsupported.
+function PushEnabler() {
+  const [state, setState] = React.useState('off');   // off | working | on | denied | hide
+  React.useEffect(() => {
+    if (typeof Notification === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) { setState('hide'); return; }
+    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) { setState('hide'); return; }
+    if (Notification.permission === 'granted') { window.Steward.registerPush().then(r => setState(r === 'on' ? 'on' : (r === 'native' || r === 'unsupported' ? 'hide' : 'off'))); }
+    else if (Notification.permission === 'denied') setState('denied');
+  }, []);
+  if (state === 'hide') return null;
+  const enable = async () => { setState('working'); const r = await window.Steward.registerPush(); setState(r === 'on' ? 'on' : (r === 'denied' ? 'denied' : 'off')); };
+  const on = state === 'on';
+  return (
+    <button onClick={on ? undefined : enable} disabled={state === 'working' || on} title={on ? 'You’ll get a phone notification when someone joins' : 'Get a phone notification when a new member joins'}
+      style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', boxSizing: 'border-box', padding: '10px 13px', borderRadius: 12, cursor: on ? 'default' : 'pointer', textAlign: 'left',
+        background: on ? 'color-mix(in oklab, var(--sage) 12%, var(--surface))' : 'var(--surface-2)', border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 40%, transparent)' : 'var(--line)'), fontFamily: 'var(--font-ui)' }}>
+      <Icon name="bell" size={16} color={on ? 'var(--sage)' : 'var(--clay)'} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{on ? 'Join alerts are on' : 'Notify my phone on joins'}</div>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{state === 'working' ? 'Enabling…' : state === 'denied' ? 'Notifications are blocked in your browser settings' : on ? 'A push lands here even when the console is shut' : 'Tap to allow notifications'}</div>
+      </div>
+    </button>
+  );
+}
+
 function DashOverview({ onTab }) {
   const groups = window.useStewardGroups();   // real chat groups (the focus)
   const members = window.useStewardMembers(); // real members (joined and/or active)
@@ -632,6 +658,7 @@ function DashOverview({ onTab }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>
           <Panel title="Joining code">
             <JoinCard qrSize={92} />
+            <div style={{ marginTop: 12 }}><PushEnabler /></div>
           </Panel>
           <Panel title="Recent activity" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
@@ -1357,6 +1384,7 @@ function DashDevotionals() {
   const [dragId, setDragId] = React.useState(null);
   const [overId, setOverId] = React.useState(null);
   const [seriesRename, setSeriesRename] = React.useState(null);   // { items, current } when naming/renaming a series
+  const [seriesSchedule, setSeriesSchedule] = React.useState(null);   // { items, label } when drip-scheduling a series
   // the list to show: the live order, unless we're mid-drag with a local working order
   const list = order || devos;
   const [seriesOpen, setSeriesOpen] = React.useState({});   // collapsible series sections (keyed by series id)
@@ -1383,6 +1411,11 @@ function DashDevotionals() {
   })();
   // give a group an explicit name (also migrates a legacy "Series N" group): re-publish each with the new series
   const renameSeries = (items, name) => { items.forEach(d => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: name, publishAt: d.publishAt })); };
+  // drip-release a series: stagger each item's publishAt by `interval` seconds from `startSec`, in display
+  // order. A start at/below now means the first item publishes immediately; the rest land on the cadence.
+  const scheduleSeries = (items, startSec, intervalSec) => { items.forEach((d, i) => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: d.series, publishAt: startSec + i * intervalSec })); };
+  // clear all schedules in a series (publish everything now)
+  const unscheduleSeries = (items) => { items.forEach(d => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: d.series, publishAt: 0 })); };
   // persist a new order: number each devotional by position, re-publish only the ones that changed (keep series)
   const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, series: d.series, order: i, publishAt: d.publishAt }); }); };
   // sort the list and bake it into the saved order (so the member app shows the same). "number" is a
@@ -1416,6 +1449,7 @@ function DashDevotionals() {
       {adding ? <NewDevotionalModal onClose={() => setAdding(false)} seriesOptions={seriesOptions} /> : null}
       {editing ? <NewDevotionalModal editing={editing} onClose={() => setEditing(null)} seriesOptions={seriesOptions} /> : null}
       {seriesRename ? <SeriesNameModal current={seriesRename.current} count={seriesRename.items.length} onSave={(n) => renameSeries(seriesRename.items, n)} onClose={() => setSeriesRename(null)} /> : null}
+      {seriesSchedule ? <SeriesScheduleModal label={seriesSchedule.label} count={seriesSchedule.items.length} onApply={(start, interval) => scheduleSeries(seriesSchedule.items, start, interval)} onClear={() => unscheduleSeries(seriesSchedule.items)} onClose={() => setSeriesSchedule(null)} /> : null}
       <Panel scroll title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
@@ -1467,6 +1501,8 @@ function DashDevotionals() {
                       <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.label}</div>
                       <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.items.length} devotionals{g.named ? '' : ' · unnamed'}</div>
                     </div>
+                    <button onClick={(e) => { e.stopPropagation(); setSeriesSchedule({ items: g.items, label: g.label }); }}
+                      title="Drip-release this series on a cadence" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="clock" size={13} color="currentColor" /> Schedule</button>
                     <button onClick={(e) => { e.stopPropagation(); setSeriesRename({ items: g.items, current: g.named ? g.label : '' }); }}
                       title={g.named ? 'Rename series' : 'Name this series'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> {g.named ? 'Rename' : 'Name'}</button>
                     <Icon name={seriesOpen[g.key] ? 'chevU' : 'chevD'} size={17} color="var(--ink-3)" />
@@ -1989,6 +2025,49 @@ function SeriesNameModal({ current, count, onSave, onClose }) {
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
           <button onClick={save} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !name.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// drip-release a whole series on a cadence: pick a start + interval, and each item's release is staggered
+// in order (one a day / week / fortnight / month). Members see each only when its turn comes.
+function SeriesScheduleModal({ label, count, onApply, onClear, onClose }) {
+  const CADENCES = [['1d', 'Every day', 86400], ['1w', 'Weekly', 7 * 86400], ['2w', 'Fortnightly', 14 * 86400], ['1m', 'Monthly', 30 * 86400]];
+  const nextSunday9 = () => { const d = new Date(); d.setHours(9, 0, 0, 0); d.setDate(d.getDate() + ((7 - d.getDay()) % 7 || 7)); return Math.floor(d.getTime() / 1000); };
+  const [startSec, setStartSec] = React.useState(nextSunday9);
+  const [cad, setCad] = React.useState('1w');
+  const [busy, setBusy] = React.useState(false);
+  const interval = (CADENCES.find(c => c[0] === cad) || CADENCES[1])[2];
+  const toLocalInput = (sec) => { const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const fromLocalInput = (s) => { const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : startSec; };
+  const lastSec = startSec + (count - 1) * interval;
+  const fmt = (sec) => new Date(sec * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  const apply = async () => { setBusy(true); await Promise.resolve(onApply(startSec, interval)); setBusy(false); onClose(); };
+  const clear = async () => { setBusy(true); await Promise.resolve(onClear()); setBusy(false); onClose(); };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="clock" size={21} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Schedule release</div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Drip <b>{label}</b> out to your members — its {count} devotionals release one at a time, in their current order.</p>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>First one releases</div>
+        <input type="datetime-local" value={toLocalInput(startSec)} onChange={e => setStartSec(fromLocalInput(e.target.value))} style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Then one</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          {CADENCES.map(([id, lbl]) => (
+            <button key={id} onClick={() => setCad(id)} style={{ flex: '1 1 0', minWidth: 92, padding: '9px 10px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, background: cad === id ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (cad === id ? 'var(--clay)' : 'var(--line)'), color: cad === id ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{lbl}</button>
+          ))}
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 11, padding: '10px 13px', lineHeight: 1.5, marginBottom: 18 }}>
+          First on <b>{fmt(startSec)}</b>, last on <b>{fmt(lastSec)}</b>{startSec * 1000 <= Date.now() ? ' · the first one publishes straight away' : ''}.
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={clear} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: 13, fontSize: 13.5 }} title="Clear schedules — publish all now">Publish all now</button>
+          <button onClick={apply} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name="clock" size={15} color="#fff" /> {busy ? 'Scheduling…' : 'Schedule'}</button>
         </div>
       </div>
     </div>

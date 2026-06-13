@@ -9675,6 +9675,14 @@ zoo`.split("\n");
     return out;
   }
   var pool = new SimplePool();
+  function _b64ToU8(base642) {
+    const pad2 = "=".repeat((4 - base642.length % 4) % 4);
+    const s = (base642 + pad2).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(s);
+    const out = new Uint8Array(raw.length);
+    for (let i3 = 0; i3 < raw.length; i3++) out[i3] = raw.charCodeAt(i3);
+    return out;
+  }
   var sk = null;
   var pub = null;
   pool.automaticallyAuth = () => async (authEvent) => {
@@ -9763,6 +9771,33 @@ zoo`.split("\n");
       setKey(m);
       lsSet(KEY_LS, m);
       return { npub: window.Steward.npub };
+    },
+    // ---- web push: notify the steward's phone when someone joins (PWA only; Capacitor → local notifs) ----
+    // The subscription is filed under the CHURCH key, so the gateway pushes church-targeted alerts (joins)
+    // to whichever devices proved that key. Returns a status string the UI can reflect.
+    async registerPush() {
+      try {
+        if (!churchPub || !churchSk) return "no-key";
+        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return "native";
+        if (typeof navigator === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) return "unsupported";
+        if (typeof Notification !== "undefined" && Notification.permission === "default") {
+          const ok = await Notification.requestPermission();
+          if (ok !== "granted") return "denied";
+        }
+        if (typeof Notification !== "undefined" && Notification.permission !== "granted") return "denied";
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          const vapid = await fetch("/push/vapid").then((r2) => r2.json()).catch(() => null);
+          if (!vapid || !vapid.publicKey) return "no-vapid";
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _b64ToU8(vapid.publicKey) });
+        }
+        const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", sub.endpoint], ["method", "POST"]], content: "" }, churchSk);
+        const r = await fetch("/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub, auth }) });
+        return r.ok ? "on" : "error";
+      } catch {
+        return "error";
+      }
     },
     // ---- publish (signed by the church) ----
     publishProfile(meta) {

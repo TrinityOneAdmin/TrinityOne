@@ -83,6 +83,22 @@ function pushTo(memberHex, payload) {
     if (err && (err.statusCode === 410 || err.statusCode === 404)) { pushSubs[memberHex] = (pushSubs[memberHex] || []).filter(s => s.endpoint !== sub.endpoint); saveSubs(); }
   }));
 }
+// fire a push to the church's steward when a brand-new member joins (a member: doc for one of our
+// churches, not a leave, not the church itself, and not someone we already counted). wasMember is the
+// membership state captured BEFORE note() ran, so a returning member's heartbeat doesn't re-alert.
+function maybePushJoin(evt, wasMember) {
+  try {
+    if (wasMember || evt.kind !== 30078) return;
+    const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
+    if (!d.startsWith(MEMBER_D)) return;
+    const churchPub = d.slice(MEMBER_D.length);
+    if (!CHURCH_PUBS.has(churchPub) || evt.pubkey === churchPub) return;
+    if ((evt.tags || []).some(t => t[0] === 'deleted') || !evt.content) return;   // a leave, not a join
+    let name = '';   // best-effort: the joiner's latest kind-0 display name
+    for (let i = events.length - 1; i >= 0; i--) { const e = events[i]; if (e.pubkey === evt.pubkey && e.kind === 0) { try { const m = JSON.parse(e.content); name = m.name || m.display_name || ''; } catch {} break; } }
+    pushTo(churchPub, { title: 'New member', body: (name || 'Someone') + ' just joined your church', url: '/steward', tag: 'join-' + evt.pubkey.slice(0, 8) });
+  } catch {}
+}
 // fire a push when the church sends a member a serving request (p-tagged to them)
 function maybePush(evt) {
   try {
@@ -626,6 +642,7 @@ wss.on('connection', ws => {
     if (type === 'EVENT') {
       const evt = rest[0]; if (!evt || !evt.id) return;
       if (!accept(evt)) { ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: not a member or not permitted for this group'])); return; }
+      const wasMember = MEMBERS.has(evt.pubkey);   // capture before note() flips it, to detect a genuinely new join
       note(evt);   // a membership/broadcast change takes effect for subsequent events
       // replaceable/addressable: drop older versions; ignore if we already hold a newer one
       const rk = replKey(evt);
@@ -637,6 +654,7 @@ wss.on('connection', ws => {
       events.push(evt); if (events.length > MAX_EVENTS) events.shift();
       scheduleSave();
       maybePush(evt);   // notify the targeted member if this is a serving request
+      maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       for (const [client, m] of subs) { if (client.readyState !== 1) continue;
         for (const [subId, filters] of m) if (matchAny(evt, filters) && canRead(evt, client._auth)) client.send(JSON.stringify(['EVENT', subId, evt])); }

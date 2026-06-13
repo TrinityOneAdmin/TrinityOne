@@ -669,12 +669,18 @@ function App() {
     if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; }
     // stewards run their church from the separate Steward console — ordinary members aren't stewards,
     // so the member app hides steward-only tools (e.g. the invite generator).
-    return { name, avatar, npub: cur.npub || '', handle: cur.handle || 'Anonymous', nip05: (FS && FS.myProfile && FS.myProfile.nip05) || '', steward: false };
+    return { name, avatar, npub: cur.npub || '', handle: cur.handle || 'Anonymous', nip05: (FS && FS.myProfile && FS.myProfile.nip05) || '', hidden: !!(FS && FS.myProfile && FS.myProfile.hidden), steward: false };
   })();
-  // saving a profile publishes name + mark to the user's key (kind-0)
+  // saving a profile publishes name + mark to the user's key (kind-0). Patch only the fields supplied, so
+  // a directory-visibility toggle (hidden only) never blanks the name, and vice-versa.
   const saveIdentity = (patch) => {
     const FS = window.Fellowship;
-    if (FS && FS.setProfile) FS.ready.then(() => FS.setProfile({ name: (patch.name || '').trim(), av: patch.avatar })).catch(() => {});
+    if (!(FS && FS.setProfile)) return;
+    const meta = {};
+    if (patch.name != null) meta.name = String(patch.name).trim();
+    if (patch.avatar != null) meta.av = patch.avatar;
+    if (patch.hidden != null) meta.hidden = !!patch.hidden;
+    FS.ready.then(() => FS.setProfile(meta)).catch(() => {});
   };
 
   const toast = (msg) => {

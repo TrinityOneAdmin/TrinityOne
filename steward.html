@@ -60,5 +60,15 @@
 <script type="text/babel" src="stew-custody.jsx"></script>
 <script type="text/babel" src="backup.jsx"></script>
 <script type="text/babel" src="steward-root.jsx"></script>
+<script>
+  // register the shared service worker so the console can receive web-push (join alerts) when shut.
+  // PWA only — the Capacitor steward build uses native local notifications instead.
+  (function () {
+    var _native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    if ('serviceWorker' in navigator && !_native) {
+      window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+    }
+  })();
+</script>
 </body>
 </html>

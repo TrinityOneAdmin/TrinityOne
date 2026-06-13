@@ -278,13 +278,14 @@ window.Fellowship = {
     const MEMBER_D = 'trinityone/member:';
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, nip05, picture, joined, lastTs, msgs }
     const profSubs = new Map();
-    const emit = (done) => onMembers([...byPub.values()].filter(m => m.joined || m.msgs > 0).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)), !!done);
+    // a member who opted out (kind-0 `hidden`) is withheld from the directory the others see
+    const emit = (done) => onMembers([...byPub.values()].filter(m => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)), !!done);
     // seed name/nip05 from the persisted profile cache so known members render instantly (no resolve lag)
-    const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || '', nip05: (profiles[pk] || {}).nip05 || '', picture: (profiles[pk] || {}).picture || '', joined: 0, lastTs: 0, msgs: 0 };
+    const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || '', nip05: (profiles[pk] || {}).nip05 || '', picture: (profiles[pk] || {}).picture || '', hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
     const ensureProfile = (pk) => {
       if (profSubs.has(pk)) return;
       const s = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pk] }], {
-        onevent(e) { try { const meta = JSON.parse(e.content); profiles[pk] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', av: meta.av || undefined }; saveProfiles(); const m = byPub.get(pk); if (m) { m.name = profiles[pk].name; m.picture = profiles[pk].picture; m.nip05 = profiles[pk].nip05; emit(); } } catch {} },
+        onevent(e) { try { const meta = JSON.parse(e.content); profiles[pk] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(pk); if (m) { m.name = profiles[pk].name; m.picture = profiles[pk].picture; m.nip05 = profiles[pk].nip05; m.hidden = !!meta.hidden; emit(); } } catch {} },
         oneose() {},
       });
       profSubs.set(pk, s);
@@ -327,6 +328,8 @@ window.Fellowship = {
       picture: (meta.picture != null ? meta.picture : (prev.picture || '')).trim(),
     };
     if (meta.av || prev.av) p.av = meta.av || prev.av;   // chosen symbol/monogram avatar
+    const hidden = (meta.hidden != null ? meta.hidden : prev.hidden);   // opt out of the member directory
+    if (hidden) p.hidden = true;
     // auto-claim a verified NIP-05 handle on the church's relay: <name>@<relay-host>. The relay serves
     // /.well-known/nostr.json, so the member gets a real verified name — no third-party domain needed.
     const handleLocal = p.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
@@ -351,7 +354,7 @@ window.Fellowship = {
       onevent(e) {
         try {
           const m = JSON.parse(e.content);
-          profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', av: m.av || undefined };
+          profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
           saveProfiles();
           window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } }));
         } catch {}
