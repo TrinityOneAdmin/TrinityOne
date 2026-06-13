@@ -615,6 +615,10 @@ function ReadScreen({ ctx }) {
 
   const bname = Bible.bookName(loc.book);
   const labelOf = (v) => Bible.refLabel(loc, v);
+  // recorded Audio Bible (public-domain narration) for the open chapter — plays through the persistent player
+  const audio = useTrinityAudio();
+  const audioOnThis = !!(audio.track && audio.track.id === ('bible:' + loc.book + ':' + loc.chap));
+  const listenChapter = () => { if (audioOnThis) window.TrinityAudio.toggle(); else if (window.playBibleChapter) window.playBibleChapter(loc.book, loc.chap); };
   const keyOf = (v) => Bible.refKey(loc, v);
 
   const close = () => setSheet(null);
@@ -668,7 +672,7 @@ function ReadScreen({ ctx }) {
       <ReadHeader ctx={ctx} loc={{ book: bname, ch: loc.chap }} version={version}
         onBook={() => setSheet('book')} onVersion={() => setSheet('version')}
         onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)}
-        onListen={toggleNarration} narrating={narrateState !== 'idle'} canListen={!!synth} />
+        onListen={listenChapter} narrating={audioOnThis && audio.playing} canListen={true} />
 
       <div ref={scrollRef} className="no-scrollbar" style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: '164px 18px 116px' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>

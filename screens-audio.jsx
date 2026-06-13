@@ -110,6 +110,34 @@ function MiniPlayer({ ctx }) {
   );
 }
 
+// ── Audio Bible: public-domain recorded narration (Berean Standard Bible, via the Free Use Bible API) ──
+// audio.bible.helloao.org serves a clean per-chapter MP3 (CDN, range-supported). The text the member
+// reads is WEB/KJV; this is a companion narration, not a verse-synced reading of that exact translation.
+const USFM_ORDER = ('GEN EXO LEV NUM DEU JOS JDG RUT 1SA 2SA 1KI 2KI 1CH 2CH EZR NEH EST JOB PSA PRO ECC SNG ISA JER ' +
+  'LAM EZK DAN HOS JOL AMO OBA JON MIC NAM HAB ZEP HAG ZEC MAL MAT MRK LUK JHN ACT ROM 1CO 2CO GAL EPH PHP COL ' +
+  '1TH 2TH 1TI 2TI TIT PHM HEB JAS 1PE 2PE 1JN 2JN 3JN JUD REV').split(' ');
+const BIBLE_AUDIO_BASE = 'https://audio.bible.helloao.org/api/BSB';   // Berean Standard Bible (freely usable)
+const BIBLE_AUDIO_READER = 'david';
+function bibleChapterTrack(bookNum, chap) {
+  const code = USFM_ORDER[bookNum - 1];
+  if (!code) return null;
+  const label = (window.Bible && window.Bible.bookName) ? window.Bible.bookName(bookNum) : ('Book ' + bookNum);
+  return { id: 'bible:' + bookNum + ':' + chap, title: label + ' ' + chap, subtitle: 'Audio Bible · Berean Standard Bible',
+    src: BIBLE_AUDIO_BASE + '/' + code + '/' + chap + '/audio/' + BIBLE_AUDIO_READER + '.mp3', album: 'Audio Bible' };
+}
+// play a chapter's recorded audio, queueing the whole book so it auto-advances chapter → chapter
+function playBibleChapter(bookNum, chap) {
+  if (!window.TrinityAudio || !USFM_ORDER[bookNum - 1]) return false;
+  const max = (window.Bible && window.Bible.maxChapter) ? (window.Bible.maxChapter(bookNum) || chap) : chap;
+  const queue = []; for (let c = 1; c <= max; c++) { const t = bibleChapterTrack(bookNum, c); if (t) queue.push(t); }
+  const track = bibleChapterTrack(bookNum, chap);
+  if (!track) return false;
+  window.TrinityAudio.play(track, queue);
+  return true;
+}
+
 window.MiniPlayer = MiniPlayer;
 window.useTrinityAudio = useTrinityAudio;
 window.audioFmtTime = fmtTime;
+window.playBibleChapter = playBibleChapter;
+window.bibleChapterTrackId = (b, c) => 'bible:' + b + ':' + c;
