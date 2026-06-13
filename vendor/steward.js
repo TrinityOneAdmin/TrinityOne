@@ -10145,6 +10145,7 @@ zoo`.split("\n");
       const id = devo.id || "devo" + Date.now();
       const base = { id, title: devo.title || "Devotional", ref: devo.ref || "", type: devo.type || "txt", text: devo.text || "" };
       if (typeof devo.order === "number") base.order = devo.order;
+      if (devo.series) base.series = String(devo.series).slice(0, 80);
       const content = JSON.stringify(base);
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", DEVO_D + id], ["t", NET]], content }, sk)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
@@ -10168,7 +10169,7 @@ zoo`.split("\n");
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, hasFile: !!c.text, ts: e.created_at });
+            byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || "", order: c.order, series: c.series || "", hasFile: !!c.text, ts: e.created_at });
             emit();
           } catch {
           }

@@ -1251,9 +1251,10 @@ window.DashPlans = DashPlans;
 // Upload OR edit a devotional — a reflection on a passage as a text (.txt) or Markdown (.md) file.
 // Passing `editing` (an existing devo) pre-fills it and re-publishes under the same id; the file is
 // optional when editing (title/passage can change without re-uploading the text).
-function NewDevotionalModal({ onClose, editing }) {
+function NewDevotionalModal({ onClose, editing, seriesOptions }) {
   const [title, setTitle] = React.useState(editing ? editing.title || '' : '');
   const [ref, setRef] = React.useState(editing ? editing.ref || '' : '');
+  const [series, setSeries] = React.useState(editing ? editing.series || '' : '');
   const [file, setFile] = React.useState(null);   // { type, name, text? } — a NEW replacement file
   const [busy, setBusy] = React.useState(false);
   const pick = (f) => {
@@ -1273,7 +1274,7 @@ function NewDevotionalModal({ onClose, editing }) {
     setBusy(true);
     const text = file ? file.text : (editing ? editing.text : '');
     const type = file ? file.type : (editing ? editing.type : 'txt');
-    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), type, text: text || '' })).then(() => onClose());
+    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), type, text: text || '', order: editing ? editing.order : undefined })).then(() => onClose());
   };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1284,6 +1285,9 @@ function NewDevotionalModal({ onClose, editing }) {
         <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Resting in Psalm 23" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Passage (optional)</div>
         <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. Psalm 23" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Series (optional)</div>
+        <input value={series} onChange={e => setSeries(e.target.value)} list="devo-series-list" placeholder="e.g. The Weekly Word — groups it with the rest" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <datalist id="devo-series-list">{(seriesOptions || []).map(s => <option key={s} value={s} />)}</datalist>
         <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer' }}>
           <Icon name="read" size={20} color="var(--clay)" />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1316,18 +1320,26 @@ function DashDevotionals() {
     if (!window.Steward || !window.Steward.subscribeProfile) return;
     return window.Steward.subscribeProfile(p => { if (p && p.name) setChurchName(p.name); });
   }, []);
-  // group devotionals into collapsible series for a tidier list. A devo is "in a series" when its ref names
-  // one; bare "Series N" devos all share one group, labelled by the church that uploaded them (an explicitly
-  // named series keeps its own name). Global order is preserved; non-series devos render as their own row.
-  const seriesKeyOf = (d) => { const r = String(d.ref || ''); const m = r.match(/^\s*(.+?)\s*[—\-–:]\s*series\b/i) || r.match(/series\s*:\s*(.+?)\s*$/i); if (m && m[1].trim()) return 'name:' + m[1].trim(); return /series/i.test(r) ? '__series__' : null; };
+  const seriesOptions = [...new Set(devos.map(d => d.series).filter(Boolean))];   // existing series names (datalist + reuse)
+  // group devotionals into collapsible series. A devo is in a series when the steward set its Series field;
+  // legacy "Series N" devos (no explicit field) fall into one unnamed group the steward can name. The group
+  // is labelled by the series name, falling back to the church name. Order preserved; loners get their own row.
+  const seriesKeyOf = (d) => {
+    if (d.series && d.series.trim()) return 'name:' + d.series.trim();                     // explicit series the steward set
+    const r = String(d.ref || ''); const m = r.match(/^\s*(.+?)\s*[—\-–:]\s*series\b/i) || r.match(/series\s*:\s*(.+?)\s*$/i);
+    if (m && m[1].trim()) return 'name:' + m[1].trim();
+    return /series/i.test(r) ? '__series__' : null;                                        // legacy bare "Series N"
+  };
   const devoGroups = (() => {
     const out = [], idx = {};
-    list.forEach(d => { const k = seriesKeyOf(d); const key = k == null ? 'solo:' + d.id : k; if (idx[key] == null) { idx[key] = out.length; out.push({ key, series: k != null, items: [] }); } out[idx[key]].items.push(d); });
-    out.forEach(g => { if (!g.series) return; const nm = g.key.indexOf('name:') === 0 ? g.key.slice(5) : ''; g.label = nm || churchName || 'Devotionals'; });
+    list.forEach(d => { const k = seriesKeyOf(d); const key = k == null ? 'solo:' + d.id : k; if (idx[key] == null) { idx[key] = out.length; out.push({ key, series: k != null, named: k && k.indexOf('name:') === 0, items: [] }); } out[idx[key]].items.push(d); });
+    out.forEach(g => { if (!g.series) return; g.label = (g.named ? g.key.slice(5) : '') || churchName || 'Devotionals'; });
     return out;
   })();
-  // persist a new order: number each devotional by position, re-publish only the ones that changed
-  const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: i }); }); };
+  // give a group an explicit name (also migrates a legacy "Series N" group): re-publish each with the new series
+  const renameSeries = (items, name) => { items.forEach(d => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: name })); };
+  // persist a new order: number each devotional by position, re-publish only the ones that changed (keep series)
+  const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, series: d.series, order: i }); }); };
   // sort the list and bake it into the saved order (so the member app shows the same). "number" is a
   // numeric-aware title sort, so "Day 2" comes before "Day 10".
   // pull the SERIES number from a title ("Series 3", "Series #3", "Series03"); fall back to a leading
@@ -1356,8 +1368,8 @@ function DashDevotionals() {
   const onDrop = () => { if (order) persist(order); setDragId(null); setOverId(null); setOrder(null); };
   return (
     <div style={{ position: 'relative', height: '100%' }}>
-      {adding ? <NewDevotionalModal onClose={() => setAdding(false)} /> : null}
-      {editing ? <NewDevotionalModal editing={editing} onClose={() => setEditing(null)} /> : null}
+      {adding ? <NewDevotionalModal onClose={() => setAdding(false)} seriesOptions={seriesOptions} /> : null}
+      {editing ? <NewDevotionalModal editing={editing} onClose={() => setEditing(null)} seriesOptions={seriesOptions} /> : null}
       <Panel scroll title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
@@ -1400,14 +1412,16 @@ function DashDevotionals() {
               };
               return devoGroups.map(g => g.series ? (
                 <div key={g.key} style={{ border: '1px solid var(--line)', borderRadius: 13, overflow: 'hidden' }}>
-                  <button onClick={() => setSeriesOpen(s => ({ ...s, [g.key]: !s[g.key] }))} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', border: 'none', background: 'var(--surface-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
+                  <div onClick={() => setSeriesOpen(s => ({ ...s, [g.key]: !s[g.key] }))} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', background: 'var(--surface-2)', cursor: 'pointer' }}>
                     <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={17} color="currentColor" /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.label}</div>
-                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.items.length} devotionals</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.items.length} devotionals{g.named ? '' : ' · unnamed'}</div>
                     </div>
+                    <button onClick={(e) => { e.stopPropagation(); const n = window.prompt(g.named ? 'Rename this series' : 'Name this series (groups these in members’ apps)', g.named ? g.label : ''); if (n && n.trim()) renameSeries(g.items, n.trim()); }}
+                      title={g.named ? 'Rename series' : 'Name this series'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> {g.named ? 'Rename' : 'Name'}</button>
                     <Icon name={seriesOpen[g.key] ? 'chevU' : 'chevD'} size={17} color="var(--ink-3)" />
-                  </button>
+                  </div>
                   {seriesOpen[g.key] ? <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10, borderTop: '1px solid var(--line)' }}>{g.items.map(renderRow)}</div> : null}
                 </div>
               ) : renderRow(g.items[0]));

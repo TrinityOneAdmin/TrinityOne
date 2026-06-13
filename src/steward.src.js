@@ -416,6 +416,7 @@ window.Steward = {
     const id = devo.id || ('devo' + Date.now());
     const base = { id, title: devo.title || 'Devotional', ref: devo.ref || '', type: devo.type || 'txt', text: devo.text || '' };
     if (typeof devo.order === 'number') base.order = devo.order;   // steward-controlled display order (lower = first)
+    if (devo.series) base.series = String(devo.series).slice(0, 80);   // the named series this devotional belongs to (groups it in both apps)
     const content = JSON.stringify(base);
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', DEVO_D + id], ['t', NET]], content }, sk))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
@@ -435,7 +436,7 @@ window.Steward = {
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, hasFile: !!c.text, ts: e.created_at }); emit(); } catch {}
+        try { const c = JSON.parse(e.content); byId.set(id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', hasFile: !!c.text, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });

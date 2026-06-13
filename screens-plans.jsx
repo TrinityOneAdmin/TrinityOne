@@ -27,6 +27,46 @@ function DevoCard({ d, onClick }) {
   );
 }
 
+// group church devotionals by the steward's explicit Series field (mirrors the steward console). Devotionals
+// with no series, or a series of one, stay as standalone cards. Members' grouping == whatever the steward named.
+function groupDevosBySeries(devos) {
+  const groups = new Map(); const singles = [];
+  devos.forEach(d => { const s = (d.series || '').trim(); if (!s) { singles.push(d); return; } if (!groups.has(s)) groups.set(s, { name: s, items: [] }); groups.get(s).items.push(d); });
+  const out = [];
+  for (const g of groups.values()) { if (g.items.length < 2) singles.push(...g.items); else out.push(g); }
+  return { groups: out, singles };
+}
+// a collapsible series: header (name + count) expanding to compact per-devotional rows
+function DevoSeries({ group, ctx }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div style={{ marginBottom: 12, border: '1px solid var(--line)', borderRadius: 18, background: 'var(--surface)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+      <button onClick={() => setOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
+        <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="read" size={21} color="#fff" /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.name}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{group.items.length} devotionals</div>
+        </div>
+        <Icon name={open ? 'chevU' : 'chevD'} size={18} color="var(--ink-3)" />
+      </button>
+      {open ? (
+        <div style={{ padding: '0 12px 8px' }}>
+          {group.items.map((d, i) => (
+            <div key={d.id} onClick={() => ctx.openChurchDevo(d)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 8px', borderTop: '1px solid var(--line)', cursor: 'pointer' }}>
+              <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, color: 'var(--ink-3)' }}>{i + 1}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{d.ref || 'A reflection'}</div>
+              </div>
+              <Icon name="chevR" size={16} color="var(--ink-3)" />
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PlanCard({ p, ctx, onClick, corner }) {
   const done = doneDays(ctx, p.id).length;
   const pct = p.len ? done / p.len : 0;
@@ -149,14 +189,20 @@ function PlansScreen({ ctx }) {
             </div>
           ) : null}
 
-          {(ctx.churchDevos || []).length ? (
-            <React.Fragment>
-              <SectionLabel>Devotionals from {churchName}</SectionLabel>
-              <div style={{ ...grid, animationDelay: '.1s' }}>
-                {ctx.churchDevos.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
-              </div>
-            </React.Fragment>
-          ) : null}
+          {(ctx.churchDevos || []).length ? (() => {
+            const { groups, singles } = groupDevosBySeries(ctx.churchDevos);
+            return (
+              <React.Fragment>
+                <SectionLabel>Devotionals from {churchName}</SectionLabel>
+                {groups.length ? <div style={{ marginBottom: singles.length ? 12 : 22 }}>{groups.map(g => <DevoSeries key={g.name} group={g} ctx={ctx} />)}</div> : null}
+                {singles.length ? (
+                  <div style={{ ...grid, animationDelay: '.1s' }}>
+                    {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
+                  </div>
+                ) : null}
+              </React.Fragment>
+            );
+          })() : null}
         </React.Fragment>
       ) : (
         <React.Fragment>
