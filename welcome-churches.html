@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TrinityOne — Relays &amp; joining (for churches)</title>
+<meta name="description" content="Run your own TrinityOne relay and share your church's joining code." />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="brand.css" />
+<style>
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 28px; }
+  a { color: inherit; }
+  html, body { overflow-x: clip; max-width: 100%; }
+
+  /* nav */
+  nav.top { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--paper) 86%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--line-2); }
+  nav.top .wrap { display: flex; align-items: center; gap: 24px; height: 72px; }
+  nav .links { display: flex; gap: 28px; margin-left: 20px; }
+  nav .links a { font-weight: 600; font-size: 14.5px; color: var(--ink-2); text-decoration: none; transition: color .15s; }
+  nav .links a:hover { color: var(--ink); }
+  nav .spacer { flex: 1; }
+  .wm-sm { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: -.3px; }
+  .wm-sm .one { color: var(--clay); }
+
+  .band { padding: 72px 0 90px; }
+  .eyebrow { display:flex; justify-content:center; margin-bottom: 18px; }
+  .band h2 { font-family: var(--font-display); font-weight: 700; font-size: clamp(30px,4.4vw,46px); letter-spacing: -1px; text-align: center; margin: 0 auto; max-width: 720px; line-height: 1.04; }
+  .band .intro { text-align:center; font-family: var(--font-serif); font-size: 19px; color: var(--ink-2); max-width: 560px; margin: 18px auto 0; line-height: 1.5; text-wrap: pretty; }
+
+  .church .mono { font-family: 'Newsreader', monospace; font-style: normal; font-weight: 600; color: var(--clay-ink); background: var(--clay-soft); padding: 1px 6px; border-radius: 6px; font-size: .92em; }
+  .church-cards { display: grid; grid-template-columns: 1.05fr .95fr; gap: 22px; margin-top: 40px; }
+  .ch-card { border-radius: var(--r-xl); padding: 36px; display: flex; flex-direction: column; }
+  .ch-head h3 { font-family: var(--font-display); font-weight: 700; font-size: 26px; letter-spacing: -.5px; margin: 14px 0 0; }
+  .ch-head p { font-size: 15.5px; line-height: 1.6; margin: 12px 0 0; }
+
+  /* relay (dark / terminal) */
+  .ch-relay { background: linear-gradient(160deg, var(--midnight-2), var(--midnight)); color: var(--paper); box-shadow: var(--shadow-lg); }
+  .ch-relay .ch-head p { color: color-mix(in oklab, var(--paper) 76%, transparent); }
+  .relay-console { margin-top: 24px; border-radius: 16px; overflow: hidden; background: #0c0a07; border: 1px solid rgba(255,255,255,.1); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .rc-bar { display: flex; align-items: center; gap: 7px; padding: 11px 15px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .rc-bar span { width: 11px; height: 11px; border-radius: 999px; background: rgba(255,255,255,.18); }
+  .rc-bar span:nth-child(1){background:#E06C5B}.rc-bar span:nth-child(2){background:#E0B860}.rc-bar span:nth-child(3){background:#5E8C6A}
+  .rc-bar b { margin-left: auto; font-family: var(--font-ui); font-weight: 600; font-size: 11.5px; letter-spacing: .4px; color: rgba(255,255,255,.55); }
+  .rc-body { padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+  .rc-row { display: flex; align-items: center; gap: 11px; padding: 11px 12px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); }
+  .rc-ic { color: #8fc79c; display: flex; flex-shrink: 0; }
+  .rc-tx { flex: 1; min-width: 0; }
+  .rc-name { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 13px; color: #e7e1d3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rc-sub { font-size: 11.5px; color: rgba(255,255,255,.42); margin-top: 1px; }
+  .rc-tag { font-family: var(--font-ui); font-size: 10.5px; font-weight: 800; letter-spacing: .3px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; flex-shrink: 0; }
+  .rc-tag--shared { background: rgba(255,255,255,.1); color: rgba(255,255,255,.7); }
+  .rc-tag--own { background: rgba(226,128,80,.18); color: #E68A66; }
+  .rc-live { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: #8fc79c; flex-shrink: 0; }
+  .rc-dot { width: 7px; height: 7px; border-radius: 999px; background: #8fc79c; }
+  .rc-add { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 11px; border-radius: 12px; border: 1px dashed rgba(255,255,255,.22); background: transparent; color: rgba(255,255,255,.72); font-family: var(--font-ui); font-weight: 700; font-size: 13px; cursor: pointer; transition: border-color .2s, color .2s; }
+  .rc-add:hover { border-color: var(--gold-soft); color: var(--gold-soft); }
+  .rc-foot { display: flex; align-items: center; gap: 8px; padding: 12px 15px; border-top: 1px solid rgba(255,255,255,.07); font-size: 12px; color: rgba(255,255,255,.5); line-height: 1.4; }
+  .rc-foot .rc-lock { color: #8fc79c; display: flex; flex-shrink: 0; }
+
+  /* joining (light) */
+  .ch-join { background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-sm); }
+  .join-card { margin-top: 24px; display: flex; gap: 22px; align-items: center; padding: 22px; border-radius: var(--r-lg); background: var(--paper); border: 1px solid var(--line); }
+  .join-qr { width: 124px; height: 124px; border-radius: 16px; background: #fff; box-shadow: var(--shadow-md); display: flex; align-items: center; justify-content: center; flex-shrink: 0; position: relative; }
+  .join-qr #churchQR { width: 104px; height: 104px; }
+  .join-label { font-size: 11px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; color: var(--ink-3); }
+  .join-code { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-weight: 700; font-size: 30px; letter-spacing: 2px; color: var(--ink); margin-top: 4px; }
+  .join-sub { font-size: 13px; color: var(--ink-2); font-weight: 600; margin-top: 3px; }
+  .join-copy { display: inline-flex; align-items: center; gap: 7px; margin-top: 16px; padding: 9px 15px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-family: var(--font-ui); font-weight: 700; font-size: 13px; cursor: pointer; transition: border-color .15s, transform .15s; }
+  .join-copy:hover { border-color: var(--clay); transform: translateY(-1px); }
+  .join-ways { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 22px; }
+  @media (min-width: 881px) { .join-ways { margin-top: auto; padding-top: 22px; } .ch-list { margin-top: auto; padding-top: 22px; } }
+  .join-ways span { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); color: var(--ink-2); font-weight: 600; font-size: 13px; }
+  .join-ways span svg { color: var(--clay); }
+
+  .ch-list { list-style: none; padding: 0; margin: 22px 0 0; display: flex; flex-direction: column; gap: 11px; }
+  .ch-list li { display: flex; align-items: center; gap: 11px; font-weight: 600; font-size: 14.5px; }
+  .ch-list .tick { width: 22px; height: 22px; border-radius: 999px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .tick--gold { background: rgba(224,184,96,.16); color: var(--gold-soft); }
+  .ch-list--dark li { color: color-mix(in oklab, var(--paper) 88%, transparent); }
+
+  /* advanced: terminal install for the self-hosted relay */
+  .relay-cli { margin-top: 20px; border-top: 1px solid rgba(255,255,255,.09); padding-top: 16px; }
+  .relay-cli summary { cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--gold-soft); list-style: none; }
+  .relay-cli summary::-webkit-details-marker { display: none; }
+  .relay-cli summary::before { content: '▸ '; }
+  .relay-cli[open] summary::before { content: '▾ '; }
+  .relay-cli p { color: color-mix(in oklab, var(--paper) 70%, transparent); font-size: 13px; line-height: 1.55; margin: 12px 0 12px; }
+  .cli-line { display: flex; align-items: stretch; gap: 8px; }
+  .cli-line code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; background: rgba(0,0,0,.32); border: 1px solid rgba(255,255,255,.1); border-radius: 10px; padding: 11px 13px; font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 12.5px; color: #cfe8d6; }
+  .cli-copy { flex-shrink: 0; background: var(--gold-soft); color: var(--midnight); border: none; border-radius: 10px; padding: 0 15px; font-family: var(--font-ui); font-weight: 700; font-size: 12.5px; cursor: pointer; }
+  .cli-copy:hover { filter: brightness(1.06); }
+
+  .church-cta { display: flex; gap: 14px; justify-content: center; margin-top: 44px; flex-wrap: wrap; }
+
+  footer { background: var(--midnight); color: var(--ink-3); padding: 40px 0; }
+  footer .wrap { display:flex; align-items:center; justify-content:space-between; gap: 20px; flex-wrap: wrap; font-size: 14px; }
+  footer a { color: var(--ink-3); text-decoration: none; }
+  footer a:hover { color: var(--paper); }
+
+  @media (max-width: 880px) {
+    .church-cards { grid-template-columns: 1fr; }
+    nav .links { display:none; }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 0 18px; }
+    .join-card { flex-direction: column; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="to-halo" viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="36" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)" />
+    <circle cx="50" cy="50" r="6.5" fill="var(--spark)" />
+  </symbol>
+</svg>
+
+<nav class="top">
+  <div class="wrap">
+    <a href="welcome" class="wm-sm" style="text-decoration:none"><svg class="halo" style="font-size:34px;color:var(--ink);--spark:var(--clay)"><use href="#to-halo" /></svg><span class="wm-txt">Trinity<span class="one">One</span></span></a>
+    <div class="links">
+      <a href="welcome#church">For churches</a><a href="welcome#get">Get the app</a>
+    </div>
+    <div class="spacer"></div>
+    <a href="./steward.html?setup=1" class="to-btn to-btn--clay" style="padding:11px 20px;font-size:14px">Start a church</a>
+  </div>
+</nav>
+
+<section class="band church" id="church">
+  <div class="wrap">
+    <div class="eyebrow"><span class="to-pill" style="background:var(--sage-soft);color:#345c41">For pastors &amp; stewards</span></div>
+    <h2>Relays &amp; joining codes</h2>
+    <p class="intro">Run a copy of your church's data on hardware you control, and hand your people a code to join. Both are optional — TrinityOne works out of the box on shared relays.</p>
+
+    <div class="church-cards">
+
+      <!-- RELAY -->
+      <div class="ch-card ch-relay" id="church-relay">
+        <div class="ch-head">
+          <span class="to-pill" style="background:rgba(255,255,255,.1);color:var(--gold-soft)">Your own relay · optional</span>
+          <h3>Run your own relay</h3>
+          <p>Your church runs on TrinityOne’s shared relays out of the box — nothing to set up. Want a copy of every event on hardware you control? Order a <b style="color:var(--paper)">managed relay</b> in a click, or run the free <b style="color:var(--paper)">TrinityOne Relay app</b> on any Mac, Windows, or Linux machine. The Steward console just points your church at it — signing always stays in Keykeeper.</p>
+        </div>
+        <div class="relay-console">
+          <div class="rc-bar"><span></span><span></span><span></span><b>Steward console · Relays</b></div>
+          <div class="rc-body">
+            <div class="rc-row">
+              <span class="rc-ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6c2.2 2.3 3.4 5.3 3.4 8.4s-1.2 6.1-3.4 8.4c-2.2-2.3-3.4-5.3-3.4-8.4S9.8 5.9 12 3.6Z"/></svg></span>
+              <div class="rc-tx"><div class="rc-name">relay.trinityone.app</div><div class="rc-sub">TrinityOne shared</div></div>
+              <span class="rc-tag rc-tag--shared">Shared</span>
+              <span class="rc-live"><span class="rc-dot"></span> Live</span>
+            </div>
+            <div class="rc-row">
+              <span class="rc-ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6c2.2 2.3 3.4 5.3 3.4 8.4s-1.2 6.1-3.4 8.4c-2.2-2.3-3.4-5.3-3.4-8.4S9.8 5.9 12 3.6Z"/></svg></span>
+              <div class="rc-tx"><div class="rc-name">relay.grace.org</div><div class="rc-sub">Grace Chapel · your own</div></div>
+              <span class="rc-tag rc-tag--own">Self-hosted</span>
+              <span class="rc-live"><span class="rc-dot"></span> Live</span>
+            </div>
+            <button class="rc-add" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> Add a relay</button>
+          </div>
+          <div class="rc-foot"><span class="rc-lock"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="9.5" rx="2.4"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg></span> The console points your church at relays — Keykeeper signs each change</div>
+        </div>
+        <ul class="ch-list ch-list--dark">
+          <li><span class="tick tick--gold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Managed by us, or the desktop Relay app — your call</li>
+          <li><span class="tick tick--gold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Relay app runs on Mac, Windows or Linux — no command line</li>
+          <li><span class="tick tick--gold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Always falls back to shared relays</li>
+        </ul>
+        <details class="relay-cli">
+          <summary>Run it yourself — one line, then finish in your browser</summary>
+          <p>Paste this on any Debian/Ubuntu/Raspberry Pi box (a Pi, mini-PC, old laptop or VPS). It installs the relay as a boot service, then prints a dashboard link — open it and click <b>Connect → Make it public</b> for a secure public address. No GitHub account, and no more terminal after this line.</p>
+          <div class="cli-line">
+            <code id="relayInstallCmd">curl -fsSL https://trinityone.tailbeaac0.ts.net/relay-app/install.sh | sudo bash</code>
+            <button type="button" class="cli-copy" onclick="(function(b){navigator.clipboard&amp;&amp;navigator.clipboard.writeText(document.getElementById('relayInstallCmd').textContent);b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1400);})(this)">Copy</button>
+          </div>
+        </details>
+      </div>
+
+      <!-- JOINING CODE -->
+      <div class="ch-card ch-join" id="church-join">
+        <div class="ch-head">
+          <span class="to-pill">How people join</span>
+          <h3>Share a joining code</h3>
+          <p>Every church gets a friendly code and a matching QR. It carries your <span class="mono">npub</span> and relay hints — so one scan follows your church and pulls in your funds and groups.</p>
+        </div>
+        <div class="join-card">
+          <div class="join-qr"><div id="churchQR"></div></div>
+          <div class="join-meta">
+            <div class="join-label">Church code</div>
+            <div class="join-code">GRACE‑7K2</div>
+            <div class="join-sub">Grace Chapel · Riverside</div>
+            <button class="join-copy" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2.2"/><path d="M5.5 15.5H5a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 5 3.5h9A1.5 1.5 0 0 1 15.5 5v.5"/></svg> Copy code</button>
+          </div>
+        </div>
+        <div class="join-ways">
+          <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h12v17l-2.5-2-2 2-2-2-2 2-2-2L6 20.5Z"/><path d="M9 8h6M9 11.5h4"/></svg> Print on the bulletin</span>
+          <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg> Show it on the screen</span>
+          <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H10l-4 3v-3a2 2 0 0 1-1.5-1.9Z"/></svg> Text it to a friend</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="church-cta">
+      <a href="./steward.html?setup=1" class="to-btn to-btn--clay">Start a church</a>
+      <a href="welcome#church" class="to-btn to-btn--ghost">← Back to overview</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>© TrinityOne — Read · Gather · Share</span>
+    <a href="welcome">← trinityone.app</a>
+  </div>
+</footer>
+
+<script>
+  // ── procedural faux-QR for the church joining card (matches the in-app style) ──
+  (function () {
+    const seed = 'GRACE-7K2';
+    let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    const rnd = (i) => { const x = Math.sin(h + i * 12.9898) * 43758.5453; return x - Math.floor(x); };
+    const N = 19, cells = [];
+    const finder = (r, c) => r < 6 && c < 6;
+    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+      const isF = finder(r, c) || finder(r, N - 1 - c) || finder(N - 1 - r, c);
+      let on;
+      if (isF) { const br = r < 6 ? r : N - 1 - r, bc = c < 6 ? c : N - 1 - c; on = br === 0 || br === 5 || bc === 0 || bc === 5 || (br >= 2 && br <= 3 && bc >= 2 && bc <= 3); }
+      else on = rnd(r * N + c) > 0.55;
+      if (on) cells.push('<rect x="' + c + '" y="' + r + '" width="1" height="1" rx="0.18"/>');
+    }
+    const el = document.getElementById('churchQR');
+    if (el) el.innerHTML =
+      '<svg viewBox="0 0 19 19" width="100%" height="100%"><rect width="19" height="19" fill="#fff"/>' +
+      '<g fill="#1a1410">' + cells.join('') + '</g>' +
+      '<circle cx="9.5" cy="9.5" r="2.6" fill="#fff"/>' +
+      '<use href="#to-halo" x="7" y="7" width="5" height="5" style="color:var(--ink);--spark:var(--clay)"/></svg>';
+  })();
+
+  // ── copy the joining code ──
+  document.querySelectorAll('.join-copy').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const code = btn.closest('.join-meta')?.querySelector('.join-code')?.textContent?.replace(/‑/g, '-').trim() || '';
+      if (navigator.clipboard) navigator.clipboard.writeText(code).catch(() => {});
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg> Copied';
+      setTimeout(() => { btn.innerHTML = orig; }, 1600);
+    });
+  });
+</script>
+</body>
+</html>

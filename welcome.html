@@ -116,7 +116,8 @@
   @media (max-width: 880px) {
     .hero .wrap, .feat, .proto .wrap { grid-template-columns: 1fr; }
     .feat.alt .ftext { order: 0; }
-    .phone-stage { order:-1; }
+    /* on mobile the hero text comes first, the app screenshot follows it (was order:-1 = above) */
+    .phone-stage { order: 1; margin-top: 8px; }
     .pillars { grid-template-columns: 1fr; }
     nav .links { display:none; }
   }
@@ -628,73 +629,15 @@
       </li>
     </ol>
 
-    <!-- two detail cards -->
-    <div class="church-cards">
-
-      <!-- RELAY -->
-      <div class="ch-card ch-relay" id="church-relay">
-        <div class="ch-head">
-          <span class="to-pill" style="background:rgba(255,255,255,.1);color:var(--gold-soft)">Your own relay · optional</span>
-          <h3>Run your own relay</h3>
-          <p>Your church runs on TrinityOne’s shared relays out of the box — nothing to set up. Want a copy of every event on hardware you control? Order a <b style="color:var(--paper)">managed relay</b> in a click, or run the free <b style="color:var(--paper)">TrinityOne Relay app</b> on any Mac, Windows, or Linux machine. The Steward console just points your church at it — signing always stays in Keykeeper.</p>
-        </div>
-        <div class="relay-console">
-          <div class="rc-bar"><span></span><span></span><span></span><b>Steward console · Relays</b></div>
-          <div class="rc-body">
-            <div class="rc-row">
-              <span class="rc-ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6c2.2 2.3 3.4 5.3 3.4 8.4s-1.2 6.1-3.4 8.4c-2.2-2.3-3.4-5.3-3.4-8.4S9.8 5.9 12 3.6Z"/></svg></span>
-              <div class="rc-tx"><div class="rc-name">relay.trinityone.app</div><div class="rc-sub">TrinityOne shared</div></div>
-              <span class="rc-tag rc-tag--shared">Shared</span>
-              <span class="rc-live"><span class="rc-dot"></span> Live</span>
-            </div>
-            <div class="rc-row">
-              <span class="rc-ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6c2.2 2.3 3.4 5.3 3.4 8.4s-1.2 6.1-3.4 8.4c-2.2-2.3-3.4-5.3-3.4-8.4S9.8 5.9 12 3.6Z"/></svg></span>
-              <div class="rc-tx"><div class="rc-name">relay.grace.org</div><div class="rc-sub">Grace Chapel · your own</div></div>
-              <span class="rc-tag rc-tag--own">Self-hosted</span>
-              <span class="rc-live"><span class="rc-dot"></span> Live</span>
-            </div>
-            <button class="rc-add" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> Add a relay</button>
-          </div>
-          <div class="rc-foot"><span class="rc-lock"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="9.5" rx="2.4"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg></span> The console points your church at relays — Keykeeper signs each change</div>
-        </div>
-        <ul class="ch-list ch-list--dark">
-          <li><span class="tick tick--gold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Managed by us, or the desktop Relay app — your call</li>
-          <li><span class="tick tick--gold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Relay app runs on Mac, Windows or Linux — no command line</li>
-          <li><span class="tick tick--gold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Always falls back to shared relays</li>
-        </ul>
-        <details class="relay-cli">
-          <summary>Run it yourself — one line, then finish in your browser</summary>
-          <p>Paste this on any Debian/Ubuntu/Raspberry Pi box (a Pi, mini-PC, old laptop or VPS). It installs the relay as a boot service, then prints a dashboard link — open it and click <b>Connect → Make it public</b> for a secure public address. No GitHub account, and no more terminal after this line.</p>
-          <div class="cli-line">
-            <code id="relayInstallCmd">curl -fsSL https://trinityone.tailbeaac0.ts.net/relay-app/install.sh | sudo bash</code>
-            <button type="button" class="cli-copy" onclick="(function(b){navigator.clipboard&amp;&amp;navigator.clipboard.writeText(document.getElementById('relayInstallCmd').textContent);b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1400);})(this)">Copy</button>
-          </div>
-        </details>
+    <!-- relays + joining-code detail moved to welcome-churches.html -->
+    <a href="welcome-churches.html" class="ch-card ch-relay" id="church-relay" style="text-decoration:none;margin-top:24px;flex-direction:row;align-items:center;gap:26px;flex-wrap:wrap">
+      <div class="ch-head" style="flex:1;min-width:250px">
+        <span class="to-pill" style="background:rgba(255,255,255,.1);color:var(--gold-soft)">For churches · optional</span>
+        <h3>Run your own relay &amp; share a joining code</h3>
+        <p>Keep a copy of every event on hardware you control, and hand your people a friendly code to join. Both are optional — TrinityOne works out of the box on shared relays.</p>
       </div>
-
-      <!-- JOINING CODE -->
-      <div class="ch-card ch-join" id="church-join">
-        <div class="ch-head">
-          <span class="to-pill">How people join</span>
-          <h3>Share a joining code</h3>
-          <p>Every church gets a friendly code and a matching QR. It carries your <span class="mono">npub</span> and relay hints — so one scan follows your church and pulls in your funds and groups.</p>
-        </div>
-        <div class="join-card">
-          <div class="join-qr"><div id="churchQR"></div></div>
-          <div class="join-meta">
-            <div class="join-label">Church code</div>
-            <div class="join-code">GRACE‑7K2</div>
-            <div class="join-sub">Grace Chapel · Riverside</div>
-            <button class="join-copy" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2.2"/><path d="M5.5 15.5H5a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 5 3.5h9A1.5 1.5 0 0 1 15.5 5v.5"/></svg> Copy code</button>
-          </div>
-        </div>
-        <div class="join-ways">
-          <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h12v17l-2.5-2-2 2-2-2-2 2-2-2L6 20.5Z"/><path d="M9 8h6M9 11.5h4"/></svg> Print on the bulletin</span>
-          <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg> Show it on the screen</span>
-          <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H10l-4 3v-3a2 2 0 0 1-1.5-1.9Z"/></svg> Text it to a friend</span>
-        </div>
-      </div>
-    </div>
+      <span class="to-btn to-btn--clay" style="flex-shrink:0">Relays &amp; joining →</span>
+    </a>
 
     <div class="church-cta">
       <a href="./steward.html?setup=1" class="to-btn to-btn--clay">Start a church</a>
