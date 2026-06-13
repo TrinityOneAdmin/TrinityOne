@@ -116,14 +116,28 @@ function MiniPlayer({ ctx }) {
 const USFM_ORDER = ('GEN EXO LEV NUM DEU JOS JDG RUT 1SA 2SA 1KI 2KI 1CH 2CH EZR NEH EST JOB PSA PRO ECC SNG ISA JER ' +
   'LAM EZK DAN HOS JOL AMO OBA JON MIC NAM HAB ZEP HAG ZEC MAL MAT MRK LUK JHN ACT ROM 1CO 2CO GAL EPH PHP COL ' +
   '1TH 2TH 1TI 2TI TIT PHM HEB JAS 1PE 2PE 1JN 2JN 3JN JUD REV').split(' ');
-const BIBLE_AUDIO_BASE = 'https://audio.bible.helloao.org/api/BSB';   // Berean Standard Bible (freely usable)
-const BIBLE_AUDIO_READER = 'david';
+// translations + narrators that have clean per-chapter audio in the Free Use Bible API
+// Only BSB streams reliably today (AAB's audio links 404/403); WEB & KJV arrive as downloadable modules.
+const AUDIO_BIBLE_OPTIONS = {
+  translations: [{ id: 'BSB', name: 'Berean Standard' }],
+  readers: [{ id: 'david', name: 'David' }, { id: 'hays', name: 'Hays' }, { id: 'souer', name: 'Souer' }],
+};
+// the member's chosen translation + voice (stored locally), defaulting to BSB / David
+function getAudioChoice() {
+  let v = 'BSB/david'; try { if (typeof lsGet === 'function') v = lsGet('trinityone.audioVoice', 'BSB/david') || 'BSB/david'; } catch (e) {}
+  const [t, r] = String(v).split('/');
+  const translation = AUDIO_BIBLE_OPTIONS.translations.some(x => x.id === t) ? t : 'BSB';
+  const reader = AUDIO_BIBLE_OPTIONS.readers.some(x => x.id === r) ? r : 'david';
+  return { translation, reader };
+}
 function bibleChapterTrack(bookNum, chap) {
   const code = USFM_ORDER[bookNum - 1];
   if (!code) return null;
+  const { translation, reader } = getAudioChoice();
   const label = (window.Bible && window.Bible.bookName) ? window.Bible.bookName(bookNum) : ('Book ' + bookNum);
-  return { id: 'bible:' + bookNum + ':' + chap, title: label + ' ' + chap, subtitle: 'Audio Bible · Berean Standard Bible',
-    src: BIBLE_AUDIO_BASE + '/' + code + '/' + chap + '/audio/' + BIBLE_AUDIO_READER + '.mp3', album: 'Audio Bible' };
+  const transName = (AUDIO_BIBLE_OPTIONS.translations.find(t => t.id === translation) || {}).name || translation;
+  return { id: 'bible:' + bookNum + ':' + chap, title: label + ' ' + chap, subtitle: 'Audio Bible · ' + transName,
+    src: 'https://audio.bible.helloao.org/api/' + translation + '/' + code + '/' + chap + '/audio/' + reader + '.mp3', album: 'Audio Bible' };
 }
 // play a chapter's recorded audio, queueing the whole book so it auto-advances chapter → chapter
 function playBibleChapter(bookNum, chap) {
@@ -141,3 +155,5 @@ window.useTrinityAudio = useTrinityAudio;
 window.audioFmtTime = fmtTime;
 window.playBibleChapter = playBibleChapter;
 window.bibleChapterTrackId = (b, c) => 'bible:' + b + ':' + c;
+window.AUDIO_BIBLE_OPTIONS = AUDIO_BIBLE_OPTIONS;
+window.getAudioChoice = getAudioChoice;

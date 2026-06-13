@@ -354,6 +354,11 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
 
 // ── reader settings (size, serif, Strong's, theme) ──
 function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showStrongs, setShowStrongs, ctx }) {
+  const aOpts = window.AUDIO_BIBLE_OPTIONS || { translations: [], readers: [] };
+  const [voice, setVoice] = React.useState(() => { const c = window.getAudioChoice ? window.getAudioChoice() : { translation: 'BSB', reader: 'david' }; return c.translation + '/' + c.reader; });
+  const [vt, vr] = voice.split('/');
+  const pickAudio = (t, r) => { const v = t + '/' + r; lsSet('trinityone.audioVoice', v); setVoice(v); };
+  const aBtn = (on) => ({ flex: 1, padding: '11px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'var(--clay-soft)' : 'var(--surface-2)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' });
   return (
     <BottomSheet open={open} onClose={onClose}>
       <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Reading</div>
@@ -387,6 +392,24 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
           <div style={{ position: 'absolute', top: 3, left: showStrongs ? 21 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
         </div>
       </button>
+
+      {aOpts.readers.length ? (
+        <div style={{ marginBottom: 18 }}>
+          {aOpts.translations.length > 1 ? (
+            <React.Fragment>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9 }}>Audio Bible — translation</div>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 13 }}>
+                {aOpts.translations.map(t => <button key={t.id} onClick={() => pickAudio(t.id, vr)} style={aBtn(vt === t.id)}>{t.name}</button>)}
+              </div>
+            </React.Fragment>
+          ) : null}
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9 }}>Audio Bible voice</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {aOpts.readers.map(r => <button key={r.id} onClick={() => pickAudio(vt, r.id)} style={{ ...aBtn(vr === r.id), padding: '10px' }}>{r.name}</button>)}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.45 }}>Public-domain narration. Applies the next time you tap Listen.</div>
+        </div>
+      ) : null}
 
       <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, margin: '4px 0 14px' }}>Theme</div>
       <button onClick={ctx.toggleDark} style={{
