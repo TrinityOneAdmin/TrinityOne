@@ -1117,17 +1117,10 @@ function DMInbox({ open, onClose, ctx }) {
 // ── People: the church directory — find a member and message them ──
 function PeopleScreen({ open, onClose, ctx }) {
   const FS = window.Fellowship;
-  const [members, setMembers] = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
   const [q, setQ] = React.useState('');
-  const np = ctx.church && ctx.church.npub;
-  React.useEffect(() => {
-    if (!open || !np || !FS || !FS.subscribeChurchMembers) { setMembers([]); setLoading(false); return; }
-    setLoading(true);
-    const t = setTimeout(() => setLoading(false), 9000);   // safety: stop spinning even on a slow relay
-    const off = FS.subscribeChurchMembers(np, (m, done) => { setMembers(m); if (done) { setLoading(false); clearTimeout(t); } });
-    return () => { clearTimeout(t); if (off) off(); };
-  }, [open, np]);
+  // the roster is prefetched at app load (ctx.churchPeople), so it's already warm when this opens
+  const members = ctx.churchPeople || [];
+  const loading = !!ctx.churchPeopleLoading;
   const me = FS && FS.myPubkey;
   // a member's display: their chosen name, else their @handle (nip05 local part), else the anonymous handle
   const nameOf = (m) => (m.name && m.name.trim()) || (m.nip05 ? String(m.nip05).split('@')[0] : '') || FS.displayFor(m.pubkey).handle;

@@ -431,6 +431,18 @@ function App() {
     if (!c || !c.npub || !(window.Fellowship && window.Fellowship.subscribeChurchMemberCount)) return;
     return window.Fellowship.subscribeChurchMemberCount(c.npub, (n) => setChurches(cs => cs.map(x => x.id === activeChurch ? { ...x, members: n } : x)));
   }, [activeChurch, connTick]);
+  // prefetch the People directory at app load (not when the screen opens) so it's ready before the
+  // member taps "People" — the roster streams in the background while they read elsewhere.
+  const [churchPeople, setChurchPeople] = useA([]);
+  const [churchPeopleLoading, setChurchPeopleLoading] = useA(false);
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchMembers)) { setChurchPeople([]); setChurchPeopleLoading(false); return; }
+    setChurchPeopleLoading(true);
+    const t = setTimeout(() => setChurchPeopleLoading(false), 9000);   // safety: stop "loading" even on a slow relay
+    const off = window.Fellowship.subscribeChurchMembers(np, (m, done) => { setChurchPeople(m); if (done) { setChurchPeopleLoading(false); clearTimeout(t); } });
+    return () => { clearTimeout(t); if (off) off(); };
+  }, [activeChurch, connTick]);
   // devotionals the active church shares (text/Markdown reflections)
   const [churchDevos, setChurchDevos] = useA([]);
   const [openDevo, setOpenDevo] = useA(null);   // a church devotional opened for reading
@@ -771,6 +783,7 @@ function App() {
     devoProgress,
     churchPlans: [...churchPlans, ...netPlans],
     churchDevos,
+    churchPeople, churchPeopleLoading,   // prefetched at app load so the People screen is instant
     myPubkey: (window.Fellowship && window.Fellowship.myPubkey) || null,
     openChurchDevo: (d) => setOpenDevo(d),
     // serving & events (church's own + aggregated from its network)
