@@ -1310,6 +1310,18 @@ function DashDevotionals() {
   const [overId, setOverId] = React.useState(null);
   // the list to show: the live order, unless we're mid-drag with a local working order
   const list = order || devos;
+  const [seriesOpen, setSeriesOpen] = React.useState({});   // collapsible series sections (keyed by series id)
+  // group devotionals into collapsible series for a tidier list. A devo is "in a series" when its ref names
+  // one; bare "Series N" devos all share one group, labelled by the titles' common "— suffix" (e.g. "Weekly
+  // Plans"). Global order is preserved; non-series devos render as their own plain row.
+  const seriesKeyOf = (d) => { const r = String(d.ref || ''); const m = r.match(/^\s*(.+?)\s*[—\-–:]\s*series\b/i) || r.match(/series\s*:\s*(.+?)\s*$/i); if (m && m[1].trim()) return 'name:' + m[1].trim(); return /series/i.test(r) ? '__series__' : null; };
+  const dashSuffix = (titles) => { const tail = (t) => { const m = String(t || '').match(/[—\-–]\s*([^—\-–]+?)\s*$/); return m ? m[1].trim() : null; }; const ts = titles.map(tail); return ts.length && ts[0] && ts.every(x => x === ts[0]) ? ts[0] : ''; };
+  const devoGroups = (() => {
+    const out = [], idx = {};
+    list.forEach(d => { const k = seriesKeyOf(d); const key = k == null ? 'solo:' + d.id : k; if (idx[key] == null) { idx[key] = out.length; out.push({ key, series: k != null, items: [] }); } out[idx[key]].items.push(d); });
+    out.forEach(g => { if (!g.series) return; const nm = g.key.indexOf('name:') === 0 ? g.key.slice(5) : ''; const sfx = nm ? '' : dashSuffix(g.items.map(d => d.title)); g.label = nm || (sfx ? (/s$/i.test(sfx) ? sfx : sfx + 's') : 'Series'); });
+    return out;
+  })();
   // persist a new order: number each devotional by position, re-publish only the ones that changed
   const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: i }); }); };
   // sort the list and bake it into the saved order (so the member app shows the same). "number" is a
@@ -1358,9 +1370,11 @@ function DashDevotionals() {
             ))}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {list.map((d, i) => {
-              const dragging = dragId === d.id;
-              return (
+            {(() => {
+              const renderRow = (d) => {
+                const i = list.findIndex(x => x.id === d.id);
+                const dragging = dragId === d.id;
+                return (
               <div key={d.id} draggable
                 onDragStart={(e) => { setDragId(d.id); try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', d.id); } catch (err) {} }}
                 onDragOver={(e) => onDragOver(e, d.id)} onDrop={onDrop} onDragEnd={() => { setDragId(null); setOverId(null); setOrder(null); }}
@@ -1378,8 +1392,22 @@ function DashDevotionals() {
                 <button onClick={() => setEditing(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
                 <button onClick={() => window.Steward.removeDevotional(d.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
               </div>
-              );
-            })}
+                );
+              };
+              return devoGroups.map(g => g.series ? (
+                <div key={g.key} style={{ border: '1px solid var(--line)', borderRadius: 13, overflow: 'hidden' }}>
+                  <button onClick={() => setSeriesOpen(s => ({ ...s, [g.key]: !s[g.key] }))} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', border: 'none', background: 'var(--surface-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={17} color="currentColor" /></div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.label}</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.items.length} devotionals</div>
+                    </div>
+                    <Icon name={seriesOpen[g.key] ? 'chevU' : 'chevD'} size={17} color="var(--ink-3)" />
+                  </button>
+                  {seriesOpen[g.key] ? <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10, borderTop: '1px solid var(--line)' }}>{g.items.map(renderRow)}</div> : null}
+                </div>
+              ) : renderRow(g.items[0]));
+            })()}
           </div>
           </React.Fragment>
         )}

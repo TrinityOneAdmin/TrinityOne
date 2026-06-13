@@ -27,64 +27,6 @@ function DevoCard({ d, onClick }) {
   );
 }
 
-// pull the Series number from a devotional's ref/title ("Series 3", "#3"); same rule the steward sorts by
-function devoSeriesNum(d) { const s = String((d.ref || '') + ' ' + (d.title || '')); const m = s.match(/series\s*#?\s*(\d+)/i) || s.match(/#\s*(\d+)/); return m ? parseInt(m[1], 10) : Infinity; }
-// the shared "— Suffix" tail across a set of titles (e.g. every "… — Weekly Plan"), '' if they don't share one
-function commonDashSuffix(titles) {
-  const tail = (t) => { const m = String(t || '').match(/[—\-–]\s*([^—\-–]+?)\s*$/); return m ? m[1].trim() : null; };
-  const tails = titles.map(tail);
-  return tails.length && tails[0] && tails.every(x => x === tails[0]) ? tails[0] : '';
-}
-// nest a flat devotional list into collapsible series. A devotional is "in a series" if its ref mentions
-// "Series"; bare "Series N" devotionals share one group (labelled by their common title suffix when they
-// have one, e.g. "Weekly Plans"). Groups of one are demoted back to standalone cards.
-function groupDevos(devos) {
-  const seriesName = (d) => { const r = String(d.ref || ''); const m = r.match(/^\s*(.+?)\s*[—\-–:]\s*series\b/i) || r.match(/series\s*:\s*(.+?)\s*$/i); if (m && m[1].trim()) return m[1].trim(); return /series/i.test(r) ? '' : null; };
-  const groups = new Map(); const singles = [];
-  devos.forEach(d => { const nm = seriesName(d); if (nm === null) { singles.push(d); return; } const key = nm || '__series__'; if (!groups.has(key)) groups.set(key, { key, name: nm, items: [] }); groups.get(key).items.push(d); });
-  const realGroups = [];
-  for (const g of groups.values()) {
-    if (g.items.length < 2) { singles.push(...g.items); continue; }
-    g.items.sort((a, b) => devoSeriesNum(a) - devoSeriesNum(b));
-    const suffix = g.name ? '' : commonDashSuffix(g.items.map(d => d.title));
-    g.suffix = suffix;                                  // strip this tail from each row's title (the header carries it)
-    g.label = g.name || (suffix ? (/s$/i.test(suffix) ? suffix : suffix + 's') : 'Devotional series');
-    realGroups.push(g);
-  }
-  return { groups: realGroups, singles };
-}
-// a collapsible series: one header card that expands to compact per-devotional rows (de-clutters a long list)
-function DevoSeries({ group, ctx }) {
-  const [open, setOpen] = React.useState(false);
-  const strip = (t) => group.suffix ? String(t || '').replace(new RegExp('\\s*[—\\-–]\\s*' + group.suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '') : t;
-  return (
-    <div style={{ marginBottom: 12, border: '1px solid var(--line)', borderRadius: 18, background: 'var(--surface)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
-      <button onClick={() => setOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
-        <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="read" size={21} color="#fff" /></div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.label}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{group.items.length} devotionals</div>
-        </div>
-        <Icon name={open ? 'chevU' : 'chevD'} size={18} color="var(--ink-3)" />
-      </button>
-      {open ? (
-        <div style={{ padding: '0 12px 8px' }}>
-          {group.items.map((d, i) => (
-            <div key={d.id} onClick={() => ctx.openChurchDevo(d)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 8px', borderTop: '1px solid var(--line)', cursor: 'pointer' }}>
-              <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, color: 'var(--ink-3)' }}>{i + 1}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{strip(d.title)}</div>
-                <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{d.ref || 'A reflection'}</div>
-              </div>
-              <Icon name="chevR" size={16} color="var(--ink-3)" />
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function PlanCard({ p, ctx, onClick }) {
   const done = doneDays(ctx, p.id).length;
   const pct = p.len ? done / p.len : 0;
@@ -169,22 +111,14 @@ function PlansScreen({ ctx }) {
         </React.Fragment>
       ) : null}
 
-      {(ctx.churchDevos || []).length ? (() => {
-        const { groups, singles } = groupDevos(ctx.churchDevos);
-        return (
-          <React.Fragment>
-            <SectionLabel>Devotionals from {churchName}</SectionLabel>
-            <div style={{ marginBottom: singles.length ? 12 : 22, animation: 'trinityFade .5s ease .1s both' }}>
-              {groups.map(g => <DevoSeries key={g.key} group={g} ctx={ctx} />)}
-            </div>
-            {singles.length ? (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22, animation: 'trinityFade .5s ease .1s both' }}>
-                {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
-              </div>
-            ) : null}
-          </React.Fragment>
-        );
-      })() : null}
+      {(ctx.churchDevos || []).length ? (
+        <React.Fragment>
+          <SectionLabel>Devotionals from {churchName}</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22, animation: 'trinityFade .5s ease .1s both' }}>
+            {ctx.churchDevos.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
+          </div>
+        </React.Fragment>
+      ) : null}
 
       <SectionLabel>Discover plans</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'trinityFade .5s ease .1s both' }}>
