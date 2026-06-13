@@ -58,33 +58,12 @@ function scheduleVisible(list) {
 // on `online` / window focus / tab-visible we swap in a fresh one (debounced) so it self-heals in a
 // second or two. Accumulator state lives in the caller's closure, so re-subscribing just refills it.
 function withReconnect(makeSub) {
-  let closer = makeSub();
-  let lastAt = Date.now();
-  const redo = (force) => {
-    if (!force && Date.now() - lastAt < 1500) return;   // debounce online+focus+visibility firing together
-    lastAt = Date.now();
-    try { closer && closer(); } catch {}
-    closer = makeSub();
-  };
-  const onVis = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') redo(); };
-  // A relay restart (installer re-run) kills the socket WITHOUT firing online/focus/visibility — the app
-  // is still foregrounded and "online", so nothing prompts a reconnect and the screen sits stale. A slow
-  // heartbeat re-subscribes periodically so it self-heals within ~25s even while the user is looking at it.
-  const hb = setInterval(() => redo(true), 25000);
-  if (typeof window !== 'undefined') {
-    window.addEventListener('online', redo);
-    window.addEventListener('focus', redo);
-    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
-  }
-  return () => {
-    clearInterval(hb);
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('online', redo);
-      window.removeEventListener('focus', redo);
-      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis);
-    }
-    try { closer && closer(); } catch {}
-  };
+  // NOTE: reconnect/heartbeat re-subscribing was disabled — over a slow tunnel its repeated re-subscribes
+  // churned subscriptions on the relay and starved later queries (notably the per-member name fetches).
+  // Subscriptions are opened once and kept open (the original, reliable behaviour). Relay-restart recovery
+  // can be reintroduced later in a way that doesn't re-fire every church subscription.
+  const closer = makeSub();
+  return () => { try { closer && closer(); } catch {} };
 }
 function scheduleNextReveal(list, timer, emit) {
   if (timer) { clearTimeout(timer); timer = null; }

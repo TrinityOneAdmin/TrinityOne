@@ -5792,33 +5792,8 @@
     return list.filter((m) => !m.draft && (!m.publishAt || m.publishAt <= nowS));
   }
   function withReconnect(makeSub) {
-    let closer = makeSub();
-    let lastAt = Date.now();
-    const redo = (force) => {
-      if (!force && Date.now() - lastAt < 1500) return;
-      lastAt = Date.now();
-      try {
-        closer && closer();
-      } catch {
-      }
-      closer = makeSub();
-    };
-    const onVis = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") redo();
-    };
-    const hb = setInterval(() => redo(true), 25e3);
-    if (typeof window !== "undefined") {
-      window.addEventListener("online", redo);
-      window.addEventListener("focus", redo);
-      if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVis);
-    }
+    const closer = makeSub();
     return () => {
-      clearInterval(hb);
-      if (typeof window !== "undefined") {
-        window.removeEventListener("online", redo);
-        window.removeEventListener("focus", redo);
-        if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVis);
-      }
       try {
         closer && closer();
       } catch {
