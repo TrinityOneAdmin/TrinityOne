@@ -175,6 +175,9 @@ Out of scope for now: full ChurchSuite surface (CRM, child check-in, broadcast c
 ### Nice-to-haves (small UX, unprioritised)
 - **Member search** — a search/filter field in the Steward console's Members tab (filter by name / npub) for churches with longer rosters. *(requested 2026-06-12)*
 
+### Resources release schedule (steward)  *(requested 2026-06-13 — feature, not yet built)*
+Let stewards **schedule when resources publish** to members instead of dropping them all at once — drip a devotional/plan on a date, or set a recurring cadence (e.g. one item of a **series** per week). Pairs with the new explicit **`series`** field on devotionals (`src/steward.src.js` `publishDevotional`): a series becomes a release track. **Shape to decide:** a `publishAt` (and optional `recurrence`) field on the `devotional:`/`plan:` kind-30078 docs; the member app hides items whose `publishAt` is in the future (client-side gate), and/or the steward console holds them unpublished and releases on a timer. Note the relay/Nostr has no native "publish later," so either the client gates on `publishAt`, the steward device publishes on schedule (needs the console open / a background job), or the gateway holds + emits. UI: a date/cadence picker in the devotional/plan modal + a "Scheduled" state in the Resources list. Reuses the date-picker patterns in `stew-schedule.jsx` (rota board) but is a distinct feature from rota/calendar.
+
 ---
 
 ## Conventions
