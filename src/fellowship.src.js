@@ -364,16 +364,19 @@ window.Fellowship = {
       authors.forEach(pk => askedProf.add(pk));
       try { console.log('[TO names] querying', authors.length, 'profiles over', churchRelays().length, 'relays:', churchRelays().join(',')); } catch {}
       let s = null;
-      // release the in-flight lock when the batch settles, so any names that DIDN'T resolve (e.g. the
-      // query landed during a relay restart) can be retried the next time the member sub re-fires —
-      // resolved ones are skipped by the `has name` check, so this only retries the genuinely-missing.
-      const done = () => { const named = authors.filter(pk => profiles[pk] && profiles[pk].name).length; try { console.log('[TO names] batch done:', named, 'of', authors.length, 'resolved'); } catch {} authors.forEach(pk => askedProf.delete(pk)); try { s && s.close(); } catch {} const i = profSubs.indexOf(s); if (i >= 0) profSubs.splice(i, 1); };
+      // IMPORTANT: do NOT close the sub on the first EOSE. With multiple relays, a fast/empty relay (the
+      // dev box) EOSEs in ~40ms while the relay that actually HAS the profiles (master-01) is ~900ms away
+      // over the tunnel — closing on the fast EOSE discarded the real profiles. So we keep the sub open
+      // and let names stream in, then release the retry-lock and close on timers tuned past the slow relay.
+      const release = () => { authors.forEach(pk => askedProf.delete(pk)); };   // allow a later retry of any still-missing
+      const close = () => { const named = authors.filter(pk => profiles[pk] && profiles[pk].name).length; try { console.log('[TO names] batch done:', named, 'of', authors.length, 'resolved'); } catch {} try { s && s.close(); } catch {} const i = profSubs.indexOf(s); if (i >= 0) profSubs.splice(i, 1); };
       s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
         onevent(e) { try { const meta = JSON.parse(e.content); profiles[e.pubkey] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(e.pubkey); if (m) { m.name = profiles[e.pubkey].name; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; } emit(); } catch {} },
-        oneose() { done(); },
+        oneose() {},   // a relay finished its backlog — keep listening; slow relays are still delivering
       });
       profSubs.push(s);
-      setTimeout(done, 8000);   // safety: if no EOSE (slow/dropped relay), still release so a retry can happen
+      setTimeout(release, 5000);    // after the slow relay has had time, free still-missing names for retry
+      setTimeout(close, 12000);     // close well past the slowest relay so nothing is cut off early
     };
     const ensureProfile = (pk) => {
       if (profiles[pk] && profiles[pk].name) return;   // already named — nothing to fetch

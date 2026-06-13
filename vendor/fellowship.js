@@ -6206,13 +6206,15 @@
         } catch {
         }
         let s = null;
-        const done = () => {
+        const release = () => {
+          authors.forEach((pk) => askedProf.delete(pk));
+        };
+        const close = () => {
           const named = authors.filter((pk) => profiles[pk] && profiles[pk].name).length;
           try {
             console.log("[TO names] batch done:", named, "of", authors.length, "resolved");
           } catch {
           }
-          authors.forEach((pk) => askedProf.delete(pk));
           try {
             s && s.close();
           } catch {
@@ -6238,11 +6240,12 @@
             }
           },
           oneose() {
-            done();
           }
+          // a relay finished its backlog — keep listening; slow relays are still delivering
         });
         profSubs.push(s);
-        setTimeout(done, 8e3);
+        setTimeout(release, 5e3);
+        setTimeout(close, 12e3);
       };
       const ensureProfile = (pk) => {
         if (profiles[pk] && profiles[pk].name) return;
