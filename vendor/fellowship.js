@@ -5903,6 +5903,32 @@
       }
     }, 800);
   }
+  var MEMBERS_KEY = "trinityone.members.";
+  var MEMBERCOUNT_KEY = "trinityone.membercount.";
+  function loadMembersCache(cp) {
+    try {
+      const a = JSON.parse(localStorage.getItem(MEMBERS_KEY + cp) || "[]");
+      return Array.isArray(a) ? a : [];
+    } catch {
+      return [];
+    }
+  }
+  function saveMembersCache(cp, list) {
+    try {
+      localStorage.setItem(MEMBERS_KEY + cp, JSON.stringify(list.slice(0, 500)));
+    } catch {
+    }
+  }
+  function loadCountCache(cp) {
+    const n = parseInt(localStorage.getItem(MEMBERCOUNT_KEY + cp) || "", 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  function saveCountCache(cp, n) {
+    try {
+      localStorage.setItem(MEMBERCOUNT_KEY + cp, String(n));
+    } catch {
+    }
+  }
   var AV_SYMBOLS = ["halo", "dove", "fish", "flame", "vine", "wheat", "anchor", "crook", "chalice", "olive", "mountain", "well", "star"];
   function displayFor(pubkey) {
     const base = profile(pubkey);
@@ -6084,9 +6110,12 @@
       }
       const MEMBER_D = "trinityone/member:";
       const ppl = /* @__PURE__ */ new Map();
+      const cached = loadCountCache(cp);
+      if (cached != null) cb(cached);
       const tally = () => {
         let n = 0;
         for (const v of ppl.values()) if (v.msgs > 0 || v.joined) n++;
+        saveCountCache(cp, n);
         cb(n);
       };
       const makeSub = () => {
@@ -6130,7 +6159,14 @@
       const MEMBER_D = "trinityone/member:";
       const byPub = /* @__PURE__ */ new Map();
       const profSubs = /* @__PURE__ */ new Map();
-      const emit = (done) => onMembers([...byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)), !!done);
+      for (const m of loadMembersCache(cp)) {
+        if (m && m.pubkey) byPub.set(m.pubkey, m);
+      }
+      const emit = (done) => {
+        const visible = [...byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+        saveMembersCache(cp, [...byPub.values()]);
+        onMembers(visible, !!done);
+      };
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || "", nip05: (profiles[pk] || {}).nip05 || "", picture: (profiles[pk] || {}).picture || "", hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
       const ensureProfile = (pk) => {
         if (profSubs.has(pk)) return;
@@ -6194,6 +6230,7 @@
           }
         };
       };
+      if (byPub.size) emit(false);
       const stop = withReconnect(makeSub);
       return () => {
         stop();

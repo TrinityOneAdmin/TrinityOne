@@ -157,6 +157,15 @@ function saveProfiles() {
   _profSaveT = setTimeout(() => { _profSaveT = null; try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)); } catch {} }, 800);
 }
 
+// cache the resolved church member roster + count per church, so the People list and the member count
+// render INSTANTLY from the last-known state on app load (and offline / slow relay), then refresh live.
+const MEMBERS_KEY = 'trinityone.members.';        // + churchPubHex -> JSON array of member objects
+const MEMBERCOUNT_KEY = 'trinityone.membercount.'; // + churchPubHex -> number
+function loadMembersCache(cp) { try { const a = JSON.parse(localStorage.getItem(MEMBERS_KEY + cp) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
+function saveMembersCache(cp, list) { try { localStorage.setItem(MEMBERS_KEY + cp, JSON.stringify(list.slice(0, 500))); } catch {} }
+function loadCountCache(cp) { const n = parseInt(localStorage.getItem(MEMBERCOUNT_KEY + cp) || '', 10); return Number.isFinite(n) ? n : null; }
+function saveCountCache(cp, n) { try { localStorage.setItem(MEMBERCOUNT_KEY + cp, String(n)); } catch {} }
+
 const AV_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 'crook', 'chalice', 'olive', 'mountain', 'well', 'star'];
 // resolved display = kind-0 name/avatar if known, else a deterministic anonymous handle + symbol
 function displayFor(pubkey) {
@@ -282,7 +291,9 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp) { cb(0); return () => {}; }
     const MEMBER_D = 'trinityone/member:';
     const ppl = new Map();   // pubkey -> { msgs, joined }
-    const tally = () => { let n = 0; for (const v of ppl.values()) if (v.msgs > 0 || v.joined) n++; cb(n); };
+    const cached = loadCountCache(cp);
+    if (cached != null) cb(cached);   // show the last-known count instantly on load
+    const tally = () => { let n = 0; for (const v of ppl.values()) if (v.msgs > 0 || v.joined) n++; saveCountCache(cp, n); cb(n); };
     const makeSub = () => {
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
         onevent(e) {
@@ -310,8 +321,14 @@ window.Fellowship = {
     const MEMBER_D = 'trinityone/member:';
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, nip05, picture, joined, lastTs, msgs }
     const profSubs = new Map();
+    // seed from the persisted roster so the list paints instantly on load (then live events refresh it)
+    for (const m of loadMembersCache(cp)) { if (m && m.pubkey) byPub.set(m.pubkey, m); }
     // a member who opted out (kind-0 `hidden`) is withheld from the directory the others see
-    const emit = (done) => onMembers([...byPub.values()].filter(m => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)), !!done);
+    const emit = (done) => {
+      const visible = [...byPub.values()].filter(m => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+      saveMembersCache(cp, [...byPub.values()]);   // keep the cache warm for next launch
+      onMembers(visible, !!done);
+    };
     // seed name/nip05 from the persisted profile cache so known members render instantly (no resolve lag)
     const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || '', nip05: (profiles[pk] || {}).nip05 || '', picture: (profiles[pk] || {}).picture || '', hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
     const ensureProfile = (pk) => {
@@ -339,6 +356,7 @@ window.Fellowship = {
       });
       return () => { try { sub.close(); } catch {} };
     };
+    if (byPub.size) emit(false);   // paint the cached roster immediately, before the relay answers
     const stop = withReconnect(makeSub);
     return () => { stop(); for (const s of profSubs.values()) { try { s.close(); } catch {} } };
   },
