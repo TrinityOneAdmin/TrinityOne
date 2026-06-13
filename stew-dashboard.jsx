@@ -1266,8 +1266,12 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
   const [title, setTitle] = React.useState(editing ? editing.title || '' : '');
   const [ref, setRef] = React.useState(editing ? editing.ref || '' : '');
   const [series, setSeries] = React.useState(editing ? editing.series || '' : '');
+  const [schedAt, setSchedAt] = React.useState(editing && editing.publishAt ? editing.publishAt : 0);   // unix sec; 0 = publish now
   const [file, setFile] = React.useState(null);   // { type, name, text? } — a NEW replacement file
   const [busy, setBusy] = React.useState(false);
+  const toLocalInput = (sec) => { if (!sec) return ''; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
+  const isFuture = schedAt && schedAt * 1000 > Date.now();
   const pick = (f) => {
     if (!f) return;
     const isText = /\.(txt|md|markdown)$/i.test(f.name) || /^text\//i.test(f.type) || f.type === '';
@@ -1285,7 +1289,7 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
     setBusy(true);
     const text = file ? file.text : (editing ? editing.text : '');
     const type = file ? file.type : (editing ? editing.type : 'txt');
-    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), type, text: text || '', order: editing ? editing.order : undefined })).then(() => onClose());
+    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, type, text: text || '', order: editing ? editing.order : undefined })).then(() => onClose());
   };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1299,6 +1303,17 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Series (optional)</div>
         <input value={series} onChange={e => setSeries(e.target.value)} list="devo-series-list" placeholder="e.g. The Weekly Word — groups it with the rest" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <datalist id="devo-series-list">{(seriesOptions || []).map(s => <option key={s} value={s} />)}</datalist>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Release</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: schedAt ? 6 : 14 }}>
+          <button type="button" onClick={() => setSchedAt(0)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: !schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (!schedAt ? 'var(--clay)' : 'var(--line)'), color: !schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Now</button>
+          <button type="button" onClick={() => setSchedAt(schedAt || Math.floor(Date.now() / 1000) + 7 * 86400)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (schedAt ? 'var(--clay)' : 'var(--line)'), color: schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Schedule…</button>
+        </div>
+        {schedAt ? (
+          <React.Fragment>
+            <input type="datetime-local" value={toLocalInput(schedAt)} min={toLocalInput(Math.floor(Date.now() / 1000))} onChange={e => setSchedAt(fromLocalInput(e.target.value))} style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 6 }} />
+            <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay)', marginBottom: 14 }}>{isFuture ? `Hidden from members until ${new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : 'That time is in the past — it will publish immediately.'}</div>
+          </React.Fragment>
+        ) : null}
         <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer' }}>
           <Icon name="read" size={20} color="var(--clay)" />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1349,9 +1364,9 @@ function DashDevotionals() {
     return out;
   })();
   // give a group an explicit name (also migrates a legacy "Series N" group): re-publish each with the new series
-  const renameSeries = (items, name) => { items.forEach(d => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: name })); };
+  const renameSeries = (items, name) => { items.forEach(d => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: name, publishAt: d.publishAt })); };
   // persist a new order: number each devotional by position, re-publish only the ones that changed (keep series)
-  const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, series: d.series, order: i }); }); };
+  const persist = (arr) => { arr.forEach((d, i) => { if (d.order !== i) window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, series: d.series, order: i, publishAt: d.publishAt }); }); };
   // sort the list and bake it into the saved order (so the member app shows the same). "number" is a
   // numeric-aware title sort, so "Day 2" comes before "Day 10".
   // pull the SERIES number from a title ("Series 3", "Series #3", "Series03"); fall back to a leading
@@ -1415,8 +1430,11 @@ function DashDevotionals() {
                 </div>
                 <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--surface)', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={19} color="currentColor" /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>{d.title}</div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[d.ref, (d.type || '').toUpperCase()].filter(Boolean).join(' · ')}</div>
+                  <div style={{ fontWeight: 700, fontSize: 14.5, display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
+                    {d.publishAt && d.publishAt * 1000 > Date.now() ? <span title={'Members see it on ' + new Date(d.publishAt * 1000).toLocaleString()} style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 800, letterSpacing: '.3px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 8px' }}><Icon name="clock" size={11} color="var(--clay)" /> SCHEDULED</span> : null}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{[d.ref, (d.type || '').toUpperCase(), d.publishAt && d.publishAt * 1000 > Date.now() ? new Date(d.publishAt * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''].filter(Boolean).join(' · ')}</div>
                 </div>
                 <button onClick={() => setEditing(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
                 <button onClick={() => window.Steward.removeDevotional(d.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>

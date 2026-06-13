@@ -5787,6 +5787,24 @@
     }
   }
   var NET = "trinityone";
+  function scheduleVisible(list) {
+    const nowS = Math.floor(Date.now() / 1e3);
+    return list.filter((m) => !m.publishAt || m.publishAt <= nowS);
+  }
+  function scheduleNextReveal(list, timer, emit) {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const nowMs = Date.now();
+    let soonest = Infinity;
+    for (const m of list) {
+      const t = (m.publishAt || 0) * 1e3;
+      if (t > nowMs && t < soonest) soonest = t;
+    }
+    if (soonest === Infinity) return null;
+    return setTimeout(emit, Math.min(soonest - nowMs + 250, 2147483647));
+  }
   var _loc = typeof location !== "undefined" ? location : null;
   var RELAY_BASE = _loc && _loc.host ? _loc.host : "127.0.0.1:8090";
   var _native = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -6549,7 +6567,12 @@
       }
       const PLAN_D = "trinityone/plan:";
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => onPlans([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+      let timer = null;
+      const emit = () => {
+        const all = [...byId.values()];
+        onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+        timer = scheduleNextReveal(all, timer, emit);
+      };
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -6575,6 +6598,7 @@
           sub.close();
         } catch {
         }
+        if (timer) clearTimeout(timer);
       };
     },
     // ── read the devotionals a church shares (kind-30078, d=devotional:) — full content for rendering ──
@@ -6588,7 +6612,12 @@
       const DEVO_D = "trinityone/devotional:";
       const byId = /* @__PURE__ */ new Map();
       const ord = (d) => typeof d.order === "number" ? d.order : Infinity;
-      const emit = () => onDevos([...byId.values()].sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
+      let timer = null;
+      const emit = () => {
+        const all = [...byId.values()];
+        onDevos(scheduleVisible(all).sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
+        timer = scheduleNextReveal(all, timer, emit);
+      };
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -6614,6 +6643,7 @@
           sub.close();
         } catch {
         }
+        if (timer) clearTimeout(timer);
       };
     },
     // ── generic reader for the church's own addressable docs with a given d-prefix ──

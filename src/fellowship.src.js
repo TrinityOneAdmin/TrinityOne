@@ -43,6 +43,23 @@ function _decEvt(e) {
 }
 
 const NET = 'trinityone';                       // network-wide tag
+
+// ── scheduled release (steward drip): a doc with a future `publishAt` (unix sec) is withheld from
+// members until that time. The relay has no "publish later", so the gate is client-side: hide future
+// items, and arm a one-shot timer to re-emit the moment the soonest one becomes due (so an open app
+// reveals it on time, no reload). Items with no publishAt (or one already past) are always visible.
+function scheduleVisible(list) {
+  const nowS = Math.floor(Date.now() / 1000);
+  return list.filter(m => !m.publishAt || m.publishAt <= nowS);
+}
+function scheduleNextReveal(list, timer, emit) {
+  if (timer) { clearTimeout(timer); timer = null; }
+  const nowMs = Date.now();
+  let soonest = Infinity;
+  for (const m of list) { const t = (m.publishAt || 0) * 1000; if (t > nowMs && t < soonest) soonest = t; }
+  if (soonest === Infinity) return null;
+  return setTimeout(emit, Math.min(soonest - nowMs + 250, 2147483647));   // cap at setTimeout's max delay
+}
 // Relays are configurable + persisted, so pointing at a hosted wss:// relay is a settings
 // change, not a code change. Default = a relay on the SAME host the app is served from, port
 // 7447. That makes self-hosting on one machine work for both this device (localhost) and phones
@@ -527,7 +544,12 @@ window.Fellowship = {
     if (!pubk) { onPlans([]); return () => {}; }
     const PLAN_D = 'trinityone/plan:';
     const byId = new Map();
-    const emit = () => onPlans([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+    let timer = null;   // re-emit when the next scheduled item is due (drip release)
+    const emit = () => {
+      const all = [...byId.values()];
+      onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+      timer = scheduleNextReveal(all, timer, emit);
+    };
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -538,7 +560,7 @@ window.Fellowship = {
       },
       oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} };
+    return () => { try { sub.close(); } catch {} if (timer) clearTimeout(timer); };
   },
 
   // ── read the devotionals a church shares (kind-30078, d=devotional:) — full content for rendering ──
@@ -549,7 +571,12 @@ window.Fellowship = {
     const byId = new Map();
     // honour the steward's explicit order (lower = first); unordered devotionals fall back to newest-first
     const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
-    const emit = () => onDevos([...byId.values()].sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
+    let timer = null;   // re-emit when the next scheduled devotional is due (drip release)
+    const emit = () => {
+      const all = [...byId.values()];
+      onDevos(scheduleVisible(all).sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
+      timer = scheduleNextReveal(all, timer, emit);
+    };
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -560,7 +587,7 @@ window.Fellowship = {
       },
       oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} };
+    return () => { try { sub.close(); } catch {} if (timer) clearTimeout(timer); };
   },
 
   // ── generic reader for the church's own addressable docs with a given d-prefix ──
