@@ -12,6 +12,9 @@
 <style>
   .wrap { max-width: 1160px; margin: 0 auto; padding: 0 28px; }
   a { color: inherit; }
+  /* contain horizontal overflow (oversized phone mockups + off-canvas decorative gradients) so the page
+     doesn't end up wider than a phone viewport. 'clip' (not 'hidden') keeps the sticky nav working. */
+  html, body { overflow-x: clip; max-width: 100%; }
 
   /* nav */
   nav.top { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--paper) 86%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--line-2); }
@@ -38,7 +41,7 @@
   .phone-stage::before { content:''; position:absolute; width:340px; height:340px; border-radius:999px; background: radial-gradient(circle, color-mix(in oklab, var(--clay) 18%, transparent), transparent 62%); }
   .phone { position: relative; width: 280px; height: 580px; border-radius: 44px; padding: 7px; background: linear-gradient(155deg,#2b2622,#0d0b09); box-shadow: var(--shadow-lg); }
   .phone .screen { width:100%; height:100%; border-radius:38px; overflow:hidden; background: var(--paper); position:relative; }
-  .phone-embed { width: 280px; height: 604px; position: relative; border-radius: 39px; background: linear-gradient(150deg,#2b2b2e,#0d0d0f 60%); box-shadow: 0 40px 70px rgba(40,30,20,.34), 0 0 0 1px rgba(0,0,0,.4); }
+  .phone-embed { width: 280px; height: 604px; position: relative; overflow: hidden; border-radius: 39px; background: linear-gradient(150deg,#2b2b2e,#0d0d0f 60%); box-shadow: 0 40px 70px rgba(40,30,20,.34), 0 0 0 1px rgba(0,0,0,.4); }
   .phone-embed iframe, .phone-embed img { display: block; border-radius: 39px; }
 
   /* sections */
@@ -116,6 +119,14 @@
     .phone-stage { order:-1; }
     .pillars { grid-template-columns: 1fr; }
     nav .links { display:none; }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 0 18px; }
+    .proto .wrap { padding: 54px 18px; }
+    .final { padding: 72px 18px; }
+    .feat { padding: 40px 0; gap: 28px; }
+    .pillars { margin-top: 36px; }
+    .fvis { min-height: 240px; padding: 24px; }
   }
 </style>
 </head>
