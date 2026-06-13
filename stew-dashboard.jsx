@@ -486,6 +486,8 @@ function JoinCard({ qrSize = 92, center = false }) {
   const np = church.npub || '';
   const url = np ? window.Steward.joinUrl() : '';
   const svg = np ? window.Steward.joinQR() : '';
+  const nice = church.nip05 ? '@' + String(church.nip05).split('@')[0] : '';   // friendly handle members can type
+  const codeText = nice || np;
   const [copied, setCopied] = React.useState('');
   const doCopy = (what, text) => { copyText(text); setCopied(what); setTimeout(() => setCopied(''), 1400); };
   return (
@@ -495,11 +497,12 @@ function JoinCard({ qrSize = 92, center = false }) {
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Your church code</div>
-        <div onClick={() => doCopy('code', np)} title={np} style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 15, letterSpacing: '.3px', margin: '4px 0 2px', cursor: 'pointer' }}>{shortNpub(np)}</div>
-        {/* full code, selectable — so copy works even if the buttons can't reach the clipboard */}
-        <textarea readOnly value={np} onFocus={e => e.target.select()} style={{ width: '100%', maxWidth: 280, height: 40, resize: 'none', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 10.5, padding: '6px 8px', marginTop: 2, lineHeight: 1.3, wordBreak: 'break-all' }} />
+        <div onClick={() => doCopy('code', codeText)} title={nice ? church.nip05 : np} style={{ fontFamily: nice ? 'var(--font-display)' : 'var(--mono)', fontWeight: nice ? 800 : 700, fontSize: nice ? 18 : 15, letterSpacing: nice ? '-.2px' : '.3px', margin: '4px 0 2px', cursor: 'pointer', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{nice || shortNpub(np)}</div>
+        {nice ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 2 }}>members can scan the QR, or type this name</div> : null}
+        {/* full key, selectable — so copy works even if the buttons can't reach the clipboard */}
+        <textarea readOnly value={np} onFocus={e => e.target.select()} style={{ width: '100%', maxWidth: 280, height: 38, resize: 'none', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--ink-3)', fontFamily: 'var(--mono)', fontSize: 10.5, padding: '6px 8px', marginTop: 4, lineHeight: 1.3, wordBreak: 'break-all' }} />
         <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: center ? 'center' : 'flex-start' }}>
-          <button onClick={() => doCopy('code', np)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'code' ? 'check' : 'receipt'} size={14} color="#fff" /> {copied === 'code' ? 'Copied' : 'Copy code'}</button>
+          <button onClick={() => doCopy('code', codeText)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'code' ? 'check' : 'receipt'} size={14} color="#fff" /> {copied === 'code' ? 'Copied' : 'Copy code'}</button>
           <button onClick={() => doCopy('link', url)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'link' ? 'check' : 'link'} size={14} color="currentColor" /> {copied === 'link' ? 'Copied' : 'Copy link'}</button>
           <button onClick={() => window.TrinityTemplates.printInviteSheet({ name: church.name, url, qrSvg: svg })} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Print a paper invite with the QR + space for the recovery phrase"><Icon name="receipt" size={14} color="currentColor" /> Print invite</button>
         </div>

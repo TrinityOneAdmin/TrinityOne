@@ -102,13 +102,23 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
   const [code, setCode] = useCh('');
   const [err, setErr] = useCh('');
   const [scanning, setScanning] = useCh(false);
+  const [busy, setBusy] = useCh(false);
   const hasNpub = /npub1[0-9a-z]{20,}/.test(code);
-  // follow by the church's real npub — accepts a bare npub, an invite link, or a scanned QR (which
-  // encodes the follow URL). ctx.followChurch extracts the npub from any of them.
-  const resolve = (raw) => {
-    const off = ctx.followChurch(raw != null ? raw : code);
-    if (off === false) { setScanning(false); setErr('That doesn’t look like a church invite. Paste the npub or invite link your steward shared.'); return false; }
-    onFollowed(); return true;
+  // joinable = a bare npub / invite link, OR a NIP-05 nice name (@church-name / name@host) we can resolve
+  const joinable = hasNpub || /^@?[a-z0-9._-]{2,}(@[a-z0-9.-]+)?$/i.test(code.trim());
+  // follow by npub (from a bare npub, invite link, or scanned QR), else resolve a nice name → npub.
+  const resolve = async (raw) => {
+    const input = raw != null ? raw : code;
+    setErr('');
+    if (ctx.followChurch(input) !== false) { onFollowed(); return true; }   // fast path: npub / invite link
+    setBusy(true);
+    let npub = null;
+    try { npub = (window.Fellowship && window.Fellowship.resolveChurch) ? await window.Fellowship.resolveChurch(input) : null; } catch (e) {}
+    setBusy(false);
+    if (npub && ctx.followChurch(npub) !== false) { onFollowed(); return true; }
+    setScanning(false);
+    setErr('Couldn’t find that church. Check the @name, or paste the npub or invite link your steward shared.');
+    return false;
   };
   return (
     <div style={{ animation: 'trinityFade .25s ease both' }}>
@@ -131,15 +141,15 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 0 16px' }}>
         <div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>enter code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
       </div>
-      <input value={code} onChange={e => { setCode(e.target.value.trim()); setErr(''); }} autoFocus placeholder="npub1… or invite link" style={{
+      <input value={code} onChange={e => { setCode(e.target.value.trim()); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && joinable && !busy) resolve(); }} autoFocus placeholder="@church-name, npub1… or invite link" style={{
         width: '100%', height: 58, border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 18px',
         fontSize: 14, fontFamily: 'monospace', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', textAlign: 'center', textOverflow: 'ellipsis' }} />
       {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8, lineHeight: 1.4 }}>{err}</div> : null}
-      <button onClick={() => resolve()} disabled={!hasNpub} style={{
-        width: '100%', marginTop: 16, padding: 16, borderRadius: 15, border: 'none', cursor: hasNpub ? 'pointer' : 'default',
-        background: hasNpub ? 'var(--clay)' : 'var(--line)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
+      <button onClick={() => resolve()} disabled={!joinable || busy} style={{
+        width: '100%', marginTop: 16, padding: 16, borderRadius: 15, border: 'none', cursor: (joinable && !busy) ? 'pointer' : 'default',
+        background: (joinable && !busy) ? 'var(--clay)' : 'var(--line)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
-        <Icon name="check" size={18} stroke={2.4} color="#fff" /> Follow church</button>
+        <Icon name="check" size={18} stroke={2.4} color="#fff" /> {busy ? 'Finding church…' : 'Follow church'}</button>
 
       <div style={{ display: 'flex', gap: 9, padding: 13, borderRadius: 14, background: 'color-mix(in oklab, var(--sage) 11%, var(--surface))',
         border: '1px solid color-mix(in oklab, var(--sage) 28%, transparent)', marginTop: 16 }}>

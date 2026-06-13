@@ -150,6 +150,35 @@ window.Fellowship = {
     try { const u = new URL(r); return (u.protocol === 'wss:' ? 'https:' : 'http:') + '//' + u.host; } catch { return ''; }
   },
 
+  // resolve a church reference → npub. A bare npub / invite link returns as-is; a NIP-05 "nice name"
+  // ("@trinitychurchlittlehampton" or "name@host") is looked up via the relay's /.well-known/nostr.json
+  // (served by the gateway). A bare @name is resolved against the shared relay pool (first match wins).
+  async resolveChurch(input) {
+    const raw = String(input || '').trim();
+    const m = raw.match(/npub1[0-9a-z]{20,}/);
+    if (m) return m[0];
+    const nm = raw.replace(/^@/, '');
+    if (!/^[a-z0-9._-]{2,}(@[a-z0-9.-]+)?$/i.test(nm)) return null;
+    let name, hosts;
+    if (nm.includes('@')) { const [n, h] = nm.split('@'); name = n.toLowerCase(); hosts = [h]; }
+    else {
+      name = nm.toLowerCase();
+      const urls = [...new Set([...(window.Fellowship.CANONICAL_RELAYS || []), ...(window.Fellowship.relays || [])])];
+      hosts = urls.map(u => { try { return new URL(u).host; } catch { return null; } }).filter(Boolean);
+    }
+    for (const host of hosts) {
+      try {
+        const r = await fetch('https://' + host + '/.well-known/nostr.json?name=' + encodeURIComponent(name), { mode: 'cors' });
+        if (!r.ok) continue;
+        const j = await r.json();
+        const names = (j && j.names) || {};
+        const hex = names[name] || names[Object.keys(names).find(k => k.toLowerCase() === name) || ''];
+        if (hex && /^[0-9a-f]{64}$/i.test(hex)) { try { return npubEncode(hex); } catch { return null; } }
+      } catch (e) {}
+    }
+    return null;
+  },
+
   // scope outgoing messages to a church (so its steward can see who's participating). The member
   // app calls this with the active church's npub whenever it changes; null clears the scope.
   setChurch(npubOrHex) { window.Fellowship.churchPub = toPub(npubOrHex); return window.Fellowship.churchPub; },
