@@ -359,17 +359,24 @@ window.Fellowship = {
     // a single round-trip across the relays.
     const flushProfiles = () => {
       profTimer = null;
-      const authors = [...pendingProf].filter(pk => !askedProf.has(pk)); pendingProf = new Set();
+      const authors = [...pendingProf].filter(pk => !askedProf.has(pk) && !(profiles[pk] && profiles[pk].name)); pendingProf = new Set();
       if (!authors.length) return;
       authors.forEach(pk => askedProf.add(pk));
-      const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
+      let s = null;
+      // release the in-flight lock when the batch settles, so any names that DIDN'T resolve (e.g. the
+      // query landed during a relay restart) can be retried the next time the member sub re-fires —
+      // resolved ones are skipped by the `has name` check, so this only retries the genuinely-missing.
+      const done = () => { authors.forEach(pk => askedProf.delete(pk)); try { s && s.close(); } catch {} const i = profSubs.indexOf(s); if (i >= 0) profSubs.splice(i, 1); };
+      s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
         onevent(e) { try { const meta = JSON.parse(e.content); profiles[e.pubkey] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(e.pubkey); if (m) { m.name = profiles[e.pubkey].name; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; } emit(); } catch {} },
-        oneose() {},
+        oneose() { done(); },
       });
       profSubs.push(s);
+      setTimeout(done, 8000);   // safety: if no EOSE (slow/dropped relay), still release so a retry can happen
     };
     const ensureProfile = (pk) => {
-      if (askedProf.has(pk) || (profiles[pk] && profiles[pk].name)) return;   // already resolving / already named
+      if (profiles[pk] && profiles[pk].name) return;   // already named — nothing to fetch
+      if (askedProf.has(pk)) return;                    // a query for it is already in flight
       pendingProf.add(pk);
       if (!profTimer) profTimer = setTimeout(flushProfiles, 120);
     };

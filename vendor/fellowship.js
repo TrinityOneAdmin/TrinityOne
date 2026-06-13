@@ -6197,11 +6197,21 @@
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || "", nip05: (profiles[pk] || {}).nip05 || "", picture: (profiles[pk] || {}).picture || "", hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
       const flushProfiles = () => {
         profTimer = null;
-        const authors = [...pendingProf].filter((pk) => !askedProf.has(pk));
+        const authors = [...pendingProf].filter((pk) => !askedProf.has(pk) && !(profiles[pk] && profiles[pk].name));
         pendingProf = /* @__PURE__ */ new Set();
         if (!authors.length) return;
         authors.forEach((pk) => askedProf.add(pk));
-        const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
+        let s = null;
+        const done = () => {
+          authors.forEach((pk) => askedProf.delete(pk));
+          try {
+            s && s.close();
+          } catch {
+          }
+          const i3 = profSubs.indexOf(s);
+          if (i3 >= 0) profSubs.splice(i3, 1);
+        };
+        s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
           onevent(e) {
             try {
               const meta = JSON.parse(e.content);
@@ -6219,12 +6229,15 @@
             }
           },
           oneose() {
+            done();
           }
         });
         profSubs.push(s);
+        setTimeout(done, 8e3);
       };
       const ensureProfile = (pk) => {
-        if (askedProf.has(pk) || profiles[pk] && profiles[pk].name) return;
+        if (profiles[pk] && profiles[pk].name) return;
+        if (askedProf.has(pk)) return;
         pendingProf.add(pk);
         if (!profTimer) profTimer = setTimeout(flushProfiles, 120);
       };
