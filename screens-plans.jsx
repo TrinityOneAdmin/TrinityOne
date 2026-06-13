@@ -188,8 +188,13 @@ function PlansScreen({ ctx }) {
 
       <div style={seg}>{segBtn('mine', 'My Plans')}{segBtn('browse', 'Browse')}</div>
 
-      {tab === 'mine' ? (
+      {tab === 'mine' ? (() => {
+        const devo = (ctx.churchDevos || []).length ? groupDevosBySeries(ctx.churchDevos) : { groups: [], singles: [] };
+        return (
         <React.Fragment>
+          {/* church devotional series — always pinned to the top */}
+          {devo.groups.length ? <div style={{ marginBottom: 8 }}>{devo.groups.map(g => <DevoSeriesHero key={g.name} group={g} ctx={ctx} />)}</div> : null}
+
           {featured ? (
             <div onClick={() => ctx.openPlan(featured)} style={{
               borderRadius: 24, padding: 20, cursor: 'pointer', marginBottom: 24, position: 'relative', overflow: 'hidden',
@@ -232,22 +237,17 @@ function PlansScreen({ ctx }) {
             </div>
           ) : null}
 
-          {(ctx.churchDevos || []).length ? (() => {
-            const { groups, singles } = groupDevosBySeries(ctx.churchDevos);
-            return (
-              <React.Fragment>
-                <SectionLabel>Devotionals from {churchName}</SectionLabel>
-                {groups.length ? <div style={{ marginBottom: singles.length ? 12 : 22 }}>{groups.map(g => <DevoSeriesHero key={g.name} group={g} ctx={ctx} />)}</div> : null}
-                {singles.length ? (
-                  <div style={{ ...grid, animationDelay: '.1s' }}>
-                    {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
-                  </div>
-                ) : null}
-              </React.Fragment>
-            );
-          })() : null}
+          {devo.singles.length ? (
+            <React.Fragment>
+              <SectionLabel>Devotionals from {churchName}</SectionLabel>
+              <div style={{ ...grid, animationDelay: '.1s' }}>
+                {devo.singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
+              </div>
+            </React.Fragment>
+          ) : null}
         </React.Fragment>
-      ) : (
+        );
+      })() : (
         <React.Fragment>
           {(ctx.churchDevos || []).length ? (() => {
             const { groups, singles } = groupDevosBySeries(ctx.churchDevos);
