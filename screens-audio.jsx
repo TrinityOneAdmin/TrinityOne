@@ -167,10 +167,18 @@ async function webBookState(book) {
 async function webDownloadedBooks() { const keys = await _adbKeys(); const s = new Set(); keys.forEach(k => { const m = /^WEB\/(\d+)\//.exec(String(k)); if (m) s.add(+m[1]); }); return s; }
 async function removeWebBook(book) { const keys = await _adbKeys(); await _adbDel(keys.filter(k => String(k).indexOf(_webKey(book, '')) === 0)); }
 // download one book: range-fetch each chapter slice via the gateway proxy, inflate (raw DEFLATE), store
+let _audioBase = null;   // a pool gateway that serves /audiozip (cached after the first probe)
+async function pickAudioBase() {
+  if (_audioBase) return _audioBase;
+  const FS = window.Fellowship; const urls = [...new Set([...((FS && FS.relays) || []), ...((FS && FS.CANONICAL_RELAYS) || [])])];
+  const bases = urls.map(u => { try { const x = new URL(u); return (x.protocol === 'wss:' ? 'https:' : 'http:') + '//' + x.host; } catch (e) { return null; } }).filter(Boolean);
+  for (const b of bases) { try { const r = await fetch(b + '/audiozip?t=nt&start=0&len=4'); if (r.ok) { _audioBase = b; return b; } } catch (e) {} }
+  return null;
+}
 async function downloadWebBook(book, onProgress, getAborted) {
   const man = await getWebManifest(); const bk = man.chapters[String(book)]; if (!bk) throw new Error('no such book');
-  const base = window.Fellowship && window.Fellowship.gatewayBase && window.Fellowship.gatewayBase();
-  if (!base) throw new Error('Connect to your church to download');
+  const base = await pickAudioBase();
+  if (!base) throw new Error('No download server reachable — your church relay needs updating');
   const t = book <= 39 ? 'ot' : 'nt';
   const chaps = Object.keys(bk).map(Number).sort((a, b) => a - b);
   for (let i = 0; i < chaps.length; i++) {
