@@ -60,19 +60,24 @@ function scheduleVisible(list) {
 function withReconnect(makeSub) {
   let closer = makeSub();
   let lastAt = Date.now();
-  const redo = () => {
-    if (Date.now() - lastAt < 1500) return;   // debounce online+focus+visibility firing together
+  const redo = (force) => {
+    if (!force && Date.now() - lastAt < 1500) return;   // debounce online+focus+visibility firing together
     lastAt = Date.now();
     try { closer && closer(); } catch {}
     closer = makeSub();
   };
   const onVis = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') redo(); };
+  // A relay restart (installer re-run) kills the socket WITHOUT firing online/focus/visibility — the app
+  // is still foregrounded and "online", so nothing prompts a reconnect and the screen sits stale. A slow
+  // heartbeat re-subscribes periodically so it self-heals within ~25s even while the user is looking at it.
+  const hb = setInterval(() => redo(true), 25000);
   if (typeof window !== 'undefined') {
     window.addEventListener('online', redo);
     window.addEventListener('focus', redo);
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
   }
   return () => {
+    clearInterval(hb);
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', redo);
       window.removeEventListener('focus', redo);
