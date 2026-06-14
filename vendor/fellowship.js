@@ -5834,10 +5834,10 @@
   function loadRelays() {
     try {
       const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || "null");
-      if (Array.isArray(r)) return r;
+      if (Array.isArray(r) && r.length) return r;
     } catch {
     }
-    return DEFAULT_RELAYS.slice();
+    return (DEFAULT_RELAYS.length ? DEFAULT_RELAYS : CANONICAL_RELAYS).slice();
   }
   var HANDLE_POOL = ["Cedar", "River", "Sparrow", "Olive", "Wren", "Maple", "Reed", "Dove", "Ash", "Linden", "Heron", "Bramble"];
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
@@ -6256,7 +6256,7 @@
     // relay configuration (persisted) — accepts ws:// or wss:// URLs
     setRelays(urls) {
       const list = [...new Set((urls || []).map((u) => (u || "").trim()).filter((u) => /^wss?:\/\//i.test(u)))];
-      window.Fellowship.relays = list.length ? list : DEFAULT_RELAYS.slice();
+      window.Fellowship.relays = list.length ? list : (DEFAULT_RELAYS.length ? DEFAULT_RELAYS : CANONICAL_RELAYS).slice();
       try {
         localStorage.setItem(RELAYS_KEY, JSON.stringify(window.Fellowship.relays));
       } catch {

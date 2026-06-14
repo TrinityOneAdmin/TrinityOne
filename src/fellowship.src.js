@@ -111,8 +111,11 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 function churchRelays() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
-  try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r)) return r; } catch {}
-  return DEFAULT_RELAYS.slice();
+  try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r) && r.length) return r; } catch {}
+  // NEVER leave the relay list empty: a native install has no origin/persisted relay, and an empty list
+  // means every publish (name, membership, chat, DMs) silently goes nowhere — the user can read but never
+  // be seen. Fall back to the shared canonical pool so the app always has somewhere to publish + read.
+  return (DEFAULT_RELAYS.length ? DEFAULT_RELAYS : CANONICAL_RELAYS).slice();
 }
 const HANDLE_POOL = ['Cedar', 'River', 'Sparrow', 'Olive', 'Wren', 'Maple', 'Reed', 'Dove', 'Ash', 'Linden', 'Heron', 'Bramble'];
 const COLORS = ['#5E8C6A', '#C2913A', '#C25A38', '#5360D6', '#1F9488', '#C24B7A'];
@@ -380,7 +383,7 @@ window.Fellowship = {
   // relay configuration (persisted) — accepts ws:// or wss:// URLs
   setRelays(urls) {
     const list = [...new Set((urls || []).map(u => (u || '').trim()).filter(u => /^wss?:\/\//i.test(u)))];
-    window.Fellowship.relays = list.length ? list : DEFAULT_RELAYS.slice();
+    window.Fellowship.relays = list.length ? list : (DEFAULT_RELAYS.length ? DEFAULT_RELAYS : CANONICAL_RELAYS).slice();
     try { localStorage.setItem(RELAYS_KEY, JSON.stringify(window.Fellowship.relays)); } catch {}
     window.dispatchEvent(new CustomEvent('trinity-relays', { detail: window.Fellowship.relays }));
     return window.Fellowship.relays;
