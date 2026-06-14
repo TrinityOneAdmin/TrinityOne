@@ -5,7 +5,7 @@ const { useState: useC, useEffect: useCE, useRef: useCR } = React;
 
 // Giving is PARKED for the pilot's first months (focus on chat first). Flip to true to bring it
 // back -- the whole Lightning giving flow stays built behind this flag.
-const GIVING_ON = false;
+const GIVING_ON = true;
 
 // reflect the live (real-or-mock) anonymous identity; re-render on regeneration
 function useIdentity() {
