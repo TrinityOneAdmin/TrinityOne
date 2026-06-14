@@ -624,7 +624,7 @@ const subs = new Map();   // ws -> Map(subId -> filters[])
 
 const server = createServer(serveStatic);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });   // 1 MB cap (default is 100 MB — memory-DoS guard)
-const MAX_SUBS_PER_CONN = 64;   // a single connection can't flood the relay with REQ subscriptions
+const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (members, chat, profiles, etc.)
 server.on('upgrade', (req, socket, head) => {
   if ((req.url || '').split('?')[0] !== '/relay') { socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));

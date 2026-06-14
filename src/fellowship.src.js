@@ -321,7 +321,10 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp) { onMembers([]); return () => {}; }
     const MEMBER_D = 'trinityone/member:';
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, nip05, picture, joined, lastTs, msgs }
-    const profSubs = new Map();       // pubkey -> open kind-0 subscription (resolves that member's name)
+    // ONE kept-open kind-0 subscription resolves ALL members' names at once. A sub-per-member blew past
+    // the relay's 64-subscription-per-connection cap (members + chat + a sub each = the later name fetches
+    // got 'rate-limited' and dropped — the cause of blank names). Batched = a single sub regardless of size.
+    let profSub = null; const profAuthors = new Set(); let profTimer = null;
     // seed from the persisted roster so the list paints instantly on load (then live events refresh it)
     for (const m of loadMembersCache(cp)) { if (m && m.pubkey) byPub.set(m.pubkey, m); }
     // a member who opted out (kind-0 `hidden`) is withheld from the directory the others see
@@ -335,15 +338,22 @@ window.Fellowship = {
     // resolve each member's kind-0 name with its own subscription, kept OPEN (never closed on EOSE) so a
     // slow relay's reply is never cut off — this is the original, proven approach. One sub per member is a
     // touch chattier than a batch, but it reliably fills names in; correctness over cleverness.
-    const ensureProfile = (pk) => {
-      if (profSubs.has(pk) || (profiles[pk] && profiles[pk].name)) return;
-      // MUST be churchRelays() not window.Fellowship.relays — on a native install the latter is empty
-      // (no persisted relay), so the name query would hit no relays at all and every member stays anonymous.
-      const s = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors: [pk] }], {
-        onevent(e) { try { const meta = JSON.parse(e.content); profiles[pk] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(pk); if (m) { m.name = profiles[pk].name; m.picture = profiles[pk].picture; m.nip05 = profiles[pk].nip05; m.hidden = !!meta.hidden; emit(); } } catch {} },
+    // (re)open the single profile sub for every still-unnamed member. churchRelays() — NOT
+    // window.Fellowship.relays, which is empty on a native install. Kept open so a slow relay isn't cut off.
+    const refreshProfiles = () => {
+      profTimer = null;
+      const authors = [...profAuthors].filter(pk => !(profiles[pk] && profiles[pk].name));
+      if (!authors.length) return;
+      try { profSub && profSub.close(); } catch {}   // replace the old one — never accumulate subscriptions
+      profSub = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
+        onevent(e) { try { const meta = JSON.parse(e.content); profiles[e.pubkey] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(e.pubkey); if (m) { m.name = profiles[e.pubkey].name; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; } emit(); } catch {} },
         oneose() {},
       });
-      profSubs.set(pk, s);
+    };
+    const ensureProfile = (pk) => {
+      if (profAuthors.has(pk) || (profiles[pk] && profiles[pk].name)) return;
+      profAuthors.add(pk);
+      if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);   // debounce the burst of arriving members
     };
     const makeSub = () => {
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
@@ -364,7 +374,7 @@ window.Fellowship = {
     };
     if (byPub.size) emit(false);   // paint the cached roster immediately, before the relay answers
     const stop = withReconnect(makeSub);
-    return () => { stop(); for (const s of profSubs.values()) { try { s.close(); } catch {} } };
+    return () => { stop(); if (profTimer) clearTimeout(profTimer); try { profSub && profSub.close(); } catch {} };
   },
 
   // relay configuration (persisted) — accepts ws:// or wss:// URLs
