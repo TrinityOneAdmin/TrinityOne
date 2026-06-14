@@ -275,7 +275,14 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
   const available = bibles.filter(b => !owned.has(b.abbr) && !window.Bible.isInstalled(b.url));
 
   const remove = (e, abbr) => { e.stopPropagation(); ctx.removeTranslation(abbr); ctx.toast('Removed ' + abbr); };
-  const add = (item) => { ctx.toast('Adding ' + item.abbr + '…'); window.Bible.installModule(item).then(() => ctx.toast(item.abbr + ' added')).catch(() => ctx.toast("Couldn't add " + item.abbr)); };
+  const add = (item) => {
+    ctx.toast('Adding ' + item.abbr + '…');
+    window.Bible.installModule(item).then((res) => {
+      const abbr = (res && res.abbr) || item.abbr;
+      if (res && res.kind === 'bible') ctx.setVersion(abbr);   // jump the reader straight to the new translation
+      ctx.toast(abbr + ' — now reading');
+    }).catch(() => ctx.toast("Couldn't add " + item.abbr));
+  };
 
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="84%">
