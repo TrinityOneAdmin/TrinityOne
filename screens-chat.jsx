@@ -3,9 +3,9 @@
 // derived a key (window.TrinityIdentity), otherwise falls back to the mock identity.
 const { useState: useC, useEffect: useCE, useRef: useCR } = React;
 
-// Giving is PARKED for the pilot's first months (focus on chat first). Flip to true to bring it
-// back -- the whole Lightning giving flow stays built behind this flag.
-const GIVING_ON = true;
+// Giving is controlled PER CHURCH by the steward (they enable it + bring their own payment gateway).
+// The member app shows the Giving tab only when the active church has turned it on (church.giving),
+// published on the church profile over the relay. TrinityOne is the platform; the church operates giving.
 
 // reflect the live (real-or-mock) anonymous identity; re-render on regeneration
 function useIdentity() {
@@ -242,10 +242,11 @@ function miniBtn() {
 // ── group list (the Chat tab body) ──
 function ChatScreen({ ctx }) {
   const D = window.TrinityData;
+  const givingOn = !!(ctx.church && ctx.church.giving);   // steward toggle, published on the church profile
   const idParam = new URLSearchParams(location.search).get('identity'); // main|recovery|restore|invite
   const [nostr, setNostr] = useC(!!idParam);
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
-  const [view, setView] = useC(GIVING_ON && chatParam === 'giving' ? 'giving' : 'groups');
+  const [view, setView] = useC(givingOn && chatParam === 'giving' ? 'giving' : 'groups');
   const id = useIdentity();
   const live = !!(window.Fellowship && window.Fellowship.subscribeGroups);
   const relayCount = live ? window.Fellowship.relays.length : D.RELAYS.filter(r => r.status === 'on').length;
@@ -356,13 +357,13 @@ function ChatScreen({ ctx }) {
           </button>
         </div>
       </div>
-      <div style={{ marginBottom: (ctx.churchNetworks || []).length ? 12 : (GIVING_ON ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
+      <div style={{ marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
         <ChurchPill ctx={ctx} />
       </div>
 
       {/* the wider network(s) this church belongs to — a small line right under the church it's part of */}
       {(ctx.churchNetworks || []).length ? (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: GIVING_ON ? 16 : 20, animation: 'trinityFade .5s ease .05s both' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: givingOn ? 16 : 20, animation: 'trinityFade .5s ease .05s both' }}>
           {ctx.churchNetworks.map(n => (
             <button key={n.networkPub} onClick={() => { ctx.setActiveChurch(n.npub); ctx.toast('Viewing ' + (n.name || 'the network')); }} title="Tap to see its announcements & events" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px 5px 8px', borderRadius: 999, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
               <Icon name="globe" size={14} color="var(--clay)" />
@@ -375,7 +376,7 @@ function ChatScreen({ ctx }) {
       ) : null}
 
       {/* segmented: Groups / Giving (giving parked for the pilot) */}
-      {GIVING_ON ? (
+      {givingOn ? (
       <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 15, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 20 }}>
         {[['groups', 'Groups', 'chat'], ['giving', 'Giving', 'bolt']].map(([gid, label, ic]) => {
           const on = view === gid;
@@ -391,7 +392,7 @@ function ChatScreen({ ctx }) {
       </div>
       ) : null}
 
-      {GIVING_ON && view === 'giving' ? (
+      {givingOn && view === 'giving' ? (
         <GivingView ctx={ctx} history={ctx.giving} setHistory={ctx.setGiving} />
       ) : notJoined ? (
         <div style={{ textAlign: 'center', padding: '44px 22px', animation: 'trinityFade .4s ease both' }}>

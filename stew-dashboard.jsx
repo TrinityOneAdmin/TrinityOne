@@ -2012,8 +2012,22 @@ function DashGivingPanel({ church }) {
   };
   const save = () => { window.Steward.publishProfile({ lud16: draft.trim() }); setSaved(true); setTimeout(() => setSaved(false), 1700); };
 
+  const toggleGiving = () => window.Steward.publishProfile({ giving: !church.giving });
+
   return (
-    <Panel title="Giving · Lightning address">
+    <Panel title="Giving">
+      {/* steward owns the switch: giving only appears for members when this church turns it on */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)',
+        background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', marginBottom: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show the Giving tab to members</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{church.giving ? 'On — members can give to this church.' : 'Off — members won’t see giving. Set your Lightning address below, then switch on.'}</div>
+        </div>
+        <button onClick={toggleGiving} aria-label="Toggle giving" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0,
+          background: church.giving ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+          <span style={{ position: 'absolute', top: 3, left: church.giving ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+        </button>
+      </div>
       <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where gifts land. Paste your church’s <b>Lightning address</b> (looks like an email: <span style={{ fontFamily: 'var(--mono)' }}>giving@yourchurch.org</span>). It’s the church’s <b>own wallet</b> — Strike, Phoenix, Alby, Coinos, a node, anywhere that gives a Lightning address. Members give straight to it; <b>the app never holds your money</b>.</div>
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={draft} onChange={e => { setDraft(e.target.value); setCheck(null); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} spellCheck={false} autoCapitalize="none" inputMode="email"
