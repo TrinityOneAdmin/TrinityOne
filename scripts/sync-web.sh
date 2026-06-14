@@ -32,10 +32,14 @@ sed -i \
   -e 's#<script type="text/babel" src="\([^"]*\)\.jsx">#<script src="\1.js">#g' \
   "$WWW/index.html"
 
-# local Featured modules (so the app is useful offline on first launch)
-cp modules/engbsb.zip modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
-   modules/ahirani-usfm.zip modules/eng-akjv.bbl.mybible modules/strongs-dict.json \
-   "$WWW/modules/"
+# Bible/lexicon modules are NOT embedded in the app — they download on demand (BSB auto-installs on
+# first launch). The web build still serves them same-origin from the deploy, so they live in www/
+# for the PWA; the native APK ships none and pulls them from the gateway (engine.js ASSET_BASE).
+if [ "${BUNDLE_MODULES:-}" = "1" ]; then
+  cp modules/engbsb.zip modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
+     modules/ahirani-usfm.zip modules/eng-akjv.bbl.mybible modules/strongs-dict.json \
+     "$WWW/modules/" 2>/dev/null || true
+fi
 
 echo "www/ populated:"; du -sh "$WWW"
 
