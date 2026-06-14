@@ -21,6 +21,7 @@ let proofs = [];
 let owner = '';        // npub this wallet belongs to
 let loaded = false;    // mint keys loaded?
 let loadingP = null;
+let initP = null;      // shared init promise (idempotent boot)
 
 const subs = new Set();
 const emit = () => { const b = sum(proofs); subs.forEach((fn) => { try { fn(b); } catch {} }); };
@@ -71,14 +72,19 @@ window.TrinityWallet = {
   balance() { return sum(proofs); },
   onChange(fn) { subs.add(fn); try { fn(sum(proofs)); } catch {} return () => subs.delete(fn); },
 
-  // boot: paint local balance instantly, restore from relay if this device is empty, warm the mint
-  async init() {
-    owner = npub();
-    loadLocal();
-    if (!proofs.length) await restoreFromRelay();
-    emit();
-    ensureMint().catch(() => {});
-    return this.balance();
+  // boot: paint local balance instantly, restore from relay if this device is empty, warm the mint.
+  // Idempotent — many surfaces (Giving tab, wallet hub, profile) may call it; they share one init.
+  init() {
+    if (initP) return initP;
+    initP = (async () => {
+      owner = npub();
+      loadLocal();
+      if (!proofs.length) await restoreFromRelay();
+      emit();
+      ensureMint().catch(() => {});
+      return this.balance();
+    })();
+    return initP;
   },
 
   // re-check on-chain that our proofs are still unspent (e.g. after restoring on a new device)
@@ -125,5 +131,23 @@ window.TrinityWallet = {
     proofs = [...keep, ...(res.change || [])];
     await backup(); emit();
     return { paid: res.quote ? res.quote.state === 'PAID' : true, fee: q.fee, balance: this.balance() };
+  },
+
+  // ── Withdraw / cash out: send the balance back out to the member's OWN wallet. ──
+  // destination = a Lightning address (name@domain — we resolve + request an invoice for `sats`)
+  // or a bolt11 invoice (amount is embedded, `sats` ignored). Always available, church-independent.
+  async withdraw(destination, sats) {
+    const dest = String(destination || '').trim().replace(/^lightning:/i, '');
+    let bolt11;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dest)) {
+      if (!(window.TrinityLN && window.TrinityLN.invoiceFor)) throw new Error('Lightning-address support unavailable');
+      const r = await window.TrinityLN.invoiceFor(dest, sats);
+      bolt11 = r.bolt11;
+    } else if (/^ln(bc|tb|bcrt)/i.test(dest)) {
+      bolt11 = dest;
+    } else {
+      throw new Error('Enter a Lightning address or invoice');
+    }
+    return this.payInvoice(bolt11);
   },
 };

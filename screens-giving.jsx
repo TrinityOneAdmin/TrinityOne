@@ -684,4 +684,165 @@ function GivingView({ ctx, history, setHistory, giveSignal }) {
   );
 }
 
-Object.assign(window, { GivingView });
+// ════ Withdraw: cash out the balance to the member's OWN wallet (church-independent) ════
+function WithdrawSheet({ open, onClose, ctx, balance }) {
+  const LN = window.TrinityLN;
+  const W = window.TrinityWallet;
+  const [stage, setStage] = useG('form');   // form | sending | done
+  const [dest, setDest] = useG('');
+  const [usd, setUsd] = useG(5);
+  const [custom, setCustom] = useG('');
+  const [sent, setSent] = useG(0);
+  const [err, setErr] = useG('');
+
+  useGE(() => { if (open) { setStage('form'); setDest(''); setUsd(5); setCustom(''); setSent(0); setErr(''); } }, [open]);
+
+  const d = dest.trim().replace(/^lightning:/i, '');
+  const isInvoice = /^ln(bc|tb|bcrt)/i.test(d);
+  const isAddr = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d);
+  const amtUsd = custom ? (parseFloat(custom) || 0) : usd;
+  const sats = LN.usdToSats(amtUsd);
+  const needAmount = isAddr; // a pasted invoice carries its own amount
+  const ready = isInvoice || (isAddr && sats > 0 && sats <= balance);
+
+  const go = async () => {
+    setStage('sending'); setErr('');
+    try {
+      const res = await W.withdraw(d, sats);
+      if (!res.paid) throw new Error('Withdrawal didn’t settle — try again');
+      setSent(isInvoice ? null : sats);
+      setStage('done');
+    } catch (e) { setStage('form'); setErr(e.message || 'Could not withdraw'); }
+  };
+
+  return (
+    <BottomSheet open={open} onClose={onClose} maxHeight="90%">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="chevU" size={22} color="var(--clay)" /></div>
+          <div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700, lineHeight: 1 }}>Withdraw</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>Send sats to your own wallet · balance {fmtSats(balance)}</div>
+          </div>
+        </div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+
+      {stage === 'form' ? (
+        <React.Fragment>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 8 }}>TO</label>
+          <input value={dest} onChange={e => setDest(e.target.value)} autoCapitalize="none" spellCheck={false} placeholder="Lightning address or invoice" style={{
+            width: '100%', height: 50, border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface-2)', padding: '0 14px',
+            fontFamily: 'monospace', fontSize: 13, color: 'var(--ink)', outline: 'none', marginBottom: 6 }} />
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 16, lineHeight: 1.45 }}>
+            {isInvoice ? 'Invoice detected — its amount will be used.' : isAddr ? 'Lightning address — choose an amount below.' : 'Paste your own wallet’s Lightning address (you@wallet.com) or an invoice from it.'}
+          </div>
+
+          {needAmount ? (
+            <React.Fragment>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 10 }}>
+                {[5, 10, 25, 50].map(p => {
+                  const on = !custom && usd === p;
+                  return <button key={p} onClick={() => { setUsd(p); setCustom(''); }} style={{ padding: '12px 0', borderRadius: 13, cursor: 'pointer',
+                    border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'var(--clay-soft)' : 'var(--surface-2)',
+                    fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: on ? 'var(--clay-ink)' : 'var(--ink)' }}>${p}</button>;
+                })}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 50, borderRadius: 14,
+                border: custom ? '2px solid var(--clay)' : '1px solid var(--line)', background: 'var(--surface-2)', marginBottom: 8 }}>
+                <span style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700, color: 'var(--ink-2)' }}>$</span>
+                <input value={custom} onChange={e => setCustom(e.target.value.replace(/[^0-9.]/g, ''))} inputMode="decimal" placeholder="Other amount"
+                  style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 16, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                <span style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>{fmtSats(sats)} sats</span>
+              </div>
+              {sats > balance ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginBottom: 8, textAlign: 'center' }}>More than your balance ({fmtSats(balance)} sats).</div> : null}
+            </React.Fragment>
+          ) : null}
+
+          {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, margin: '4px 0 10px', textAlign: 'center', lineHeight: 1.4 }}>{err}</div> : null}
+          <button disabled={!ready} onClick={go} style={{
+            width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: ready ? 'pointer' : 'default', marginTop: 8,
+            background: ready ? 'var(--clay)' : 'var(--line)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
+          }}><Icon name="chevU" size={19} color="#fff" /> {isInvoice ? 'Withdraw' : `Withdraw ${fmtSats(sats)} sats`}</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, justifyContent: 'center', marginTop: 13, color: 'var(--ink-3)', fontSize: 12, textAlign: 'center' }}>
+            <Icon name="key" size={13} /> Your sats, on your key — move them out any time.
+          </div>
+        </React.Fragment>
+      ) : null}
+
+      {stage === 'sending' ? (
+        <div style={{ textAlign: 'center', padding: '32px 0' }}>
+          <GiveSpinner size={34} color="var(--clay)" />
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, marginTop: 16 }}>Sending…</div>
+        </div>
+      ) : null}
+
+      {stage === 'done' ? (
+        <div style={{ textAlign: 'center', padding: '12px 0 8px' }}>
+          <div style={{ width: 74, height: 74, borderRadius: 999, background: 'color-mix(in oklab, var(--sage) 18%, var(--surface))',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', animation: 'trinityScale .4s ease both' }}>
+            <Icon name="check" size={40} stroke={2.6} color="var(--sage)" /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700 }}>Sent</div>
+          <p style={{ fontSize: 14.5, color: 'var(--ink-2)', margin: '6px 0 22px', lineHeight: 1.5 }}>{sent ? `${fmtSats(sent)} sats are` : 'Your sats are'} on the way to your wallet.</p>
+          <button onClick={onClose} style={{ width: '100%', padding: 15, borderRadius: 16, border: 'none', cursor: 'pointer',
+            background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15.5, fontFamily: 'var(--font-ui)' }}>Done</button>
+        </div>
+      ) : null}
+    </BottomSheet>
+  );
+}
+
+// ════ Member wallet hub: balance + Add + Withdraw. Lives in the profile, always reachable. ════
+function WalletSheet({ open, onClose, ctx }) {
+  const balance = useWalletBalance();
+  const [topUp, setTopUp] = useG(false);
+  const [withdraw, setWithdraw] = useG(false);
+  useGE(() => { if (open && window.TrinityWallet && window.TrinityWallet.refresh) window.TrinityWallet.refresh(); }, [open]);
+
+  return (
+    <React.Fragment>
+      <BottomSheet open={open} onClose={onClose} maxHeight="80%">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>Your wallet</div>
+          <IconBtn name="x" onClick={onClose} />
+        </div>
+
+        <div style={{ position: 'relative', borderRadius: 20, overflow: 'hidden', marginBottom: 16, padding: '20px 18px',
+          background: 'linear-gradient(150deg, #2a2218 0%, #16120c 100%)', color: '#F3ECDC', boxShadow: 'var(--shadow-lg)' }}>
+          <div style={{ position: 'absolute', inset: 0, opacity: .9, background: 'radial-gradient(circle at 92% 0%, color-mix(in oklab, var(--gold) 42%, transparent), transparent 42%)' }} />
+          <div style={{ position: 'absolute', right: -22, bottom: -30, opacity: .1 }}><Icon name="key" size={120} color="var(--gold)" /></div>
+          <div style={{ position: 'relative' }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.6px', opacity: .7 }}>SELF-CUSTODY · ON YOUR KEY</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <span style={{ fontFamily: 'var(--font-display)', fontSize: 34, fontWeight: 700, lineHeight: 1 }}>{fmtSats(balance)}</span>
+              <span style={{ fontSize: 14, fontWeight: 600, opacity: .6 }}>sats · ${usdOf(balance).toFixed(2)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+          <button onClick={() => setTopUp(true)} style={{ flex: 1, padding: '14px 6px', borderRadius: 14, border: 'none', cursor: 'pointer',
+            background: 'var(--gold)', color: '#1a1410', fontWeight: 800, fontSize: 14, fontFamily: 'var(--font-ui)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+            <Icon name="plus" size={20} stroke={2.6} color="#1a1410" /> Add funds</button>
+          <button onClick={() => setWithdraw(true)} disabled={balance <= 0} style={{ flex: 1, padding: '14px 6px', borderRadius: 14, cursor: balance > 0 ? 'pointer' : 'default',
+            background: 'var(--surface-2)', border: '1px solid var(--line)', color: balance > 0 ? 'var(--ink)' : 'var(--ink-3)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+            <Icon name="chevU" size={20} color={balance > 0 ? 'var(--clay)' : 'var(--ink-3)'} /> Withdraw</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 9, padding: 13, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <Icon name="shield" size={18} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Held on your key, backed up to your church’s relay — recovered by your 12-word phrase. It’s yours across any church you join, and you can withdraw any time. Best for small, spendable amounts.</div>
+        </div>
+      </BottomSheet>
+
+      <TopUpSheet open={topUp} onClose={() => setTopUp(false)} ctx={ctx} />
+      <WithdrawSheet open={withdraw} onClose={() => setWithdraw(false)} ctx={ctx} balance={balance} />
+    </React.Fragment>
+  );
+}
+
+Object.assign(window, { GivingView, WalletSheet });
