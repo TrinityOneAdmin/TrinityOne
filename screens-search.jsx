@@ -62,6 +62,18 @@ function SearchScreen({ ctx, onBack }) {
               <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{Bible.books(ver).length} books · type a word or a Strong's number (e.g. G3056)</div>
             </div>
           </div>
+
+          {/* reach the full eBible catalogue — search 1,000+ translations to install */}
+          <button onClick={() => ctx.openStore('language', 'bibles')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, marginTop: 12,
+            padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left' }}>
+            <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, background: 'color-mix(in oklab, var(--gold) 16%, var(--surface))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gold)' }}><Icon name="globe" size={20} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>Search the catalogue</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>Find &amp; install from 1,000+ translations &amp; languages</div>
+            </div>
+            <Icon name="chevR" size={18} color="var(--ink-3)" />
+          </button>
         </div>
       ) : (
         <div style={{ animation: 'trinityFade .4s ease both' }}>
@@ -99,9 +111,15 @@ function SearchScreen({ ctx, onBack }) {
                   ))}
                 </div>
               ) : (
-                <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.55 }}>
-                  No verses in this translation match “{active}”. Try another word, or switch translations in the reader.
-                </p>
+                <React.Fragment>
+                  <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.55, marginBottom: 14 }}>
+                    No verses in this translation match “{active}”. Try another word, switch translations in the reader, or add another from the catalogue.
+                  </p>
+                  <button onClick={() => ctx.openStore('language', 'bibles')} style={{ display: 'inline-flex', alignItems: 'center', gap: 9,
+                    padding: '12px 16px', borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14.5,
+                    fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+                    <Icon name="globe" size={17} color="#fff" /> Search 1,000+ translations</button>
+                </React.Fragment>
               )}
             </React.Fragment>
           )}

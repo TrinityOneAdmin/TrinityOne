@@ -161,7 +161,11 @@ function EmptyState({ loading, error, onBrowse }) {
           </button>
         </div>
       )}
-      {error ? <p style={{ color: 'var(--clay-ink)', fontSize: 13, marginTop: 18, fontWeight: 600 }}>{error}</p> : null}
+      {error ? <p style={{ color: 'var(--clay-ink)', fontSize: 13, marginTop: 18, fontWeight: 600, lineHeight: 1.5 }}>
+        {(typeof navigator !== 'undefined' && navigator.onLine === false)
+          ? 'You appear to be offline. Connect to the internet and your Bible will download automatically.'
+          : error}
+      </p> : null}
       <p style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--ink-3)', marginTop: 26 }}>Everything stays on this device — nothing is uploaded.</p>
     </div>
   );

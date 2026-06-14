@@ -329,10 +329,19 @@ window.sanitizeHtml = function (html) {
   async function cacheKeys(){ try{ const db = await idb(); return await new Promise((res, rej) => { const q = idbStore(db, "readonly").getAllKeys(); q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error); }); }catch(e){ return []; } }
   async function cacheDelete(key){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").delete(key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
 
+  // Modules (Bibles + the Strong's lexicon) are NOT embedded in the app — they download on demand.
+  // The web build serves them same-origin; the APK ships none, so on native we resolve a relative
+  // module URL against our public gateway (CapacitorHttp makes this cross-origin fetch work; the
+  // gateway serves /modules/* with CORS). Cache keys stay the ORIGINAL (relative) url so a cache hit
+  // is host-independent. Swap ASSET_BASE for the church's own domain post-pilot.
+  const IS_NATIVE = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const ASSET_BASE = IS_NATIVE ? "https://trinityone.tailbeaac0.ts.net/" : "";
+  const resolveAsset = (u) => (ASSET_BASE && u && !/^https?:/i.test(u)) ? (ASSET_BASE + String(u).replace(/^\//, "")) : u;
+
   async function fetchAndCacheModule(url, meta){
     const cached = await cacheGet(url);
     if(cached) return loadModuleBytes(cached, url.split("/").pop(), meta);
-    const res = await fetch(url);
+    const res = await fetch(resolveAsset(url));
     if(!res.ok) throw new Error("HTTP " + res.status);
     const u8 = new Uint8Array(await res.arrayBuffer());
     await cachePut(url, u8);
@@ -341,9 +350,11 @@ window.sanitizeHtml = function (html) {
 
   // bundled default Bible — auto-installed on first run so the app lands reading, not on an
   // empty "browse modules" wall. Removable/switchable like any other module afterwards.
-  const DEFAULT_MODULE = { id: "eng-akjv-pce", abbr: "AKJV/PCE",
-    name: "Authorised (King James) Version, Pure Cambridge Edition",
-    kind: "bible", format: "mysword", category: "bibles", url: "modules/eng-akjv.bbl.mybible" };
+  // Berean Standard Bible: a clear, accurate, modern, public-domain text — the warmest default
+  // for a first read (Strong's still resolves via the lexicon + the AKJV+S module).
+  const DEFAULT_MODULE = { id: "engbsb", abbr: "BSB",
+    name: "Berean Standard Bible",
+    kind: "bible", format: "USFM", category: "bibles", url: "modules/engbsb.zip" };
   // the full Strong's lexicon (14,197 entries) is auto-installed on first run too, so every Strong's
   // number resolves to a full definition (not just the tiny built-in fallback set).
   const DEFAULT_LEXICON = { id: "strongs", abbr: "Strong's", name: "Strong's Greek & Hebrew Dictionary",
@@ -392,7 +403,7 @@ window.sanitizeHtml = function (html) {
     try{
       if((item.format || "").toUpperCase() === "JSON"){
         let bytes = await cacheGet(item.url);
-        if(!bytes){ const res = await fetch(item.url); if(!res.ok) throw new Error("HTTP " + res.status); bytes = new Uint8Array(await res.arrayBuffer()); await cachePut(item.url, bytes); }
+        if(!bytes){ const res = await fetch(resolveAsset(item.url)); if(!res.ok) throw new Error("HTTP " + res.status); bytes = new Uint8Array(await res.arrayBuffer()); await cachePut(item.url, bytes); }
         loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)));
       }else{
         await fetchAndCacheModule(item.url, { abbr: item.abbr, name: item.name, category: catOf(item) });
@@ -555,4 +566,10 @@ window.sanitizeHtml = function (html) {
   // kick off autoload once the DOM + CDN libs are present
   if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", autoLoad);
   else autoLoad();
+
+  // modules download on first run; if that first launch was offline, retry the moment we're back
+  // online so the app self-heals into a readable state without a manual reload.
+  if(typeof window !== "undefined") window.addEventListener("online", () => {
+    if(order.length === 0 && !loadingFlag){ window.Bible._error = null; autoLoad(); }
+  });
 })();
