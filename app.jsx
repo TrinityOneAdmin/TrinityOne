@@ -129,7 +129,18 @@ function DevotionalView({ open, onClose, ctx }) {
 }
 
 // ── empty state: choose / download a Bible module ──
+// while the first Bible downloads, sit with a word about waiting (KJV, public domain)
+const PATIENCE_VERSES = [
+  { t: 'But they that wait upon the LORD shall renew their strength; they shall mount up with wings as eagles; they shall run, and not be weary.', r: 'Isaiah 40:31' },
+  { t: 'Rest in the LORD, and wait patiently for him.', r: 'Psalm 37:7' },
+  { t: 'Be still, and know that I am God.', r: 'Psalm 46:10' },
+  { t: 'Wait on the LORD: be of good courage, and he shall strengthen thine heart.', r: 'Psalm 27:14' },
+  { t: 'Let us run with patience the race that is set before us.', r: 'Hebrews 12:1' },
+  { t: 'In your patience possess ye your souls.', r: 'Luke 21:19' },
+];
+
 function EmptyState({ loading, error, onBrowse }) {
+  const [verse] = useA(() => PATIENCE_VERSES[Math.floor(Math.random() * PATIENCE_VERSES.length)]);
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '0 34px', animation: 'trinityFade .5s ease both' }}>
@@ -137,29 +148,34 @@ function EmptyState({ loading, error, onBrowse }) {
         display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow-lg)', marginBottom: 22 }}>
         <Icon name="read" size={38} color="#fff" />
       </div>
-      <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 27, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>A quiet place to read.</h1>
-      <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 0 26px', textWrap: 'pretty' }}>
-        Open a Bible module to begin — a MySword <code style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.bbl.mybible</code> file,
-        or an open.bible download (a <code style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.zip</code> of USFM books).
-      </p>
       {loading ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--clay)', fontWeight: 700 }}>
-          <div style={{ width: 18, height: 18, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} /> Loading…
-        </div>
+        <React.Fragment>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 20, lineHeight: 1.5, color: 'var(--ink)', margin: '0 0 10px', maxWidth: 460, textWrap: 'pretty' }}>“{verse.t}”</p>
+          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 700, color: 'var(--clay)', letterSpacing: '.3px', marginBottom: 26 }}>{verse.r}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink-3)', fontWeight: 700, fontSize: 14 }}>
+            <div style={{ width: 18, height: 18, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} /> Bringing in your Bible…
+          </div>
+        </React.Fragment>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 13 }}>
-          <button onClick={onBrowse} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 10, border: 'none', cursor: 'pointer',
-            background: 'var(--clay)', color: '#fff', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 16,
-            padding: '15px 26px', borderRadius: 16, boxShadow: 'var(--shadow-lg)' }}>
-            <Icon name="plus" size={20} color="#fff" /> Browse modules
-          </button>
-          <button onClick={() => window.Bible.pickFile()} style={{
-            border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-2)',
-            fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 14 }}>
-            or open a file from this device
-          </button>
-        </div>
+        <React.Fragment>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 27, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>A quiet place to read.</h1>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 0 26px', textWrap: 'pretty' }}>
+            Add a translation to begin — the Berean Standard Bible downloads in moments, or browse 1,000+ more.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 13 }}>
+            <button onClick={onBrowse} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 10, border: 'none', cursor: 'pointer',
+              background: 'var(--clay)', color: '#fff', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 16,
+              padding: '15px 26px', borderRadius: 16, boxShadow: 'var(--shadow-lg)' }}>
+              <Icon name="plus" size={20} color="#fff" /> Browse translations
+            </button>
+            <button onClick={() => window.Bible.pickFile()} style={{
+              border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-2)',
+              fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 14 }}>
+              or open a file from this device
+            </button>
+          </div>
+        </React.Fragment>
       )}
       {error ? <p style={{ color: 'var(--clay-ink)', fontSize: 13, marginTop: 18, fontWeight: 600, lineHeight: 1.5 }}>
         {(typeof navigator !== 'undefined' && navigator.onLine === false)
