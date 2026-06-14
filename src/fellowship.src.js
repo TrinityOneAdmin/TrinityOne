@@ -218,7 +218,7 @@ window.Fellowship = {
   },
 
   // resolve a church reference → npub. A bare npub / invite link returns as-is; a NIP-05 "nice name"
-  // ("@trinitychurchlittlehampton" or "name@host") is looked up via the relay's /.well-known/nostr.json
+  // ("@yourchurch" or "name@host") is looked up via the relay's /.well-known/nostr.json
   // (served by the gateway). A bare @name is resolved against the shared relay pool (first match wins).
   async resolveChurch(input) {
     const raw = String(input || '').trim();

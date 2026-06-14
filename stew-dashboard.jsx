@@ -471,7 +471,7 @@ function handleLocal(nip05, name) {
   return n5.includes('@') ? slug(n5.split('@')[0]) : slug(name);
 }
 function nameHandle(m) { return m ? handleLocal(m.nip05, m.name) : ''; }
-// a church's resolvable joining handle, e.g. "@trinitychurchlittlehampton"
+// a church's resolvable joining handle, e.g. "@yourchurch"
 function churchHandle(church) { const l = church ? handleLocal(church.nip05, church.name) : ''; return l ? '@' + l : ''; }
 function copyText(t) {
   if (!t) return false;
@@ -2120,7 +2120,7 @@ function WebAddressModal({ church, onClose }) {
         </div>
         <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Your church’s own domain (optional). Just the domain — no <span style={{ fontFamily: 'var(--mono)' }}>https://</span>. Members always join with your <b>{churchHandle(church) || '@handle'}</b>; leave this blank to use the default.</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Web address</div>
-        <input value={val} onChange={e => setVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(val); }} autoFocus placeholder="trinitylittlehampton.co.uk" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
+        <input value={val} onChange={e => setVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(val); }} autoFocus placeholder="yourchurch.org" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
           {custom ? <button onClick={() => save('')} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Use default</button> : null}
