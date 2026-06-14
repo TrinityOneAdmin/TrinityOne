@@ -835,5 +835,26 @@ window.Fellowship = {
     });
     return () => { try { sub.close(); } catch {} };
   },
+
+  // ── Wallet backup (NIP-60-aligned): one replaceable doc, encrypted to the member's OWN key ──
+  // The in-app Cashu wallet (mint + proofs) is mirrored here so a reinstall restores the balance
+  // from the same identity + relays — the wallet IS the Nostr identity. d = 'trinityone/wallet:<suffix>'.
+  // Always written over churchRelays() so it lands on the canonical relays (master-01) for recovery.
+  async publishWalletBackup(suffix, obj) {
+    if (!sk || !pub) return null;
+    let content; try { content = nip44e(JSON.stringify(obj), nip44ck(sk, pub)); } catch (e) { return null; }
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/wallet:' + suffix], ['t', NET]], content }, sk);
+    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] wallet backup failed', e); }
+    return evt;
+  },
+  subscribeWalletBackup(suffix, onDoc) {
+    if (!pub) { onDoc(null); return () => {}; }
+    let latest = 0;
+    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pub], '#d': ['trinityone/wallet:' + suffix] }], {
+      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { onDoc(JSON.parse(nip44d(e.content, nip44ck(sk, pub)))); } catch {} },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
 };
 window.Fellowship.ready = init().catch(e => console.error('[fellowship] init failed', e));

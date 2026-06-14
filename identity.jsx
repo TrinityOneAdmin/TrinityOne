@@ -238,6 +238,10 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
 
   const named = !!(identity.name && identity.name.trim());
 
+  // member wallet balance (always the member's, rides on their key) — live for the wallet row
+  const [wbal, setWbal] = useId(() => (window.TrinityWallet ? window.TrinityWallet.balance() : 0));
+  useIdE(() => { const W = window.TrinityWallet; if (!W || !W.onChange) return; if (W.init) W.init().catch(() => {}); return W.onChange(setWbal); }, []);
+
   // ── edit mode ──
   if (edit) {
     return (
@@ -329,6 +333,12 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <Group>
           <Row icon="qr" label="Follow a church" sub="Scan a code or paste a church’s link" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openChurchSwitcher('follow'); }} />
           <DirectoryToggle identity={identity} onSave={onSave} ctx={ctx} />
+        </Group>
+
+        {/* Your wallet — the member's own, always reachable (add / give / withdraw), church-independent */}
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>YOUR WALLET</div>
+        <Group>
+          <Row icon="bolt" label="Lightning wallet" sub={`${Number(wbal || 0).toLocaleString('en-US')} sats · add funds or withdraw any time`} accent="var(--gold)" onClick={() => { onClose && onClose(); ctx.openWallet(); }} />
         </Group>
 
         {/* help & guides */}

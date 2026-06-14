@@ -281,6 +281,7 @@ function App() {
   const [member, setMember] = useA(idParam === 'member' ? window.TrinityData.MEMBERS.River : null);
   const [idSheet, setIdSheet] = useA(['recovery', 'invite', 'relays'].includes(idParam) ? idParam : null);
   const [newId, setNewId] = useA(idParam === 'newid');
+  const [walletSheet, setWalletSheet] = useA(false);   // member wallet hub (balance + add + withdraw)
   const [confirmExit, setConfirmExit] = useA(false);   // hardware-back on Today -> confirm before close
   const [idTick, forceId] = useA(0);           // bumps on identity / profile changes (also re-runs subs that need myPubkey)
   useAE(() => {
@@ -289,6 +290,9 @@ function App() {
     window.addEventListener('trinity-profiles', h);
     return () => { window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-profiles', h); };
   }, []);
+  // the in-app wallet is the member's, always-on (rides on their key) — boot it once so the balance is
+  // ready everywhere (profile hub, Giving tab), independent of any church's giving switch.
+  useAE(() => { if (window.TrinityWallet) window.TrinityWallet.init().catch(() => {}); }, []);
   // connTick bumps when the app returns to the foreground or the network reconnects. Relay WebSockets
   // drop while a phone is backgrounded, and a dropped socket silently misses live pushes — so we tear
   // down and re-establish the church subscriptions on resume, which re-queries and catches up anything
@@ -331,7 +335,7 @@ function App() {
     const offs = followed.map(c =>
       window.Fellowship.subscribeChurchProfile(c.npub || c.id, (p) => {
         if (!p) return;
-        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
+        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : x.lnaddr, giving: p.giving != null ? p.giving : x.giving, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
       }));
     return () => offs.forEach(o => { try { o && o(); } catch (e) {} });
   }, []);
@@ -368,7 +372,7 @@ function App() {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     return window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (!p) return;
-      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
+      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : c.lnaddr, giving: p.giving != null ? p.giving : c.giving, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
     });
   };
   // leave a church: tombstone the membership (steward sees them drop) + stop following locally
@@ -760,6 +764,7 @@ function App() {
     openRecovery: () => setIdSheet('recovery'),
     openInvite: () => setIdSheet('invite'),
     openRelays: () => setIdSheet('relays'),
+    openWallet: () => setWalletSheet(true),
     openNewIdentity: () => setNewId(true),
     // library drill-ins
     openModule: (m) => setModule(m),
@@ -956,6 +961,7 @@ function App() {
             <InviteSheet open={idSheet === 'invite'} onClose={() => setIdSheet(null)} identity={identity} ctx={ctx} />
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
+            {window.WalletSheet ? <WalletSheet open={walletSheet} onClose={() => setWalletSheet(false)} ctx={ctx} /> : null}
             <ChatRoom group={group} open={!!group && !(desktop && tab === 'chat')} onClose={() => setGroup(null)} ctx={ctx} />
             <DMInbox open={dmInbox} onClose={() => setDmInbox(false)} ctx={ctx} />
             <DMThread peer={dmPeer} open={!!dmPeer} onClose={() => setDmPeer(null)} ctx={ctx} />

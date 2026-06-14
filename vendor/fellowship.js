@@ -5987,7 +5987,7 @@
       }
     },
     // resolve a church reference → npub. A bare npub / invite link returns as-is; a NIP-05 "nice name"
-    // ("@trinitychurchlittlehampton" or "name@host") is looked up via the relay's /.well-known/nostr.json
+    // ("@yourchurch" or "name@host") is looked up via the relay's /.well-known/nostr.json
     // (served by the gateway). A bare @name is resolved against the shared relay pool (first match wins).
     async resolveChurch(input) {
       const raw = String(input || "").trim();
@@ -7068,6 +7068,52 @@
           latest = e.created_at;
           try {
             onProfile(JSON.parse(e.content));
+          } catch {
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // ── Wallet backup (NIP-60-aligned): one replaceable doc, encrypted to the member's OWN key ──
+    // The in-app Cashu wallet (mint + proofs) is mirrored here so a reinstall restores the balance
+    // from the same identity + relays — the wallet IS the Nostr identity. d = 'trinityone/wallet:<suffix>'.
+    // Always written over churchRelays() so it lands on the canonical relays (master-01) for recovery.
+    async publishWalletBackup(suffix, obj) {
+      if (!sk || !pub) return null;
+      let content;
+      try {
+        content = encrypt(JSON.stringify(obj), getConversationKey(sk, pub));
+      } catch (e) {
+        return null;
+      }
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/wallet:" + suffix], ["t", NET]], content }, sk);
+      try {
+        await Promise.any(pool.publish(churchRelays(), evt));
+      } catch (e) {
+        console.warn("[fellowship] wallet backup failed", e);
+      }
+      return evt;
+    },
+    subscribeWalletBackup(suffix, onDoc) {
+      if (!pub) {
+        onDoc(null);
+        return () => {
+        };
+      }
+      let latest = 0;
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pub], "#d": ["trinityone/wallet:" + suffix] }], {
+        onevent(e) {
+          if (e.created_at < latest) return;
+          latest = e.created_at;
+          try {
+            onDoc(JSON.parse(decrypt(e.content, getConversationKey(sk, pub))));
           } catch {
           }
         },
