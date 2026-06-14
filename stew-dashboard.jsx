@@ -1990,6 +1990,45 @@ function DashChannelPanel({ church }) {
   );
 }
 
+// church giving — the Lightning address gifts pay to (published as kind-0 lud16, NIP-57).
+// Self-custody: this is the church's OWN wallet; the app never holds funds.
+function DashGivingPanel({ church }) {
+  const [draft, setDraft] = React.useState('');
+  const [saved, setSaved] = React.useState(false);
+  const [check, setCheck] = React.useState(null); // null | 'checking' | 'ok' | 'bad'
+  React.useEffect(() => { setDraft(church.lud16 || church.lnaddr || ''); setCheck(null); }, [church.lud16, church.lnaddr]);
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.trim());
+
+  // verify it's a real LNURL-pay address before saving
+  const verify = async () => {
+    const addr = draft.trim(); if (!valid) { setCheck('bad'); return; }
+    setCheck('checking');
+    try {
+      const [n, d] = addr.split('@');
+      const r = await fetch(`https://${d}/.well-known/lnurlp/${encodeURIComponent(n)}`, { headers: { Accept: 'application/json' } });
+      const p = await r.json();
+      setCheck(p && p.tag === 'payRequest' ? 'ok' : 'bad');
+    } catch { setCheck('bad'); }
+  };
+  const save = () => { window.Steward.publishProfile({ lud16: draft.trim() }); setSaved(true); setTimeout(() => setSaved(false), 1700); };
+
+  return (
+    <Panel title="Giving · Lightning address">
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where gifts land. Paste your church’s <b>Lightning address</b> (looks like an email: <span style={{ fontFamily: 'var(--mono)' }}>giving@yourchurch.org</span>). It’s the church’s <b>own wallet</b> — Strike, Phoenix, Alby, Coinos, a node, anywhere that gives a Lightning address. Members give straight to it; <b>the app never holds your money</b>.</div>
+      <div style={{ display: 'flex', gap: 9 }}>
+        <input value={draft} onChange={e => { setDraft(e.target.value); setCheck(null); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} spellCheck={false} autoCapitalize="none" inputMode="email"
+          placeholder="giving@yourchurch.org"
+          style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: `1px solid ${check === 'bad' ? 'var(--clay)' : 'var(--line)'}`, background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' }} />
+        <button onClick={verify} disabled={!valid || check === 'checking'} className="sk-btn sk-btn--ghost" style={{ padding: '0 14px', fontSize: 13 }}>{check === 'checking' ? '…' : 'Check'}</button>
+        <button onClick={save} disabled={!valid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="#fff" /> {saved ? 'Saved' : 'Save'}</button>
+      </div>
+      {check === 'ok' ? <div style={{ fontSize: 12, color: 'var(--sage)', fontWeight: 700, marginTop: 8, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="check" size={13} stroke={3} color="var(--sage)" /> Valid Lightning address — ready to receive.</div> : null}
+      {check === 'bad' ? <div style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 700, marginTop: 8 }}>That doesn’t resolve to a Lightning pay address — double-check it.</div> : null}
+      {(church.lud16 || church.lnaddr) ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.lud16 || church.lnaddr}</span></div> : null}
+    </Panel>
+  );
+}
+
 // church audio — a podcast RSS feed whose episodes members stream in the app's Listen tab
 function DashAudioPanel({ church }) {
   const [draft, setDraft] = React.useState('');
@@ -2192,6 +2231,8 @@ function DashSettings({ onTab }) {
       <DashChannelPanel church={church} />
 
       <DashAudioPanel church={church} />
+
+      <DashGivingPanel church={church} />
 
       <DashNetworksPanel />
 

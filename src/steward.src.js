@@ -218,14 +218,14 @@ window.Steward = {
       const host = (CANONICAL_RELAY || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '');
       if (local && host) nip05 = local + '@' + host;
     }
-    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', channel: m.channel || '', audioFeed: m.audioFeed || '' });
+    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', channel: m.channel || '', audioFeed: m.audioFeed || '', lud16: (m.lud16 || '').trim() });
     return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
   },
   publishFund(fund) {
     if (!sk) return Promise.resolve(null);
     const id = fund.id || ('fund' + Date.now());
     const content = JSON.stringify({ name: fund.name || 'Fund', sub: fund.sub || '', icon: fund.icon || 'gift',
-      address: fund.address || '', custody: fund.custody || 'Custodial · Strike' });
+      lnaddr: (fund.lnaddr || '').trim(), address: fund.address || '', custody: fund.custody || 'Self-custody · Lightning' });
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', FUND_D + id], ['t', NET]], content }, sk))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },

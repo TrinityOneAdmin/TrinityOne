@@ -9810,7 +9810,7 @@ zoo`.split("\n");
         const host = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
         if (local && host) nip05 = local + "@" + host;
       }
-      const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", channel: m.channel || "", audioFeed: m.audioFeed || "" });
+      const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", channel: m.channel || "", audioFeed: m.audioFeed || "", lud16: (m.lud16 || "").trim() });
       return publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content }, sk));
     },
     publishFund(fund) {
@@ -9820,8 +9820,9 @@ zoo`.split("\n");
         name: fund.name || "Fund",
         sub: fund.sub || "",
         icon: fund.icon || "gift",
+        lnaddr: (fund.lnaddr || "").trim(),
         address: fund.address || "",
-        custody: fund.custody || "Custodial \xB7 Strike"
+        custody: fund.custody || "Self-custody \xB7 Lightning"
       });
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", FUND_D + id], ["t", NET]], content }, sk)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },

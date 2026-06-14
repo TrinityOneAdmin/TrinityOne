@@ -392,7 +392,7 @@ function ChatScreen({ ctx }) {
       ) : null}
 
       {GIVING_ON && view === 'giving' ? (
-        <GivingView ctx={ctx} balance={ctx.walletSats} setBalance={ctx.setWalletSats} history={ctx.giving} setHistory={ctx.setGiving} />
+        <GivingView ctx={ctx} history={ctx.giving} setHistory={ctx.setGiving} />
       ) : notJoined ? (
         <div style={{ textAlign: 'center', padding: '44px 22px', animation: 'trinityFade .4s ease both' }}>
           <div style={{ width: 66, height: 66, borderRadius: 20, margin: '0 auto 16px', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}><Icon name="chat" size={32} /></div>
