@@ -401,15 +401,16 @@ window.sanitizeHtml = function (html) {
     if(installing.has(item.url)) return;
     installing.add(item.url); notify();
     try{
+      let loaded = null;
       if((item.format || "").toUpperCase() === "JSON"){
         let bytes = await cacheGet(item.url);
         if(!bytes){ const res = await fetch(resolveAsset(item.url)); if(!res.ok) throw new Error("HTTP " + res.status); bytes = new Uint8Array(await res.arrayBuffer()); await cachePut(item.url, bytes); }
         loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)));
       }else{
-        await fetchAndCacheModule(item.url, { abbr: item.abbr, name: item.name, category: catOf(item) });
+        loaded = await fetchAndCacheModule(item.url, { abbr: item.abbr, name: item.name, category: catOf(item) });
       }
       recordInstalled(item);
-      return true;
+      return loaded || true;   // {kind:'bible',abbr} for a translation (the real registered abbr) — lets callers switch to it
     }catch(err){ console.error(err); window.Bible._error = "Couldn't install " + (item.name || item.url) + " — " + err.message; throw err; }
     finally{ installing.delete(item.url); notify(); }
   }
