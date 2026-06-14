@@ -341,9 +341,11 @@ window.sanitizeHtml = function (html) {
 
   // bundled default Bible — auto-installed on first run so the app lands reading, not on an
   // empty "browse modules" wall. Removable/switchable like any other module afterwards.
-  const DEFAULT_MODULE = { id: "eng-akjv-pce", abbr: "AKJV/PCE",
-    name: "Authorised (King James) Version, Pure Cambridge Edition",
-    kind: "bible", format: "mysword", category: "bibles", url: "modules/eng-akjv.bbl.mybible" };
+  // Berean Standard Bible: a clear, accurate, modern, public-domain text — the warmest default
+  // for a first read (Strong's still resolves via the lexicon + the AKJV+S module).
+  const DEFAULT_MODULE = { id: "engbsb", abbr: "BSB",
+    name: "Berean Standard Bible",
+    kind: "bible", format: "USFM", category: "bibles", url: "modules/engbsb.zip" };
   // the full Strong's lexicon (14,197 entries) is auto-installed on first run too, so every Strong's
   // number resolves to a full definition (not just the tiny built-in fallback set).
   const DEFAULT_LEXICON = { id: "strongs", abbr: "Strong's", name: "Strong's Greek & Hebrew Dictionary",

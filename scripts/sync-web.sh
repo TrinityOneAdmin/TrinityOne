@@ -33,7 +33,7 @@ sed -i \
   "$WWW/index.html"
 
 # local Featured modules (so the app is useful offline on first launch)
-cp modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
+cp modules/engbsb.zip modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
    modules/ahirani-usfm.zip modules/eng-akjv.bbl.mybible modules/strongs-dict.json \
    "$WWW/modules/"
 
