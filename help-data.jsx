@@ -91,18 +91,35 @@ window.HelpData = {
     {
       id: 'wallet',
       illo: 'wallet',
-      title: 'The giving wallet',
-      summary: 'Give to your church straight from the app, using Lightning.',
-      minutes: 2,
-      soon: true,
+      title: 'Giving with the wallet',
+      summary: 'Give to your church in a tap — here’s how it works, in plain terms.',
+      minutes: 3,
       blocks: [
+        { type: 'p', text: 'TrinityOne has a small wallet built in, just for giving to your church. Think of it like the change purse you’d drop in the collection — keep a little in it, and give whenever you like.' },
         { type: 'list', items: [
-          { lead: 'Protected by the same 12 words.', text: 'Your wallet uses the same recovery phrase as your account — so backing them up protects your giving too.' },
+          { lead: 'What’s in it?', text: 'A small amount of digital money (its little units are called “sats”). The app always shows the pounds value too — so you just give “£5” and it handles the rest. You don’t need to learn anything new.' },
+          { lead: 'It’s yours, held on your phone.', text: 'Not the church, not us — you hold it, protected by your same 12 words. Nobody can freeze it or take it.' },
           { lead: 'Keep only a little in it.', text: 'Like cash in a purse, not your savings.' },
-          { lead: 'Giving can be anonymous.', text: 'Your church sees the gift, not your name, if you choose.' },
-          { lead: 'You always see a confirmation.', text: 'You’ll know every gift went through.' },
         ] },
-        { type: 'note', text: 'We’ll add full step-by-step giving help when this feature arrives.' },
+        { type: 'steps', label: 'Put money in your wallet', items: [
+          'Tap your circle at the top → Your wallet.',
+          'Tap “Add funds” and choose an amount.',
+          'Follow the simple steps to pay in — the amount then shows in your wallet.',
+        ] },
+        { type: 'steps', label: 'Give to your church', items: [
+          'Open Community → Giving.',
+          'Pick what you’d like to give to, and an amount.',
+          'Tap Give — it’s sent in a second, and you’ll see it confirmed.',
+        ] },
+        { type: 'steps', label: 'Take money back out — any time', items: [
+          'Tap your circle → Your wallet → Withdraw.',
+          'Send it to any other wallet you use. It’s your money — you’re never locked in.',
+        ] },
+        { type: 'list', items: [
+          { lead: 'Give privately if you like.', text: 'Your church can see the gift, but not your name, if you choose.' },
+          { lead: 'New phone? You’re covered.', text: 'Your 12 words restore your wallet too — so do keep them safe (see “Your 12 words”).' },
+        ] },
+        { type: 'callout', tone: 'gold', text: 'New to this? That’s completely normal — most people are. Ask a steward at church and they’ll happily walk you through your first gift.' },
       ],
     },
     {

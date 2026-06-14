@@ -669,7 +669,12 @@ function GivingView({ ctx, history, setHistory, giveSignal }) {
         </React.Fragment>
       ) : null}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, justifyContent: 'center', margin: '20px 0 4px', color: 'var(--ink-3)', fontSize: 11.5, textAlign: 'center' }}>
+      <button onClick={() => ctx.openHelp && ctx.openHelp('wallet')} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+        margin: '18px 0 4px', padding: '11px', borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer',
+        color: 'var(--ink-2)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>
+        <Icon name="book" size={15} color="var(--clay)" /> New to this? How giving works
+      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, justifyContent: 'center', margin: '12px 0 4px', color: 'var(--ink-3)', fontSize: 11.5, textAlign: 'center' }}>
         <Icon name="bolt" size={13} color="var(--gold)" fill /> Gifts settle instantly on the Lightning Network · self-custodial
       </div>
 
@@ -837,6 +842,9 @@ function WalletSheet({ open, onClose, ctx }) {
           <Icon name="shield" size={18} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Held on your key, backed up to your church’s relay — recovered by your 12-word phrase. It’s yours across any church you join, and you can withdraw any time. Best for small, spendable amounts.</div>
         </div>
+        <button onClick={() => { onClose(); ctx.openHelp && ctx.openHelp('wallet'); }} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          marginTop: 10, padding: '11px', borderRadius: 13, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>
+          <Icon name="book" size={15} color="var(--clay)" /> How the wallet works</button>
       </BottomSheet>
 
       <TopUpSheet open={topUp} onClose={() => setTopUp(false)} ctx={ctx} />
