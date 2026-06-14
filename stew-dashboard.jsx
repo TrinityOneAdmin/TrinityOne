@@ -2106,11 +2106,15 @@ function SeriesScheduleModal({ label, count, onApply, onClear, onClose }) {
 // blank reverts to the relay-served default handle. Members join with the @handle either way.
 function WebAddressModal({ church, onClose }) {
   const cur = String(church.nip05 || '');
-  const initial = cur.includes('@') ? cur.split('@')[1] : cur.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
-  const [val, setVal] = React.useState(initial || '');
+  const dom = cur.includes('@') ? cur.split('@')[1] : cur.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+  // the auto-claimed handle lives on the RELAY's own host (tailscale .ts.net / tunnel) — that's the default,
+  // not a domain the church owns. Don't pre-fill it: the field would expose the relay's internal address as
+  // if it were the church's website. Only show a genuinely custom domain the steward set themselves.
+  const isRelayHost = /(\.ts\.net|\.trycloudflare\.com)$/i.test(dom || '');
+  const [val, setVal] = React.useState(isRelayHost ? '' : (dom || ''));
   const [busy, setBusy] = React.useState(false);
   const save = async (v) => { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: church.name, nip05: v })); setBusy(false); onClose(); };
-  const custom = cur.includes('@');
+  const custom = cur.includes('@') && !isRelayHost;
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
