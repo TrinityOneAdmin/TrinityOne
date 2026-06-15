@@ -134,7 +134,7 @@
       <a href="welcome#church">For churches</a><a href="welcome#get">Get the app</a>
     </div>
     <div class="spacer"></div>
-    <a href="./steward.html?setup=1" class="to-btn to-btn--clay" style="padding:11px 20px;font-size:14px">Start a church</a>
+    <a href="./steward.html?setup=1" data-steward-cta class="to-btn to-btn--clay" style="padding:11px 20px;font-size:14px">Start a church</a>
   </div>
 </nav>
 
@@ -212,7 +212,7 @@
     </div>
 
     <div class="church-cta">
-      <a href="./steward.html?setup=1" class="to-btn to-btn--clay">Start a church</a>
+      <a href="./steward.html?setup=1" data-steward-cta class="to-btn to-btn--clay">Start a church</a>
       <a href="welcome#church" class="to-btn to-btn--ghost">← Back to overview</a>
     </div>
   </div>
@@ -259,5 +259,7 @@
     });
   });
 </script>
+{SCRIPT}
+<script>(function(){if(!/Android/i.test(navigator.userAgent))return;document.querySelectorAll("[data-steward-cta]").forEach(function(a){a.href="./trinityone-steward.apk";a.setAttribute("download","");if(/start a church/i.test(a.textContent))a.textContent="Get the Steward app (Android)";});})();</script>
 </body>
 </html>

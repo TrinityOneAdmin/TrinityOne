@@ -651,7 +651,7 @@
     </a>
 
     <div class="church-cta">
-      <a href="./steward.html?setup=1" class="to-btn to-btn--clay">Start a church</a>
+      <a href="./steward.html?setup=1" data-steward-cta class="to-btn to-btn--clay">Start a church</a>
       <a href="TrinityOne Giving Architecture.html" class="to-btn to-btn--ghost" data-comment-anchor="f7fefe1250-a">See how it works</a>
     </div>
 
@@ -944,5 +944,7 @@
     <circle cx="50" cy="50" r="5" fill="#E0B860"/>
   </svg>
 </template>
+{SCRIPT}
+<script>(function(){if(!/Android/i.test(navigator.userAgent))return;document.querySelectorAll("[data-steward-cta]").forEach(function(a){a.href="./trinityone-steward.apk";a.setAttribute("download","");if(/start a church/i.test(a.textContent))a.textContent="Get the Steward app (Android)";});})();</script>
 </body>
 </html>
