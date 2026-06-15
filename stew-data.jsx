@@ -74,6 +74,7 @@ const TEAM_PRESETS = [
   { id: 'coffee',  name: 'Coffee',  icon: 'coffee', accent: '#C24B7A', roles: 'Barista\nServe\nWash up' },
   { id: 'prayer',  name: 'Prayer',  icon: 'pray',   accent: '#5E8C6A', roles: 'Lead\nMinistry team\nMinistry team' },
 ];
+window.TEAM_PRESETS = TEAM_PRESETS;   // NewTeamModal reads window.TEAM_PRESETS (a top-level const isn't a window prop)
 
 // ── pill ──
 function SkPill({ children, tint = 'clay', style = {} }) {
