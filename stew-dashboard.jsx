@@ -400,6 +400,14 @@ function StewDashboard({ initial = 'overview' }) {
     return () => clearTimeout(t);
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   const finishWizard = () => { try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {} setWizard(false); };
+  // the church's brand accent (a hex) recolours the whole console too, derived from the one hex
+  const ca = (typeof church.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(church.accent.trim())) ? church.accent.trim() : null;
+  const accentStyle = ca ? {
+    '--clay': ca,
+    '--clay-ink': `color-mix(in oklab, ${ca} 86%, #000)`,
+    '--clay-soft': `color-mix(in oklab, ${ca} 16%, #fff)`,
+    '--clay-deep': `color-mix(in oklab, ${ca} 74%, #000)`,
+  } : null;
 
   // tab content + topbar actions, shared by both layouts
   const content = (
@@ -426,7 +434,7 @@ function StewDashboard({ initial = 'overview' }) {
 
   if (narrow) {
     return (
-      <ConsoleChrome>
+      <ConsoleChrome accentStyle={accentStyle}>
         {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
         {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
@@ -464,7 +472,7 @@ function StewDashboard({ initial = 'overview' }) {
   }
 
   return (
-    <ConsoleChrome>
+    <ConsoleChrome accentStyle={accentStyle}>
       {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
       {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
@@ -2369,19 +2377,23 @@ function DashBrandingPanel({ church }) {
 
       <div style={lbl}>Brand colour</div>
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Tints the highlights, buttons and active states in your members’ app to match your church.</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        {swatches.map(s => (
-          <button key={s} onClick={() => onAccent(s)} title={s} style={{ width: 30, height: 30, borderRadius: 999, background: s, cursor: 'pointer', border: (accent.toLowerCase() === s.toLowerCase()) ? '3px solid var(--ink)' : '2px solid var(--line)', padding: 0 }} />
-        ))}
-        <label title="Custom colour" style={{ width: 30, height: 30, borderRadius: 999, overflow: 'hidden', border: '2px solid var(--line)', cursor: 'pointer', position: 'relative', display: 'inline-block' }}>
-          <span style={{ position: 'absolute', inset: 0, background: 'conic-gradient(red, orange, yellow, lime, cyan, blue, magenta, red)' }} />
-          <input type="color" value={acc} onChange={e => onAccent(e.target.value)} style={{ position: 'absolute', inset: -4, width: '140%', height: '140%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
+      {/* big spectrum-picker tile + a prominent # hex field */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: acc, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
+          <input type="color" value={acc} onChange={e => onAccent(e.target.value)} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
         </label>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 4 }}>
-          <input value={hexDraft} onChange={e => onHex(e.target.value)} spellCheck={false} autoCapitalize="characters" maxLength={7} placeholder="#C25A38"
-            style={{ width: 94, fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 9, padding: '6px 9px', outline: 'none' }} />
-          {accent ? <button onClick={resetAccent} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : null}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 46, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 13px', gap: 3 }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--ink-3)' }}>#</span>
+          <input value={hexDraft.replace(/^#/, '')} onChange={e => onHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} spellCheck={false} autoCapitalize="characters" maxLength={6} placeholder="C25A38"
+            style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink)', background: 'transparent', border: 'none', outline: 'none', padding: 0 }} />
+          {accent ? <button onClick={resetAccent} title="Reset to default" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>default</span>}
         </div>
+      </div>
+      {/* quick presets */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+        {swatches.map(s => (
+          <button key={s} onClick={() => onAccent(s)} title={s} style={{ width: 28, height: 28, borderRadius: 999, background: s, cursor: 'pointer', border: (accent.toLowerCase() === s.toLowerCase()) ? '3px solid var(--ink)' : '1px solid var(--line)', padding: 0 }} />
+        ))}
       </div>
     </Panel>
   );

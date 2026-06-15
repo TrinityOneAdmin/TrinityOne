@@ -2,9 +2,9 @@
 // Exports to window: StewWizard, StewDashboard
 
 // ── console container (real app -- the fake browser chrome only shows in ?showcase mode) ──
-function ConsoleChrome({ children, bg = 'var(--paper)', showcase = false, url = 'console.trinityone.app' }) {
+function ConsoleChrome({ children, bg = 'var(--paper)', showcase = false, url = 'console.trinityone.app', accentStyle }) {
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: bg, fontFamily: 'var(--font-ui)' }}>
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: bg, fontFamily: 'var(--font-ui)', ...(accentStyle || {}) }}>
       {showcase ? (
         <div style={{ height: 46, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '0 16px', background: 'var(--surface-2)', borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', gap: 8 }}>

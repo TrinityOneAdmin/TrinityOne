@@ -347,7 +347,10 @@ function ChatScreen({ ctx }) {
 
   return (
     <ScreenScroll>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, animation: 'trinityFade .5s ease both' }}>
+      <div style={{ marginBottom: 14, animation: 'trinityFade .5s ease both' }}>
+        <ChurchPill ctx={ctx} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
@@ -356,9 +359,6 @@ function ChatScreen({ ctx }) {
             <span style={{ position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 999, background: 'var(--sage)', border: '2px solid var(--surface)' }} />
           </button>
         </div>
-      </div>
-      <div style={{ marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
-        <ChurchPill ctx={ctx} />
       </div>
 
       {/* the wider network(s) this church belongs to — a small line right under the church it's part of */}
