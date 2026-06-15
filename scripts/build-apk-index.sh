@@ -11,7 +11,7 @@ OUT="apks.html"
 # (filename + size + date), so new branches appear automatically — add a line to taste.
 meta() {
   case "$1" in
-    trinityone-test-bundle)     echo "Test bundle (4 branches)|claude/test-bundle|Notifications + settings + currency, security hardening (ecash-at-rest), name-clash disambiguation, and the CCEL Christian library (books download on demand). The main build to test.";;
+      trinityone-test-bundle)     echo "Test bundle (4 branches)|claude/test-bundle|Notifications + settings + currency, security hardening (ecash-at-rest), name-clash disambiguation, and the CCEL Christian library (books download on demand). The main build to test.";;
     trinityone-steward-app)     echo "Steward console|claude/steward-app|The Steward app — create & manage a church on a phone. Separate app ID (com.trinityone.steward), installs alongside a member build.";;
     trinityone-steward-handoff) echo "Steward + handoff|claude/steward-handoff|Steward console with multiple-stewards & handoff. Separate app ID, installs alongside a member build.";;
     trinityone-search)   echo "Search + BSB|claude/catalogue-search|Catalogue search from the Search screen (1,000+ translations). No Bibles embedded — BSB auto-downloads on first launch.";;
