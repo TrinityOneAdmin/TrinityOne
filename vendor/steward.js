@@ -9772,6 +9772,21 @@ zoo`.split("\n");
       lsSet(KEY_LS, m);
       return { npub: window.Steward.npub };
     },
+    // remove the church key from THIS device (completing a handoff, or stepping away). The church lives on
+    // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
+    removeKey() {
+      try {
+        localStorage.removeItem(KEY_LS);
+      } catch {
+      }
+      sk = null;
+      pub = null;
+      window.Steward.pubkey = null;
+      window.Steward.npub = null;
+      window.Steward.hasKey = false;
+      window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: null } }));
+      return true;
+    },
     // ---- web push: notify the steward's phone when someone joins (PWA only; Capacitor → local notifs) ----
     // The subscription is filed under the CHURCH key, so the gateway pushes church-targeted alerts (joins)
     // to whichever devices proved that key. Returns a status string the UI can reflect.

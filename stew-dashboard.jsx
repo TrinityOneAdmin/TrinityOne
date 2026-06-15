@@ -2201,6 +2201,7 @@ function DashSettings({ onTab }) {
   const [backupOpen, setBackupOpen] = React.useState(false);
   const [restorePhrase, setRestorePhrase] = React.useState('');
   const [restoreErr, setRestoreErr] = React.useState('');
+  const [confirmRemove, setConfirmRemove] = React.useState(false);   // "remove church from this device" guard
   const doRestore = () => {
     setRestoreErr('');
     try {
@@ -2291,9 +2292,29 @@ function DashSettings({ onTab }) {
         </div>
       </Panel>
 
-      <Panel title="Stewards">
-        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>For the pilot, this one key runs {church.name || 'your church'}. Shared sign-off for multiple leaders — each with their own key via NIP-26 delegation, so the church secret is never copied — is on the roadmap.</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 12.5, color: 'var(--ink-3)' }}>
+      <Panel title="Stewards & handoff">
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>A church is one key. To <b style={{ color: 'var(--ink)' }}>add another steward</b> or <b style={{ color: 'var(--ink)' }}>hand the church over</b>, share its recovery phrase — they enter it on their device under <b>Church key → Restore from a recovery phrase</b> (or in the Steward app). Then they can manage {church.name || 'the church'} too.</div>
+        <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+          <li><b>Reveal</b> the recovery phrase above and share it privately (in person is safest).</li>
+          <li>They <b>Restore</b> it on their device — now a co-steward.</li>
+          <li>Handing off entirely? <b>Remove it from this device</b> below once they’re set up.</li>
+        </ol>
+        <div style={{ display: 'flex', gap: 9, padding: 11, borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', marginBottom: 14 }}>
+          <Icon name="shield" size={16} color="var(--gold)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Anyone with the phrase can manage the church.</b> Per-person add/remove that doesn’t copy the secret (delegated keys / a steward roster) is on the roadmap — for now, only share it with people you fully trust.</div>
+        </div>
+        {!confirmRemove ? (
+          <button onClick={() => setConfirmRemove(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay)' }}><Icon name="x" size={15} color="currentColor" /> Remove this church from this device</button>
+        ) : (
+          <div style={{ padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))' }}>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>This forgets the church key on <b>this</b> device only — the church keeps running wherever its phrase is held. Make sure you’ve backed up the phrase or handed it on first, or this church is gone from here.</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => { window.Steward.removeKey(); window.location.reload(); }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: '#fff' }}><Icon name="x" size={14} color="#fff" /> Remove &amp; reload</button>
+              <button onClick={() => setConfirmRemove(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
+            </div>
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 14, fontSize: 12.5, color: 'var(--ink-3)' }}>
           <Icon name="pray" size={14} color="var(--ink-3)" /> See who’s joined in the <button onClick={() => onTab && onTab('members')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Members list</button>.
         </div>
       </Panel>
