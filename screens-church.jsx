@@ -80,6 +80,26 @@ window.ChurchBadge = ChurchBadge;
 function ChurchPill({ ctx }) {
   const c = ctx.church;
   if (!c) return null;
+  // with a brand banner: a wide header image with the badge + name overlaid (the church's identity).
+  if (c.banner) {
+    return (
+      <button onClick={ctx.openChurchSwitcher} style={{
+        position: 'relative', display: 'block', width: '100%', border: '1px solid var(--line)',
+        borderRadius: 18, overflow: 'hidden', cursor: 'pointer', boxShadow: 'var(--shadow)', textAlign: 'left',
+        aspectRatio: '3 / 1', background: `center/cover no-repeat url(${c.banner})`,
+      }}>
+        <span style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.62), rgba(0,0,0,0) 62%)' }} />
+        <span style={{ position: 'absolute', right: 12, top: 12, width: 30, height: 30, borderRadius: 999, background: 'rgba(0,0,0,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={18} stroke={2.4} color="#fff" /></span>
+        <span style={{ position: 'absolute', left: 14, bottom: 12, display: 'flex', alignItems: 'center', gap: 11 }}>
+          <ChurchBadge church={c} size={40} radius={12} />
+          <span>
+            <span style={{ display: 'block', fontSize: 11, color: 'rgba(255,255,255,.82)', fontWeight: 600, textShadow: '0 1px 4px rgba(0,0,0,.5)' }}>Your church</span>
+            <span style={{ display: 'block', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{c.name}</span>
+          </span>
+        </span>
+      </button>
+    );
+  }
   return (
     <button onClick={ctx.openChurchSwitcher} style={{
       display: 'flex', alignItems: 'center', gap: 12, width: '100%', border: '1px solid var(--line)',

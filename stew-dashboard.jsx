@@ -2286,13 +2286,17 @@ function WebAddressModal({ church, onClose }) {
 
 // resize a chosen image to a small square data-URI for the church avatar (no image host — it rides in
 // the church's kind-0 profile, so keep it small). Centre-cropped to `size`px, webp (jpeg fallback).
-function resizeImageToDataURI(file, size = 128) {
+// Centre-crop (cover) an image file to w×h and return a compact data URI.
+// Square by default (avatar); pass a wider h for banners.
+function resizeImageToDataURI(file, w = 128, h = w) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const c = document.createElement('canvas'); c.width = size; c.height = size;
-      const ctx = c.getContext('2d'); const s = Math.min(img.width, img.height);
-      ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      const scale = Math.max(w / img.width, h / img.height);   // cover
+      const sw = w / scale, sh = h / scale;                    // source crop window
+      ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, w, h);
       let uri = ''; try { uri = c.toDataURL('image/webp', 0.82); } catch {}
       if (!uri || uri.length < 30) uri = c.toDataURL('image/jpeg', 0.82);
       resolve(uri);
@@ -2300,6 +2304,72 @@ function resizeImageToDataURI(file, size = 128) {
     img.onerror = reject;
     const r = new FileReader(); r.onload = () => { img.src = r.result; }; r.onerror = reject; r.readAsDataURL(file);
   });
+}
+
+// Church branding — a wide banner + a brand accent colour, published on the kind-0 profile
+// (banner ~768×256, accent as a hex). The logo lives on the identity card above. Members' app
+// shows the banner on the church header and tints its clay accents to the church's colour.
+function DashBrandingPanel({ church }) {
+  const [busy, setBusy] = React.useState(false);
+  const [accent, setAccentState] = React.useState(church.accent || '');
+  const saveTimer = React.useRef(null);
+  React.useEffect(() => { setAccentState(church.accent || ''); }, [church.accent]);
+  const onPickBanner = async (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return; setBusy(true);
+    try { const uri = await resizeImageToDataURI(f, 768, 256); await Promise.resolve(window.Steward.publishProfile({ banner: uri })); } catch {}
+    setBusy(false);
+  };
+  const removeBanner = () => Promise.resolve(window.Steward.publishProfile({ banner: '' }));
+  const onAccent = (v) => {
+    setAccentState(v);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => window.Steward.publishProfile({ accent: v }), 400);
+  };
+  const resetAccent = () => { if (saveTimer.current) clearTimeout(saveTimer.current); setAccentState(''); window.Steward.publishProfile({ accent: '' }); };
+  const acc = accent || '#C25A38';
+  const swatches = ['#C25A38', '#3B6FB0', '#5E8C6A', '#7A4FA3', '#B0853B', '#1F2A37'];
+  const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
+  const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
+  return (
+    <Panel title="Church branding">
+      <div style={lbl}>Banner</div>
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A wide image at the top of your church in members’ apps. Landscape works best (about 3:1) — it’s centre-cropped to fit.</div>
+      {/* live preview — banner + logo + name, the way members see the header */}
+      <div style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', border: '1px solid var(--line)', background: church.banner ? `center/cover no-repeat url(${church.banner})` : `linear-gradient(135deg, ${acc}, color-mix(in oklab, ${acc} 60%, #000))` }}>
+        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
+        <div style={{ position: 'absolute', left: 12, bottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <SkBadge initials={initials} picture={church.picture} accent={acc} size={36} radius={11} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: '#fff', textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{church.name || 'Your church'}</div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 9, marginTop: 10 }}>
+        <label className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13, cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1 }}>
+          <Icon name={busy ? 'refresh' : (church.banner ? 'pen' : 'plus')} size={15} color="#fff" /> {busy ? 'Uploading…' : (church.banner ? 'Replace banner' : 'Upload banner')}
+          <input type="file" accept="image/*" disabled={busy} onChange={onPickBanner} style={{ display: 'none' }} />
+        </label>
+        {church.banner ? <button onClick={removeBanner} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}>Remove</button> : null}
+      </div>
+
+      <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
+
+      <div style={lbl}>Brand colour</div>
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Tints the highlights, buttons and active states in your members’ app to match your church.</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        {swatches.map(s => (
+          <button key={s} onClick={() => onAccent(s)} title={s} style={{ width: 30, height: 30, borderRadius: 999, background: s, cursor: 'pointer', border: (accent.toLowerCase() === s.toLowerCase()) ? '3px solid var(--ink)' : '2px solid var(--line)', padding: 0 }} />
+        ))}
+        <label title="Custom colour" style={{ width: 30, height: 30, borderRadius: 999, overflow: 'hidden', border: '2px solid var(--line)', cursor: 'pointer', position: 'relative', display: 'inline-block' }}>
+          <span style={{ position: 'absolute', inset: 0, background: 'conic-gradient(red, orange, yellow, lime, cyan, blue, magenta, red)' }} />
+          <input type="color" value={acc} onChange={e => onAccent(e.target.value)} style={{ position: 'absolute', inset: -4, width: '140%', height: '140%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
+        </label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 4 }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink-2)' }}>{accent ? acc.toUpperCase() : 'Default'}</span>
+          {accent ? <button onClick={resetAccent} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : null}
+        </div>
+      </div>
+    </Panel>
+  );
 }
 
 // set or change the console PIN — encrypts the church key at rest with it
@@ -2405,6 +2475,8 @@ function DashSettings({ onTab }) {
           <button onClick={() => setEditingWeb(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> Edit</button>
         </div>
       </Panel>
+
+      <DashBrandingPanel church={church} />
 
       <DashMediaPanel church={church} />
 

@@ -353,7 +353,7 @@ function App() {
     const offs = followed.map(c =>
       window.Fellowship.subscribeChurchProfile(c.npub || c.id, (p) => {
         if (!p) return;
-        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : x.lnaddr, giving: p.giving != null ? p.giving : x.giving, picture: p.picture != null ? p.picture : x.picture, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
+        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : x.lnaddr, giving: p.giving != null ? p.giving : x.giving, picture: p.picture != null ? p.picture : x.picture, banner: p.banner != null ? p.banner : x.banner, accent: p.accent != null ? p.accent : x.accent, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
       }));
     return () => offs.forEach(o => { try { o && o(); } catch (e) {} });
   }, []);
@@ -390,7 +390,7 @@ function App() {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     return window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (!p) return;
-      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : c.lnaddr, giving: p.giving != null ? p.giving : c.giving, picture: p.picture != null ? p.picture : c.picture, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
+      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : c.lnaddr, giving: p.giving != null ? p.giving : c.giving, picture: p.picture != null ? p.picture : c.picture, banner: p.banner != null ? p.banner : c.banner, accent: p.accent != null ? p.accent : c.accent, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
     });
   };
   // leave a church: tombstone the membership (steward sees them drop) + stop following locally
@@ -951,8 +951,18 @@ function App() {
   // apply accent vars
   const acc = ACCENTS[t.accent] || ACCENTS.clay;
   const ap = t.dark ? acc.dark : acc.light;
+  // a church's brand accent (a hex the steward set) overrides the personal accent theme so the
+  // member's app takes on the church's colour. The clay family is derived from the one hex.
+  const ca = (ctx.church && typeof ctx.church.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(ctx.church.accent.trim())) ? ctx.church.accent.trim() : null;
+  const brand = ca ? {
+    '--clay': ca,
+    '--clay-ink': `color-mix(in oklab, ${ca} 86%, #000)`,
+    '--clay-soft': t.dark ? `color-mix(in oklab, ${ca} 30%, #16120c)` : `color-mix(in oklab, ${ca} 16%, #fff)`,
+    '--clay-deep': `color-mix(in oklab, ${ca} 74%, #000)`,
+  } : null;
   const rootStyle = {
     '--clay': ap.c, '--clay-ink': ap.i, '--clay-soft': ap.s, '--clay-deep': ap.d,
+    ...(brand || {}),
     '--read-scale': t.readScale,
   };
 
