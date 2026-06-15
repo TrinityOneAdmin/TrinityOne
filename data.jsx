@@ -277,7 +277,7 @@ const MODULES = [
   { id: 'commentaries', name: 'Commentaries', count: '8 sets', icon: 'comment', accent: 'var(--sage)' },
   { id: 'dictionaries', name: 'Dictionaries & Lexicons', count: '6 references', icon: 'lex', accent: 'var(--gold)' },
   { id: 'devotionals', name: 'Devotionals', count: '5 series', icon: 'sun', accent: 'var(--clay)' },
-  { id: 'books', name: 'Books', count: '13 free titles', icon: 'books', accent: 'var(--sage)' },
+  { id: 'books', name: 'Books', count: '20 free titles', icon: 'books', accent: 'var(--sage)' },
   { id: 'journals', name: 'Journals & Notes', count: '3 entries', icon: 'pen', accent: 'var(--gold)' },
 ];
 
@@ -384,21 +384,29 @@ const MODULE_ITEMS = {
     { id: 'streams', name: 'Streams in the Desert', sub: 'L.B. Cowman' },
     { id: 'dailylight', name: 'Daily Light on the Daily Path', sub: 'Samuel Bagster' },
   ],
-  // Real public-domain texts — built into vendor/library/ (window.TrinityLibrary.available) and
-  // downloaded on demand by the BookReader. Keep this list in step with what's actually built; the
-  // library UI shows the real downloaded state per device (not a hard-coded flag).
+  // Curated Christian classics from the Christian Classics Ethereal Library (ccel.org) — built into
+  // vendor/library/ (window.TrinityLibrary.available) and downloaded on demand by the BookReader.
+  // Keep this list in step with scripts/build-library-ccel.py; the UI shows the real per-device
+  // download state (not a hard-coded flag).
   books: [
-    { id: 'pilgrim', name: "The Pilgrim's Progress", sub: 'John Bunyan', cat: 'Fiction' },
-    { id: 'paradise', name: 'Paradise Lost', sub: 'John Milton', cat: 'Fiction' },
-    { id: 'benhur', name: 'Ben-Hur: A Tale of the Christ', sub: 'Lew Wallace', cat: 'Fiction' },
-    { id: 'inhissteps', name: 'In His Steps', sub: 'Charles M. Sheldon', cat: 'Fiction' },
-    { id: 'confessions', name: 'Confessions', sub: 'Augustine of Hippo', cat: 'Biography' },
-    { id: 'grace', name: 'Grace Abounding', sub: 'John Bunyan', cat: 'Biography' },
-    { id: 'martyrs', name: "Foxe's Book of Martyrs", sub: 'John Foxe', cat: 'Biography' },
+    { id: 'pilgrim', name: "The Pilgrim's Progress", sub: 'John Bunyan', cat: 'Allegory' },
+    { id: 'holywar', name: 'The Holy War', sub: 'John Bunyan', cat: 'Allegory' },
+    { id: 'confessions', name: 'The Confessions', sub: 'Augustine of Hippo', cat: 'Biography' },
+    { id: 'grace', name: 'Grace Abounding to the Chief of Sinners', sub: 'John Bunyan', cat: 'Biography' },
     { id: 'imitation', name: 'The Imitation of Christ', sub: 'Thomas à Kempis', cat: 'Devotional' },
     { id: 'presence', name: 'The Practice of the Presence of God', sub: 'Brother Lawrence', cat: 'Devotional' },
+    { id: 'interior', name: 'The Interior Castle', sub: 'Teresa of Ávila', cat: 'Devotional' },
+    { id: 'seriouscall', name: 'A Serious Call to a Devout and Holy Life', sub: 'William Law', cat: 'Devotional' },
+    { id: 'schoolprayer', name: 'With Christ in the School of Prayer', sub: 'Andrew Murray', cat: 'Devotional' },
+    { id: 'powerprayer', name: 'Power Through Prayer', sub: 'E.M. Bounds', cat: 'Devotional' },
+    { id: 'saintsrest', name: "The Saints' Everlasting Rest", sub: 'Richard Baxter', cat: 'Devotional' },
+    { id: 'riseprogress', name: 'The Rise and Progress of Religion in the Soul', sub: 'Philip Doddridge', cat: 'Devotional' },
+    { id: 'crook', name: 'The Crook in the Lot', sub: 'Thomas Boston', cat: 'Devotional' },
     { id: 'institutes', name: 'Institutes of the Christian Religion', sub: 'John Calvin', cat: 'Theology' },
-    { id: 'cityofgod', name: 'The City of God', sub: 'Augustine of Hippo', cat: 'Theology' },
+    { id: 'doctrine', name: 'On Christian Doctrine', sub: 'Augustine of Hippo', cat: 'Theology' },
+    { id: 'incarnation', name: 'On the Incarnation of the Word', sub: 'Athanasius of Alexandria', cat: 'Theology' },
+    { id: 'affections', name: 'A Treatise Concerning Religious Affections', sub: 'Jonathan Edwards', cat: 'Theology' },
+    { id: 'wesley', name: 'Sermons on Several Occasions', sub: 'John Wesley', cat: 'Theology' },
     { id: 'orthodoxy', name: 'Orthodoxy', sub: 'G.K. Chesterton', cat: 'Apologetics' },
     { id: 'pensees', name: 'Pensées', sub: 'Blaise Pascal', cat: 'Apologetics' },
   ],
