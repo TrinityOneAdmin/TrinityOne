@@ -78,7 +78,19 @@ webpush.setVapidDetails('mailto:steward@trinityone.app', VAPID.publicKey, VAPID.
 let pushSubs = {};   // { memberHex: [PushSubscription, …] }
 try { pushSubs = JSON.parse(readFileSync(SUBS_PATH, 'utf8')); } catch {}
 function saveSubs() { try { writeFileSync(SUBS_PATH, JSON.stringify(pushSubs)); } catch {} }
-function pushTo(memberHex, payload) {
+// per-member category prefs ({ dm, announce, serving }) set from the app's notification settings. A
+// missing member or missing category defaults to ON, so older clients keep getting everything.
+const PREFS_PATH = join(ROOT, 'relay', 'push-prefs.json');
+let pushPrefs = {};   // { memberHex: { dm, announce, serving } }
+try { pushPrefs = JSON.parse(readFileSync(PREFS_PATH, 'utf8')); } catch {}
+function savePrefs() { try { writeFileSync(PREFS_PATH, JSON.stringify(pushPrefs)); } catch {} }
+function wantsPush(memberHex, category) {
+  if (!category) return true;                       // uncategorised pushes always go (e.g. steward join)
+  const p = pushPrefs[memberHex];
+  return !p || p[category] !== false;               // default ON unless explicitly disabled
+}
+function pushTo(memberHex, payload, category) {
+  if (!wantsPush(memberHex, category)) return;
   const list = pushSubs[memberHex] || [];
   list.forEach(sub => webpush.sendNotification(sub, JSON.stringify(payload)).catch(err => {
     if (err && (err.statusCode === 410 || err.statusCode === 404)) { pushSubs[memberHex] = (pushSubs[memberHex] || []).filter(s => s.endpoint !== sub.endpoint); saveSubs(); }
@@ -108,7 +120,7 @@ function maybePush(evt) {
     if (!d.startsWith(REQUEST_D)) return;
     const target = (evt.tags.find(t => t[0] === 'p') || [])[1]; if (!target) return;
     const c = JSON.parse(evt.content || '{}');
-    pushTo(target, { title: 'Can you serve?', body: `${c.teamName || 'Serving'} · ${c.role || ''}${c.date ? ' · ' + c.date : ''}`, url: '/?serving=1' });
+    pushTo(target, { title: 'Can you serve?', body: `${c.teamName || 'Serving'} · ${c.role || ''}${c.date ? ' · ' + c.date : ''}`, url: '/?serving=1' }, 'serving');
   } catch {}
 }
 // best-effort latest display name from a pubkey's most recent kind-0 profile
@@ -132,7 +144,7 @@ function maybePushMessage(evt) {
         title: 'New message',
         body: who ? who + ' sent you a message' : 'You have a new direct message',
         url: '/?tab=chat&dm=' + evt.pubkey, tag: 'dm-' + evt.pubkey.slice(0, 8),
-      });
+      }, 'dm');
       return;
     }
     if (evt.kind === 1) {                                          // group chat post
@@ -141,7 +153,7 @@ function maybePushMessage(evt) {
       const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])] : [...MEMBERS];
       for (const r of recips) {
         if (!r || r === evt.pubkey) continue;
-        pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid });
+        pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid }, 'announce');
       }
     }
   } catch {}
@@ -574,7 +586,7 @@ function serveStatic(req, res) {
     let body = ''; req.on('data', c => { body += c; if (body.length > 1e5) req.destroy(); });
     req.on('end', () => {
       try {
-        const { sub, auth } = JSON.parse(body);
+        const { sub, auth, prefs } = JSON.parse(body);
         const j401 = (m) => { res.writeHead(401, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' }); res.end(m); };
         if (!sub || !sub.endpoint) { res.writeHead(400).end('bad'); return; }
         // require a NIP-98-style proof the subscriber controls the pubkey, bound to THIS endpoint, fresh —
@@ -587,6 +599,27 @@ function serveStatic(req, res) {
         if (!/^[0-9a-f]{64}$/i.test(pubkey)) { res.writeHead(400).end('bad'); return; }
         const list = pushSubs[pubkey] = pushSubs[pubkey] || [];
         if (!list.some(s => s.endpoint === sub.endpoint)) { list.push(sub); saveSubs(); }
+        if (prefs && typeof prefs === 'object') { pushPrefs[pubkey] = { dm: prefs.dm !== false, announce: prefs.announce !== false, serving: prefs.serving !== false }; savePrefs(); }
+        res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); res.end('ok');
+      } catch { res.writeHead(400).end('bad'); }
+    });
+    return;
+  }
+  if (route === '/push/unsubscribe') {
+    if (req.method !== 'POST') { res.writeHead(405).end('method'); return; }
+    let body = ''; req.on('data', c => { body += c; if (body.length > 1e5) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const { endpoint, auth } = JSON.parse(body);
+        const j401 = (m) => { res.writeHead(401, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' }); res.end(m); };
+        if (!endpoint) { res.writeHead(400).end('bad'); return; }
+        // same NIP-98 proof (bound to the endpoint) so only the owner can drop their own subscription
+        if (!auth || typeof auth !== 'object' || !verifyEvent(auth)) return j401('unauthorized');
+        const u = (auth.tags.find(t => t[0] === 'u') || [])[1];
+        if (u !== endpoint) return j401('endpoint mismatch');
+        if (Math.abs(Math.floor(Date.now() / 1000) - (auth.created_at || 0)) > 300) return j401('stale proof');
+        const pubkey = auth.pubkey;
+        if (pushSubs[pubkey]) { pushSubs[pubkey] = pushSubs[pubkey].filter(s => s.endpoint !== endpoint); if (!pushSubs[pubkey].length) delete pushSubs[pubkey]; saveSubs(); }
         res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); res.end('ok');
       } catch { res.writeHead(400).end('bad'); }
     });

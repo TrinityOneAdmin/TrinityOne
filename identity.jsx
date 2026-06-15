@@ -341,6 +341,12 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <Row icon="bolt" label="Lightning wallet" sub={`${Number(wbal || 0).toLocaleString('en-US')} sats · add funds or withdraw any time`} accent="var(--gold)" onClick={() => { onClose && onClose(); ctx.openWallet(); }} />
         </Group>
 
+        {/* settings */}
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>SETTINGS</div>
+        <Group>
+          <Row icon="bell" label="Notifications" sub="Choose what you’re alerted about" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openNotifSettings(); }} />
+        </Group>
+
         {/* help & guides */}
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>HELP &amp; SETUP</div>
         <Group>

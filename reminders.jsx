@@ -6,6 +6,13 @@
   const cap = () => (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) || null;
   const load = () => { try { return JSON.parse(localStorage.getItem(LS) || '{}'); } catch { return {}; } };
   const save = (o) => { try { localStorage.setItem(LS, JSON.stringify(o)); } catch {} };
+
+  // ── notification preferences (which kinds the member wants) — read by the settings UI, the reminder
+  // scheduler, and the push registration (categories are forwarded to the relay so it filters there). ──
+  const NPREFS = 'trinityone.notif';
+  const NDEFAULTS = { enabled: true, dm: true, announce: true, serving: true, reminders: true };
+  function getPrefs() { try { return { ...NDEFAULTS, ...(JSON.parse(localStorage.getItem(NPREFS) || '{}')) }; } catch { return { ...NDEFAULTS }; } }
+  function savePrefs(p) { try { localStorage.setItem(NPREFS, JSON.stringify(p)); } catch {} }
   function hashId(s) { let h = 0; for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return (h % 2000000000) + 1; }
   // 18:00 the day before the slot (local time)
   function remindAt(dateStr) { try { const d = new Date(dateStr + 'T00:00'); d.setDate(d.getDate() - 1); d.setHours(18, 0, 0, 0); return d; } catch { return null; } }
@@ -20,6 +27,8 @@
 
   const webTimers = {};
   async function sync(slots) {
+    const prefs = getPrefs();
+    if (!prefs.enabled || !prefs.reminders) return;   // member turned serving reminders off
     slots = (slots || []).filter(s => s && s.date);
     if (!slots.length) return;
     const LN = cap();
@@ -57,11 +66,32 @@
     for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
     return out;
   }
-  let pushDone = '';
-  async function registerPush(pubkey) {
-    if (!pubkey || pushDone === pubkey) return;
-    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return; // native: local notifs
+  let pushDone = '', lastPubkey = '';
+  const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  // drop this device's push subscription (master toggle off): tell the relay, then unsubscribe locally
+  async function unsubscribePush() {
+    pushDone = '';
+    if (isNative() || !('serviceWorker' in navigator)) return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (!sub) return;
+      const auth = (window.Fellowship && window.Fellowship.signAuth) ? await window.Fellowship.signAuth(sub.endpoint) : null;
+      try { await fetch('/push/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: sub.endpoint, auth }) }); } catch {}
+      try { await sub.unsubscribe(); } catch {}
+    } catch (e) { /* best-effort */ }
+  }
+  // subscribe (or refresh) this device's push, forwarding the member's category prefs to the relay.
+  // force=true re-sends even if already registered (used when prefs change). Native uses local notifs.
+  async function registerPush(pubkey, force) {
+    if (pubkey) lastPubkey = pubkey;
+    pubkey = pubkey || lastPubkey;
+    if (!pubkey) return;
+    if (isNative()) return;                                          // native: local notifs, no web-push
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    const prefs = getPrefs();
+    if (!prefs.enabled) { await unsubscribePush(); return; }         // master toggle off → no push
+    if (pushDone === pubkey && !force) return;
     try {
       if (Notification.permission !== 'granted') { const ok = await ensurePerm(); if (!ok) return; }
       const reg = await navigator.serviceWorker.ready;
@@ -74,10 +104,24 @@
       // prove control of the key (NIP-98), bound to this endpoint, so the relay won't accept a
       // subscription registered under someone else's pubkey
       const auth = (window.Fellowship && window.Fellowship.signAuth) ? await window.Fellowship.signAuth(sub.endpoint) : null;
-      await fetch('/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sub, auth }) });
+      const cats = { dm: !!prefs.dm, announce: !!prefs.announce, serving: !!prefs.serving };
+      await fetch('/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sub, auth, prefs: cats }) });
       pushDone = pubkey;
     } catch (e) { /* push not available — local reminders still work */ }
   }
 
   window.TrinityReminders = { sync, ensurePerm, registerPush };
+  // settings hook: read/update prefs; a change re-syncs the push subscription with the relay
+  window.TrinityNotif = {
+    get: getPrefs,
+    permission: () => (typeof Notification !== 'undefined' ? Notification.permission : 'default'),
+    ensurePerm,
+    isNative,
+    async set(patch) {
+      const p = { ...getPrefs(), ...patch };
+      savePrefs(p);
+      try { await registerPush(null, true); } catch {}
+      return p;
+    },
+  };
 })();

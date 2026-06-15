@@ -260,6 +260,7 @@ function App() {
   const [video, setVideo] = useA(null);
   const extraParam = new URLSearchParams(location.search).get('extra');  // 'notif' | 'listen'
   const [notif, setNotif] = useA(extraParam === 'notif');   // notifications overlay
+  const [notifSettings, setNotifSettings] = useA(extraParam === 'notifsettings'); // notification settings overlay
   const [listen, setListen] = useA(extraParam === 'listen'); // audio Listen overlay
   const [audioBibles, setAudioBibles] = useA(false);   // Audio Bibles download library
   const concordParam = new URLSearchParams(location.search).get('concord');  // '1' = index, or a Strong's id (e.g. G5457)
@@ -832,6 +833,7 @@ function App() {
     openConcordance: () => setConcord(true),
     openAllUses: (id) => setAllUses(id),
     openNotifications: () => setNotif(true),
+    openNotifSettings: () => setNotifSettings(true),
     openListen: () => setListen(true),
     openAudioBibles: () => setAudioBibles(true),
     // identity surfaces
@@ -1027,6 +1029,7 @@ function App() {
             <ConcordanceIndex open={concord} onClose={() => setConcord(false)} ctx={ctx} />
             <AllUsesView id={allUses} open={!!allUses} onClose={() => setAllUses(null)} ctx={ctx} />
             <NotificationsScreen open={notif} onClose={() => setNotif(false)} ctx={ctx} />
+            <NotifSettingsScreen open={notifSettings} onClose={() => setNotifSettings(false)} ctx={ctx} />
             <ListenScreen open={listen} onClose={() => setListen(false)} ctx={ctx} />
             <AudioBiblesScreen open={audioBibles} onClose={() => setAudioBibles(false)} ctx={ctx} />
             <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} ctx={ctx} />
