@@ -553,6 +553,7 @@ function SchEventModal({ day, onClose }) {
 }
 
 function DashCalendar() {
+  const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;   // stack on phones
   const services = window.useStewardServices();
   const events = window.useStewardEvents();
   const rotas = window.useStewardRotas();
@@ -589,8 +590,8 @@ function DashCalendar() {
   const upcoming = services.slice().filter(s => (s.date || '') >= schKey(today)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 6);
 
   return (
-    <div style={{ position: 'relative', height: '100%', display: 'flex', gap: 16 }}>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'relative', height: narrow ? 'auto' : '100%', display: 'flex', flexDirection: narrow ? 'column' : 'row', gap: 16 }}>
+      <div style={{ flex: narrow ? 'none' : 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexShrink: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][view.m]} {view.y}</div>
           <button onClick={() => setView(v => ({ y: v.m === 0 ? v.y - 1 : v.y, m: v.m === 0 ? 11 : v.m - 1 }))} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="chevL" size={16} /></button>
@@ -601,7 +602,7 @@ function DashCalendar() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 5, marginBottom: 5, flexShrink: 0 }}>
           {SCH_DOW.map(d => <div key={d} style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.4px' }}>{d.toUpperCase()}</div>)}
         </div>
-        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridAutoRows: 'minmax(74px, 1fr)', gap: 5 }}>
+        <div className="no-scrollbar" style={{ flex: narrow ? 'none' : 1, minHeight: 0, overflow: narrow ? 'visible' : 'auto', display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridAutoRows: narrow ? 'minmax(52px, auto)' : 'minmax(74px, 1fr)', gap: 5 }}>
           {cells.map((d, i) => {
             if (!d) return <div key={i} />;
             const key = monKey(d); const it = dayItems(key); const isToday = key === schKey(today);
@@ -619,7 +620,7 @@ function DashCalendar() {
       </div>
 
       {/* side panel: picked-day detail OR upcoming services */}
-      <div style={{ width: 300, flexShrink: 0, borderLeft: '1px solid var(--line)', paddingLeft: 16, overflow: 'auto' }} className="no-scrollbar">
+      <div style={{ width: narrow ? 'auto' : 300, flexShrink: 0, borderLeft: narrow ? 'none' : '1px solid var(--line)', borderTop: narrow ? '1px solid var(--line)' : 'none', paddingLeft: narrow ? 0 : 16, paddingTop: narrow ? 14 : 0, overflow: narrow ? 'visible' : 'auto' }} className="no-scrollbar">
         {pickedDay ? (() => {
           const it = dayItems(pickedDay); const p = schParts(pickedDay);
           return (

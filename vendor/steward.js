@@ -9630,8 +9630,9 @@ zoo`.split("\n");
   var CANONICAL_RELAYS = ["wss://trinityone-master-01.tailbeaac0.ts.net/relay", "wss://trinityone.tailbeaac0.ts.net/relay"];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function ownRelay() {
+    if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;
     const l = typeof location !== "undefined" ? location : null;
-    if (!l || !l.host) return "ws://127.0.0.1:8090/relay";
+    if (!l || !l.host) return CANONICAL_RELAY;
     if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return CANONICAL_RELAY;
     return (l.protocol === "https:" ? "wss://" : "ws://") + l.host + "/relay";
   }

@@ -65,8 +65,11 @@ function saveNetKey(rec) {
 const CANONICAL_RELAYS = ['wss://trinityone-master-01.tailbeaac0.ts.net/relay', 'wss://trinityone.tailbeaac0.ts.net/relay'];
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 function ownRelay() {
+  // native (Capacitor APK): location.host is just "localhost", which has no relay — use the shared pool
+  // so a phone-installed steward (or one restored via handoff) reaches the church's data.
+  if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;
   const l = (typeof location !== 'undefined') ? location : null;
-  if (!l || !l.host) return 'ws://127.0.0.1:8090/relay';
+  if (!l || !l.host) return CANONICAL_RELAY;
   // a static CDN host (GitHub Pages etc.) has no relay on its origin → publish to the shared pool
   if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return CANONICAL_RELAY;
   return ((l.protocol === 'https:') ? 'wss://' : 'ws://') + l.host + '/relay';
