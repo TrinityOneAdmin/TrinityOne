@@ -332,6 +332,9 @@ function ModuleView({ module, open, onClose, ctx }) {
 
   const raw = module.id === 'journals'
     ? (ctx.journalEntries || D.JOURNAL).map(j => ({ id: j.id, name: j.title, sub: (j.ref || 'Reflection') + ' · ' + j.date, journal: j, downloaded: true }))
+    : module.id === 'books'
+    // books: reflect the REAL per-device download state (set by the reader), not a hard-coded flag
+    ? (D.MODULE_ITEMS.books || []).map(it => ({ ...it, downloaded: (typeof isDownloaded === 'function' && isDownloaded(it.id)) }))
     : (D.MODULE_ITEMS[module.id] || []);
   const cats = ['All', ...Array.from(new Set(raw.map(it => it.cat).filter(Boolean)))];
   const catFiltered = cat === 'All' ? raw : raw.filter(it => it.cat === cat);
@@ -407,11 +410,11 @@ function ModuleView({ module, open, onClose, ctx }) {
                 ) : it.downloaded ? (
                   <Icon name="cloudCheck" size={20} color="var(--sage)" style={{ flexShrink: 0 }} />
                 ) : (
-                  <button onClick={(e) => { e.stopPropagation(); ctx.toast('Downloading ' + it.name + '…'); }} style={{
+                  <button onClick={(e) => { e.stopPropagation(); if (module.id === 'books') { ctx.openBook(it); } else { ctx.toast('Downloading ' + it.name + '…'); } }} style={{
                     flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 10,
                     border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 12.5,
                     cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
-                    <Icon name="cloud" size={15} color="var(--ink-3)" /> Get</button>
+                    <Icon name={module.id === 'books' ? 'book' : 'cloud'} size={15} color="var(--ink-3)" /> {module.id === 'books' ? 'Read' : 'Get'}</button>
                 )}
               </div>
             ))}

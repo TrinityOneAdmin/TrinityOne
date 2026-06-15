@@ -4,11 +4,20 @@
 // vendor/library/<id>.json.gz. Falls back to data.jsx BOOK_TEXT for titles not yet fetched.
 const LIB_CACHE = {};   // in-session full-book cache (id -> book)
 
+// Books are NOT bundled in the APK — they download on demand (like Bibles) and cache in IndexedDB for
+// offline re-reads. window.Bible.loadAsset resolves to the gateway on native and uses the shared cache;
+// on the web the file is same-origin in the deploy. Falls back to a plain fetch if the engine is absent.
 async function loadFullBook(id) {
   if (LIB_CACHE[id]) return LIB_CACHE[id];
-  const res = await fetch('vendor/library/' + id + '.json.gz');
-  if (!res.ok) throw new Error('not found');
-  const buf = new Uint8Array(await res.arrayBuffer());
+  const url = 'vendor/library/' + id + '.json.gz';
+  let buf;
+  if (window.Bible && window.Bible.loadAsset) {
+    buf = await window.Bible.loadAsset(url);
+  } else {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('not found');
+    buf = new Uint8Array(await res.arrayBuffer());
+  }
   const json = window.fflate.strFromU8(window.fflate.gunzipSync(buf));
   const book = JSON.parse(json);
   LIB_CACHE[id] = book;

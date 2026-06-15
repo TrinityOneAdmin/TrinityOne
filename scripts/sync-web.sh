@@ -16,6 +16,10 @@ cp manifest.json sw.js sw-register.js "$WWW/" 2>/dev/null || true
 cp -r icons "$WWW/" 2>/dev/null || true
 # vendored libs (React/Babel/sql.js/fflate/fonts/identity) — fully offline
 cp -r vendor/. "$WWW/vendor/"
+# Library books are NOT bundled in the APK — they download on demand from the gateway (like Bibles)
+# and cache in IndexedDB. Keep vendor/library/index.js (small previews/catalog) so the list works
+# offline; drop the full-book payloads (~5 MB) so they don't bloat the APK.
+rm -f "$WWW"/vendor/library/*.json.gz
 
 # Pre-transpile JSX -> plain JS so the PACKAGED app needs NO runtime Babel. Runtime @babel/standalone
 # is unreliable in the Capacitor webview (its native-HTTP patching can break Babel's fetch of the
