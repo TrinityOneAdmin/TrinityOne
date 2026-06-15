@@ -400,7 +400,7 @@ window.Steward = {
   publishGroupKey(groupId, memberPubs, opts = {}) {
     if (!churchSk || !churchPub) return Promise.resolve(null);
     if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
-    const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toHexPub(p) || p).filter(Boolean)])];
+    const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])];
     let key = _skeys[groupId];
     if (opts.rotate || !key) { key = crypto.getRandomValues(new Uint8Array(32)); _srev[groupId] = (_srev[groupId] || 0) + 1; }
     _skeys[groupId] = key;

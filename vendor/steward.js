@@ -10092,7 +10092,7 @@ zoo`.split("\n");
     publishGroupKey(groupId, memberPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
       if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);
-      const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toHexPub(p) || p).filter(Boolean)])];
+      const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])];
       let key = _skeys[groupId];
       if (opts.rotate || !key) {
         key = crypto.getRandomValues(new Uint8Array(32));
