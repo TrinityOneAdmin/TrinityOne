@@ -277,7 +277,7 @@ const MODULES = [
   { id: 'commentaries', name: 'Commentaries', count: '8 sets', icon: 'comment', accent: 'var(--sage)' },
   { id: 'dictionaries', name: 'Dictionaries & Lexicons', count: '6 references', icon: 'lex', accent: 'var(--gold)' },
   { id: 'devotionals', name: 'Devotionals', count: '5 series', icon: 'sun', accent: 'var(--clay)' },
-  { id: 'books', name: 'Books', count: '20 free titles', icon: 'books', accent: 'var(--sage)' },
+  { id: 'books', name: 'Books', count: '25 free titles', icon: 'books', accent: 'var(--sage)' },
   { id: 'journals', name: 'Journals & Notes', count: '3 entries', icon: 'pen', accent: 'var(--gold)' },
 ];
 
@@ -416,11 +416,16 @@ const MODULE_ITEMS = {
     { id: 'crook', name: 'The Crook in the Lot', sub: 'Thomas Boston', cat: 'Devotional' },
     { id: 'institutes', name: 'Institutes of the Christian Religion', sub: 'John Calvin', cat: 'Theology' },
     { id: 'doctrine', name: 'On Christian Doctrine', sub: 'Augustine of Hippo', cat: 'Theology' },
-    { id: 'incarnation', name: 'On the Incarnation of the Word', sub: 'Athanasius of Alexandria', cat: 'Theology' },
     { id: 'affections', name: 'A Treatise Concerning Religious Affections', sub: 'Jonathan Edwards', cat: 'Theology' },
     { id: 'wesley', name: 'Sermons on Several Occasions', sub: 'John Wesley', cat: 'Theology' },
     { id: 'orthodoxy', name: 'Orthodoxy', sub: 'G.K. Chesterton', cat: 'Apologetics' },
     { id: 'pensees', name: 'Pensées', sub: 'Blaise Pascal', cat: 'Apologetics' },
+    { id: 'fathers', name: 'Early Christian Fathers', sub: 'Clement, Ignatius, Polycarp & others', cat: 'Church Fathers' },
+    { id: 'apostolic', name: 'Apostolic Fathers, Justin Martyr & Irenaeus', sub: 'Ante-Nicene Fathers', cat: 'Church Fathers' },
+    { id: 'incarnation', name: 'On the Incarnation of the Word', sub: 'Athanasius of Alexandria', cat: 'Church Fathers' },
+    { id: 'enchiridion', name: 'Handbook on Faith, Hope & Love', sub: 'Augustine of Hippo', cat: 'Church Fathers' },
+    { id: 'chrysostom', name: 'On the Priesthood', sub: 'John Chrysostom', cat: 'Church Fathers' },
+    { id: 'eusebius', name: 'The Church History', sub: 'Eusebius of Caesarea', cat: 'Church Fathers' },
   ],
 };
 

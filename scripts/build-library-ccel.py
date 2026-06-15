@@ -44,6 +44,13 @@ BOOKS = {
     "riseprogress":{"name": "The Rise and Progress of Religion in the Soul", "author": "Philip Doddridge", "year": "1745", "cat": "Devotional", "path": "doddridge/rise"},
     "crook":       {"name": "The Crook in the Lot", "author": "Thomas Boston", "year": "1737", "cat": "Devotional", "path": "boston/crook"},
     "wesley":      {"name": "Sermons on Several Occasions", "author": "John Wesley", "year": "1746", "cat": "Theology", "path": "wesley/sermons"},
+    # ── Church Fathers (early church) ──
+    "fathers":     {"name": "Early Christian Fathers", "author": "Clement, Ignatius, Polycarp & others", "year": "c. 95", "cat": "Church Fathers", "path": "richardson/fathers"},
+    "tertullian":  {"name": "Tertullian: Apology & Writings", "author": "Tertullian", "year": "c. 197", "cat": "Church Fathers", "path": "tertullian/apology"},
+    "apostolic":   {"name": "Apostolic Fathers, Justin Martyr & Irenaeus", "author": "Ante-Nicene Fathers", "year": "c. 150", "cat": "Church Fathers", "path": "schaff/anf01"},
+    "enchiridion": {"name": "Handbook on Faith, Hope & Love", "author": "Augustine of Hippo", "year": "421", "cat": "Church Fathers", "path": "augustine/enchiridion"},
+    "chrysostom":  {"name": "On the Priesthood", "author": "John Chrysostom", "year": "c. 388", "cat": "Church Fathers", "path": "schaff/npnf109"},
+    "eusebius":    {"name": "The Church History", "author": "Eusebius of Caesarea", "year": "c. 324", "cat": "Church Fathers", "path": "schaff/npnf201"},
 }
 
 PREVIEW_PARAS = 5
@@ -69,11 +76,20 @@ def inline(s):
     s = s.replace("\xad", "")               # soft hyphens
     return re.sub(r"\s+", " ", s).strip()
 
+# front/back matter to drop — normalised (lowercased, trailing punctuation stripped) + substrings
+def is_skip(title):
+    t = re.sub(r"[\s.,:;]+$", "", title.lower()).strip()
+    if t in SKIP_TITLES:
+        return True
+    return any(s in t for s in ("title page", "select library", "library of the", "introductory note",
+                                "translator's", "editor's preface", "bibliograph", "elucidation",
+                                "prefatory", "publisher", "table of contents"))
+
 # each <div1>/<div2 title="..."> starts a chapter; <p> are paragraphs; <note> footnotes dropped.
 DIV_OR_P = re.compile(r'<div[12]\b[^>]*\btitle="([^"]*)"[^>]*>|<p\b[^>]*>(.*?)</p>', re.S | re.I)
 
 def parse_thml(xml):
-    m = re.search(r"<ThML\.body>(.*)</ThML\.body>", xml, re.S | re.I)
+    m = re.search(r"<ThML\.body[^>]*>(.*)</ThML\.body>", xml, re.S | re.I)
     body = m.group(1) if m else xml
     body = re.sub(r"<note\b[^>]*>.*?</note>", "", body, flags=re.S | re.I)   # footnotes
     body = re.sub(r"<(pb|note)\b[^>]*/?>", "", body, flags=re.I)
@@ -82,7 +98,7 @@ def parse_thml(xml):
         title, para = tok.group(1), tok.group(2)
         if title is not None:
             t = inline(title)
-            if t.lower() in SKIP_TITLES:
+            if is_skip(t):
                 cur = None; continue
             if cur and cur["body"]:
                 chapters.append(cur)
@@ -92,7 +108,7 @@ def parse_thml(xml):
             if not txt:
                 continue
             if cur is None:
-                cur = {"title": "Opening", "body": []}
+                continue                 # drop paragraphs before the first real section (series/title pages)
             cur["body"].append(txt)
     if cur and cur["body"]:
         chapters.append(cur)
