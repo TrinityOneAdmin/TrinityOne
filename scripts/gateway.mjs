@@ -66,6 +66,7 @@ const BLOCKED = new Set();       // banned pubkeys — rejected on write, withhe
 function rebuildBlocked() { BLOCKED.clear(); for (const s of BLOCKED_BY.values()) for (const p of s) BLOCKED.add(p); }
 const GROUP_VIS = new Map();     // groupId -> 'open' | 'invite'
 const GROUP_MEMBERS = new Map(); // groupId -> Set(pubkey) allowed to post in an invite-only group
+const GROUP_NAMES = new Map();   // groupId -> display name (for push titles)
 
 // ---- web push (VAPID): notify members of serving requests in real time (PWA) ----
 const VAPID_PATH = join(ROOT, 'relay', 'vapid.json');
@@ -110,6 +111,41 @@ function maybePush(evt) {
     pushTo(target, { title: 'Can you serve?', body: `${c.teamName || 'Serving'} · ${c.role || ''}${c.date ? ' · ' + c.date : ''}`, url: '/?serving=1' });
   } catch {}
 }
+// best-effort latest display name from a pubkey's most recent kind-0 profile
+function displayName(pubkey) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind === 0 && e.pubkey === pubkey) { try { const m = JSON.parse(e.content); return m.name || m.display_name || ''; } catch { return ''; } }
+  }
+  return '';
+}
+// fire a closed-app push for a new chat message: 1:1 DMs (to the recipient) and broadcast/announcement
+// posts (to every member). Ordinary group chatter is intentionally NOT pushed — the in-app Community
+// dot already covers it; only personal DMs and church announcements escalate to a phone notification.
+function maybePushMessage(evt) {
+  try {
+    if (evt.kind === 4) {                                          // NIP-04 direct message (content encrypted)
+      const target = (evt.tags.find(t => t[0] === 'p') || [])[1];
+      if (!target || target === evt.pubkey) return;               // needs a distinct recipient
+      const who = displayName(evt.pubkey);
+      pushTo(target, {
+        title: 'New message',
+        body: who ? who + ' sent you a message' : 'You have a new direct message',
+        url: '/?tab=chat&dm=' + evt.pubkey, tag: 'dm-' + evt.pubkey.slice(0, 8),
+      });
+      return;
+    }
+    if (evt.kind === 1) {                                          // group chat post
+      const gid = gidOf(evt); if (!gid || !BROADCAST.has(gid)) return;   // announcements only (church-posted)
+      const gname = GROUP_NAMES.get(gid) || 'Your church';
+      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])] : [...MEMBERS];
+      for (const r of recips) {
+        if (!r || r === evt.pubkey) continue;
+        pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid });
+      }
+    }
+  } catch {}
+}
 const dtag = (e) => { const t = (e.tags || []).find(t => t[0] === 'd'); return t ? t[1] : ''; };
 // NIP-01 replaceable (0/3/10000-19999) + addressable (30000-39999 by d-tag): keep only the newest
 // per (pubkey, kind[, d]). Without this, e.g. a member's swap then decline reqreply both linger and
@@ -135,7 +171,8 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
-    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); return; }
+    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); return; }
+    if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60));
     if (c.kind === 'broadcast') BROADCAST.add(id); else BROADCAST.delete(id);
     // a group def may name member leaders who can post events for that group
     GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : []));
@@ -657,6 +694,7 @@ wss.on('connection', ws => {
       scheduleSave();
       maybePush(evt);   // notify the targeted member if this is a serving request
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
+      maybePushMessage(evt);   // notify on a new DM (recipient) or church announcement (members)
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       for (const [client, m] of subs) { if (client.readyState !== 1) continue;
         for (const [subId, filters] of m) if (matchAny(evt, filters) && canRead(evt, client._auth)) client.send(JSON.stringify(['EVENT', subId, evt])); }
