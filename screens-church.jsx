@@ -90,12 +90,9 @@ function ChurchPill({ ctx }) {
       }}>
         <span style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.62), rgba(0,0,0,0) 62%)' }} />
         <span style={{ position: 'absolute', right: 12, top: 12, width: 30, height: 30, borderRadius: 999, background: 'rgba(0,0,0,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={18} stroke={2.4} color="#fff" /></span>
-        <span style={{ position: 'absolute', left: 14, bottom: 12, display: 'flex', alignItems: 'center', gap: 11 }}>
+        <span style={{ position: 'absolute', left: 14, bottom: 12, right: 50, display: 'flex', alignItems: 'center', gap: 11 }}>
           <ChurchBadge church={c} size={40} radius={12} />
-          <span>
-            <span style={{ display: 'block', fontSize: 11, color: 'rgba(255,255,255,.82)', fontWeight: 600, textShadow: '0 1px 4px rgba(0,0,0,.5)' }}>Your church</span>
-            <span style={{ display: 'block', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{c.name}</span>
-          </span>
+          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
         </span>
       </button>
     );
