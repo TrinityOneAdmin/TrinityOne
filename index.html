@@ -202,13 +202,6 @@
 <script type="text/babel" src="app.jsx"></script>
 
 <!-- register the offline service worker (caches the app shell; modules live in IndexedDB) -->
-<script>
-  // Web PWA only — inside the Capacitor APK the native layer already serves offline + routes module
-  // downloads through native HTTP, so a service worker is redundant and could interfere.
-  var _native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  if ('serviceWorker' in navigator && !_native) {
-    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
-  }
-</script>
+<script src="sw-register.js"></script>
 </body>
 </html>

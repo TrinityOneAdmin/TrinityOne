@@ -19,6 +19,7 @@ const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
 const DB = process.env.RELAY_DB || join(ROOT, 'relay', 'relay-db.json');
 const MAX_EVENTS = 20000;
+const NONMEMBER_KIND0_CAP = 1000;   // cap stored profiles from non-members (L2: prevent unbounded growth)
 
 // ---- write policy (enabled only when the church key is configured) ----
 // Set the church via env CHURCH_NPUB or relay/church.json {"npub":"npub1…"}. When set, the relay
@@ -206,7 +207,13 @@ function accept(e) {
   const isChurch = CHURCH_PUBS.has(e.pubkey), isNetwork = NETWORKS.has(e.pubkey), isLeader = isChurch || isNetwork, isMember = isLeader || MEMBERS.has(e.pubkey);
   if (BLOCKED.has(e.pubkey) && !isLeader) return false;          // a blocked member can't write anything
   const k = e.kind;
-  if (k === 0) return true;                                      // profiles (replaceable, low risk)
+  if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
+    if (isMember) return true;                                   // members/leaders: always
+    if (events.some(x => x.kind === 0 && x.pubkey === e.pubkey)) return true;  // a stranger updating their own
+    let strangers = 0;                                           // else cap how many non-member profiles we store
+    for (const x of events) { if (x.kind === 0 && !(CHURCH_PUBS.has(x.pubkey) || NETWORKS.has(x.pubkey) || MEMBERS.has(x.pubkey))) strangers++; }
+    return strangers < NONMEMBER_KIND0_CAP;
+  }
   if (k === 30078) {
     const d = dtag(e);
     if (d.startsWith(EVENT_D)) {   // a group's leader may post an event for that one group
@@ -359,14 +366,16 @@ async function getAudioFeed(url) {
   return data;
 }
 
-// security response headers. CSP is deliberately compatible with the current build (Babel needs
-// 'unsafe-eval'; the app has many inline styles/handlers → 'unsafe-inline') but still blocks the
-// big wins: no external/injected <script>, no <object>/<embed>, no <base> hijack, no framing.
+// security response headers. By default the CSP is compatible with the RAW (runtime-Babel) build the
+// gateway serves from the repo (Babel needs 'unsafe-eval'; its injected transpiled code needs
+// 'unsafe-inline'). When the gateway instead serves a PRE-TRANSPILED build (no Babel — like sync-web /
+// build-pages produce), set STRICT_CSP=1 to drop both from script-src — keeping only 'wasm-unsafe-eval'
+// for sql.js. The Cloudflare Pages deploy is already strict via its own _headers (build-pages.sh).
 // Referrer-Policy: no-referrer also stops invite links (which carry a seed in the URL) leaking via Referer.
 const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN' };
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  process.env.STRICT_CSP ? "script-src 'self' 'wasm-unsafe-eval'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
   "img-src 'self' data: blob: https:",

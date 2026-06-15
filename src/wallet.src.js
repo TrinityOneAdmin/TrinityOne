@@ -28,8 +28,31 @@ const emit = () => { const b = sum(proofs); subs.forEach((fn) => { try { fn(b); 
 
 function npub() { try { return (window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub) || ''; } catch { return ''; } }
 function lsKey() { return 'trinityone.wallet.' + (owner || 'anon'); }
-function saveLocal() { try { localStorage.setItem(lsKey(), JSON.stringify({ mint: mintUrl, proofs })); } catch {} }
-function loadLocal() { try { const d = JSON.parse(localStorage.getItem(lsKey()) || 'null'); if (d && Array.isArray(d.proofs)) { proofs = d.proofs; if (d.mint) mintUrl = d.mint; } } catch {} }
+// Proofs are bearer ecash — whoever reads them can spend them. So encrypt the on-device copy at rest
+// with the member's own key (NIP-44 self-encryption, same key as the relay backup). It raises the bar
+// against trivial localStorage scraping; the real fix (keys out of page scope) is the planned signer.
+// Legacy plaintext blobs still load, and re-save as encrypted on the next write.
+function saveLocal() {
+  try {
+    const plain = JSON.stringify({ mint: mintUrl, proofs });
+    const F = window.Fellowship;
+    const ct = (F && F.encryptSelf) ? F.encryptSelf(plain) : null;
+    localStorage.setItem(lsKey(), ct ? JSON.stringify({ v: 2, enc: ct }) : plain);
+  } catch {}
+}
+function loadLocal() {
+  try {
+    const raw = localStorage.getItem(lsKey()); if (!raw) return;
+    let d = JSON.parse(raw);
+    if (d && d.enc) {                                  // encrypted at rest → decrypt with our own key
+      const F = window.Fellowship;
+      const pt = (F && F.decryptSelf) ? F.decryptSelf(d.enc) : null;
+      if (!pt) return;                                 // key not ready / not ours — leave as-is, retry later
+      d = JSON.parse(pt);
+    }
+    if (d && Array.isArray(d.proofs)) { proofs = d.proofs; if (d.mint) mintUrl = d.mint; }
+  } catch {}
+}
 async function backup() { saveLocal(); try { if (window.Fellowship && window.Fellowship.publishWalletBackup) await window.Fellowship.publishWalletBackup('proofs', { mint: mintUrl, proofs }); } catch {} }
 
 async function ensureMint() {
@@ -78,6 +101,7 @@ window.TrinityWallet = {
     if (initP) return initP;
     initP = (async () => {
       owner = npub();
+      try { if (window.Fellowship && window.Fellowship.ready) await window.Fellowship.ready; } catch {}   // need our key to decrypt at-rest proofs
       loadLocal();
       if (!proofs.length) await restoreFromRelay();
       emit();
