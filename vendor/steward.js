@@ -10645,6 +10645,10 @@ zoo`.split("\n");
     // ---- church profile (kind-0): name etc. shown to members and in the console ----
     subscribeProfile(onProfile) {
       let latest = 0;
+      try {
+        if (lastProfile && Object.keys(lastProfile).length) onProfile(lastProfile);
+      } catch {
+      }
       const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pub] }], {
         onevent(e) {
           if (e.created_at < latest) return;

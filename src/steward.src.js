@@ -749,6 +749,9 @@ window.Steward = {
   // ---- church profile (kind-0): name etc. shown to members and in the console ----
   subscribeProfile(onProfile) {
     let latest = 0;
+    // seed from the cached profile so a freshly-mounted view (e.g. Settings) is instantly consistent
+    // with the others (avatar/picture shows everywhere at once, not only where it was just edited)
+    try { if (lastProfile && Object.keys(lastProfile).length) onProfile(lastProfile); } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pub] }], {
       onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; onProfile(p); } catch {} },
       oneose() {},
