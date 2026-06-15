@@ -3,25 +3,18 @@
 # (steward.html + stew-*.jsx) wrapped as its OWN Android app (com.trinityone.steward), so a steward
 # can create + manage a church on a phone, talking straight to the relays — a host-independent
 # fallback if the web console is blocked. Re-uses the shared android/ project via a temporary
-# applicationId / app-name / webDir / ICON swap, ALWAYS reverted on exit (the member project is restored).
+# applicationId / app-name / webDir swap, ALWAYS reverted on exit (the member project is restored).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 WWW="$ROOT/www"
 GRADLE="android/app/build.gradle"
 STRINGS="android/app/src/main/res/values/strings.xml"
-RES="android/app/src/main/res"
-BG_XML="$RES/values/ic_launcher_background.xml"
-DENS="mdpi hdpi xhdpi xxhdpi xxxhdpi"
-ICON_BAK="$(mktemp -d)"
 
-# whatever happens, put the member project back (app id, name, icon, and the member www/)
+# whatever happens, put the member project back (app id, name, and the member www/)
 restore() {
   sed -i 's/applicationId "com.trinityone.steward"/applicationId "com.trinityone.app"/' "$GRADLE" 2>/dev/null || true
   sed -i 's#<string name="app_name">TrinityOne Steward</string>#<string name="app_name">TrinityOne</string>#' "$STRINGS" 2>/dev/null || true
-  for d in $DENS; do cp "$ICON_BAK/mipmap-$d/"*.png "$RES/mipmap-$d/" 2>/dev/null || true; done
-  cp "$ICON_BAK/ic_launcher_background.xml" "$BG_XML" 2>/dev/null || true
-  rm -rf "$ICON_BAK"
   echo "restoring member www/ + project…"
   bash scripts/sync-web.sh >/dev/null 2>&1 || true
 }
@@ -52,20 +45,6 @@ sed -i -e '/babel\.min\.js/d' -e 's#<script type="text/babel" src="\([^"]*\)\.js
 # 2. swap to the Steward app identity (separate install from the member app)
 sed -i 's/applicationId "com.trinityone.app"/applicationId "com.trinityone.steward"/' "$GRADLE"
 sed -i 's#<string name="app_name">TrinityOne</string>#<string name="app_name">TrinityOne Steward</string>#' "$STRINGS"
-
-# 2b. swap to the steward icon — SAME Halo, colours swapped (cream bg + clay ring). Back up the member
-# icons first (android/ is gitignored, so disk-only) and restore them on exit. Generate the steward
-# icon set once with: node scripts/make-steward-icon.mjs  (committed under assets/steward-icons/).
-if [ -d assets/steward-icons ]; then
-  echo "swapping in the steward icon…"
-  for d in $DENS; do
-    mkdir -p "$ICON_BAK/mipmap-$d"
-    cp "$RES/mipmap-$d/"ic_launcher*.png "$ICON_BAK/mipmap-$d/" 2>/dev/null || true
-    cp assets/steward-icons/mipmap-$d/*.png "$RES/mipmap-$d/"
-  done
-  cp "$BG_XML" "$ICON_BAK/ic_launcher_background.xml" 2>/dev/null || true
-  sed -i 's/#C25A38/#F4EAD9/' "$BG_XML"   # adaptive-icon background: clay -> cream (swapped)
-fi
 
 # 3. copy webDir into the native project + build
 npx cap copy android
