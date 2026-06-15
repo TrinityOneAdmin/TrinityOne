@@ -53,4 +53,12 @@ async function build(theme, outBase) {
 
 await build(MEMBER, join(ROOT, 'android', 'app', 'src', 'main', 'res'));
 await build(STEWARD, join(ROOT, 'assets', 'steward-icons'));
-console.log('done — member (clay) into android res, steward (midnight) into assets/steward-icons');
+
+// Android 12+ cold-start splash (Theme.SplashScreen → windowSplashScreenAnimatedIcon). The drawable is
+// a 1152×1152 canvas and the OS centres + circle-masks it, so the Halo MUST be centred here (an
+// off-centre mark reads as a lopsided "frame" on first launch). Dark ink Halo + gold spark on
+// transparent; the platform paints @color/splash_bg (#F4EEE2 cream) behind it.
+const SPLASH = { halo: '#2C2316', spark: '#C8962E', sparkR: 6.5, keeper: null };
+await png(svg(1152, halo(SPLASH, 1152, 0.46)), join(ROOT, 'android', 'app', 'src', 'main', 'res', 'drawable', 'splash_icon.png'));
+
+console.log('done — member (clay) into android res, steward (midnight) into assets/steward-icons, centred splash_icon');
