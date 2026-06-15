@@ -404,7 +404,7 @@ function StewDashboard({ initial = 'overview' }) {
   // tab content + topbar actions, shared by both layouts
   const content = (
     <React.Fragment>
-      {tab === 'overview' && <DashOverview onTab={setTab} />}
+      {tab === 'overview' && <DashOverview onTab={setTab} onNewPost={() => setPosting(true)} />}
       {tab === 'giving' && <DashGiving />}
       {tab === 'groups' && <DashGroups />}
       {tab === 'rota' && <DashRota onNewTeam={() => setAddingTeam(true)} />}
@@ -630,13 +630,16 @@ function NewPostModal({ onClose }) {
   );
 }
 
-function StatCard({ label, value, sub, ic, tint }) {
+function StatCard({ label, value, sub, ic, tint, onClick }) {
   const t = SK_TINT[tint];
   return (
-    <div style={{ flex: 1, padding: 18, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+    <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, padding: 18, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
+      onMouseEnter={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow)'; } : undefined}
+      onMouseLeave={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; } : undefined}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <div style={{ width: 30, height: 30, borderRadius: 9, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={17} color="currentColor" /></div>
         <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>{label}</span>
+        {onClick ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
       </div>
       <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: 12 }}>{value}</div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{sub}</div>
@@ -690,7 +693,7 @@ function useStewNarrow(bp = 760) {
   return n;
 }
 
-function DashOverview({ onTab }) {
+function DashOverview({ onTab, onNewPost }) {
   const groups = window.useStewardGroups();   // real chat groups (the focus)
   const members = window.useStewardMembers(); // real members (joined and/or active)
   const relays = window.useStewardRelays();   // real relay status
@@ -704,10 +707,10 @@ function DashOverview({ onTab }) {
 
   const stat = (
     <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr 1fr' : 'repeat(4, 1fr)', gap: narrow ? 10 : 14 }}>
-      <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'invite more' : 'invite your church'} ic="pray" tint="sage" />
-      <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" />
-      <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" />
-      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="self-hosted" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} />
+      <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'invite more' : 'invite your church'} ic="pray" tint="sage" onClick={() => onTab('members')} />
+      <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" onClick={() => onTab('groups')} />
+      <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
+      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="self-hosted" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} onClick={() => onTab('settings')} />
     </div>
   );
   const groupsPanel = (
