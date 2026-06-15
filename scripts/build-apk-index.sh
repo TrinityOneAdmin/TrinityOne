@@ -11,6 +11,9 @@ OUT="apks.html"
 # (filename + size + date), so new branches appear automatically — add a line to taste.
 meta() {
   case "$1" in
+    trinityone-test-bundle)     echo "Test bundle (4 branches)|claude/test-bundle|Notifications + settings + currency, security hardening (ecash-at-rest), name-clash disambiguation, and the CCEL Christian library (books download on demand). The main build to test.";;
+    trinityone-steward-app)     echo "Steward console|claude/steward-app|The Steward app — create & manage a church on a phone. Separate app ID (com.trinityone.steward), installs alongside a member build.";;
+    trinityone-steward-handoff) echo "Steward + handoff|claude/steward-handoff|Steward console with multiple-stewards & handoff. Separate app ID, installs alongside a member build.";;
     trinityone-search)   echo "Search + BSB|claude/catalogue-search|Catalogue search from the Search screen (1,000+ translations). No Bibles embedded — BSB auto-downloads on first launch.";;
     trinityone-giving)   echo "Giving wallet|claude/giving|In-app self-custodial Cashu wallet — top up, hold a small balance, give in one tap. Bundles Bibles the old way.";;
     trinityone-debug)    echo "Main (latest release)|main|The current released build.";;
@@ -72,7 +75,7 @@ cat <<'HEAD'
     <div class="mark">T1</div>
     <div><h1>TrinityOne · Builds</h1><div class="sub">Branch APKs — tap to download &amp; install</div></div>
   </header>
-  <div class="note"><b>Same app ID</b> — installing one build replaces any other. Allow “install unknown apps” for your browser the first time. Newest build is at the top.</div>
+  <div class="note">The <b>member</b> builds share one app ID, so installing one replaces another (test them one at a time). The <b>Steward</b> builds use a separate app ID and install alongside a member build. Allow “install unknown apps” for your browser the first time.</div>
 HEAD
 
 for f in "${APKS[@]}"; do
