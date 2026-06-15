@@ -56,6 +56,14 @@ function HelpIllo({ name, size = 120, tone = 'var(--clay)', soft = 'var(--clay-s
       <rect x="40" y="66" width="14" height="14" rx="3" {...s} strokeWidth="3.4" />
       <path d="M66 66h6v6m8 0v.04M72 80h.04M80 80v-6" {...s} strokeWidth="3.4" />
     </>,
+    // bell with a gentle alert dot (notifications)
+    bell: <>
+      <circle cx="60" cy="54" r="30" {...fillSoft} />
+      <path d="M44 68c-3 0-4-3-2-5 3-3 5-6 5-12a13 13 0 0 1 26 0c0 6 2 9 5 12 2 2 1 5-2 5Z" {...s} />
+      <path d="M54 74a6 6 0 0 0 12 0" {...s} strokeWidth="3.4" />
+      <path d="M60 33v-5" {...s} strokeWidth="3.4" />
+      <circle cx="80" cy="40" r="6" fill={tone} stroke="none" />
+    </>,
     // safe / lockbox (backup hero variant)
     safe: <>
       <rect x="24" y="30" width="62" height="56" rx="8" {...fillSoft} />

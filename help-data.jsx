@@ -58,6 +58,28 @@ window.HelpData = {
       ],
     },
     {
+      id: 'notifications',
+      illo: 'bell',
+      title: 'Notifications — staying in the loop',
+      summary: 'Get a gentle nudge when something needs you — and choose exactly what.',
+      minutes: 2,
+      blocks: [
+        { type: 'p', text: 'TrinityOne can let you know when there’s something for you — a message, a church announcement, or a request to serve — even when the app is closed. You’re always in control of what comes through.' },
+        { type: 'steps', label: 'Turn them on or off', items: [
+          'Tap your circle at the top → Settings → Notifications.',
+          'Turn “Allow notifications” on (your phone may ask permission — tap Allow).',
+          'Switch on only the things you’d like to hear about.',
+        ] },
+        { type: 'list', items: [
+          { lead: 'Direct messages', text: 'When someone messages you directly. The alert never shows the message itself — just that one arrived.' },
+          { lead: 'Church announcements', text: 'When your church posts in its announcements channel.' },
+          { lead: 'Serving requests', text: 'When your church asks if you can serve.' },
+          { lead: 'Serving reminders', text: 'A gentle reminder the evening before you’re due to serve.' },
+        ] },
+        { type: 'note', text: 'Changed your mind? Come back any time and switch things off. If your phone has blocked notifications, the app will show you a short note on how to turn them back on.' },
+      ],
+    },
+    {
       id: 'restore',
       illo: 'phone',
       title: 'Getting a new phone',
@@ -97,7 +119,7 @@ window.HelpData = {
       blocks: [
         { type: 'p', text: 'TrinityOne has a small wallet built in, just for giving to your church. Think of it like the change purse you’d drop in the collection — keep a little in it, and give whenever you like.' },
         { type: 'list', items: [
-          { lead: 'What’s in it?', text: 'A small amount of digital money (its little units are called “sats”). The app always shows the pounds value too — so you just give “£5” and it handles the rest. You don’t need to learn anything new.' },
+          { lead: 'What’s in it?', text: 'A small amount of digital money (its little units are called “sats”). The app always shows the cash value too — so you just pick an amount like “$5” and it handles the rest. You don’t need to learn anything new.' },
           { lead: 'It’s yours, held on your phone.', text: 'Not the church, not us — you hold it, protected by your same 12 words. Nobody can freeze it or take it.' },
           { lead: 'Keep only a little in it.', text: 'Like cash in a purse, not your savings.' },
         ] },

@@ -302,6 +302,10 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
             ? 'Serving reminders show on this device even when the app is closed. Message and announcement alerts arrive when the app is open.'
             : 'Notifications arrive even when TrinityOne is closed, as long as your device allows them. Direct messages never include the message text.'}
         </p>
+        <button onClick={() => ctx.openHelp && ctx.openHelp('notifications')} style={{ marginTop: 16, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          padding: '12px 0', borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, boxShadow: 'var(--shadow)' }}>
+          <Icon name="book" size={16} color="var(--ink-2)" /> How notifications work
+        </button>
       </div>
     </Overlay>
   );
