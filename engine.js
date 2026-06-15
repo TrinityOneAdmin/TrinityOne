@@ -348,6 +348,19 @@ window.sanitizeHtml = function (html) {
     return loadModuleBytes(u8, url.split("/").pop(), meta);
   }
 
+  // generic cached asset fetch -> raw bytes (same IndexedDB cache + ASSET_BASE host as Bible modules).
+  // Used by the on-demand Book library: native pulls from the gateway, then it reads offline from cache.
+  async function loadAsset(url){
+    const cached = await cacheGet(url);
+    if(cached) return cached;
+    const res = await fetch(resolveAsset(url));
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const u8 = new Uint8Array(await res.arrayBuffer());
+    await cachePut(url, u8);
+    return u8;
+  }
+  function assetCached(url){ return cacheGet(url).then(b => !!b).catch(() => false); }
+
   // bundled default Bible — auto-installed on first run so the app lands reading, not on an
   // empty "browse modules" wall. Removable/switchable like any other module afterwards.
   // Berean Standard Bible: a clear, accurate, modern, public-domain text — the warmest default
@@ -552,7 +565,7 @@ window.sanitizeHtml = function (html) {
   window.Bible = {
     BOOK_NAMES, bookName, bookAbbr, bookGroup, bookNum, parseRef,
     parseVerse, lex,
-    loadModuleBytes, fetchAndCacheModule, pickFile,
+    loadModuleBytes, fetchAndCacheModule, loadAsset, assetCached, pickFile,
     cacheKeys, getCatalog, getMirror, getVideos, installModule, removeModule, isInstalled, isInstalling,
     installedMap: getInstalled,
     subscribe(fn){ subs.add(fn); return () => subs.delete(fn); },
