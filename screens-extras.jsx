@@ -311,6 +311,47 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
   );
 }
 
+// ── Currency: pick the currency giving amounts are shown in (sats stay the real unit) ──
+function CurrencyScreen({ open, onClose, ctx }) {
+  const LN = window.TrinityLN;
+  const [code, setCode] = useX(() => (LN ? LN.curCode() : 'USD'));
+  React.useEffect(() => { if (open && LN) setCode(LN.curCode()); }, [open]);
+  const currencies = (LN && LN.currencies && LN.currencies()) || [];
+  const pick = (c) => { if (LN) LN.setCurrency(c); setCode(c); ctx.toast('Showing amounts in ' + c); };
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
+          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
+            <Icon name="chevL" size={20} /></button>
+          <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Currency</h1>
+        </div>
+      </div>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>
+          Choose the currency you’d like to see giving amounts in. Your money is always held as Bitcoin (in “sats”) — this just changes the friendly label shown next to it.
+        </p>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)' }}>
+          {currencies.map((c, i) => {
+            const on = c.code === code;
+            return (
+              <button key={c.code} onClick={() => pick(c.code)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', border: 'none', borderTop: i ? '1px solid var(--line-2)' : 'none', background: on ? 'var(--clay-soft)' : 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', color: 'var(--ink)' }}>
+                <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? 'color-mix(in oklab, var(--clay) 16%, var(--surface))' : 'var(--surface-2)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16 }}>{c.symbol}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>{c.label}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 1 }}>{c.code}</div>
+                </div>
+                {on ? <Icon name="check" size={18} stroke={3} color="var(--clay)" /> : null}
+              </button>
+            );
+          })}
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, margin: '14px 6px 0' }}>Conversion rates are approximate and for display only.</p>
+      </div>
+    </Overlay>
+  );
+}
+
 // ── Search as a page (note 3 — moved off the tab bar) ──
 function SearchOverlay({ open, onClose, ctx }) {
   return (
@@ -320,4 +361,4 @@ function SearchOverlay({ open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { NotificationsScreen, NotifSettingsScreen, ListenScreen, SearchOverlay });
+Object.assign(window, { NotificationsScreen, NotifSettingsScreen, CurrencyScreen, ListenScreen, SearchOverlay });

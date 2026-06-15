@@ -64,10 +64,42 @@
     catch { return ''; }
   }
 
-  // sat ⇄ usd display helpers (mock spot rate until we wire a live price feed)
+  // ── currency: members display giving amounts in their chosen currency. Sats are the real unit;
+  // fiat is just a friendly label converted at a (mock) spot rate. Stored in localStorage. ──
+  const CUR_LS = 'trinityone.currency';
   const satsPerUsd = () => (window.TrinityData && window.TrinityData.SATS_PER_USD) || 1075;
-  const usdToSats = (usd) => Math.round(usd * satsPerUsd());
-  const satsToUsd = (sats) => sats / satsPerUsd();
+  const list = () => (window.TrinityData && window.TrinityData.CURRENCIES) || [{ code: 'USD', symbol: '$', label: 'US dollar', usd: 1 }];
+  const find = (code) => list().find(c => c.code === code);
+  // sensible default from the device locale (e.g. en-GB → GBP), falling back to USD
+  function defaultCode() {
+    try {
+      const loc = (navigator.language || 'en-US');
+      const map = { GB: 'GBP', IE: 'EUR', DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', CA: 'CAD', AU: 'AUD', NG: 'NGN', ZA: 'ZAR', IN: 'INR' };
+      const region = (loc.split('-')[1] || '').toUpperCase();
+      return (map[region] && find(map[region])) ? map[region] : 'USD';
+    } catch { return 'USD'; }
+  }
+  function curCode() { try { return localStorage.getItem(CUR_LS) || defaultCode(); } catch { return 'USD'; } }
+  function currency() { return find(curCode()) || find('USD') || list()[0]; }
+  const subs = new Set();
+  function setCurrency(code) {
+    if (!find(code)) return;
+    try { localStorage.setItem(CUR_LS, code); } catch {}
+    subs.forEach(fn => { try { fn(code); } catch {} });
+    try { window.dispatchEvent(new CustomEvent('trinityone:currency', { detail: code })); } catch {}
+  }
+  function onCurrencyChange(fn) { subs.add(fn); return () => subs.delete(fn); }
+
+  const satsPerUnit = () => satsPerUsd() * (currency().usd || 1);
+  const symbol = () => currency().symbol;
+  // amount (in the selected currency) → sats, and sats → amount/formatted string
+  const toSats = (amt) => Math.round((Number(amt) || 0) * satsPerUnit());
+  const toFiat = (sats) => (Number(sats) || 0) / satsPerUnit();
+  const fmtAmount = (amt) => symbol() + (Number(amt) || 0).toFixed(2);
+  const fmtFiat = (sats) => fmtAmount(toFiat(sats));
+  // legacy aliases (callers pass amounts in the *selected* currency now, not necessarily USD)
+  const usdToSats = toSats;
+  const satsToUsd = toFiat;
 
   // Where does a gift to this fund go? per-fund address, else the church's, else none.
   function payAddress(fund, ctx) {
@@ -82,5 +114,8 @@
     resolveLnAddress, requestInvoice, invoiceFor,
     walletURI, payViaWebLN, hasWebLN, qrSVG,
     usdToSats, satsToUsd, payAddress,
+    // currency
+    currency, currencies: list, curCode, setCurrency, onCurrencyChange,
+    symbol, toSats, toFiat, fmtAmount, fmtFiat,
   };
 })();
