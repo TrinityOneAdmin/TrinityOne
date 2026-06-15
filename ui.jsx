@@ -3,6 +3,24 @@ const { useState, useEffect, useRef } = React;
 
 function cx(...a) { return a.filter(Boolean).join(' '); }
 
+// Name-clash disambiguation: identity is the pubkey, names are free-text labels, so two members
+// (or churches) can share a name. Build a labeller over a list that appends a discriminator ONLY to
+// the colliding names — a verified @handle if there is one, else a short key tag — so the common
+// case stays clean and duplicates are always tellable apart (also a quiet guard against copycats).
+function makeNameDisambiguator(list, getName, getHandle, getKey) {
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const counts = {};
+  (list || []).forEach((e) => { const n = norm(getName(e)); if (n) counts[n] = (counts[n] || 0) + 1; });
+  const shortKey = (k) => { k = String(k || ''); return k.length > 14 ? k.slice(0, 10) + '…' + k.slice(-4) : k; };
+  return (e) => {
+    const name = getName(e) || '';
+    if (!name || (counts[norm(name)] || 0) < 2) return name;       // unique here → show plain
+    const h = getHandle ? getHandle(e) : '';
+    const disc = h ? '@' + String(h).split('@')[0] : shortKey(getKey ? getKey(e) : '');
+    return disc ? name + ' · ' + disc : name;
+  };
+}
+
 // ── Warm status bar ──
 function StatusBar() {
   return (
@@ -304,4 +322,4 @@ function Toast({ msg }) {
   );
 }
 
-Object.assign(window, { cx, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast });
+Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast });
