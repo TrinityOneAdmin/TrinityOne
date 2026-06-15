@@ -675,9 +675,16 @@ function App() {
   // dot on the Community tab even when you're elsewhere. "Seen" = newest message ts when you last
   // opened Community. Group posts only (DMs are a follow-on). ──
   const [chatUnread, setChatUnread] = useA(false);
+  const [dmUnread, setDmUnread] = useA(false);
   const chatNewestTs = useAR(0);
+  const dmNewestTs = useAR(0);
   const chatSeenKey = activeChurch ? 'trinityone.chatTabSeen.' + activeChurch : null;
-  const markChatSeen = () => { if (chatSeenKey) { try { localStorage.setItem(chatSeenKey, String(chatNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} } setChatUnread(false); };
+  const dmSeenKey = () => { const me = window.Fellowship && window.Fellowship.myPubkey; return me ? 'trinityone.dmSeen.' + me : null; };
+  const markChatSeen = () => {
+    if (chatSeenKey) { try { localStorage.setItem(chatSeenKey, String(chatNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} }
+    const dk = dmSeenKey(); if (dk) { try { localStorage.setItem(dk, String(dmNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} }
+    setChatUnread(false); setDmUnread(false);
+  };
   useAE(() => {
     const F = window.Fellowship;
     const ch = churches.find(c => c.id === activeChurch);
@@ -700,6 +707,27 @@ function App() {
     });
     return () => { try { off && off(); } catch {} try { groupSub && groupSub(); } catch {} };
   }, [activeChurch, idTick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // ── DM unread dot: incoming direct messages also light the Community tab. "Seen" = newest incoming
+  // DM ts when you last opened Community (keyed by my pubkey, since DMs aren't church-scoped). ──
+  useAE(() => {
+    const F = window.Fellowship;
+    dmNewestTs.current = 0; setDmUnread(false);
+    if (!F || !F.subscribeDMs) return;
+    const getSeen = () => { const dk = dmSeenKey(); if (!dk) return 0; try { return Number(localStorage.getItem(dk) || 0); } catch { return 0; } };
+    const off = F.subscribeDMs((convos) => {
+      // newest INCOMING message across all conversations (skip ones where I sent last → "You: ")
+      let newest = 0;
+      for (const c of (convos || [])) {
+        if (c && c.lastTs > newest && !(c.preview || '').startsWith('You: ')) newest = c.lastTs;
+      }
+      if (newest > dmNewestTs.current) {
+        dmNewestTs.current = newest;
+        if (tabRef.current === 'chat') markChatSeen();           // already looking → keep it clear
+        else if (newest > getSeen()) setDmUnread(true);          // new since last visit → dot
+      }
+    });
+    return () => { try { off && off(); } catch {} };
+  }, [idTick]);   // eslint-disable-line react-hooks/exhaustive-deps
   // opening Community clears the dot + records what we've now seen
   useAE(() => { if (tab === 'chat') markChatSeen(); }, [tab]);   // eslint-disable-line react-hooks/exhaustive-deps
   useAE(() => {
@@ -938,7 +966,7 @@ function App() {
           <React.Fragment>
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
-                <DesktopNav active={tab} onChange={setTab} unread={{ chat: chatUnread }} />
+                <DesktopNav active={tab} onChange={setTab} unread={{ chat: chatUnread || dmUnread }} />
                 {tab === 'chat' && ctx.church && ctx.church.npub ? (
                   <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
@@ -977,7 +1005,7 @@ function App() {
               <React.Fragment>
                 <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>
                 <MiniPlayer ctx={ctx} />
-                <TabBar active={tab} onChange={setTab} unread={{ chat: chatUnread }} />
+                <TabBar active={tab} onChange={setTab} unread={{ chat: chatUnread || dmUnread }} />
               </React.Fragment>
             )}
 
