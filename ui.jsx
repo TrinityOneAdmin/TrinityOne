@@ -67,7 +67,7 @@ const TABS = [
   { id: 'chat', label: 'Community', icon: 'chat' },
   { id: 'library', label: 'Library', icon: 'library' },
 ];
-function TabBar({ active, onChange }) {
+function TabBar({ active, onChange, unread = {} }) {
   return (
     <div style={{
       position: 'absolute', left: 12, right: 12, bottom: 'max(12px, env(safe-area-inset-bottom))', zIndex: 25,
@@ -86,8 +86,9 @@ function TabBar({ active, onChange }) {
             padding: '6px 4px', flex: 1, color: on ? 'var(--clay)' : 'var(--ink-3)',
             transition: 'color .2s', position: 'relative',
           }}>
-            <div style={{ transform: on ? 'translateY(-1px)' : 'none', transition: 'transform .25s cubic-bezier(.34,1.56,.64,1)' }}>
+            <div style={{ position: 'relative', transform: on ? 'translateY(-1px)' : 'none', transition: 'transform .25s cubic-bezier(.34,1.56,.64,1)' }}>
               <Icon name={t.icon} size={23} stroke={on ? 2.1 : 1.8} />
+              {unread[t.id] && !on ? <span style={{ position: 'absolute', top: -2, right: -5, width: 9, height: 9, borderRadius: 999, background: 'var(--clay)', border: '2px solid var(--surface)' }} /> : null}
             </div>
             <span style={{ fontSize: 10.5, fontWeight: on ? 700 : 500, letterSpacing: '.1px' }}>{t.label}</span>
           </button>
@@ -98,7 +99,7 @@ function TabBar({ active, onChange }) {
 }
 
 // ── Desktop left sidebar nav (replaces the floating TabBar on a wide screen) ──
-function DesktopNav({ active, onChange }) {
+function DesktopNav({ active, onChange, unread = {} }) {
   return (
     <div style={{
       width: 240, flexShrink: 0, height: '100%', boxSizing: 'border-box',
@@ -120,6 +121,7 @@ function DesktopNav({ active, onChange }) {
               color: on ? 'var(--clay)' : 'var(--ink-2)', transition: 'background .15s, color .15s', textAlign: 'left',
             }}>
               <Icon name={t.icon} size={21} stroke={on ? 2.1 : 1.8} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {t.label}
+              {unread[t.id] && !on ? <span style={{ marginLeft: 'auto', width: 8, height: 8, borderRadius: 999, background: 'var(--clay)' }} /> : null}
             </button>
           );
         })}

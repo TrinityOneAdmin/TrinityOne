@@ -670,6 +670,38 @@ function App() {
   // Uses history + popstate (no native plugin) — on Android the webview's default back fires popstate
   // when there's a history entry; we keep a "guard" entry so back has something to pop and stays in-app.
   const tabRef = useAR(); tabRef.current = tab;
+
+  // ── Community unread dot: an app-level watcher (runs on any tab) so a new church message lights a
+  // dot on the Community tab even when you're elsewhere. "Seen" = newest message ts when you last
+  // opened Community. Group posts only (DMs are a follow-on). ──
+  const [chatUnread, setChatUnread] = useA(false);
+  const chatNewestTs = useAR(0);
+  const chatSeenKey = activeChurch ? 'trinityone.chatTabSeen.' + activeChurch : null;
+  const markChatSeen = () => { if (chatSeenKey) { try { localStorage.setItem(chatSeenKey, String(chatNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} } setChatUnread(false); };
+  useAE(() => {
+    const F = window.Fellowship;
+    const ch = churches.find(c => c.id === activeChurch);
+    chatNewestTs.current = 0; setChatUnread(false);
+    if (!F || !ch || !ch.npub || !F.subscribeChurchGroups || !F.subscribeGroups) return;
+    let getSeen = () => { try { return Number(localStorage.getItem('trinityone.chatTabSeen.' + ch.npub) || 0); } catch { return 0; } };
+    let groupSub = null;
+    const off = F.subscribeChurchGroups(ch.npub, (groups) => {
+      const ids = (groups || []).map(g => g.id).filter(Boolean);
+      try { groupSub && groupSub(); } catch {}
+      if (!ids.length) return;
+      groupSub = F.subscribeGroups(ids, (gid, e) => {
+        if (!e || e.pubkey === F.myPubkey) return;                 // ignore my own posts
+        if (e.created_at > chatNewestTs.current) {
+          chatNewestTs.current = e.created_at;
+          if (tabRef.current === 'chat') markChatSeen();           // already looking → keep it clear
+          else if (e.created_at > getSeen()) setChatUnread(true);  // new since last visit → dot
+        }
+      });
+    });
+    return () => { try { off && off(); } catch {} try { groupSub && groupSub(); } catch {} };
+  }, [activeChurch, idTick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // opening Community clears the dot + records what we've now seen
+  useAE(() => { if (tab === 'chat') markChatSeen(); }, [tab]);   // eslint-disable-line react-hooks/exhaustive-deps
   useAE(() => {
     const guard = () => { try { history.pushState({ trinity: 1 }, ''); } catch (e) {} };
     guard();   // seed one entry so the first back press is intercepted, not an app exit
@@ -906,7 +938,7 @@ function App() {
           <React.Fragment>
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
-                <DesktopNav active={tab} onChange={setTab} />
+                <DesktopNav active={tab} onChange={setTab} unread={{ chat: chatUnread }} />
                 {tab === 'chat' && ctx.church && ctx.church.npub ? (
                   <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
@@ -945,7 +977,7 @@ function App() {
               <React.Fragment>
                 <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>
                 <MiniPlayer ctx={ctx} />
-                <TabBar active={tab} onChange={setTab} />
+                <TabBar active={tab} onChange={setTab} unread={{ chat: chatUnread }} />
               </React.Fragment>
             )}
 
