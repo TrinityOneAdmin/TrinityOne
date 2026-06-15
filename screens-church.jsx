@@ -165,6 +165,8 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
   const [mode, setMode] = useCh('list'); // 'list' | 'follow'
   const [confirmLeave, setConfirmLeave] = useCh(null);   // church id awaiting leave confirmation
   useChE(() => { if (open) setMode(initialMode === 'follow' || new URLSearchParams(location.search).get('church') === 'follow' ? 'follow' : 'list'); }, [open]);
+  // two churches can share a name — disambiguate clashes with the verified @handle, else a short key
+  const churchLabel = window.makeNameDisambiguator(churches || [], c => c.name || '', c => c.nip05, c => c.npub || c.id);
 
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="86%" z={60}>
@@ -190,7 +192,7 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
                     <ChurchBadge church={c} size={50} radius={15} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5 }}>{c.name}</span>
+                        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5 }}>{churchLabel(c)}</span>
                         {c.kind === 'network' ? <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 7px' }}>NETWORK</span> : null}
                         {c.verified ? <Icon name="check" size={14} stroke={3} color="var(--sage)" /> : null}
                       </div>

@@ -1127,6 +1127,8 @@ function PeopleScreen({ open, onClose, ctx }) {
   const nameOf = (m) => (m.name && m.name.trim()) || (m.nip05 ? String(m.nip05).split('@')[0] : '') || FS.displayFor(m.pubkey).handle;
   const ql = q.trim().toLowerCase();
   const people = members.filter(m => m.pubkey !== me);
+  // name-clash count: a name shared by 2+ people needs a discriminator so they're tellable apart
+  const nameCounts = {}; people.forEach(m => { const n = nameOf(m).trim().toLowerCase(); if (n) nameCounts[n] = (nameCounts[n] || 0) + 1; });
   const list = people.filter(m => !ql || nameOf(m).toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql));
   return (
     <Overlay open={open} onClose={onClose}>
@@ -1171,12 +1173,16 @@ function PeopleScreen({ open, onClose, ctx }) {
           const name = nameOf(m);
           const local = m.nip05 ? String(m.nip05).split('@')[0] : '';
           const dup = local && name.toLowerCase().replace(/[^a-z0-9]+/g, '') === local.toLowerCase();   // name already is the handle
+          // same name as someone else here, and no verified @handle to tell them apart → show a short key tag
+          const clashNoHandle = !local && (nameCounts[name.trim().toLowerCase()] || 0) > 1;
+          const keyTag = m.npub ? (m.npub.slice(0, 9) + '…' + m.npub.slice(-4)) : '';
           return (
             <div key={m.pubkey} onClick={() => { onClose(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 6px', borderBottom: '1px solid var(--line-2)', cursor: 'pointer' }}>
               <UserAvatar av={avOf(d)} name={name} size={44} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
-                {local && !dup ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--ink-3)' }}>@{local}<Icon name="check" size={11} stroke={3} color="var(--sage)" /></div> : null}
+                {local && !dup ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--ink-3)' }}>@{local}<Icon name="check" size={11} stroke={3} color="var(--sage)" /></div>
+                  : clashNoHandle && keyTag ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontFamily: 'var(--mono, monospace)', color: 'var(--ink-3)' }} title="Shares a name with someone else — this is their unique key">· {keyTag}</div> : null}
               </div>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', borderRadius: 999, padding: '7px 12px', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}><Icon name="chat" size={14} color="currentColor" /> Message</span>
             </div>
