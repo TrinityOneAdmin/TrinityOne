@@ -420,7 +420,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'rota'
         ? <button onClick={() => setAddingTeam(true)} className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {narrow ? '' : 'New team'}</button>
         : <button onClick={() => setPosting(true)} className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> {narrow ? '' : 'New post'}</button>}
-      <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials="PJ" size={narrow ? 32 : 36} radius={11} accent="var(--sage)" /></button>
+      <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials={initials} size={narrow ? 32 : 36} radius={11} accent="var(--sage)" /></button>
     </React.Fragment>
   );
 
@@ -927,16 +927,20 @@ function EditGroupMembersModal({ group, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const [sel, setSel] = React.useState(() => new Set(Array.isArray(group.members) ? group.members : []));
   const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const known = new Set(members.map(m => m.pubkey));
   const orphans = [...sel].filter(pk => !known.has(pk));   // in the group but not in the current roster
   const save = () => {
-    setBusy(true);
+    setBusy(true); setErr('');
     const newM = [...sel];
     const removed = (group.members || []).some(pk => !sel.has(pk));   // someone dropped → rotate the key
+    // don't hang forever if the relay never ACKs — surface it so it's not a dead button
+    const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
     Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: newM }))
       .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
-      .then(() => onClose()).catch(() => setBusy(false));
+      .then(() => { clearTimeout(guard); onClose(); })
+      .catch((e) => { clearTimeout(guard); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
   };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
   return (
@@ -957,9 +961,10 @@ function EditGroupMembersModal({ group, onClose }) {
           ); })}
           {orphans.length ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>{orphans.length} other member{orphans.length === 1 ? '' : 's'} in this group aren’t on the current roster (left/quiet) — they stay unless you’ve unticked them above.</div> : null}
         </div>
+        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, padding: '8px 24px 0', lineHeight: 1.45 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '16px 24px 20px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}>Cancel</button>
-          <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}><Icon name="check" size={16} color="#fff" /> Save members</button>
+          <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}><Icon name="check" size={16} color="#fff" /> {busy ? 'Saving…' : 'Save members'}</button>
         </div>
       </div>
     </div>
