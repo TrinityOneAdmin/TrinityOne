@@ -1,7 +1,7 @@
 // Generate the TrinityOne launcher icons from the Claude Design spec ("TrinityOne App Icons.html").
-// Two apps, one Halo:
+// Two apps, one Halo — the SAME mark, set apart only by the tile + spark (no extra rings):
 //   member  — warm clay gradient, white Halo, gold-soft spark
-//   steward — midnight gradient, paper Halo, gold spark guarded by a gold-soft "keeper" ring
+//   steward — midnight gradient, paper Halo, brighter gold spark (identical geometry to member)
 // Emits full adaptive sets (foreground + gradient background + legacy square/round) per density:
 //   member  -> android/app/src/main/res/mipmap-*/         (the default build)
 //   steward -> assets/steward-icons/mipmap-*/             (build-steward-apk.sh swaps these in)
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const MEMBER = { grad: ['#CB6442', '#C25A38', '#9C4327'], mid: 0.42, halo: '#FFFFFF', spark: '#E0B860', sparkR: 6.5, keeper: null };
-const STEWARD = { grad: ['#2C2316', '#241C12', '#17120B'], mid: 0.46, halo: '#F4EEE2', spark: '#C8962E', sparkR: 6, keeper: '#E0B860' };
+const STEWARD = { grad: ['#2C2316', '#241C12', '#17120B'], mid: 0.46, halo: '#F4EEE2', spark: '#C8962E', sparkR: 6.5, keeper: null };
 
 // the Halo mark in its own 100x100 space, scaled+centred into an icon of side `size`
 function halo(t, size, frac) {
