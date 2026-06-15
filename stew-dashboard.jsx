@@ -804,6 +804,7 @@ function DashGiving() {
 }
 
 function ListPanel({ title, items, addLabel, renderRight, onAdd, empty, reorderable, onReorder }) {
+  const narrow = useStewNarrow();                    // phone width → stack the row so actions don't overflow
   const [order, setOrder] = React.useState(null);   // working copy while dragging
   const [dragId, setDragId] = React.useState(null);
   const [overId, setOverId] = React.useState(null);
@@ -831,11 +832,13 @@ function ListPanel({ title, items, addLabel, renderRight, onAdd, empty, reordera
           <div key={id} draggable={!!reorderable}
             onDragStart={reorderable ? (e) => { setDragId(id); try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(id)); } catch (err) {} } : undefined}
             onDragOver={reorderable ? (e) => onDragOver(e, id) : undefined} onDrop={reorderable ? onDrop : undefined} onDragEnd={reorderable ? () => { setDragId(null); setOverId(null); setOrder(null); } : undefined}
-            style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid ' + (overId === id && !dragging ? 'var(--clay)' : 'var(--line)'), opacity: dragging ? 0.4 : 1, boxShadow: dragging ? 'var(--shadow-lg)' : 'none', transition: 'border-color .12s, opacity .12s' }}>
-            {reorderable ? <div title="Drag to reorder" style={{ cursor: 'grab', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, touchAction: 'none' }}><Icon name="dots" size={18} color="currentColor" /></div> : null}
-            <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)' }}><Icon name={it.ic} size={19} color="currentColor" /></div>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{it.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{it.sub}</div></div>
-            {renderRight(it)}
+            style={{ display: 'flex', flexDirection: narrow ? 'column' : 'row', alignItems: narrow ? 'stretch' : 'center', gap: narrow ? 11 : 13, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid ' + (overId === id && !dragging ? 'var(--clay)' : 'var(--line)'), opacity: dragging ? 0.4 : 1, boxShadow: dragging ? 'var(--shadow-lg)' : 'none', transition: 'border-color .12s, opacity .12s' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0, flex: narrow ? 'none' : 1 }}>
+              {reorderable ? <div title="Drag to reorder" style={{ cursor: 'grab', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, touchAction: 'none' }}><Icon name="dots" size={18} color="currentColor" /></div> : null}
+              <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)', flexShrink: 0 }}><Icon name={it.ic} size={19} color="currentColor" /></div>
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sub}</div> : null}</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0, justifyContent: narrow ? 'flex-start' : 'flex-end', paddingLeft: narrow ? 51 : 0 }}>{renderRight(it)}</div>
           </div>
           );
         })}
@@ -1072,7 +1075,7 @@ function DashGroups() {
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...g, order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         renderRight={(it) => (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <React.Fragment>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
@@ -1080,7 +1083,7 @@ function DashGroups() {
             <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
             <button onClick={() => setChatGroup(it)} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
             <button onClick={() => setPendingDelete(it)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
-          </div>
+          </React.Fragment>
         )} />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
       {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}
@@ -2326,7 +2329,16 @@ function DashBrandingPanel({ church }) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => window.Steward.publishProfile({ accent: v }), 400);
   };
-  const resetAccent = () => { if (saveTimer.current) clearTimeout(saveTimer.current); setAccentState(''); window.Steward.publishProfile({ accent: '' }); };
+  const resetAccent = () => { if (saveTimer.current) clearTimeout(saveTimer.current); setAccentState(''); setHexDraft(''); window.Steward.publishProfile({ accent: '' }); };
+  // typed hex code — free text while typing, publishes only once it's a valid #RGB / #RRGGBB
+  const [hexDraft, setHexDraft] = React.useState((church.accent || '').toUpperCase());
+  React.useEffect(() => { setHexDraft(accent ? accent.toUpperCase() : ''); }, [accent]);
+  const onHex = (v) => {
+    let s = v.trim(); if (s && s[0] !== '#') s = '#' + s;
+    setHexDraft(s.toUpperCase());
+    if (/^#[0-9a-fA-F]{3}$/.test(s)) onAccent('#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3]);
+    else if (/^#[0-9a-fA-F]{6}$/.test(s)) onAccent(s);
+  };
   const acc = accent || '#C25A38';
   const swatches = ['#C25A38', '#3B6FB0', '#5E8C6A', '#7A4FA3', '#B0853B', '#1F2A37'];
   const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
@@ -2364,7 +2376,8 @@ function DashBrandingPanel({ church }) {
           <input type="color" value={acc} onChange={e => onAccent(e.target.value)} style={{ position: 'absolute', inset: -4, width: '140%', height: '140%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
         </label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 4 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink-2)' }}>{accent ? acc.toUpperCase() : 'Default'}</span>
+          <input value={hexDraft} onChange={e => onHex(e.target.value)} spellCheck={false} autoCapitalize="characters" maxLength={7} placeholder="#C25A38"
+            style={{ width: 94, fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 9, padding: '6px 9px', outline: 'none' }} />
           {accent ? <button onClick={resetAccent} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : null}
         </div>
       </div>
