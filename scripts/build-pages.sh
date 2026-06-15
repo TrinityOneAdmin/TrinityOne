@@ -64,7 +64,7 @@ HDR
 # the Steward APK (≈14 MB, under Cloudflare's 25 MiB/file cap) ships with the site so the marketing
 # "Start a church" CTA can hand Android visitors the app. It's a build artifact (gitignored), so copy
 # it in after the git-archive. The member APK is too big for Pages and stays on the gateway.
-[ -f trinityone-steward-all.apk ] && cp trinityone-steward-all.apk "$OUT/trinityone-steward.apk"
+[ -f trinityone-steward.apk ] && cp trinityone-steward.apk "$OUT/trinityone-steward.apk"
 
 # safety: never ship secrets, and nothing over Cloudflare's 25 MiB/file cap
 if find "$OUT" \( -name 'admin.json' -o -name 'vapid.json' -o -name 'church.json' -o -name 'push-subs.json' -o -name 'relay-db.json' \) | grep -q .; then
