@@ -8215,13 +8215,24 @@ ${e21}}` : `{${i2.join(",")}}`;
   }
   function saveLocal() {
     try {
-      localStorage.setItem(lsKey(), JSON.stringify({ mint: mintUrl, proofs }));
+      const plain = JSON.stringify({ mint: mintUrl, proofs });
+      const F2 = window.Fellowship;
+      const ct2 = F2 && F2.encryptSelf ? F2.encryptSelf(plain) : null;
+      localStorage.setItem(lsKey(), ct2 ? JSON.stringify({ v: 2, enc: ct2 }) : plain);
     } catch {
     }
   }
   function loadLocal() {
     try {
-      const d = JSON.parse(localStorage.getItem(lsKey()) || "null");
+      const raw = localStorage.getItem(lsKey());
+      if (!raw) return;
+      let d = JSON.parse(raw);
+      if (d && d.enc) {
+        const F2 = window.Fellowship;
+        const pt = F2 && F2.decryptSelf ? F2.decryptSelf(d.enc) : null;
+        if (!pt) return;
+        d = JSON.parse(pt);
+      }
       if (d && Array.isArray(d.proofs)) {
         proofs = d.proofs;
         if (d.mint) mintUrl = d.mint;
@@ -8308,6 +8319,10 @@ ${e21}}` : `{${i2.join(",")}}`;
       if (initP) return initP;
       initP = (async () => {
         owner = npub();
+        try {
+          if (window.Fellowship && window.Fellowship.ready) await window.Fellowship.ready;
+        } catch {
+        }
         loadLocal();
         if (!proofs.length) await restoreFromRelay();
         emit();

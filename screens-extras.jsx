@@ -228,6 +228,130 @@ function ListenScreen({ open, onClose, ctx }) {
 
 const transBtn = { width: 44, height: 44, borderRadius: 999, border: 'none', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };
 
+// ── Notification settings: which alerts the member wants (DMs, announcements, serving, reminders) ──
+function NotifToggleRow({ icon, accent, label, sub, on, disabled, onFlip }) {
+  return (
+    <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left', opacity: disabled ? .45 : 1 }}>
+      <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `color-mix(in oklab, ${accent || 'var(--ink-2)'} 14%, var(--surface-2))`, color: accent || 'var(--ink-2)' }}>
+        <Icon name={icon} size={19} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
+        {sub ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 1, lineHeight: 1.4 }}>{sub}</div> : null}
+      </div>
+      <button onClick={() => !disabled && onFlip()} role="switch" aria-checked={on} disabled={disabled} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: disabled ? 'default' : 'pointer', padding: 3, background: on ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+        <div style={{ width: 22, height: 22, borderRadius: 999, background: '#fff', boxShadow: 'var(--shadow)', transform: on ? 'translateX(18px)' : 'translateX(0)', transition: 'transform .15s' }} /></button>
+    </div>
+  );
+}
+
+function NotifSettingsScreen({ open, onClose, ctx }) {
+  const N = window.TrinityNotif;
+  const [prefs, setPrefs] = useX(() => (N ? N.get() : { enabled: true, dm: true, announce: true, serving: true, reminders: true }));
+  const [perm, setPerm] = useX(() => (N ? N.permission() : 'default'));
+  React.useEffect(() => { if (open && N) { setPrefs(N.get()); setPerm(N.permission()); } }, [open]);
+  const native = !!(N && N.isNative && N.isNative());
+  const denied = perm === 'denied';
+  const apply = async (patch) => { if (!N) return; const next = await N.set(patch); setPrefs(next); setPerm(N.permission()); };
+  // turning the master switch on asks for OS permission first; if it's blocked, leave it off
+  const flipMaster = async () => {
+    if (prefs.enabled) { apply({ enabled: false }); return; }
+    if (N && N.permission && N.permission() !== 'granted') {
+      const ok = N.ensurePerm ? await N.ensurePerm() : false;
+      setPerm(N.permission());
+      if (!ok) { ctx.toast('Allow notifications in your device settings first'); return; }
+    }
+    apply({ enabled: true });
+  };
+  const Group = ({ children }) => (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)', marginBottom: 14 }}>{children}</div>
+  );
+  const off = !prefs.enabled;
+
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
+          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
+            <Icon name="chevL" size={20} /></button>
+          <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Notifications</h1>
+        </div>
+      </div>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
+        {denied ? (
+          <div style={{ display: 'flex', gap: 11, padding: 14, borderRadius: 16, background: 'var(--clay-soft)', border: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)', marginBottom: 16 }}>
+            <Icon name="bell" size={20} color="var(--clay-ink)" style={{ flexShrink: 0, marginTop: 1 }} />
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+              <b style={{ color: 'var(--ink)' }}>Notifications are blocked.</b> Turn them back on for TrinityOne in your {native ? 'phone' : 'browser'} settings, then flip the switch below.</div>
+          </div>
+        ) : null}
+
+        <Group>
+          <NotifToggleRow icon="bell" accent="var(--clay)" label="Allow notifications" sub={off ? 'All notifications are paused' : 'Get alerted when something needs you'} on={!off} onFlip={flipMaster} />
+        </Group>
+
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 4px 9px' }}>WHAT TO ALERT ME ABOUT</div>
+        <Group>
+          <NotifToggleRow icon="chat" accent="var(--clay)" label="Direct messages" sub="When someone messages you" on={!!prefs.dm} disabled={off} onFlip={() => apply({ dm: !prefs.dm })} />
+          <NotifToggleRow icon="bell" accent="var(--gold)" label="Church announcements" sub="Posts in your church’s announcement channel" on={!!prefs.announce} disabled={off} onFlip={() => apply({ announce: !prefs.announce })} />
+          <NotifToggleRow icon="users" accent="var(--sage)" label="Serving requests" sub="When your church asks you to serve" on={!!prefs.serving} disabled={off} onFlip={() => apply({ serving: !prefs.serving })} />
+          <NotifToggleRow icon="calendar" accent="var(--clay)" label="Serving reminders" sub="A nudge the evening before you serve" on={!!prefs.reminders} disabled={off} onFlip={() => apply({ reminders: !prefs.reminders })} />
+        </Group>
+
+        <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '10px 6px 0' }}>
+          {native
+            ? 'Serving reminders show on this device even when the app is closed. Message and announcement alerts arrive when the app is open.'
+            : 'Notifications arrive even when TrinityOne is closed, as long as your device allows them. Direct messages never include the message text.'}
+        </p>
+        <button onClick={() => ctx.openHelp && ctx.openHelp('notifications')} style={{ marginTop: 16, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          padding: '12px 0', borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, boxShadow: 'var(--shadow)' }}>
+          <Icon name="book" size={16} color="var(--ink-2)" /> How notifications work
+        </button>
+      </div>
+    </Overlay>
+  );
+}
+
+// ── Currency: pick the currency giving amounts are shown in (sats stay the real unit) ──
+function CurrencyScreen({ open, onClose, ctx }) {
+  const LN = window.TrinityLN;
+  const [code, setCode] = useX(() => (LN ? LN.curCode() : 'USD'));
+  React.useEffect(() => { if (open && LN) setCode(LN.curCode()); }, [open]);
+  const currencies = (LN && LN.currencies && LN.currencies()) || [];
+  const pick = (c) => { if (LN) LN.setCurrency(c); setCode(c); ctx.toast('Showing amounts in ' + c); };
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 50, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
+          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
+            <Icon name="chevL" size={20} /></button>
+          <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Currency</h1>
+        </div>
+      </div>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>
+          Choose the currency you’d like to see giving amounts in. Your money is always held as Bitcoin (in “sats”) — this just changes the friendly label shown next to it.
+        </p>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)' }}>
+          {currencies.map((c, i) => {
+            const on = c.code === code;
+            return (
+              <button key={c.code} onClick={() => pick(c.code)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', border: 'none', borderTop: i ? '1px solid var(--line-2)' : 'none', background: on ? 'var(--clay-soft)' : 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', color: 'var(--ink)' }}>
+                <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? 'color-mix(in oklab, var(--clay) 16%, var(--surface))' : 'var(--surface-2)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16 }}>{c.symbol}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>{c.label}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 1 }}>{c.code}</div>
+                </div>
+                {on ? <Icon name="check" size={18} stroke={3} color="var(--clay)" /> : null}
+              </button>
+            );
+          })}
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, margin: '14px 6px 0' }}>Conversion rates are approximate and for display only.</p>
+      </div>
+    </Overlay>
+  );
+}
+
 // ── Search as a page (note 3 — moved off the tab bar) ──
 function SearchOverlay({ open, onClose, ctx }) {
   return (
@@ -237,4 +361,4 @@ function SearchOverlay({ open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { NotificationsScreen, ListenScreen, SearchOverlay });
+Object.assign(window, { NotificationsScreen, NotifSettingsScreen, CurrencyScreen, ListenScreen, SearchOverlay });

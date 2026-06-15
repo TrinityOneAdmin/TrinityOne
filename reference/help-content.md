@@ -17,8 +17,8 @@ TrinityOne is different from most apps, in a good way:
 - **There's no account, no password, and no email to sign up.** Nothing to forget.
 - **Your phone holds a private "key" that is you.** It's created for you automatically and
   stays on your phone. It's how your church knows it's really you posting.
-- **You stay anonymous unless you choose a name.** No phone number, no real name required.
-  You can pick a friendly name your church will see — or stay as "Anonymous".
+- **Use your name so your church recognises you.** No phone number or email needed — just a
+  friendly name your church sees. You can keep it private if you'd rather.
 - **No company in the middle.** Not even we can read into your account or reset it for you.
 
 That last point is wonderful for privacy — but it means **one thing is now your
@@ -55,7 +55,7 @@ no "forgot password" button, because there's no password and no company holding 
 You can be recognised in chat without giving any personal details.
 
 - **Name:** tap your circle at the top, choose **Display name**, and type a friendly name —
-  e.g. *"Maria from Tuesday group"*. Leave it blank to stay **Anonymous**.
+  e.g. *"Maria from Tuesday group"*. Leave it blank to keep it private.
 - **Picture:** choose a **colour with your initial**, or pick a small **picture** from the
   gallery. (You can't upload a photo — that keeps everyone private.)
 
@@ -64,7 +64,61 @@ email, or real name.
 
 ---
 
-## 4. Getting a new phone (or if you lose this one)
+## 4. Reading the Bible
+
+TrinityOne is a **complete Bible you can read anywhere** — even with no internet at all. The
+first time you open it, a clear modern translation (the **Berean Standard Bible**) sets itself
+up for you. Nothing to buy, nothing to sign up for.
+
+- **Turn to any passage:** tap the book name at the top to jump to a book and chapter.
+- **Make it comfy:** in the reader's settings, make the words bigger or switch on tappable
+  Strong's word helps.
+- **Keep what speaks to you:** highlight a verse, add a note, or bookmark it — these stay
+  private on your phone.
+
+### Add another translation
+1. In **Read**, tap the translation name at the very top (e.g. *"BSB"*).
+2. Tap **"Browse all translations"** and search — there are over a thousand, in many languages.
+3. Tap one to download it. It saves to your phone, then **works offline** forever after.
+
+Bibles download only when you choose one (to keep the app small); after that they're yours
+offline. To switch versions, just tap the name at the top and pick. Use **Search** to find a
+verse across every translation you've installed.
+
+---
+
+## 5. Your church & messaging
+
+The **Community** tab is where your church life lives: announcements, group chats, and private
+messages. It's a quiet, friendly space — just your church, no strangers, no adverts.
+
+### Follow your church
+1. Tap your circle at the top → **"Follow a church"**.
+2. Point your camera at the church's **QR code**, or paste the link they gave you.
+3. That's it — you'll see their groups, announcements, and giving.
+
+- **Groups & announcements:** join the chat or read what the church shares. A little **dot** on
+  Community tells you when something new arrives.
+- **Private messages:** message anyone in your church one-to-one. Only you and they can read them.
+- **Share what blesses you:** send a verse, note, or prayer into a group with a tap.
+
+It's a church, so **do use your name** — it helps people recognise and welcome you. You can stay
+private if you'd rather (see *"Setting up your name and picture"*).
+
+**A gentle word about that "key":**
+- **You don't manage it day to day.** The key is just how the app quietly proves it's really you
+  posting — no password to type, nothing to log into. You simply use the app.
+- **Your church can't see your private things.** Notes stay on your phone, and direct messages
+  can only be read by you and the person you're writing to.
+- **The one thing to keep safe is your 12 words.** They back up everything — your name, your
+  groups, your wallet. Write them on paper once and you're covered, even on a new phone.
+
+> Not sure about the 12 words? It's one small thing to do once — see *"Your 12 words"*, and any
+> steward will happily help.
+
+---
+
+## 6. Getting a new phone (or if you lose this one)
 
 This is exactly why you wrote down your 12 words.
 
@@ -78,7 +132,7 @@ be recovered, and you'd simply start fresh with a new one. So keep that paper sa
 
 ---
 
-## 5. Staying safe from scams
+## 7. Staying safe from scams
 
 Because you're in charge of your own key, please remember:
 
@@ -91,22 +145,59 @@ Because you're in charge of your own key, please remember:
 
 ---
 
-## 6. The giving wallet *(coming soon)*
+## 8. Notifications — staying in the loop
 
-TrinityOne will let you give to your church straight from the app, using Lightning (a fast,
-low-fee way to send small amounts).
+TrinityOne can let you know when there's something for you — a message, a church announcement,
+or a request to serve — **even when the app is closed.** You're always in control of what
+comes through.
 
-- Your wallet uses the **same 12 words** as your account — so backing them up protects your
-  giving too.
-- **Keep only a little in the in-app wallet** — like cash in a purse, not your savings.
-- Giving can be **anonymous**: your church sees the gift, not your name, if you choose.
-- You'll always see a **confirmation** that a gift went through.
+### Turn them on or off
+1. Tap your circle at the top → **Settings → Notifications**.
+2. Turn **"Allow notifications"** on (your phone may ask permission — tap **Allow**).
+3. Switch on only the things you'd like to hear about:
+   - **Direct messages** — when someone messages you (the alert never shows the message itself).
+   - **Church announcements** — when your church posts in its announcements channel.
+   - **Serving requests** — when your church asks if you can serve.
+   - **Serving reminders** — a gentle reminder the evening before you're due to serve.
 
-(We'll add full step-by-step giving help when this feature arrives.)
+Changed your mind? Come back any time and switch things off. If your phone has blocked
+notifications, the app shows a short note on how to turn them back on.
 
 ---
 
-## 7. Getting set up with help from a steward
+## 9. The giving wallet
+
+TrinityOne has a small wallet built in, just for giving to your church — using Lightning (a
+fast, low-fee way to send small amounts). Think of it like the change purse you'd drop in the
+collection: keep a little in it, and give whenever you like.
+
+- **What's in it?** A small amount of digital money (its little units are called "sats"). The
+  app always shows the **cash value** too — so you just pick an amount like *"$5"* and it
+  handles the rest.
+- **It's yours, held on your phone.** Not the church, not us — you hold it, protected by your
+  same **12 words**. Nobody can freeze it or take it.
+- **Keep only a little in it** — like cash in a purse, not your savings.
+
+### Put money in
+1. Tap your circle at the top → **Your wallet**.
+2. Tap **"Add funds"** and choose an amount.
+3. Follow the simple steps to pay in — the amount then shows in your wallet.
+
+### Give to your church
+1. Open **Community → Giving**.
+2. Pick what you'd like to give to, and an amount.
+3. Tap **Give** — it's sent in a second, and you'll see it confirmed.
+
+### Take money back out — any time
+1. Tap your circle → **Your wallet → Withdraw**.
+2. Send it to any other wallet you use. It's your money — you're never locked in.
+
+Giving can be **private** if you choose: your church sees the gift, not your name. And your
+**12 words** restore your wallet on a new phone too — so keep that paper safe.
+
+---
+
+## 10. Getting set up with help from a steward
 
 If setting this up yourself feels daunting, you don't have to do it alone.
 

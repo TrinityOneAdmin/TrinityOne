@@ -337,6 +337,18 @@ const GROUP_MESSAGES = {};   // no seeded chat — real messages arrive over the
 
 // ── Fellowship: Lightning giving (mock — no real funds move yet) ──
 const SATS_PER_USD = 1075; // mock spot rate (~$93k/BTC)
+// currencies the member can display giving amounts in. `usd` = how many USD one unit is worth
+// (mock rates until a live price feed is wired); sats-per-unit = SATS_PER_USD * usd.
+const CURRENCIES = [
+  { code: 'USD', symbol: '$',  label: 'US dollar',        usd: 1 },
+  { code: 'GBP', symbol: '£',  label: 'British pound',    usd: 1.27 },
+  { code: 'EUR', symbol: '€',  label: 'Euro',             usd: 1.08 },
+  { code: 'CAD', symbol: 'C$', label: 'Canadian dollar',  usd: 0.73 },
+  { code: 'AUD', symbol: 'A$', label: 'Australian dollar', usd: 0.66 },
+  { code: 'NGN', symbol: '₦',  label: 'Nigerian naira',   usd: 0.00065 },
+  { code: 'ZAR', symbol: 'R',  label: 'South African rand', usd: 0.055 },
+  { code: 'INR', symbol: '₹',  label: 'Indian rupee',     usd: 0.012 },
+];
 const WALLET = { sats: 0, address: '', node: '' };   // giving parked — no mock balance
 const FUNDS = [];   // giving parked for the pilot — no sample funds
 const STRIKE_PRESETS = [10, 25, 50, 100];
@@ -588,7 +600,7 @@ window.TrinityData = {
   PLANS, MODULES, MODULE_ITEMS, COLLECTIONS, COLLECTION_ITEMS, BOOK_TEXT, JOURNAL, PRAYER_SEED, SEARCH_SEED, SEARCH_RESULTS,
   VIDEO_CATS, CHANNELS, VIDEOS, NOTIFICATIONS, LISTEN, MEMBERS,
   HANDLE_POOL, AVATAR_COLORS, AVATAR_SYMBOLS, CHAT_IDENTITY, RELAYS, CHURCHES, GROUPS, GROUP_MESSAGES,
-  SATS_PER_USD, WALLET, FUNDS, STRIKE_PRESETS, GIVING_HISTORY,
+  SATS_PER_USD, CURRENCIES, WALLET, FUNDS, STRIKE_PRESETS, GIVING_HISTORY,
   CHAPTER: {
     book: 'John', bookAbbr: 'Joh', ch: 1,
     heading: 'The Word Became Flesh',

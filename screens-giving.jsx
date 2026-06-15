@@ -6,7 +6,12 @@
 const { useState: useG, useEffect: useGE } = React;
 
 const fmtSats = (n) => Number(n || 0).toLocaleString('en-US');
-const usdOf = (sats) => (sats / window.TrinityData.SATS_PER_USD);
+// re-render a giving view when the member changes their display currency
+function useCurrency() {
+  const [, force] = useG(0);
+  useGE(() => { const LN = window.TrinityLN; return LN && LN.onCurrencyChange ? LN.onCurrencyChange(() => force(n => n + 1)) : undefined; }, []);
+  return window.TrinityLN;
+}
 
 // small inline spinner (uses the trinitySpin keyframe from index.html)
 function GiveSpinner({ size = 18, color = 'var(--clay)' }) {
@@ -82,7 +87,7 @@ function TopUpSheet({ open, onClose, ctx }) {
               const on = !custom && usd === p;
               return <button key={p} onClick={() => { setUsd(p); setCustom(''); }} style={{ padding: '14px 0', borderRadius: 13, cursor: 'pointer',
                 border: on ? '2px solid var(--gold)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface-2)',
-                fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)' }}>${p}</button>;
+                fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)' }}>{LN.symbol()}{p}</button>;
             })}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 52, borderRadius: 14,
@@ -235,7 +240,7 @@ function GiveSheet({ fund, open, onClose, ctx, balance, onGive, onPickFund, onNe
               const on = !custom && usd === p;
               return <button key={p} onClick={() => { setUsd(p); setCustom(''); }} style={{ padding: '13px 0', borderRadius: 13, cursor: 'pointer',
                 border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'var(--clay-soft)' : 'var(--surface-2)',
-                fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: on ? 'var(--clay-ink)' : 'var(--ink)' }}>${p}</button>;
+                fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: on ? 'var(--clay-ink)' : 'var(--ink)' }}>{LN.symbol()}{p}</button>;
             })}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 52, borderRadius: 14,
@@ -248,7 +253,7 @@ function GiveSheet({ fund, open, onClose, ctx, balance, onGive, onPickFund, onNe
           <div style={{ textAlign: 'center', padding: '12px 0 4px' }}>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: 32, fontWeight: 700, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
               <Icon name="bolt" size={25} color="var(--gold)" fill /> {fmtSats(sats)}<span style={{ fontSize: 17, color: 'var(--ink-3)' }}>sats</span></div>
-            <div style={{ fontSize: 13.5, color: 'var(--ink-2)', fontWeight: 600, marginTop: 4 }}>≈ ${amtUsd.toFixed(2)} · balance {fmtSats(balance)} sats</div>
+            <div style={{ fontSize: 13.5, color: 'var(--ink-2)', fontWeight: 600, marginTop: 4 }}>≈ {LN.fmtAmount(amtUsd)} · balance {fmtSats(balance)} sats</div>
           </div>
 
           <button onClick={() => setAnon(a => !a)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px',
@@ -317,7 +322,7 @@ function FundDetailSheet({ fund, open, onClose, ctx, onGive }) {
   const D = window.TrinityData;
   if (!fund) return null;
   const church = (ctx.churches || D.CHURCHES || []).find(c => c.id === (fund.church || ctx.activeChurch)) || {};
-  const fmtUsd = (n) => '$' + Math.round(n).toLocaleString('en-US');
+  const fmtUsd = (n) => (window.TrinityLN ? window.TrinityLN.symbol() : '$') + Math.round(n).toLocaleString('en-US');
   const raised = fund.raised || 0;
   const pct = fund.goal ? Math.min(100, Math.round(raised / fund.goal * 100)) : 0;
   const rows = [
@@ -557,6 +562,7 @@ function NewFundSheet({ open, onClose, onCreate, ctx }) {
 // ════ Giving view (the tab body) ════
 function GivingView({ ctx, history, setHistory, giveSignal }) {
   const D = window.TrinityData;
+  const LN = useCurrency();
   const FUNDS = (ctx.funds || D.FUNDS).filter(f => !f.church || f.church === ctx.activeChurch);
   const balance = useWalletBalance();
   const [fund, setFund] = useG(null);
@@ -588,7 +594,7 @@ function GivingView({ ctx, history, setHistory, giveSignal }) {
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.6px', opacity: .7 }}>YOUR WALLET · SELF-CUSTODY</div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
               <span style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, lineHeight: 1.05 }}>{fmtSats(balance)}</span>
-              <span style={{ fontSize: 12.5, fontWeight: 600, opacity: .6 }}>sats · ${usdOf(balance).toFixed(2)}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 600, opacity: .6 }}>sats · {LN.fmtFiat(balance)}</span>
             </div>
           </div>
           <div style={{ width: 30, height: 30, borderRadius: 999, background: 'rgba(255,255,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -661,7 +667,7 @@ function GivingView({ ctx, history, setHistory, giveSignal }) {
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{fmtSats(h.sats)}</div>
-                  <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>${(h.usd || 0).toFixed(2)}</div>
+                  <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{LN.fmtFiat(h.sats)}</div>
                 </div>
               </div>
             ))}
@@ -751,7 +757,7 @@ function WithdrawSheet({ open, onClose, ctx, balance }) {
                   const on = !custom && usd === p;
                   return <button key={p} onClick={() => { setUsd(p); setCustom(''); }} style={{ padding: '12px 0', borderRadius: 13, cursor: 'pointer',
                     border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'var(--clay-soft)' : 'var(--surface-2)',
-                    fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: on ? 'var(--clay-ink)' : 'var(--ink)' }}>${p}</button>;
+                    fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: on ? 'var(--clay-ink)' : 'var(--ink)' }}>{LN.symbol()}{p}</button>;
                 })}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 50, borderRadius: 14,
@@ -801,6 +807,7 @@ function WithdrawSheet({ open, onClose, ctx, balance }) {
 
 // ════ Member wallet hub: balance + Add + Withdraw. Lives in the profile, always reachable. ════
 function WalletSheet({ open, onClose, ctx }) {
+  const LN = useCurrency();
   const balance = useWalletBalance();
   const [topUp, setTopUp] = useG(false);
   const [withdraw, setWithdraw] = useG(false);
@@ -822,7 +829,7 @@ function WalletSheet({ open, onClose, ctx }) {
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.6px', opacity: .7 }}>SELF-CUSTODY · ON YOUR KEY</div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
               <span style={{ fontFamily: 'var(--font-display)', fontSize: 34, fontWeight: 700, lineHeight: 1 }}>{fmtSats(balance)}</span>
-              <span style={{ fontSize: 14, fontWeight: 600, opacity: .6 }}>sats · ${usdOf(balance).toFixed(2)}</span>
+              <span style={{ fontSize: 14, fontWeight: 600, opacity: .6 }}>sats · {LN.fmtFiat(balance)}</span>
             </div>
           </div>
         </div>

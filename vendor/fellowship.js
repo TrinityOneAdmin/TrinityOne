@@ -7081,6 +7081,22 @@
         }
       };
     },
+    // ── self-encryption (NIP-44 to one's own key): for encrypting on-device secrets at rest, e.g. the
+    // wallet's bearer ecash in localStorage. Synchronous; returns null if the key isn't loaded yet. ──
+    encryptSelf(str) {
+      try {
+        return sk && pub ? encrypt(String(str), getConversationKey(sk, pub)) : null;
+      } catch {
+        return null;
+      }
+    },
+    decryptSelf(ct) {
+      try {
+        return sk && pub ? decrypt(String(ct), getConversationKey(sk, pub)) : null;
+      } catch {
+        return null;
+      }
+    },
     // ── Wallet backup (NIP-60-aligned): one replaceable doc, encrypted to the member's OWN key ──
     // The in-app Cashu wallet (mint + proofs) is mirrored here so a reinstall restores the balance
     // from the same identity + relays — the wallet IS the Nostr identity. d = 'trinityone/wallet:<suffix>'.

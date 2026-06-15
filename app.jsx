@@ -260,6 +260,8 @@ function App() {
   const [video, setVideo] = useA(null);
   const extraParam = new URLSearchParams(location.search).get('extra');  // 'notif' | 'listen'
   const [notif, setNotif] = useA(extraParam === 'notif');   // notifications overlay
+  const [notifSettings, setNotifSettings] = useA(extraParam === 'notifsettings'); // notification settings overlay
+  const [currencyOpen, setCurrencyOpen] = useA(extraParam === 'currency'); // currency picker overlay
   const [listen, setListen] = useA(extraParam === 'listen'); // audio Listen overlay
   const [audioBibles, setAudioBibles] = useA(false);   // Audio Bibles download library
   const concordParam = new URLSearchParams(location.search).get('concord');  // '1' = index, or a Strong's id (e.g. G5457)
@@ -670,6 +672,66 @@ function App() {
   // Uses history + popstate (no native plugin) — on Android the webview's default back fires popstate
   // when there's a history entry; we keep a "guard" entry so back has something to pop and stays in-app.
   const tabRef = useAR(); tabRef.current = tab;
+
+  // ── Community unread dot: an app-level watcher (runs on any tab) so a new church message lights a
+  // dot on the Community tab even when you're elsewhere. "Seen" = newest message ts when you last
+  // opened Community. Group posts only (DMs are a follow-on). ──
+  const [chatUnread, setChatUnread] = useA(false);
+  const [dmUnread, setDmUnread] = useA(false);
+  const chatNewestTs = useAR(0);
+  const dmNewestTs = useAR(0);
+  const chatSeenKey = activeChurch ? 'trinityone.chatTabSeen.' + activeChurch : null;
+  const dmSeenKey = () => { const me = window.Fellowship && window.Fellowship.myPubkey; return me ? 'trinityone.dmSeen.' + me : null; };
+  const markChatSeen = () => {
+    if (chatSeenKey) { try { localStorage.setItem(chatSeenKey, String(chatNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} }
+    const dk = dmSeenKey(); if (dk) { try { localStorage.setItem(dk, String(dmNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} }
+    setChatUnread(false); setDmUnread(false);
+  };
+  useAE(() => {
+    const F = window.Fellowship;
+    const ch = churches.find(c => c.id === activeChurch);
+    chatNewestTs.current = 0; setChatUnread(false);
+    if (!F || !ch || !ch.npub || !F.subscribeChurchGroups || !F.subscribeGroups) return;
+    let getSeen = () => { try { return Number(localStorage.getItem('trinityone.chatTabSeen.' + ch.npub) || 0); } catch { return 0; } };
+    let groupSub = null;
+    const off = F.subscribeChurchGroups(ch.npub, (groups) => {
+      const ids = (groups || []).map(g => g.id).filter(Boolean);
+      try { groupSub && groupSub(); } catch {}
+      if (!ids.length) return;
+      groupSub = F.subscribeGroups(ids, (gid, e) => {
+        if (!e || e.pubkey === F.myPubkey) return;                 // ignore my own posts
+        if (e.created_at > chatNewestTs.current) {
+          chatNewestTs.current = e.created_at;
+          if (tabRef.current === 'chat') markChatSeen();           // already looking → keep it clear
+          else if (e.created_at > getSeen()) setChatUnread(true);  // new since last visit → dot
+        }
+      });
+    });
+    return () => { try { off && off(); } catch {} try { groupSub && groupSub(); } catch {} };
+  }, [activeChurch, idTick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // ── DM unread dot: incoming direct messages also light the Community tab. "Seen" = newest incoming
+  // DM ts when you last opened Community (keyed by my pubkey, since DMs aren't church-scoped). ──
+  useAE(() => {
+    const F = window.Fellowship;
+    dmNewestTs.current = 0; setDmUnread(false);
+    if (!F || !F.subscribeDMs) return;
+    const getSeen = () => { const dk = dmSeenKey(); if (!dk) return 0; try { return Number(localStorage.getItem(dk) || 0); } catch { return 0; } };
+    const off = F.subscribeDMs((convos) => {
+      // newest INCOMING message across all conversations (skip ones where I sent last → "You: ")
+      let newest = 0;
+      for (const c of (convos || [])) {
+        if (c && c.lastTs > newest && !(c.preview || '').startsWith('You: ')) newest = c.lastTs;
+      }
+      if (newest > dmNewestTs.current) {
+        dmNewestTs.current = newest;
+        if (tabRef.current === 'chat') markChatSeen();           // already looking → keep it clear
+        else if (newest > getSeen()) setDmUnread(true);          // new since last visit → dot
+      }
+    });
+    return () => { try { off && off(); } catch {} };
+  }, [idTick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // opening Community clears the dot + records what we've now seen
+  useAE(() => { if (tab === 'chat') markChatSeen(); }, [tab]);   // eslint-disable-line react-hooks/exhaustive-deps
   useAE(() => {
     const guard = () => { try { history.pushState({ trinity: 1 }, ''); } catch (e) {} };
     guard();   // seed one entry so the first back press is intercepted, not an app exit
@@ -772,6 +834,8 @@ function App() {
     openConcordance: () => setConcord(true),
     openAllUses: (id) => setAllUses(id),
     openNotifications: () => setNotif(true),
+    openNotifSettings: () => setNotifSettings(true),
+    openCurrency: () => setCurrencyOpen(true),
     openListen: () => setListen(true),
     openAudioBibles: () => setAudioBibles(true),
     // identity surfaces
@@ -906,7 +970,7 @@ function App() {
           <React.Fragment>
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
-                <DesktopNav active={tab} onChange={setTab} />
+                <DesktopNav active={tab} onChange={setTab} unread={{ chat: chatUnread || dmUnread }} />
                 {tab === 'chat' && ctx.church && ctx.church.npub ? (
                   <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
@@ -945,7 +1009,7 @@ function App() {
               <React.Fragment>
                 <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>
                 <MiniPlayer ctx={ctx} />
-                <TabBar active={tab} onChange={setTab} />
+                <TabBar active={tab} onChange={setTab} unread={{ chat: chatUnread || dmUnread }} />
               </React.Fragment>
             )}
 
@@ -967,6 +1031,8 @@ function App() {
             <ConcordanceIndex open={concord} onClose={() => setConcord(false)} ctx={ctx} />
             <AllUsesView id={allUses} open={!!allUses} onClose={() => setAllUses(null)} ctx={ctx} />
             <NotificationsScreen open={notif} onClose={() => setNotif(false)} ctx={ctx} />
+            <NotifSettingsScreen open={notifSettings} onClose={() => setNotifSettings(false)} ctx={ctx} />
+            <CurrencyScreen open={currencyOpen} onClose={() => setCurrencyOpen(false)} ctx={ctx} />
             <ListenScreen open={listen} onClose={() => setListen(false)} ctx={ctx} />
             <AudioBiblesScreen open={audioBibles} onClose={() => setAudioBibles(false)} ctx={ctx} />
             <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} ctx={ctx} />

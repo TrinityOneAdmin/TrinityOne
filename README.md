@@ -1,8 +1,8 @@
 # TrinityOne
 
-A warm, offline-first **Bible study app** with **anonymous fellowship chat** and (later)
-**Lightning giving**, built on open protocols. Reader + modules work fully offline; chat and
-identity run on **Nostr** with self-custodial keys — no account, no email, no central server.
+A warm, offline-first **Bible study app** with **fellowship chat** and **Lightning giving**,
+built on open protocols. Reader + modules work fully offline; chat, giving, and identity run on
+**Nostr** with self-custodial keys — no account, no email, no central server.
 
 Pilot church: **Trinity, Littlehampton**. Working name for the network layer: *Koinonia*.
 
@@ -14,8 +14,15 @@ Pilot church: **Trinity, Littlehampton**. Working name for the network layer: *K
 - **Today / Plans / Search / Watch** — verse-of-the-day, real reading plans (open-to-passage,
   progress), fast full-text search across installed translations, Trinity's YouTube videos.
 - **Fellowship (Nostr)** — self-custodial BIP-39/NIP-06 identity (secure store on device),
-  group chat, profiles (kind-0 names/avatars), reactions (NIP-25), prayer attachments,
-  sharing verses/devotionals/notes into groups, chat search, configurable relays.
+  group chat, 1:1 direct messages (NIP-04), invite-only groups, profiles (kind-0 names/avatars),
+  reactions (NIP-25), prayer attachments, sharing verses/devotionals/notes into groups, chat
+  search, configurable relays.
+- **Giving** — a self-custodial Cashu ecash + Lightning wallet on the member's own key (add /
+  give / withdraw), per-church giving toggle; the church receives to its kind-0 Lightning address.
+- **Notifications** — web-push for DMs, church announcements, and serving requests (VAPID), plus
+  local serving reminders; per-category settings, all member-controlled.
+- **Steward console** — a separate surface (`steward.html`) to set up and run a church, with its
+  own APK fallback.
 - **Offline** — React/Babel/sql.js/fonts all vendored locally; boots with zero network.
 - **Halo** brand + animated boot splash; Android APK via Capacitor.
 
