@@ -172,6 +172,9 @@ function useStewardChurch() {
   const idv = useStewardIdv();
   const [p, setP] = useSt({});
   useStE(() => { setP({}); return window.Steward.subscribeProfile(setP); }, [idv]);
+  // any instance that receives the kind-0 broadcasts it, so every view (header, Settings, badges)
+  // stays in sync even if this instance's own relay sub mounted before the church's relays were ready.
+  useStE(() => { const f = (e) => { if (e.detail) setP(e.detail); }; window.addEventListener('steward-profile', f); return () => window.removeEventListener('steward-profile', f); }, [idv]);
   return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', channel: (p && p.channel) || '', audioFeed: (p && p.audioFeed) || '', lud16: (p && p.lud16) || '', giving: !!(p && p.giving), picture: (p && p.picture) || '', banner: (p && p.banner) || '', accent: (p && p.accent) || '', npub: window.Steward.npub || '', isNetwork: window.Steward.isViewingNetwork ? window.Steward.isViewingNetwork() : false };
 }
 window.useStewardChurch = useStewardChurch;

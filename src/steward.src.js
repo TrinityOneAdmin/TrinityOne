@@ -753,7 +753,7 @@ window.Steward = {
     // with the others (avatar/picture shows everywhere at once, not only where it was just edited)
     try { if (lastProfile && Object.keys(lastProfile).length) onProfile(lastProfile); } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pub] }], {
-      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; onProfile(p); } catch {} },
+      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; onProfile(p); try { window.dispatchEvent(new CustomEvent('steward-profile', { detail: lastProfile })); } catch (x) {} } catch {} },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };

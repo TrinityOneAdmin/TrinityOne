@@ -10657,6 +10657,10 @@ zoo`.split("\n");
             const p = JSON.parse(e.content);
             lastProfile = { ...lastProfile, ...p };
             onProfile(p);
+            try {
+              window.dispatchEvent(new CustomEvent("steward-profile", { detail: lastProfile }));
+            } catch (x) {
+            }
           } catch {
           }
         },
