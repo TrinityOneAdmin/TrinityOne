@@ -313,6 +313,63 @@ function StewSetupWizard({ church, onDone, onTab }) {
   );
 }
 
+// in-app QR scanner for the steward console (camera + BarcodeDetector; jsQR fallback for Android WebView).
+// Calls onResult(text) with the decoded QR; degrades gracefully with no camera/detector.
+function StewQRScanner({ onResult, onCancel }) {
+  const vref = React.useRef(null);
+  const [status, setStatus] = React.useState('starting');
+  React.useEffect(() => {
+    let stream, raf, stopped = false, detector = null, canvas = null, cctx = null;
+    const hasBD = ('BarcodeDetector' in window);
+    const hasJsQR = (typeof window.jsQR === 'function');
+    (async () => {
+      try {
+        if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || (!hasBD && !hasJsQR)) { setStatus('unsupported'); return; }
+        if (hasBD) { try { detector = new window.BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; } }
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+        if (stopped) { stream.getTracks().forEach(t => t.stop()); return; }
+        const v = vref.current; if (!v) return;
+        v.srcObject = stream; v.setAttribute('playsinline', ''); v.muted = true; await v.play();
+        setStatus('scanning');
+        const tick = async () => {
+          if (stopped) return;
+          try {
+            if (detector) { const codes = await detector.detect(v); if (codes && codes.length && codes[0].rawValue) { onResult(codes[0].rawValue); return; } }
+            else if (v.videoWidth) {
+              if (!canvas) { canvas = document.createElement('canvas'); cctx = canvas.getContext('2d', { willReadFrequently: true }); }
+              canvas.width = v.videoWidth; canvas.height = v.videoHeight; cctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+              const img = cctx.getImageData(0, 0, canvas.width, canvas.height);
+              const res = window.jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+              if (res && res.data) { onResult(res.data); return; }
+            }
+          } catch (e) {}
+          raf = requestAnimationFrame(tick);
+        };
+        tick();
+      } catch (e) { setStatus('error'); }
+    })();
+    return () => { stopped = true; if (raf) cancelAnimationFrame(raf); if (stream) stream.getTracks().forEach(t => t.stop()); };
+  }, []);
+  if (status === 'unsupported' || status === 'error') {
+    return (
+      <div style={{ borderRadius: 14, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', padding: 16, textAlign: 'center' }}>
+        <Icon name="qr" size={24} color="var(--clay)" />
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '8px 0 12px' }}>{status === 'unsupported' ? 'This device can’t scan here — paste the phrase instead.' : 'Couldn’t open the camera. Allow access, or paste the phrase.'}</p>
+        <button onClick={onCancel} className="sk-btn sk-btn--ghost" style={{ padding: '8px 14px', fontSize: 13 }}>Back</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ position: 'relative', borderRadius: 16, overflow: 'hidden', background: '#000', aspectRatio: '1 / 1', maxWidth: 320, margin: '0 auto' }}>
+      <video ref={vref} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+      <div style={{ position: 'absolute', inset: '16%', border: '3px solid rgba(255,255,255,.92)', borderRadius: 16 }} />
+      <div style={{ position: 'absolute', top: 10, left: 0, right: 0, textAlign: 'center', color: '#fff', fontSize: 12.5, fontWeight: 700, textShadow: '0 1px 4px rgba(0,0,0,.6)' }}>{status === 'starting' ? 'Starting camera…' : 'Point at the handoff QR'}</div>
+      <button onClick={onCancel} style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', border: 'none', background: 'rgba(0,0,0,.55)', color: '#fff', borderRadius: 999, padding: '7px 16px', cursor: 'pointer', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>Cancel</button>
+    </div>
+  );
+}
+window.StewQRScanner = StewQRScanner;
+
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
@@ -386,12 +443,13 @@ function StewDashboard({ initial = 'overview' }) {
               {actions}
             </div>
             <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
-            <div className="no-scrollbar" style={{ display: 'flex', gap: 6, overflowX: 'auto', margin: '0 -12px', padding: '2px 12px' }}>
+            {/* tabs WRAP onto multiple rows rather than scrolling sideways (no awkward horizontal scroll) */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {NAV.map(n => {
                 const on = n.key === tab;
                 return (
-                  <button key={n.key} onClick={() => setTab(n.key)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0, background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>
-                    <Icon name={n.ic} size={15} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
+                  <button key={n.key} onClick={() => setTab(n.key)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', whiteSpace: 'nowrap', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)' }}>
+                    <Icon name={n.ic} size={14} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
                   </button>
                 );
               })}
@@ -509,7 +567,7 @@ function JoinCard({ qrSize = 92, center = false }) {
         {nice ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 2 }}>members can scan the QR, or type this name</div> : null}
         {/* full key, selectable — so copy works even if the buttons can't reach the clipboard */}
         <textarea readOnly value={np} onFocus={e => e.target.select()} style={{ width: '100%', maxWidth: 280, height: 38, resize: 'none', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--ink-3)', fontFamily: 'var(--mono)', fontSize: 10.5, padding: '6px 8px', marginTop: 4, lineHeight: 1.3, wordBreak: 'break-all' }} />
-        <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: center ? 'center' : 'flex-start' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12, justifyContent: center ? 'center' : 'flex-start' }}>
           <button onClick={() => doCopy('code', codeText)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'code' ? 'check' : 'receipt'} size={14} color="#fff" /> {copied === 'code' ? 'Copied' : 'Copy code'}</button>
           <button onClick={() => doCopy('link', url)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'link' ? 'check' : 'link'} size={14} color="currentColor" /> {copied === 'link' ? 'Copied' : 'Copy link'}</button>
           <button onClick={() => window.TrinityTemplates.printInviteSheet({ name: church.name, url, qrSvg: svg })} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Print a paper invite with the QR + space for the recovery phrase"><Icon name="receipt" size={14} color="currentColor" /> Print invite</button>
@@ -625,6 +683,13 @@ function PushEnabler() {
   );
 }
 
+// shared responsive flag for the dashboard cards (phone/narrow window)
+function useStewNarrow(bp = 760) {
+  const [n, setN] = React.useState(typeof window !== 'undefined' ? window.innerWidth < bp : false);
+  React.useEffect(() => { const f = () => setN(window.innerWidth < bp); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
+  return n;
+}
+
 function DashOverview({ onTab }) {
   const groups = window.useStewardGroups();   // real chat groups (the focus)
   const members = window.useStewardMembers(); // real members (joined and/or active)
@@ -632,49 +697,69 @@ function DashOverview({ onTab }) {
   const stats = window.useStewardStats();     // real footprint + announcement counts
   const activity = window.useStewardActivity(); // real recent-events feed
   const relayUp = relays.some(r => r.status === 'on');
+  const narrow = useStewNarrow();
+  // on narrow, panels size to content and the page scrolls; on wide they fill a fixed-height grid + scroll inside
+  const fillStyle = narrow ? {} : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
+  const listStyle = narrow ? { display: 'flex', flexDirection: 'column', gap: 10 } : { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' };
+
+  const stat = (
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr 1fr' : 'repeat(4, 1fr)', gap: narrow ? 10 : 14 }}>
+      <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'invite more' : 'invite your church'} ic="pray" tint="sage" />
+      <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" />
+      <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" />
+      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="self-hosted" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} />
+    </div>
+  );
+  const groupsPanel = (
+    <Panel title="Groups & rooms" action={<button onClick={() => onTab('groups')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={fillStyle}>
+      <div className="no-scrollbar" style={listStyle}>
+        {groups.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No groups yet — create your church’s first chat room.</div> : null}
+        {groups.map(g => (
+          <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'var(--surface-2)', color: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={g.kind === 'broadcast' ? 'send' : 'chat'} size={18} color="currentColor" /></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.sub || (g.kind === 'broadcast' ? 'Broadcast' : 'Group')}</div></div>
+            {g.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+  const joinPanel = (
+    <Panel title="Joining code">
+      <JoinCard qrSize={92} center={narrow} />
+      <div style={{ marginTop: 12 }}><PushEnabler /></div>
+    </Panel>
+  );
+  const activityPanel = (
+    <Panel title="Recent activity" style={fillStyle}>
+      {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
+      <div className="no-scrollbar" style={narrow ? { display: 'flex', flexDirection: 'column', gap: 14 } : { display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        {activity.map((a) => {
+          const t = SK_TINT[a.tint] || SK_TINT.ink;
+          return (
+            <div key={a.id} style={{ display: 'flex', gap: 11, alignItems: 'flex-start' }}>
+              <div style={{ width: 30, height: 30, borderRadius: 9, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={a.ic} size={16} color="currentColor" /></div>
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>{a.text}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 1 }}>{ago(a.ts)}</div></div>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+
+  if (narrow) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {stat}{joinPanel}{groupsPanel}{activityPanel}
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
-      <div style={{ display: 'flex', gap: 14 }}>
-        <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'invite more' : 'invite your church'} ic="pray" tint="sage" />
-        <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" />
-        <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" />
-        <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="self-hosted" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} />
-      </div>
+      {stat}
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>
-          <Panel title="Groups & rooms" action={<button onClick={() => onTab('groups')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' }}>
-              {groups.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No groups yet — create your church’s first chat room.</div> : null}
-              {groups.map(g => (
-                <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface-2)', color: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={g.kind === 'broadcast' ? 'send' : 'chat'} size={18} color="currentColor" /></div>
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{g.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.sub || (g.kind === 'broadcast' ? 'Broadcast' : 'Group')}</div></div>
-                  {g.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
-                </div>
-              ))}
-            </div>
-          </Panel>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>
-          <Panel title="Joining code">
-            <JoinCard qrSize={92} />
-            <div style={{ marginTop: 12 }}><PushEnabler /></div>
-          </Panel>
-          <Panel title="Recent activity" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
-            <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
-              {activity.map((a) => {
-                const t = SK_TINT[a.tint] || SK_TINT.ink;
-                return (
-                  <div key={a.id} style={{ display: 'flex', gap: 11, alignItems: 'flex-start' }}>
-                    <div style={{ width: 30, height: 30, borderRadius: 9, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={a.ic} size={16} color="currentColor" /></div>
-                    <div style={{ flex: 1 }}><div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>{a.text}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 1 }}>{ago(a.ts)}</div></div>
-                  </div>
-                );
-              })}
-            </div>
-          </Panel>
-        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>{groupsPanel}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>{joinPanel}{activityPanel}</div>
       </div>
     </div>
   );
@@ -2201,6 +2286,9 @@ function DashSettings({ onTab }) {
   const [backupOpen, setBackupOpen] = React.useState(false);
   const [restorePhrase, setRestorePhrase] = React.useState('');
   const [restoreErr, setRestoreErr] = React.useState('');
+  const [confirmRemove, setConfirmRemove] = React.useState(false);   // "remove church from this device" guard
+  const [showQR, setShowQR] = React.useState(false);                 // handoff QR (new steward scans it)
+  const handoffSvg = showQR ? (window.Steward.qrSVG ? window.Steward.qrSVG(window.Steward.handoffPayload()) : '') : '';
   const doRestore = () => {
     setRestoreErr('');
     try {
@@ -2291,9 +2379,43 @@ function DashSettings({ onTab }) {
         </div>
       </Panel>
 
-      <Panel title="Stewards">
-        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>For the pilot, this one key runs {church.name || 'your church'}. Shared sign-off for multiple leaders — each with their own key via NIP-26 delegation, so the church secret is never copied — is on the roadmap.</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 12.5, color: 'var(--ink-3)' }}>
+      <Panel title="Stewards & handoff">
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>A church is one key. To <b style={{ color: 'var(--ink)' }}>add another steward</b> or <b style={{ color: 'var(--ink)' }}>hand the church over</b>, share its recovery phrase — they enter it on their device under <b>Church key → Restore from a recovery phrase</b> (or in the Steward app). Then they can manage {church.name || 'the church'} too.</div>
+        <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+          <li><b>Show the handoff QR</b> below (or reveal the phrase above) — in person is safest.</li>
+          <li>They open the Steward app → <b>Restore a church</b> → <b>Scan</b> it (or paste the phrase) — now a co-steward.</li>
+          <li>Handing off entirely? <b>Remove it from this device</b> below once they’re set up.</li>
+        </ol>
+        <div style={{ display: 'flex', gap: 9, padding: 11, borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', marginBottom: 14 }}>
+          <Icon name="shield" size={16} color="var(--gold)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Anyone with the phrase can manage the church.</b> Per-person add/remove that doesn’t copy the secret (delegated keys / a steward roster) is on the roadmap — for now, only share it with people you fully trust.</div>
+        </div>
+        {/* handoff QR — the new steward scans this to adopt the church */}
+        <div style={{ marginBottom: 14 }}>
+          {!showQR ? (
+            <button onClick={() => setShowQR(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="#fff" /> Show handoff QR</button>
+          ) : (
+            <div style={{ textAlign: 'center', padding: 14, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              {handoffSvg
+                ? <div style={{ width: 184, height: 184, margin: '0 auto', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: handoffSvg }} />
+                : <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: 20 }}>No church key on this device.</div>}
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '12px 6px 0' }}>New steward: open the Steward app → <b>Restore a church</b> → <b>Scan</b>, and point the camera here. This carries the church key — show it only to someone you trust, in person.</div>
+              <button onClick={() => setShowQR(false)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 13px', fontSize: 12.5, marginTop: 10 }}>Hide QR</button>
+            </div>
+          )}
+        </div>
+        {!confirmRemove ? (
+          <button onClick={() => setConfirmRemove(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay)' }}><Icon name="x" size={15} color="currentColor" /> Remove this church from this device</button>
+        ) : (
+          <div style={{ padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))' }}>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>This forgets the church key on <b>this</b> device only — the church keeps running wherever its phrase is held. Make sure you’ve backed up the phrase or handed it on first, or this church is gone from here.</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => { window.Steward.removeKey(); window.location.reload(); }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: '#fff' }}><Icon name="x" size={14} color="#fff" /> Remove &amp; reload</button>
+              <button onClick={() => setConfirmRemove(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
+            </div>
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 14, fontSize: 12.5, color: 'var(--ink-3)' }}>
           <Icon name="pray" size={14} color="var(--ink-3)" /> See who’s joined in the <button onClick={() => onTab && onTab('members')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Members list</button>.
         </div>
       </Panel>
