@@ -2299,6 +2299,38 @@ function resizeImageToDataURI(file, size = 128) {
   });
 }
 
+// set or change the console PIN — encrypts the church key at rest with it
+function PinModal({ change, onClose }) {
+  const [pin, setPin] = React.useState('');
+  const [pin2, setPin2] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const save = async () => {
+    if (pin.length < 4) { setErr('Use at least 4 digits — a longer PIN or passphrase is safer.'); return; }
+    if (pin !== pin2) { setErr('They don’t match.'); return; }
+    setBusy(true);
+    const ok = await window.Steward.setPin(pin);
+    setBusy(false);
+    if (ok) onClose(true); else setErr('Couldn’t set the PIN.');
+  };
+  const inp = { width: '100%', boxSizing: 'border-box', height: 48, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 16, color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)', marginBottom: 10 };
+  return (
+    <div onClick={() => onClose(false)} style={{ position: 'absolute', inset: 0, zIndex: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 400, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 4 }}>{change ? 'Change console PIN' : 'Lock with a PIN'}</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 16 }}>Encrypts the church key on this device. You’ll enter it to open the console; it auto-locks after 10 minutes idle. <b>Don’t forget it</b> — without it (or the 12-word phrase) this device can’t open the church.</div>
+        <input type="password" autoFocus value={pin} onChange={e => { setPin(e.target.value); setErr(''); }} placeholder="New PIN or passphrase" inputMode="numeric" autoComplete="off" style={inp} />
+        <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="Confirm" inputMode="numeric" autoComplete="off" style={inp} />
+        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginBottom: 8 }}>{err}</div> : null}
+        <div style={{ display: 'flex', gap: 9, marginTop: 6 }}>
+          <button onClick={() => onClose(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '11px' }}>Cancel</button>
+          <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '11px', opacity: busy ? .6 : 1 }}><Icon name="lock" size={15} color="#fff" /> {busy ? 'Saving…' : (change ? 'Update PIN' : 'Set PIN')}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashSettings({ onTab }) {
   const church = window.useStewardChurch();   // real church name + npub
   const [revealed, setRevealed] = React.useState(false);
@@ -2306,6 +2338,9 @@ function DashSettings({ onTab }) {
   const [copied, setCopied] = React.useState(false);
   const [editingName, setEditingName] = React.useState(false);
   const [editingWeb, setEditingWeb] = React.useState(false);
+  const [hasPin, setHasPin] = React.useState(() => !!(window.Steward.hasPinLock && window.Steward.hasPinLock()));
+  const [pinModal, setPinModal] = React.useState(false);
+  const removeLock = () => { if (window.confirm('Remove the console PIN? The church key goes back to being stored unlocked on this device.')) { window.Steward.removeLock(); setHasPin(false); } };
   const [picBusy, setPicBusy] = React.useState(false);
   const onPickPicture = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = '';
@@ -2414,6 +2449,22 @@ function DashSettings({ onTab }) {
           )}
         </div>
       </Panel>
+
+      <Panel title="Console lock">
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>{hasPin
+          ? 'This console is locked with a PIN — the church key is encrypted on this device and auto-locks after 10 minutes idle.'
+          : 'Add a PIN to encrypt the church key on this device. Without it, anyone who opens this browser can post as the church. A longer PIN or passphrase is safer.'}</div>
+        {!hasPin ? (
+          <button onClick={() => setPinModal(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="lock" size={15} color="#fff" /> Lock with a PIN</button>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={() => setPinModal(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Change PIN</button>
+            <button onClick={removeLock} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay)' }}><Icon name="x" size={15} color="currentColor" /> Remove lock</button>
+          </div>
+        )}
+      </Panel>
+
+      {pinModal ? <PinModal change={hasPin} onClose={(ok) => { setPinModal(false); if (ok) setHasPin(true); }} /> : null}
 
       <Panel title="Stewards & handoff">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>A church is one key. To <b style={{ color: 'var(--ink)' }}>add another steward</b> or <b style={{ color: 'var(--ink)' }}>hand the church over</b>, share its recovery phrase — they enter it on their device under <b>Church key → Restore from a recovery phrase</b> (or in the Steward app). Then they can manage {church.name || 'the church'} too.</div>

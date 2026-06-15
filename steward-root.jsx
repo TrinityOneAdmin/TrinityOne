@@ -184,7 +184,7 @@ function initChurch() {
   const inject = params.get('churchkey');                 // test hook: load a known church key
   if (inject) { window.Steward.init(inject); return; }
   const adopt = params.get('adopt');                      // QR/link handoff: adopt a church on launch
-  if (adopt && !window.Steward.hasKey) { try { window.Steward.adoptChurch(adopt); } catch (e) {} }
+  if (adopt && !window.Steward.hasKey) { try { window.Steward.adoptChurch(adopt); try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {} } catch (e) {} }
   window.Steward.init();                                  // load the saved key if there is one (no auto-create)
   if (window.Steward.hasKey && window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
 }
@@ -210,8 +210,12 @@ function StewardWelcome() {
   const [err, setErr] = useSt('');
   const adopt = (payload) => {
     setErr('');
-    try { window.Steward.adoptChurch(payload); if (window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {}); }
-    catch (e) { setMode('restore'); setErr((e && e.message) || 'That code or phrase isn’t valid.'); }
+    try {
+      window.Steward.adoptChurch(payload);
+      // a restored church already exists (name, groups) — don't run the new-church setup wizard
+      try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {}
+      if (window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
+    } catch (e) { setMode('restore'); setErr((e && e.message) || 'That code or phrase isn’t valid.'); }
   };
   const card = { width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28 };
   return (
@@ -279,20 +283,55 @@ function SegBtn({ on, onClick, children, icon }) {
   );
 }
 
+// PIN unlock gate — shown when the church key is encrypted at rest and not yet unlocked this session
+function StewardUnlock() {
+  const [pin, setPin] = useSt('');
+  const [busy, setBusy] = useSt(false);
+  const [err, setErr] = useSt('');
+  const submit = async () => {
+    if (!pin || busy) return; setBusy(true); setErr('');
+    const ok = await window.Steward.unlock(pin);   // fires steward-key on success → StewardRoot re-renders
+    if (!ok) { setBusy(false); setErr('Wrong PIN — try again.'); setPin(''); }
+  };
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
+      <div style={{ width: 'min(380px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28, textAlign: 'center' }}>
+        <Halo size={40} color="var(--ink)" spark="var(--clay)" />
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Console locked</div>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 18 }}>Enter the PIN to unlock this church on this device.</div>
+        <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+          placeholder="PIN" inputMode="numeric" autoComplete="off"
+          style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
+        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
+        <button onClick={submit} disabled={!pin || busy} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || busy) ? .5 : 1 }}>{busy ? 'Unlocking…' : 'Unlock'}</button>
+      </div>
+    </div>
+  );
+}
+
 function StewardRoot() {
   const params = new URLSearchParams(location.search);
   const showcase = params.get('showcase') === '1';   // ?showcase=1 = the design gallery (reference)
   const [surface, setSurface] = useSt(SURFACES.some(s => s.key === params.get('surface')) ? params.get('surface') : 'console');
   const [consoleView, setConsoleView] = useSt(params.get('setup') === '1' ? 'wizard' : 'dashboard');
-  // a fresh install has no church key → show the welcome (Start new / Restore); re-render when it changes
-  const [hasKey, setHasKey] = useSt(!!window.Steward.hasKey);
-  useStE(() => { const f = () => setHasKey(!!window.Steward.hasKey); window.addEventListener('steward-key', f); return () => window.removeEventListener('steward-key', f); }, []);
+  // a fresh install has no church key → welcome; an encrypted key → unlock gate; otherwise → console.
+  const [ks, setKs] = useSt(() => ({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }));
+  useStE(() => { const f = () => setKs({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }); window.addEventListener('steward-key', f); return () => window.removeEventListener('steward-key', f); }, []);
+  // idle auto-lock: when a PIN is set, forget the key after 10 min of no activity (re-prompt on return)
+  useStE(() => {
+    if (!ks.has || !window.Steward.hasPinLock || !window.Steward.hasPinLock()) return;
+    let t; const reset = () => { clearTimeout(t); t = setTimeout(() => window.Steward.lock(), 10 * 60 * 1000); };
+    const evs = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    evs.forEach(e => window.addEventListener(e, reset, { passive: true })); reset();
+    return () => { clearTimeout(t); evs.forEach(e => window.removeEventListener(e, reset)); };
+  }, [ks.has]);
 
   // ── Real product: steward.html IS the console, full-window ──
   if (!showcase) {
     return (
       <div className="stew-root" style={{ height: '100%' }}>
-        {!hasKey ? <StewardWelcome />
+        {ks.locked ? <StewardUnlock />
+          : !ks.has ? <StewardWelcome />
           : consoleView === 'wizard' ? <StewWizard onDone={() => setConsoleView('dashboard')} /> : <StewDashboard initial={params.get('tab') || 'overview'} />}
       </div>
     );

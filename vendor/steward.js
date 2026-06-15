@@ -9692,16 +9692,25 @@ zoo`.split("\n");
   var churchSk = null;
   var churchPub = null;
   var lastProfile = {};
+  var currentMnemonic = null;
   function setKey(mnemonic) {
     sk = privateKeyFromSeedWords(mnemonic);
     pub = getPublicKey2(sk);
     churchSk = sk;
     churchPub = pub;
+    currentMnemonic = mnemonic;
     window.Steward.pubkey = pub;
     window.Steward.npub = npubEncode(pub);
     window.Steward.churchPub = pub;
     window.Steward.activePub = pub;
     window.Steward.hasKey = true;
+  }
+  var ENC_LS = "trinityone.steward.church-key.enc";
+  var b64e = (u82) => btoa(String.fromCharCode(...u82));
+  var b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  async function deriveAes(pin, salt) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 21e4, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
   async function publish(evt) {
     try {
@@ -9738,13 +9747,71 @@ zoo`.split("\n");
     npub: null,
     hasKey: false,
     // ---- key (pilot: self-custodial in localStorage; later: a signer) ----
+    locked: false,
+    // true when an encrypted key exists and isn't unlocked yet
     init(mnemonicOverride) {
       const m = mnemonicOverride || lsGet(KEY_LS);
       if (m) {
         if (mnemonicOverride) lsSet(KEY_LS, m);
         setKey(m);
+        window.Steward.locked = false;
+        return true;
       }
-      return window.Steward.hasKey;
+      if (lsGet(ENC_LS)) {
+        window.Steward.locked = true;
+        return false;
+      }
+      return false;
+    },
+    // ---- PIN lock API ----
+    hasPinLock() {
+      return !!lsGet(ENC_LS);
+    },
+    async setPin(pin) {
+      const seed = currentMnemonic || lsGet(KEY_LS);
+      if (!seed || !pin) return false;
+      const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt), new TextEncoder().encode(seed)));
+      lsSet(ENC_LS, JSON.stringify({ v: 1, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
+      try {
+        localStorage.removeItem(KEY_LS);
+      } catch {
+      }
+      return true;
+    },
+    async unlock(pin) {
+      const raw = lsGet(ENC_LS);
+      if (!raw) return true;
+      try {
+        const o = JSON.parse(raw);
+        const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt)), b64d(o.ct)));
+        setKey(seed);
+        window.Steward.locked = false;
+        window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    lock() {
+      sk = null;
+      pub = null;
+      currentMnemonic = null;
+      window.Steward.pubkey = null;
+      window.Steward.npub = null;
+      window.Steward.hasKey = false;
+      window.Steward.locked = !!lsGet(ENC_LS);
+      window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: null } }));
+    },
+    removeLock() {
+      if (!currentMnemonic) return false;
+      lsSet(KEY_LS, currentMnemonic);
+      try {
+        localStorage.removeItem(ENC_LS);
+      } catch {
+      }
+      window.Steward.locked = false;
+      return true;
     },
     createKey() {
       const m = generateSeedWords();
@@ -9762,7 +9829,7 @@ zoo`.split("\n");
       return window.Steward.createKey();
     },
     exportMnemonic() {
-      return lsGet(KEY_LS);
+      return currentMnemonic || lsGet(KEY_LS);
     },
     // restore/import a church key from its 12-word recovery phrase (replaces the current key on this device)
     restoreKey(mnemonic) {
@@ -9777,7 +9844,7 @@ zoo`.split("\n");
     // The payload carries the church's 12-word seed (same trust model as revealing the phrase — anyone
     // who reads it controls the church), tagged so the scanner knows it's a church handoff.
     handoffPayload() {
-      const m = lsGet(KEY_LS);
+      const m = currentMnemonic || lsGet(KEY_LS);
       return m ? "trinityone-church:" + m : "";
     },
     // adopt a church from a scanned QR / pasted code / link → restore its key on THIS device.
@@ -9798,13 +9865,16 @@ zoo`.split("\n");
     removeKey() {
       try {
         localStorage.removeItem(KEY_LS);
+        localStorage.removeItem(ENC_LS);
       } catch {
       }
       sk = null;
       pub = null;
+      currentMnemonic = null;
       window.Steward.pubkey = null;
       window.Steward.npub = null;
       window.Steward.hasKey = false;
+      window.Steward.locked = false;
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: null } }));
       return true;
     },

@@ -121,15 +121,27 @@ pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('
 let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
 let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
 
+let currentMnemonic = null;   // kept in memory while unlocked (for re-encrypt / remove-lock)
 function setKey(mnemonic) {
   sk = privateKeyFromSeedWords(mnemonic);
   pub = getPublicKey(sk);
   churchSk = sk; churchPub = pub;           // the device's church key
+  currentMnemonic = mnemonic;
   window.Steward.pubkey = pub;
   window.Steward.npub = npubEncode(pub);
   window.Steward.churchPub = pub;
   window.Steward.activePub = pub;
   window.Steward.hasKey = true;
+}
+
+// ── console PIN lock: encrypt the church seed at rest with a PIN/passphrase (AES-GCM, PBKDF2). A
+// locked console holds NO usable key until unlocked, so a stolen device / copied localStorage is inert. ──
+const ENC_LS = 'trinityone.steward.church-key.enc';
+const b64e = (u8) => btoa(String.fromCharCode(...u8));
+const b64d = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function deriveAes(pin, salt) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 210000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
 async function publish(evt) {
   try { await Promise.any(pool.publish(relays(), evt)); }
@@ -155,10 +167,45 @@ window.Steward = {
   pubkey: null, npub: null, hasKey: false,
 
   // ---- key (pilot: self-custodial in localStorage; later: a signer) ----
+  locked: false,                                  // true when an encrypted key exists and isn't unlocked yet
   init(mnemonicOverride) {
     const m = mnemonicOverride || lsGet(KEY_LS);
-    if (m) { if (mnemonicOverride) lsSet(KEY_LS, m); setKey(m); }
-    return window.Steward.hasKey;
+    if (m) { if (mnemonicOverride) lsSet(KEY_LS, m); setKey(m); window.Steward.locked = false; return true; }
+    if (lsGet(ENC_LS)) { window.Steward.locked = true; return false; }   // PIN-locked — needs unlock(), no key in memory
+    return false;
+  },
+  // ---- PIN lock API ----
+  hasPinLock() { return !!lsGet(ENC_LS); },
+  async setPin(pin) {                              // encrypt the current seed at rest; remove the plaintext copy
+    const seed = currentMnemonic || lsGet(KEY_LS);
+    if (!seed || !pin) return false;
+    const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt), new TextEncoder().encode(seed)));
+    lsSet(ENC_LS, JSON.stringify({ v: 1, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
+    try { localStorage.removeItem(KEY_LS); } catch {}
+    return true;
+  },
+  async unlock(pin) {                              // decrypt into memory (does NOT re-write the plaintext)
+    const raw = lsGet(ENC_LS); if (!raw) return true;
+    try {
+      const o = JSON.parse(raw);
+      const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt)), b64d(o.ct)));
+      setKey(seed); window.Steward.locked = false;
+      window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
+      return true;
+    } catch { return false; }
+  },
+  lock() {                                         // forget the in-memory key (idle / manual); seed stays encrypted
+    sk = null; pub = null; currentMnemonic = null;
+    window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
+    window.Steward.locked = !!lsGet(ENC_LS);
+    window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
+  },
+  removeLock() {                                   // drop the PIN: restore the plaintext seed (console is unlocked)
+    if (!currentMnemonic) return false;
+    lsSet(KEY_LS, currentMnemonic); try { localStorage.removeItem(ENC_LS); } catch {}
+    window.Steward.locked = false;
+    return true;
   },
   createKey() {
     const m = generateSeedWords(); lsSet(KEY_LS, m); setKey(m);
@@ -173,7 +220,7 @@ window.Steward = {
     if (window.Steward.init()) return { npub: window.Steward.npub };   // init() loads the saved seed
     return window.Steward.createKey();
   },
-  exportMnemonic() { return lsGet(KEY_LS); },
+  exportMnemonic() { return currentMnemonic || lsGet(KEY_LS); },
   // restore/import a church key from its 12-word recovery phrase (replaces the current key on this device)
   restoreKey(mnemonic) {
     const m = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -186,7 +233,7 @@ window.Steward = {
   // ---- QR handoff: the old steward shows a code; the new steward scans it to adopt the church ----
   // The payload carries the church's 12-word seed (same trust model as revealing the phrase — anyone
   // who reads it controls the church), tagged so the scanner knows it's a church handoff.
-  handoffPayload() { const m = lsGet(KEY_LS); return m ? ('trinityone-church:' + m) : ''; },
+  handoffPayload() { const m = currentMnemonic || lsGet(KEY_LS); return m ? ('trinityone-church:' + m) : ''; },
   // adopt a church from a scanned QR / pasted code / link → restore its key on THIS device.
   adoptChurch(payload) {
     let m = (payload || '').trim();
@@ -198,9 +245,9 @@ window.Steward = {
   // remove the church key from THIS device (completing a handoff, or stepping away). The church lives on
   // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
   removeKey() {
-    try { localStorage.removeItem(KEY_LS); } catch {}
-    sk = null; pub = null;
-    window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
+    try { localStorage.removeItem(KEY_LS); localStorage.removeItem(ENC_LS); } catch {}
+    sk = null; pub = null; currentMnemonic = null;
+    window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false; window.Steward.locked = false;
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
     return true;
   },
