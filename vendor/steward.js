@@ -9770,6 +9770,7 @@ zoo`.split("\n");
       if (m.split(" ").length < 12) throw new Error("Enter the full 12-word recovery phrase.");
       setKey(m);
       lsSet(KEY_LS, m);
+      window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
       return { npub: window.Steward.npub };
     },
     // ---- QR handoff: the old steward shows a code; the new steward scans it to adopt the church ----

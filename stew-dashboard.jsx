@@ -2061,21 +2061,33 @@ function DashNetworksPanel() {
 }
 
 // church video channel — members' Watch tab auto-fills from this on follow (via the gateway feed proxy)
-function DashChannelPanel({ church }) {
-  const [draft, setDraft] = React.useState('');
-  const [saved, setSaved] = React.useState(false);
-  React.useEffect(() => { setDraft(church.channel || ''); }, [church.channel]);
-  const save = () => { window.Steward.publishProfile({ channel: draft.trim() }); setSaved(true); setTimeout(() => setSaved(false), 1700); };
+// church media — video channel (Watch tab) + podcast RSS (Listen tab), merged into one panel to save space
+function DashMediaPanel({ church }) {
+  const [vid, setVid] = React.useState(''); const [vidSaved, setVidSaved] = React.useState(false);
+  const [aud, setAud] = React.useState(''); const [audSaved, setAudSaved] = React.useState(false);
+  React.useEffect(() => { setVid(church.channel || ''); }, [church.channel]);
+  React.useEffect(() => { setAud(church.audioFeed || ''); }, [church.audioFeed]);
+  const saveVid = () => { window.Steward.publishProfile({ channel: vid.trim() }); setVidSaved(true); setTimeout(() => setVidSaved(false), 1700); };
+  const saveAud = () => { window.Steward.publishProfile({ audioFeed: aud.trim() }); setAudSaved(true); setTimeout(() => setAudSaved(false), 1700); };
+  const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
+  const inp = { flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' };
   return (
-    <Panel title="Video channel">
-      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Paste your church’s <b>YouTube</b> or <b>Rumble</b> channel. Members who follow you get its videos right inside the app’s Watch tab — kept up to date automatically.</div>
+    <Panel title="Video & audio">
+      <div style={lbl}>Video channel · Watch tab</div>
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Your church’s <b>YouTube</b> or <b>Rumble</b> channel — videos appear in members’ Watch tab, auto-updated.</div>
       <div style={{ display: 'flex', gap: 9 }}>
-        <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} spellCheck={false} autoCapitalize="none"
-          placeholder="youtube.com/@yourchurch  ·  @yourchurch  ·  rumble.com/c/yourchurch"
-          style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' }} />
-        <button onClick={save} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="#fff" /> {saved ? 'Saved' : 'Save'}</button>
+        <input value={vid} onChange={e => setVid(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveVid(); }} spellCheck={false} autoCapitalize="none" placeholder="youtube.com/@yourchurch · rumble.com/c/yourchurch" style={inp} />
+        <button onClick={saveVid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={vidSaved ? 'check' : 'send'} size={15} color="#fff" /> {vidSaved ? 'Saved' : 'Save'}</button>
       </div>
       {church.channel ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.channel}</span></div> : null}
+      <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
+      <div style={lbl}>Audio / podcast · Listen tab</div>
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A <b>podcast RSS feed</b> (sermons, devotionals) — episodes stream in the Listen tab. Most hosts (Buzzsprout, Podbean, Apple, Spotify for Podcasters) give an RSS link.</div>
+      <div style={{ display: 'flex', gap: 9 }}>
+        <input value={aud} onChange={e => setAud(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveAud(); }} spellCheck={false} autoCapitalize="none" placeholder="https://feeds.yourhost.com/yourchurch.xml" style={inp} />
+        <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="#fff" /> {audSaved ? 'Saved' : 'Save'}</button>
+      </div>
+      {church.audioFeed ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.audioFeed}</span></div> : null}
     </Panel>
   );
 }
@@ -2086,7 +2098,9 @@ function DashGivingPanel({ church }) {
   const [draft, setDraft] = React.useState('');
   const [saved, setSaved] = React.useState(false);
   const [check, setCheck] = React.useState(null); // null | 'checking' | 'ok' | 'bad'
+  const [expanded, setExpanded] = React.useState(false);   // when giving is OFF, the setup is collapsed
   React.useEffect(() => { setDraft(church.lud16 || church.lnaddr || ''); setCheck(null); }, [church.lud16, church.lnaddr]);
+  const showConfig = church.giving || expanded;            // on = always show; off = collapsed until "set up"
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.trim());
 
   // verify it's a real LNURL-pay address before saving
@@ -2108,47 +2122,36 @@ function DashGivingPanel({ church }) {
     <Panel title="Giving">
       {/* steward owns the switch: giving only appears for members when this church turns it on */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)',
-        background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', marginBottom: 16 }}>
+        background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', marginBottom: showConfig ? 16 : 0 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show the Giving tab to members</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{church.giving ? 'On — members can give to this church.' : 'Off — members won’t see giving. Set your Lightning address below, then switch on.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{church.giving ? 'On — members can give to this church.' : 'Off — members won’t see giving.'}</div>
         </div>
         <button onClick={toggleGiving} aria-label="Toggle giving" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0,
           background: church.giving ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: church.giving ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
-      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where gifts land. Paste your church’s <b>Lightning address</b> (looks like an email: <span style={{ fontFamily: 'var(--mono)' }}>giving@yourchurch.org</span>). It’s the church’s <b>own wallet</b> — Strike, Phoenix, Alby, Coinos, a node, anywhere that gives a Lightning address. Members give straight to it; <b>the app never holds your money</b>.</div>
-      <div style={{ display: 'flex', gap: 9 }}>
-        <input value={draft} onChange={e => { setDraft(e.target.value); setCheck(null); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} spellCheck={false} autoCapitalize="none" inputMode="email"
-          placeholder="giving@yourchurch.org"
-          style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: `1px solid ${check === 'bad' ? 'var(--clay)' : 'var(--line)'}`, background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' }} />
-        <button onClick={verify} disabled={!valid || check === 'checking'} className="sk-btn sk-btn--ghost" style={{ padding: '0 14px', fontSize: 13 }}>{check === 'checking' ? '…' : 'Check'}</button>
-        <button onClick={save} disabled={!valid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="#fff" /> {saved ? 'Saved' : 'Save'}</button>
-      </div>
-      {check === 'ok' ? <div style={{ fontSize: 12, color: 'var(--sage)', fontWeight: 700, marginTop: 8, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="check" size={13} stroke={3} color="var(--sage)" /> Valid Lightning address — ready to receive.</div> : null}
-      {check === 'bad' ? <div style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 700, marginTop: 8 }}>That doesn’t resolve to a Lightning pay address — double-check it.</div> : null}
-      {(church.lud16 || church.lnaddr) ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.lud16 || church.lnaddr}</span></div> : null}
-    </Panel>
-  );
-}
-
-// church audio — a podcast RSS feed whose episodes members stream in the app's Listen tab
-function DashAudioPanel({ church }) {
-  const [draft, setDraft] = React.useState('');
-  const [saved, setSaved] = React.useState(false);
-  React.useEffect(() => { setDraft(church.audioFeed || ''); }, [church.audioFeed]);
-  const save = () => { window.Steward.publishProfile({ audioFeed: draft.trim() }); setSaved(true); setTimeout(() => setSaved(false), 1700); };
-  return (
-    <Panel title="Audio / podcast">
-      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Paste a <b>podcast RSS feed</b> (sermons, audio devotionals). Members who follow you stream its episodes in the app’s <b>Listen</b> tab — most podcast hosts (Spotify for Podcasters, Buzzsprout, Podbean, Apple) give you an RSS link.</div>
-      <div style={{ display: 'flex', gap: 9 }}>
-        <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} spellCheck={false} autoCapitalize="none"
-          placeholder="https://feeds.yourhost.com/yourchurch.xml"
-          style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' }} />
-        <button onClick={save} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="#fff" /> {saved ? 'Saved' : 'Save'}</button>
-      </div>
-      {church.audioFeed ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.audioFeed}</span></div> : null}
+      {/* when giving is OFF the setup collapses to a single link, so the panel doesn't sit there full of dead fields */}
+      {!showConfig ? (
+        <button onClick={() => setExpanded(true)} style={{ border: 'none', background: 'none', padding: '10px 0 0', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name="pen" size={13} color="currentColor" /> {(church.lud16 || church.lnaddr) ? 'Edit the Lightning address' : 'Set up the Lightning address'}
+        </button>
+      ) : (
+        <React.Fragment>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where gifts land. Paste your church’s <b>Lightning address</b> (looks like an email: <span style={{ fontFamily: 'var(--mono)' }}>giving@yourchurch.org</span>). It’s the church’s <b>own wallet</b> — Strike, Phoenix, Alby, Coinos, a node, anywhere that gives a Lightning address. Members give straight to it; <b>the app never holds your money</b>.</div>
+          <div style={{ display: 'flex', gap: 9 }}>
+            <input value={draft} onChange={e => { setDraft(e.target.value); setCheck(null); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} spellCheck={false} autoCapitalize="none" inputMode="email"
+              placeholder="giving@yourchurch.org"
+              style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: `1px solid ${check === 'bad' ? 'var(--clay)' : 'var(--line)'}`, background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' }} />
+            <button onClick={verify} disabled={!valid || check === 'checking'} className="sk-btn sk-btn--ghost" style={{ padding: '0 14px', fontSize: 13 }}>{check === 'checking' ? '…' : 'Check'}</button>
+            <button onClick={save} disabled={!valid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="#fff" /> {saved ? 'Saved' : 'Save'}</button>
+          </div>
+          {check === 'ok' ? <div style={{ fontSize: 12, color: 'var(--sage)', fontWeight: 700, marginTop: 8, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="check" size={13} stroke={3} color="var(--sage)" /> Valid Lightning address — ready to receive.</div> : null}
+          {check === 'bad' ? <div style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 700, marginTop: 8 }}>That doesn’t resolve to a Lightning pay address — double-check it.</div> : null}
+          {(church.lud16 || church.lnaddr) ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.lud16 || church.lnaddr}</span></div> : null}
+        </React.Fragment>
+      )}
     </Panel>
   );
 }
@@ -2365,9 +2368,7 @@ function DashSettings({ onTab }) {
         </div>
       </Panel>
 
-      <DashChannelPanel church={church} />
-
-      <DashAudioPanel church={church} />
+      <DashMediaPanel church={church} />
 
       <DashGivingPanel church={church} />
 

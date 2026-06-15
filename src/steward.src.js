@@ -179,6 +179,8 @@ window.Steward = {
     const m = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (m.split(' ').length < 12) throw new Error('Enter the full 12-word recovery phrase.');
     setKey(m); lsSet(KEY_LS, m);   // setKey -> privateKeyFromSeedWords throws if the phrase is invalid
+    // fire steward-key so the first-run welcome advances to the console (createKey does this too)
+    window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
     return { npub: window.Steward.npub };
   },
   // ---- QR handoff: the old steward shows a code; the new steward scans it to adopt the church ----
