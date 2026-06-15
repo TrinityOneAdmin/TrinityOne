@@ -28,7 +28,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   if (!networks.length) {
     return (
       <button onClick={onEditName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: 18, textAlign: 'left' }}>
-        <SkBadge initials={initials} size={34} radius={10} />
+        <SkBadge initials={initials} picture={church.picture} size={34} radius={10} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{churchName}</span>{church.name ? <Icon name="check" size={12} stroke={3} color="var(--sage)" /> : null}</div>
           <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: churchHandle(church) ? 'var(--font-ui)' : 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchHandle(church) || (church.npub ? church.npub.slice(0, 18) + '…' : 'no key')}</div>
@@ -40,7 +40,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   return (
     <div style={{ position: 'relative', marginBottom: 18 }}>
       <button onClick={() => setOpen(o => !o)} title="Switch between your church and network" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, width: '100%', border: '1px solid ' + (viewingNetwork ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)'), background: viewingNetwork ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer', textAlign: 'left' }}>
-        <SkBadge initials={initials} size={34} radius={10} accent={viewingNetwork ? 'var(--clay)' : undefined} />
+        <SkBadge initials={initials} picture={viewingNetwork ? '' : church.picture} size={34} radius={10} accent={viewingNetwork ? 'var(--clay)' : undefined} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchName}</span>
@@ -420,7 +420,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'rota'
         ? <button onClick={() => setAddingTeam(true)} className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {narrow ? '' : 'New team'}</button>
         : <button onClick={() => setPosting(true)} className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> {narrow ? '' : 'New post'}</button>}
-      <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials={initials} size={narrow ? 32 : 36} radius={11} accent="var(--sage)" /></button>
+      <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={11} accent="var(--sage)" /></button>
     </React.Fragment>
   );
 
@@ -2278,6 +2278,24 @@ function WebAddressModal({ church, onClose }) {
   );
 }
 
+// resize a chosen image to a small square data-URI for the church avatar (no image host — it rides in
+// the church's kind-0 profile, so keep it small). Centre-cropped to `size`px, webp (jpeg fallback).
+function resizeImageToDataURI(file, size = 128) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'); c.width = size; c.height = size;
+      const ctx = c.getContext('2d'); const s = Math.min(img.width, img.height);
+      ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      let uri = ''; try { uri = c.toDataURL('image/webp', 0.82); } catch {}
+      if (!uri || uri.length < 30) uri = c.toDataURL('image/jpeg', 0.82);
+      resolve(uri);
+    };
+    img.onerror = reject;
+    const r = new FileReader(); r.onload = () => { img.src = r.result; }; r.onerror = reject; r.readAsDataURL(file);
+  });
+}
+
 function DashSettings({ onTab }) {
   const church = window.useStewardChurch();   // real church name + npub
   const [revealed, setRevealed] = React.useState(false);
@@ -2285,6 +2303,14 @@ function DashSettings({ onTab }) {
   const [copied, setCopied] = React.useState(false);
   const [editingName, setEditingName] = React.useState(false);
   const [editingWeb, setEditingWeb] = React.useState(false);
+  const [picBusy, setPicBusy] = React.useState(false);
+  const onPickPicture = async (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return; setPicBusy(true);
+    try { const uri = await resizeImageToDataURI(f, 128); await Promise.resolve(window.Steward.publishProfile({ picture: uri })); } catch {}
+    setPicBusy(false);
+  };
+  const removePicture = () => Promise.resolve(window.Steward.publishProfile({ picture: '' }));
   const saveName = (n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }));
   const reveal = () => { try { setPhrase(window.Steward.exportMnemonic() || ''); } catch {} setRevealed(true); };
   const [restoreOpen, setRestoreOpen] = React.useState(false);
@@ -2318,10 +2344,14 @@ function DashSettings({ onTab }) {
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
-          <SkBadge initials={(church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase()} size={44} radius={13} />
+          <label title="Upload a church picture" style={{ position: 'relative', cursor: picBusy ? 'default' : 'pointer', flexShrink: 0, opacity: picBusy ? .6 : 1 }}>
+            <SkBadge initials={(church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase()} picture={church.picture} size={44} radius={13} />
+            <span style={{ position: 'absolute', right: -4, bottom: -4, width: 20, height: 20, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--surface)' }}><Icon name={picBusy ? 'refresh' : 'pen'} size={10} color="#fff" /></span>
+            <input type="file" accept="image/*" disabled={picBusy} onChange={onPickPicture} style={{ display: 'none' }} />
+          </label>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{church.name || 'Name your church'}</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Shown to everyone who joins</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{church.picture ? <button onClick={removePicture} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Remove picture</button> : 'Tap the badge to add a picture'}</div>
           </div>
         </div>
         <SkKey value={church.npub || '—'} label="npub" />

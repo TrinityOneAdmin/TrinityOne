@@ -82,14 +82,14 @@ function SkPill({ children, tint = 'clay', style = {} }) {
 }
 
 // ── church badge (rounded square initials) ──
-function SkBadge({ size = 44, radius = 13, accent = 'var(--clay)', initials = 'GC', style = {} }) {
+function SkBadge({ size = 44, radius = 13, accent = 'var(--clay)', initials = 'GC', picture = '', style = {} }) {
   return (
     <div style={{
-      width: size, height: size, borderRadius: radius, flexShrink: 0,
-      background: `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 60%, #16120c))`,
+      width: size, height: size, borderRadius: radius, flexShrink: 0, overflow: 'hidden',
+      background: picture ? `center/cover no-repeat url(${picture})` : `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 60%, #16120c))`,
       display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
       fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: size * 0.38, letterSpacing: '.3px', ...style,
-    }}>{initials}</div>
+    }}>{picture ? '' : initials}</div>
   );
 }
 

@@ -172,7 +172,7 @@ function useStewardChurch() {
   const idv = useStewardIdv();
   const [p, setP] = useSt({});
   useStE(() => { setP({}); return window.Steward.subscribeProfile(setP); }, [idv]);
-  return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', channel: (p && p.channel) || '', audioFeed: (p && p.audioFeed) || '', lud16: (p && p.lud16) || '', giving: !!(p && p.giving), npub: window.Steward.npub || '', isNetwork: window.Steward.isViewingNetwork ? window.Steward.isViewingNetwork() : false };
+  return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', channel: (p && p.channel) || '', audioFeed: (p && p.audioFeed) || '', lud16: (p && p.lud16) || '', giving: !!(p && p.giving), picture: (p && p.picture) || '', npub: window.Steward.npub || '', isNetwork: window.Steward.isViewingNetwork ? window.Steward.isViewingNetwork() : false };
 }
 window.useStewardChurch = useStewardChurch;
 

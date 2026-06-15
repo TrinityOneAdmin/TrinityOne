@@ -67,11 +67,11 @@ function ChurchBadge({ church, size = 46, radius = 14 }) {
   const accent = church.accent || 'var(--clay)';
   return (
     <div style={{
-      width: size, height: size, borderRadius: radius, flexShrink: 0,
-      background: `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 62%, #16120c))`,
+      width: size, height: size, borderRadius: radius, flexShrink: 0, overflow: 'hidden',
+      background: church.picture ? `center/cover no-repeat url(${church.picture})` : `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 62%, #16120c))`,
       display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
       fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: size * 0.38, letterSpacing: '.3px',
-    }}>{church.initials}</div>
+    }}>{church.picture ? '' : church.initials}</div>
   );
 }
 window.ChurchBadge = ChurchBadge;
