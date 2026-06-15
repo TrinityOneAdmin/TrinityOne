@@ -64,7 +64,61 @@ email, or real name.
 
 ---
 
-## 4. Getting a new phone (or if you lose this one)
+## 4. Reading the Bible
+
+TrinityOne is a **complete Bible you can read anywhere** — even with no internet at all. The
+first time you open it, a clear modern translation (the **Berean Standard Bible**) sets itself
+up for you. Nothing to buy, nothing to sign up for.
+
+- **Turn to any passage:** tap the book name at the top to jump to a book and chapter.
+- **Make it comfy:** in the reader's settings, make the words bigger or switch on tappable
+  Strong's word helps.
+- **Keep what speaks to you:** highlight a verse, add a note, or bookmark it — these stay
+  private on your phone.
+
+### Add another translation
+1. In **Read**, tap the translation name at the very top (e.g. *"BSB"*).
+2. Tap **"Browse all translations"** and search — there are over a thousand, in many languages.
+3. Tap one to download it. It saves to your phone, then **works offline** forever after.
+
+Bibles download only when you choose one (to keep the app small); after that they're yours
+offline. To switch versions, just tap the name at the top and pick. Use **Search** to find a
+verse across every translation you've installed.
+
+---
+
+## 5. Your church & messaging
+
+The **Community** tab is where your church life lives: announcements, group chats, and private
+messages. It's a quiet, friendly space — just your church, no strangers, no adverts.
+
+### Follow your church
+1. Tap your circle at the top → **"Follow a church"**.
+2. Point your camera at the church's **QR code**, or paste the link they gave you.
+3. That's it — you'll see their groups, announcements, and giving.
+
+- **Groups & announcements:** join the chat or read what the church shares. A little **dot** on
+  Community tells you when something new arrives.
+- **Private messages:** message anyone in your church one-to-one. Only you and they can read them.
+- **Share what blesses you:** send a verse, note, or prayer into a group with a tap.
+
+It's a church, so **do use your name** — it helps people recognise and welcome you. You can stay
+private if you'd rather (see *"Setting up your name and picture"*).
+
+**A gentle word about that "key":**
+- **You don't manage it day to day.** The key is just how the app quietly proves it's really you
+  posting — no password to type, nothing to log into. You simply use the app.
+- **Your church can't see your private things.** Notes stay on your phone, and direct messages
+  can only be read by you and the person you're writing to.
+- **The one thing to keep safe is your 12 words.** They back up everything — your name, your
+  groups, your wallet. Write them on paper once and you're covered, even on a new phone.
+
+> Not sure about the 12 words? It's one small thing to do once — see *"Your 12 words"*, and any
+> steward will happily help.
+
+---
+
+## 6. Getting a new phone (or if you lose this one)
 
 This is exactly why you wrote down your 12 words.
 
@@ -78,7 +132,7 @@ be recovered, and you'd simply start fresh with a new one. So keep that paper sa
 
 ---
 
-## 5. Staying safe from scams
+## 7. Staying safe from scams
 
 Because you're in charge of your own key, please remember:
 
@@ -91,7 +145,7 @@ Because you're in charge of your own key, please remember:
 
 ---
 
-## 6. Notifications — staying in the loop
+## 8. Notifications — staying in the loop
 
 TrinityOne can let you know when there's something for you — a message, a church announcement,
 or a request to serve — **even when the app is closed.** You're always in control of what
@@ -111,7 +165,7 @@ notifications, the app shows a short note on how to turn them back on.
 
 ---
 
-## 7. The giving wallet
+## 9. The giving wallet
 
 TrinityOne has a small wallet built in, just for giving to your church — using Lightning (a
 fast, low-fee way to send small amounts). Think of it like the change purse you'd drop in the
@@ -143,7 +197,7 @@ Giving can be **private** if you choose: your church sees the gift, not your nam
 
 ---
 
-## 8. Getting set up with help from a steward
+## 10. Getting set up with help from a steward
 
 If setting this up yourself feels daunting, you don't have to do it alone.
 

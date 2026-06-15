@@ -58,6 +58,56 @@ window.HelpData = {
       ],
     },
     {
+      id: 'reading',
+      illo: 'book',
+      title: 'Reading the Bible',
+      summary: 'A whole Bible in your pocket — and it works with no signal.',
+      minutes: 2,
+      blocks: [
+        { type: 'p', text: 'TrinityOne is a complete Bible you can read anywhere — on the bus, in the garden, in church — even with no internet at all. The first time you open it, a clear modern translation (the Berean Standard Bible) sets itself up for you. Nothing to buy, nothing to sign up for.' },
+        { type: 'list', items: [
+          { lead: 'Turn to any passage.', text: 'Tap the book name at the top to jump to a book and chapter.' },
+          { lead: 'Make it comfy.', text: 'In the reader’s settings you can make the words bigger, and switch on tappable Strong’s word helps.' },
+          { lead: 'Keep what speaks to you.', text: 'Highlight a verse, add a note, or bookmark it — these stay private on your phone.' },
+        ] },
+        { type: 'steps', label: 'Add another translation', items: [
+          'In Read, tap the translation name at the very top (e.g. “BSB”).',
+          'Tap “Browse all translations” and search — there are over a thousand, in many languages.',
+          'Tap one to download it. It saves to your phone, then works offline forever after.',
+        ] },
+        { type: 'note', text: 'Bibles download only when you choose one, to keep the app small. Once downloaded, they’re yours offline. To switch versions, just tap the name at the top and pick.' },
+        { type: 'callout', tone: 'sage', text: 'Want to find a verse? Use Search to look across every translation you’ve installed — by word or by reference.' },
+      ],
+    },
+    {
+      id: 'community',
+      illo: 'people',
+      title: 'Your church & messaging',
+      summary: 'Stay connected with your church family — simply and safely.',
+      minutes: 3,
+      blocks: [
+        { type: 'p', text: 'The Community tab is where your church life lives: announcements, group chats, and private messages. It’s a quiet, friendly space — just your church, no strangers, no adverts.' },
+        { type: 'steps', label: 'Follow your church', items: [
+          'Tap your circle at the top → “Follow a church”.',
+          'Point your camera at the church’s QR code, or paste the link they gave you.',
+          'That’s it — you’ll see their groups, announcements, and giving.',
+        ] },
+        { type: 'list', items: [
+          { lead: 'Groups & announcements', text: 'Join in the chat, or read what the church shares. A little dot on Community tells you when something new arrives.' },
+          { lead: 'Private messages', text: 'Message anyone in your church one-to-one. These are private — only you and they can read them.' },
+          { lead: 'Share what blesses you', text: 'Send a verse, a note, or a prayer into a group with a tap.' },
+        ] },
+        { type: 'callout', tone: 'gold', text: 'It’s a church, so do use your name — it helps people recognise and welcome you. You can stay private if you’d rather (see “Setting up your name & picture”).' },
+        { type: 'p', text: 'A gentle word about that “key” you may have read about:' },
+        { type: 'list', items: [
+          { lead: 'You don’t manage it day to day.', text: 'The key is just how the app quietly proves it’s really you posting — there’s no password to type and nothing to log into. You simply use the app.' },
+          { lead: 'Your church can’t see your private things.', text: 'Your notes stay on your phone, and your direct messages can only be read by you and the person you’re writing to.' },
+          { lead: 'The one thing to keep safe is your 12 words.', text: 'They’re the backup for everything — your name, your groups, and your wallet. Write them on paper once and you’re covered, even on a new phone.' },
+        ] },
+        { type: 'callout', tone: 'sage', text: 'Not sure about the 12 words? It really is just one small thing to do once — the guide “Your 12 words” walks you through it gently, and any steward at church will happily help.' },
+      ],
+    },
+    {
       id: 'notifications',
       illo: 'bell',
       title: 'Notifications — staying in the loop',

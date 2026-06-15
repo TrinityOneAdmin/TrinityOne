@@ -56,6 +56,21 @@ function HelpIllo({ name, size = 120, tone = 'var(--clay)', soft = 'var(--clay-s
       <rect x="40" y="66" width="14" height="14" rx="3" {...s} strokeWidth="3.4" />
       <path d="M66 66h6v6m8 0v.04M72 80h.04M80 80v-6" {...s} strokeWidth="3.4" />
     </>,
+    // open book (reading the Bible)
+    book: <>
+      <path d="M60 34c-7-6-17-8-28-7-3 0-5 2-5 5v36c0 3 2 5 5 5 11-1 21 1 28 7" {...fillSoft} />
+      <path d="M60 34c7-6 17-8 28-7 3 0 5 2 5 5v36c0 3-2 5-5 5-11-1-21 1-28 7" {...s} />
+      <path d="M60 34c-7-6-17-8-28-7-3 0-5 2-5 5v36c0 3 2 5 5 5 11-1 21 1 28 7 7-6 17-8 28-7 3 0 5-2 5-5V32c0-3-2-5-5-5-11-1-21 1-28 7Z" {...s} />
+      <path d="M60 34v46" {...s} strokeWidth="3.4" />
+    </>,
+    // two people (community / fellowship)
+    people: <>
+      <circle cx="60" cy="56" r="30" {...fillSoft} />
+      <circle cx="48" cy="48" r="9" {...s} />
+      <circle cx="73" cy="51" r="7" {...s} />
+      <path d="M33 76c2-8 8-13 15-13s13 5 15 13" {...s} />
+      <path d="M66 70c2-5 6-8 11-8 5 0 9 3 11 8" {...s} strokeWidth="3.4" />
+    </>,
     // bell with a gentle alert dot (notifications)
     bell: <>
       <circle cx="60" cy="54" r="30" {...fillSoft} />
