@@ -313,6 +313,63 @@ function StewSetupWizard({ church, onDone, onTab }) {
   );
 }
 
+// in-app QR scanner for the steward console (camera + BarcodeDetector; jsQR fallback for Android WebView).
+// Calls onResult(text) with the decoded QR; degrades gracefully with no camera/detector.
+function StewQRScanner({ onResult, onCancel }) {
+  const vref = React.useRef(null);
+  const [status, setStatus] = React.useState('starting');
+  React.useEffect(() => {
+    let stream, raf, stopped = false, detector = null, canvas = null, cctx = null;
+    const hasBD = ('BarcodeDetector' in window);
+    const hasJsQR = (typeof window.jsQR === 'function');
+    (async () => {
+      try {
+        if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || (!hasBD && !hasJsQR)) { setStatus('unsupported'); return; }
+        if (hasBD) { try { detector = new window.BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; } }
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+        if (stopped) { stream.getTracks().forEach(t => t.stop()); return; }
+        const v = vref.current; if (!v) return;
+        v.srcObject = stream; v.setAttribute('playsinline', ''); v.muted = true; await v.play();
+        setStatus('scanning');
+        const tick = async () => {
+          if (stopped) return;
+          try {
+            if (detector) { const codes = await detector.detect(v); if (codes && codes.length && codes[0].rawValue) { onResult(codes[0].rawValue); return; } }
+            else if (v.videoWidth) {
+              if (!canvas) { canvas = document.createElement('canvas'); cctx = canvas.getContext('2d', { willReadFrequently: true }); }
+              canvas.width = v.videoWidth; canvas.height = v.videoHeight; cctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+              const img = cctx.getImageData(0, 0, canvas.width, canvas.height);
+              const res = window.jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+              if (res && res.data) { onResult(res.data); return; }
+            }
+          } catch (e) {}
+          raf = requestAnimationFrame(tick);
+        };
+        tick();
+      } catch (e) { setStatus('error'); }
+    })();
+    return () => { stopped = true; if (raf) cancelAnimationFrame(raf); if (stream) stream.getTracks().forEach(t => t.stop()); };
+  }, []);
+  if (status === 'unsupported' || status === 'error') {
+    return (
+      <div style={{ borderRadius: 14, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', padding: 16, textAlign: 'center' }}>
+        <Icon name="qr" size={24} color="var(--clay)" />
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '8px 0 12px' }}>{status === 'unsupported' ? 'This device can’t scan here — paste the phrase instead.' : 'Couldn’t open the camera. Allow access, or paste the phrase.'}</p>
+        <button onClick={onCancel} className="sk-btn sk-btn--ghost" style={{ padding: '8px 14px', fontSize: 13 }}>Back</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ position: 'relative', borderRadius: 16, overflow: 'hidden', background: '#000', aspectRatio: '1 / 1', maxWidth: 320, margin: '0 auto' }}>
+      <video ref={vref} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+      <div style={{ position: 'absolute', inset: '16%', border: '3px solid rgba(255,255,255,.92)', borderRadius: 16 }} />
+      <div style={{ position: 'absolute', top: 10, left: 0, right: 0, textAlign: 'center', color: '#fff', fontSize: 12.5, fontWeight: 700, textShadow: '0 1px 4px rgba(0,0,0,.6)' }}>{status === 'starting' ? 'Starting camera…' : 'Point at the handoff QR'}</div>
+      <button onClick={onCancel} style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', border: 'none', background: 'rgba(0,0,0,.55)', color: '#fff', borderRadius: 999, padding: '7px 16px', cursor: 'pointer', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>Cancel</button>
+    </div>
+  );
+}
+window.StewQRScanner = StewQRScanner;
+
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
@@ -2230,6 +2287,8 @@ function DashSettings({ onTab }) {
   const [restorePhrase, setRestorePhrase] = React.useState('');
   const [restoreErr, setRestoreErr] = React.useState('');
   const [confirmRemove, setConfirmRemove] = React.useState(false);   // "remove church from this device" guard
+  const [showQR, setShowQR] = React.useState(false);                 // handoff QR (new steward scans it)
+  const handoffSvg = showQR ? (window.Steward.qrSVG ? window.Steward.qrSVG(window.Steward.handoffPayload()) : '') : '';
   const doRestore = () => {
     setRestoreErr('');
     try {
@@ -2323,13 +2382,27 @@ function DashSettings({ onTab }) {
       <Panel title="Stewards & handoff">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>A church is one key. To <b style={{ color: 'var(--ink)' }}>add another steward</b> or <b style={{ color: 'var(--ink)' }}>hand the church over</b>, share its recovery phrase — they enter it on their device under <b>Church key → Restore from a recovery phrase</b> (or in the Steward app). Then they can manage {church.name || 'the church'} too.</div>
         <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6 }}>
-          <li><b>Reveal</b> the recovery phrase above and share it privately (in person is safest).</li>
-          <li>They <b>Restore</b> it on their device — now a co-steward.</li>
+          <li><b>Show the handoff QR</b> below (or reveal the phrase above) — in person is safest.</li>
+          <li>They open the Steward app → <b>Restore a church</b> → <b>Scan</b> it (or paste the phrase) — now a co-steward.</li>
           <li>Handing off entirely? <b>Remove it from this device</b> below once they’re set up.</li>
         </ol>
         <div style={{ display: 'flex', gap: 9, padding: 11, borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', marginBottom: 14 }}>
           <Icon name="shield" size={16} color="var(--gold)" style={{ flexShrink: 0, marginTop: 1 }} />
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Anyone with the phrase can manage the church.</b> Per-person add/remove that doesn’t copy the secret (delegated keys / a steward roster) is on the roadmap — for now, only share it with people you fully trust.</div>
+        </div>
+        {/* handoff QR — the new steward scans this to adopt the church */}
+        <div style={{ marginBottom: 14 }}>
+          {!showQR ? (
+            <button onClick={() => setShowQR(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="#fff" /> Show handoff QR</button>
+          ) : (
+            <div style={{ textAlign: 'center', padding: 14, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              {handoffSvg
+                ? <div style={{ width: 184, height: 184, margin: '0 auto', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: handoffSvg }} />
+                : <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: 20 }}>No church key on this device.</div>}
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '12px 6px 0' }}>New steward: open the Steward app → <b>Restore a church</b> → <b>Scan</b>, and point the camera here. This carries the church key — show it only to someone you trust, in person.</div>
+              <button onClick={() => setShowQR(false)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 13px', fontSize: 12.5, marginTop: 10 }}>Hide QR</button>
+            </div>
+          )}
         </div>
         {!confirmRemove ? (
           <button onClick={() => setConfirmRemove(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, color: 'var(--clay)' }}><Icon name="x" size={15} color="currentColor" /> Remove this church from this device</button>

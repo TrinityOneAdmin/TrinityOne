@@ -31,7 +31,7 @@ cp icons.jsx stew-data.jsx stew-console.jsx stew-schedule.jsx stew-templates.jsx
    stew-dashboard.jsx stew-relay.jsx stew-extension.jsx stew-phone.jsx stew-custody.jsx \
    backup.jsx steward-root.jsx "$WWW/"
 cp -r vendor/fonts "$WWW/vendor/"
-cp vendor/react.development.js vendor/react-dom.development.js vendor/steward.js "$WWW/vendor/"
+cp vendor/react.development.js vendor/react-dom.development.js vendor/steward.js vendor/jsqr.js "$WWW/vendor/"
 
 # pre-transpile JSX -> JS (runtime Babel is unreliable in the Capacitor webview)
 echo "transpiling steward JSX -> JS…"

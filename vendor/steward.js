@@ -9772,6 +9772,26 @@ zoo`.split("\n");
       lsSet(KEY_LS, m);
       return { npub: window.Steward.npub };
     },
+    // ---- QR handoff: the old steward shows a code; the new steward scans it to adopt the church ----
+    // The payload carries the church's 12-word seed (same trust model as revealing the phrase — anyone
+    // who reads it controls the church), tagged so the scanner knows it's a church handoff.
+    handoffPayload() {
+      const m = lsGet(KEY_LS);
+      return m ? "trinityone-church:" + m : "";
+    },
+    // adopt a church from a scanned QR / pasted code / link → restore its key on THIS device.
+    adoptChurch(payload) {
+      let m = (payload || "").trim();
+      const q = m.match(/[?&#](?:adopt|church)=([^&#\s]+)/);
+      if (q) {
+        try {
+          m = decodeURIComponent(q[1]);
+        } catch {
+        }
+      }
+      m = m.replace(/^trinityone-church:/i, "").trim();
+      return window.Steward.restoreKey(m);
+    },
     // remove the church key from THIS device (completing a handoff, or stepping away). The church lives on
     // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
     removeKey() {
@@ -10928,6 +10948,17 @@ zoo`.split("\n");
       qr.addData(window.Steward.joinUrl());
       qr.make();
       return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+    },
+    // generic QR (used for the handoff code) — any text → scalable SVG string
+    qrSVG(text) {
+      try {
+        const qr = (0, import_qrcode_generator.default)(0, "M");
+        qr.addData(String(text || ""));
+        qr.make();
+        return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+      } catch (e) {
+        return "";
+      }
     }
   };
   window.Steward.init();

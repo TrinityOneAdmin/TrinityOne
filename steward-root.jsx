@@ -176,25 +176,81 @@ function useStewardChurch() {
 }
 window.useStewardChurch = useStewardChurch;
 
-// ensure a church key exists; on first run, seed the church's starter groups from the sample set
-// (published for real, so the console is populated AND every group is a signed event members read).
+// load the church key if this device already has one. A fresh install has NO key — it shows the
+// welcome screen (Start a new church / Restore a church) instead of silently minting one, so the
+// steward chooses. Seeding the starter groups happens in "Start a new church" (seedNewChurch).
 function initChurch() {
   const params = new URLSearchParams(location.search);
   const inject = params.get('churchkey');                 // test hook: load a known church key
-  if (inject) window.Steward.init(inject);
-  window.Steward.ensureKey();
-  // self-register this church with the shared pool relays (proves key ownership — no admin token), so a
-  // new church is write-policy-enabled + moderation-capable with zero manual relay setup. Fire-and-forget.
+  if (inject) { window.Steward.init(inject); return; }
+  const adopt = params.get('adopt');                      // QR/link handoff: adopt a church on launch
+  if (adopt && !window.Steward.hasKey) { try { window.Steward.adoptChurch(adopt); } catch (e) {} }
+  window.Steward.init();                                  // load the saved key if there is one (no auto-create)
+  if (window.Steward.hasKey && window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
+}
+
+// "Start a new church": mint a fresh key, register it, and seed the sample chat groups once (real
+// signed events members can read). Self-register proves key ownership to the pool relays (no token).
+function seedNewChurch() {
+  window.Steward.createKey();
   if (window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
-  // first run: publish the sample chat groups (the focus) as REAL signed events. Funds are NOT
-  // seeded — giving is parked for the pilot, so the console stays chat-only.
-  if (inject) return;
   try {
-    if (localStorage.getItem('trinityone.steward.seeded')) return;
-    localStorage.setItem('trinityone.steward.seeded', '1');
-    (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: g.id, name: g.name, kind: g.kind, sub: g.sub }));
+    if (!localStorage.getItem('trinityone.steward.seeded')) {
+      localStorage.setItem('trinityone.steward.seeded', '1');
+      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: g.id, name: g.name, kind: g.kind, sub: g.sub }));
+    }
   } catch (e) {}
 }
+
+// first-run choice for a fresh install: start a new church, or restore one (scan a handoff QR / paste
+// the phrase). Once a key exists the StewardRoot swaps to the console (steward-key event re-renders).
+function StewardWelcome() {
+  const [mode, setMode] = useSt('choose');   // choose | restore | scanning
+  const [phrase, setPhrase] = useSt('');
+  const [err, setErr] = useSt('');
+  const adopt = (payload) => {
+    setErr('');
+    try { window.Steward.adoptChurch(payload); if (window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {}); }
+    catch (e) { setMode('restore'); setErr((e && e.message) || 'That code or phrase isn’t valid.'); }
+  };
+  const card = { width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28 };
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
+      <div style={card}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginBottom: 18, textAlign: 'center' }}>
+          <Halo size={40} color="var(--ink)" spark="var(--clay)" />
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, letterSpacing: '-.3px' }}>Steward console</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>{mode === 'choose' ? 'Set up a new church, or take over an existing one.' : 'Restore a church from another steward.'}</div>
+        </div>
+
+        {mode === 'choose' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+            <button onClick={seedNewChurch} className="sk-btn sk-btn--clay" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="plus" size={17} color="#fff" /> Start a new church</button>
+            <button onClick={() => { setErr(''); setMode('restore'); }} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="refresh" size={17} color="currentColor" /> Restore a church</button>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', marginTop: 4, lineHeight: 1.5 }}>Restoring? You’ll scan the handoff QR from another steward (or paste the recovery phrase).</div>
+          </div>
+        ) : mode === 'scanning' ? (
+          <div>
+            <StewQRScanner onResult={adopt} onCancel={() => setMode('restore')} />
+            <button onClick={() => setMode('restore')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, marginTop: 12, width: '100%', justifyContent: 'center' }}>Enter the phrase instead</button>
+          </div>
+        ) : (
+          <div>
+            <button onClick={() => { setErr(''); setMode('scanning'); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 14 }}><Icon name="qr" size={16} color="#fff" /> Scan the handoff QR</button>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>OR PASTE THE 12-WORD PHRASE</div>
+            <textarea value={phrase} onChange={e => setPhrase(e.target.value)} rows={3} placeholder="word one  word two  word three …" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
+            {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>{err}</div> : null}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={() => adopt(phrase)} disabled={!phrase.trim()} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14, opacity: phrase.trim() ? 1 : 0.5 }}><Icon name="refresh" size={15} color="#fff" /> Restore church</button>
+              <button onClick={() => { setErr(''); setMode('choose'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 14 }}>Back</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+window.StewardWelcome = StewardWelcome;
 
 const SURFACES = [
   { key: 'console',   label: 'Console',     ic: 'sliders' },
@@ -228,12 +284,16 @@ function StewardRoot() {
   const showcase = params.get('showcase') === '1';   // ?showcase=1 = the design gallery (reference)
   const [surface, setSurface] = useSt(SURFACES.some(s => s.key === params.get('surface')) ? params.get('surface') : 'console');
   const [consoleView, setConsoleView] = useSt(params.get('setup') === '1' ? 'wizard' : 'dashboard');
+  // a fresh install has no church key → show the welcome (Start new / Restore); re-render when it changes
+  const [hasKey, setHasKey] = useSt(!!window.Steward.hasKey);
+  useStE(() => { const f = () => setHasKey(!!window.Steward.hasKey); window.addEventListener('steward-key', f); return () => window.removeEventListener('steward-key', f); }, []);
 
   // ── Real product: steward.html IS the console, full-window ──
   if (!showcase) {
     return (
       <div className="stew-root" style={{ height: '100%' }}>
-        {consoleView === 'wizard' ? <StewWizard onDone={() => setConsoleView('dashboard')} /> : <StewDashboard initial={params.get('tab') || 'overview'} />}
+        {!hasKey ? <StewardWelcome />
+          : consoleView === 'wizard' ? <StewWizard onDone={() => setConsoleView('dashboard')} /> : <StewDashboard initial={params.get('tab') || 'overview'} />}
       </div>
     );
   }
