@@ -384,19 +384,22 @@ const MODULE_ITEMS = {
     { id: 'streams', name: 'Streams in the Desert', sub: 'L.B. Cowman' },
     { id: 'dailylight', name: 'Daily Light on the Daily Path', sub: 'Samuel Bagster' },
   ],
+  // Real public-domain texts — built into vendor/library/ (window.TrinityLibrary.available) and
+  // downloaded on demand by the BookReader. Keep this list in step with what's actually built; the
+  // library UI shows the real downloaded state per device (not a hard-coded flag).
   books: [
-    { id: 'pilgrim', name: "The Pilgrim's Progress", sub: 'John Bunyan', cat: 'Fiction', downloaded: true },
+    { id: 'pilgrim', name: "The Pilgrim's Progress", sub: 'John Bunyan', cat: 'Fiction' },
     { id: 'paradise', name: 'Paradise Lost', sub: 'John Milton', cat: 'Fiction' },
-    { id: 'holywar', name: 'The Holy War', sub: 'John Bunyan', cat: 'Fiction' },
-    { id: 'confessions', name: 'Confessions', sub: 'Augustine of Hippo', cat: 'Biography', downloaded: true },
+    { id: 'benhur', name: 'Ben-Hur: A Tale of the Christ', sub: 'Lew Wallace', cat: 'Fiction' },
+    { id: 'inhissteps', name: 'In His Steps', sub: 'Charles M. Sheldon', cat: 'Fiction' },
+    { id: 'confessions', name: 'Confessions', sub: 'Augustine of Hippo', cat: 'Biography' },
     { id: 'grace', name: 'Grace Abounding', sub: 'John Bunyan', cat: 'Biography' },
     { id: 'martyrs', name: "Foxe's Book of Martyrs", sub: 'John Foxe', cat: 'Biography' },
-    { id: 'imitation', name: 'The Imitation of Christ', sub: 'Thomas à Kempis', cat: 'Devotional', downloaded: true },
+    { id: 'imitation', name: 'The Imitation of Christ', sub: 'Thomas à Kempis', cat: 'Devotional' },
     { id: 'presence', name: 'The Practice of the Presence of God', sub: 'Brother Lawrence', cat: 'Devotional' },
-    { id: 'interior', name: 'The Interior Castle', sub: 'Teresa of Ávila', cat: 'Devotional' },
     { id: 'institutes', name: 'Institutes of the Christian Religion', sub: 'John Calvin', cat: 'Theology' },
     { id: 'cityofgod', name: 'The City of God', sub: 'Augustine of Hippo', cat: 'Theology' },
-    { id: 'orthodoxy', name: 'Orthodoxy', sub: 'G.K. Chesterton', cat: 'Apologetics', downloaded: true },
+    { id: 'orthodoxy', name: 'Orthodoxy', sub: 'G.K. Chesterton', cat: 'Apologetics' },
     { id: 'pensees', name: 'Pensées', sub: 'Blaise Pascal', cat: 'Apologetics' },
   ],
 };
