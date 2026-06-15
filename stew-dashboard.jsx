@@ -509,7 +509,7 @@ function StewDashboard({ initial = 'overview' }) {
             {actions}
           </div>
           {/* content */}
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: 28, background: 'var(--paper)' }}>
+          <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
             {content}
           </div>
         </div>
@@ -2338,7 +2338,7 @@ function DashSettings({ onTab }) {
     }).catch(err => window.alert('Restore failed: ' + (err.message || err)));
   };
   return (
-    <div className="no-scrollbar sk-masonry" style={{ height: '100%', overflowY: 'auto', paddingBottom: 4 }}>
+    <div className="sk-masonry" style={{ paddingBottom: 24 }}>
       {backupOpen ? <StewBackupModal church={church} onClose={() => setBackupOpen(false)} /> : null}
       {editingName ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={saveName} onClose={() => setEditingName(false)} /> : null}
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
