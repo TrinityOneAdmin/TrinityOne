@@ -1,7 +1,7 @@
 // TrinityOne service worker — makes the app boot offline.
 // The app SHELL (html/jsx/libs/fonts) is cached here; Bible MODULES live in IndexedDB (engine.js)
 // and chat goes over the relay WebSocket — neither is touched by this worker.
-const CACHE = 'trinity-shell-v184';   // bump on each app deploy so installed PWAs refresh the shell
+const CACHE = 'trinity-shell-v185';   // bump on each app deploy so installed PWAs refresh the shell
 
 // Precache the boot-critical core. Everything else same-origin is cached on first fetch, so one
 // online visit (to install / join) makes every screen available offline afterwards.
