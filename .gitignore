@@ -49,3 +49,12 @@ SECURITY-AUDIT-*.md
 *-handoff*.zip
 reference/archive/
 HANDOFF.md
+
+# local/agent cruft — never publish
+.claude/
+*.tmp.*
+*.bak-*
+relay/*.demo-backup*
+reference/TrinityOne.zip
+reference/nas-relay/
+payments-options.html
