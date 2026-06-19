@@ -15,7 +15,7 @@ Most church software makes a congregation a tenant on someone else's platform �
 - **Bible reader** — a complete offline Bible (the Berean Standard auto-installs first launch); **1,000+ downloadable translations** via a live eBible.org mirror; Strong's word study, cross-references, parallel translations, commentaries, and highlights/notes/bookmarks (all device-local).
 - **Plans · Search · Library · Listen / Watch** — reading plans with progress, full-text search across installed translations, audio Bibles, and a church's linked podcast/video.
 - **Fellowship (Nostr)** — self-custodial identity, group chat + broadcast channels, encrypted 1:1 DMs, invite-only **and end-to-end-encrypted** groups, prayer requests, polls, reactions, and profiles.
-- **Steward console** (`steward.html`) — set up and run a church: groups, serving rota + run-sheets, calendar, room booking, members, **safeguarding** (child-safe groups + gated child↔adult DMs), an optional **Finance** module (records encrypted to the church key + a UK Gift-Aid schedule), and **delegated stewards** (share running the church without sharing the key).
+- **Steward console** (`steward.html`) — set up and run a church: groups, serving rota + run-sheets, calendar, room booking, members, **safeguarding** (child-safe groups + gated child↔adult DMs), an optional **Finance** module (encrypted donor records + annual giving statements), and **delegated stewards** (share running the church without sharing the key).
 - **Migration** — bring a congregation across: a smart `/join` landing, shareable QR/links, and a donor-records importer.
 - **Notifications** — web-push for DMs, announcements, and serving requests. No email or phone number is ever collected.
 - **Offline + installable** — React, fonts, and sql.js are vendored locally; the app boots with zero network and installs as a PWA or Android APK.
@@ -77,7 +77,7 @@ No login, no email, no phone number. Identity is a key held on the device, prote
 
 - [`STEWARD-GUIDE.md`](STEWARD-GUIDE.md) — running a church from the console
 - [`SAFEGUARDING.md`](SAFEGUARDING.md) — protecting young people
-- [`TREASURY.md`](TREASURY.md) — the Finance / Gift-Aid module
+- [`TREASURY.md`](TREASURY.md) — the Finance / giving-records module
 - [`reference/SPINE.md`](reference/SPINE.md) — architecture spine + roadmap
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md)
 
