@@ -99,6 +99,14 @@ function Block({ b, fs }) {
     );
   }
 
+  if (b.type === 'tech') return (
+    <div style={{ margin: '6px 0 18px', borderRadius: 18, padding: '15px 18px', background: 'color-mix(in oklab, var(--ink) 5%, var(--surface))', border: '1px dashed color-mix(in oklab, var(--ink) 28%, var(--line))' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 11.5 * fs, letterSpacing: '.7px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 9 }}>
+        <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 13 * fs, color: 'var(--clay-ink)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 6, padding: '1px 6px' }}>{'{ }'}</span> Under the hood</div>
+      <p style={{ ...body, fontSize: 15.5 * fs, margin: 0, color: 'var(--ink-2)' }}>{b.text}</p>
+    </div>
+  );
+
   if (b.type === 'rule') return (
     <div style={{ margin: '8px 0 18px', borderRadius: 18, padding: '18px 20px', background: 'var(--ink)', color: 'var(--paper)', position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', right: -16, bottom: -20, opacity: .12 }}><Halo size={92} color="var(--paper)" spark="var(--gold)" /></div>

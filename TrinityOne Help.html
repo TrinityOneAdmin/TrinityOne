@@ -207,6 +207,7 @@
       const mark = b.type === 'note' ? '<path d="M4.5 3.8h15v16.4h-15z" fill="none"/><path d="M8 8h8M8 12h8M8 16h5"/>' : '<path d="M12 3.5c.7 4 1.8 5.1 5.8 5.8-4 .7-5.1 1.8-5.8 5.8-.7-4-1.8-5.1-5.8-5.8 4-.7 5.1-1.8 5.8-5.8Z"/>';
       return `<div class="blk panel ${cls}"><span class="pi" style="color:${col}">${ic(mark,21)}</span><p class="bd">${b.text}</p></div>`;
     }
+    if (b.type === 'tech') return `<div class="blk" style="border-radius:18px;padding:15px 18px;background:color-mix(in oklab,var(--ink) 5%,var(--surface));border:1px dashed color-mix(in oklab,var(--ink) 28%,var(--line))"><div style="display:flex;align-items:center;gap:9px;font-weight:800;font-size:11.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--ink-3);margin-bottom:9px"><span style="font-family:ui-monospace,monospace;font-weight:700;font-size:13px;color:var(--clay-ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:1px 6px">{ }</span> Under the hood</div><p class="bd" style="margin:0;color:var(--ink-2)">${b.text}</p></div>`;
     if (b.type === 'rule') return `<div class="blk rule"><div class="lab"><svg width="16" height="16" viewBox="0 0 100 100"><circle cx="50" cy="50" r="36" fill="none" stroke="var(--paper)" stroke-width="8" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)"/><circle cx="50" cy="50" r="7" fill="var(--gold)"/></svg> Simple rule</div><p>${b.text}</p></div>`;
     return '';
   }

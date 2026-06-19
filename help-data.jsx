@@ -17,6 +17,7 @@ window.HelpData = {
           { lead: 'No company in the middle.', text: 'Not even we can read into your account or reset it for you.' },
         ] },
         { type: 'callout', tone: 'gold', text: 'Wonderful for privacy — but it means one thing is now yours to do: a short backup. The next guide is the most important one. Please read it.' },
+        { type: 'tech', text: 'Your “key” is a standard cryptographic keypair (secp256k1 — the curve Nostr and Bitcoin use). The public half is your identity (your npub); the private half signs everything you post, so it can’t be forged. There’s no server-side account — “you” is simply that keypair on your device, which is why no one, us included, can read into or reset it.' },
       ],
     },
     {
@@ -41,6 +42,7 @@ window.HelpData = {
           'Don’t tell anyone the words — not even someone claiming to be from the church or support.',
         ] },
         { type: 'rule', text: 'The 12 words live on paper, not on a screen — and only you have them.' },
+        { type: 'tech', text: 'The 12 words are a standard BIP-39 mnemonic. They deterministically derive your private key (NIP-06), so the same words rebuild the exact same identity on any device or compatible app — there’s nothing on a server to “recover”.' },
       ],
     },
     {
@@ -78,6 +80,7 @@ window.HelpData = {
         ] },
         { type: 'note', text: 'Bibles download only when you choose one, to keep the app small. Once downloaded, they’re yours offline. To switch versions, just tap the name at the top and pick.' },
         { type: 'callout', tone: 'sage', text: 'Want to find a verse? Use Search to look across every translation you’ve installed — by word or by reference.' },
+        { type: 'tech', text: 'Translations are stored locally (IndexedDB) and read with a bundled WebAssembly SQLite engine, so the reader is fully offline once downloaded. Modules use open formats (MySword .bbl.mybible and USFM / Open.Bible); the 1,000+ extra translations mirror eBible.org.' },
       ],
     },
     {
@@ -141,6 +144,7 @@ window.HelpData = {
           { lead: 'The one thing to keep safe is your 12 words.', text: 'They’re the backup for everything — your name and your groups. Write them on paper once and you’re covered, even on a new phone.' },
         ] },
         { type: 'callout', tone: 'sage', text: 'Not sure about the 12 words? It really is just one small thing to do once — the guide “Your 12 words” walks you through it gently, and any steward at church will happily help.' },
+        { type: 'tech', text: 'Chat runs on Nostr, an open protocol: posts are signed events a relay stores and serves — you can point the app at any relay, including your church’s own. Direct messages are end-to-end encrypted (NIP-44), so the relay only ever holds ciphertext. Group membership, invite-only privacy and the safeguarding rules are enforced by the relay’s write-policy server-side, so a modified app can’t bypass them.' },
       ],
     },
     {
@@ -187,6 +191,7 @@ window.HelpData = {
         { type: 'callout', tone: 'sage', text: 'You hold your child’s 12 recovery words, so the account is yours to look after. A steward confirms every parent–child link, so no one can attach themselves to a child who isn’t theirs.' },
         { type: 'note', text: 'Not every child needs a parent account. A young person who comes to youth club can join on their own and your church will still mark and protect them — the parent link just adds a guarantee that you and your child can always reach each other.' },
         { type: 'note', text: 'This supports your church’s safeguarding — it doesn’t replace background checks, training, supervision or policy. If you’re ever concerned, speak to your church’s safeguarding lead.' },
+        { type: 'tech', text: 'This is enforced at the relay, not just hidden in the app: the minor and approved-adult lists are owner-only, and the write-policy blocks child↔adult direct messages and child posts to adult groups server-side, so a tampered or third-party client can’t get around it.' },
       ],
     },
     {
@@ -228,6 +233,26 @@ window.HelpData = {
         ] },
         { type: 'note', text: 'Your 12 words bring back your account, name and groups. Your private study — notes, journals and highlights — is kept separately on the phone, so back it up too: from Settings, make a “Back up my data” file every so often and keep it somewhere safe (it’s encrypted). On the new phone, import that file to bring those across.' },
         { type: 'callout', tone: 'sage', text: 'If you don’t have the 12 words and the old phone is gone, that account can’t be recovered — you’d simply start fresh. So keep that paper safe.' },
+        { type: 'tech', text: 'Restore re-derives your key from the BIP-39 words, and your identity and church follows come back off the relay. Your private study (notes, journals, highlights) lives only on the device — it isn’t on any relay — so the “Back up my data” file is a separate, encrypted export you keep yourself.' },
+      ],
+    },
+    {
+      id: 'how-it-works',
+      illo: 'qr',
+      title: 'How it works (the technical bit)',
+      summary: 'For the curious and the technical — the open standards under the warmth.',
+      minutes: 3,
+      blocks: [
+        { type: 'p', text: 'You never need any of this to use TrinityOne. But if you like to know how a thing really works, here it is — and it’s all open standards, nothing proprietary.' },
+        { type: 'list', items: [
+          { lead: 'Your identity', text: 'A secp256k1 keypair on your device (the curve Nostr and Bitcoin use). Your public key is who you are; your private key signs what you post. No server-side account exists.' },
+          { lead: 'The 12 words', text: 'A BIP-39 mnemonic that derives your key (NIP-06). The same words rebuild the exact same identity anywhere — nothing is stored on a server to “recover”.' },
+          { lead: 'Messaging', text: 'Nostr, an open protocol. Posts are signed events held on relays (your church can run its own). Direct messages are end-to-end encrypted (NIP-44) — relays only ever see ciphertext.' },
+          { lead: 'Privacy & safeguarding', text: 'Enforced by the relay’s write-policy, not just the app: membership, invite-only groups and child↔adult message rules are checked server-side, so a modified client can’t bypass them.' },
+          { lead: 'The Bible', text: 'Stored locally (IndexedDB) and read with WebAssembly SQLite — fully offline. Modules are open formats (MySword, USFM / Open.Bible).' },
+          { lead: 'Open source', text: 'The whole app is AGPL-3.0 and self-hostable — a church can run its own relay on a small box and hold all of its own data.' },
+        ] },
+        { type: 'tech', text: 'Deeper still: the code is plain, bundler-free JSX you can read end to end, and the architecture and specs live in the project’s README and reference docs. Found a security issue? There’s a responsible-disclosure policy in SECURITY.md.' },
       ],
     },
     {
