@@ -1,18 +1,18 @@
 # The Finance module — a guide for treasurers
 
-*Last updated 2026-06-16. Covers the opt-in Finance module: ledger, donor records, bank-statement
-import, and the Gift Aid claim.*
+*Last updated 2026-06-19. Covers the opt-in Finance module: ledger, donor records, bank-statement
+import, year-end statements, and the optional UK Gift Aid add-on.*
 
 This is for whoever looks after the church's giving — the treasurer, or a steward acting as one. It
 explains what the Finance module does, how to use it month to month, and — just as importantly —
 where its boundaries are.
 
 > **The one thing to hold onto:** the rest of TrinityOne is anonymity-first (no email, no phone, no
-> central database of members). **Finance is the deliberate exception** — to reclaim Gift Aid you must
-> keep named, identified donor records. So this module keeps real personal data, and it's walled off
+> central database of members). **Finance is the deliberate exception** — keeping a giving ledger means
+> keeping named donor records. So this module keeps real personal data, and it's walled off
 > accordingly: **every record is encrypted to your church's key**, the relay only ever stores
 > unreadable ciphertext, and only this console can open it. Turn it on only if you're handling giving,
-> and handle that data under your church's privacy/GDPR policy.
+> and handle that data under your local data-protection rules.
 
 ---
 
@@ -22,21 +22,27 @@ It's **off by default**. A steward enables it in **Settings → "Finance & givin
 **Finance** tab appears in the console sidebar. Switching it off again hides the tab (your records stay
 safely stored, just out of the way).
 
+**UK Gift Aid** is a separate, optional add-on under the same setting — **off by default**, and only
+relevant to churches that reclaim UK Gift Aid. Turn it on for donor declarations, per-gift
+eligibility, the reclaim estimate, and the HMRC claim builder. With it off, the module is fully
+nationality-agnostic: just donor records, funds, the ledger and year-end statements.
+
 ---
 
-## The four parts
+## The parts
 
-The Finance tab has four views: **Ledger**, **Donors**, **Funds**, and **Gift Aid**.
+The Finance tab has **Ledger**, **Donors** and **Funds** — plus a **Gift Aid** view when the optional UK Gift Aid add-on is on.
 
 ### 1. Ledger — every gift
 The running record of giving. **Record giving** to add an entry by hand (cash, bank, card or
-Lightning), with the amount, date, fund, donor and a Gift-Aid flag. The summary tiles show your total
-recorded, the Gift-Aid-eligible total, and the estimated 25% you can reclaim.
+Lightning), with the amount, date, fund and donor (plus a Gift-Aid flag when that add-on is on). The
+summary tiles show your total recorded, donors and funds — or, with UK Gift Aid on, the Gift-Aid-eligible
+total and the estimated 25% reclaim.
 
 ### 2. Donors — who gave
-A donor is a named person you can attach giving to. Each donor holds their **name, home address and
-postcode**, an optional email, any **bank references** (see import below), and — crucially — whether a
-**Gift Aid declaration** is on file. When a donor has a declaration, an extra "for the HMRC claim"
+A donor is a named person you can attach giving to. Each donor holds their **name, address and postal
+code**, an optional email, and any **bank references** (see import below). With **UK Gift Aid** on,
+each donor also records whether a **declaration** is on file; when it is, an extra "for the HMRC claim"
 section appears for their **title, first/last name and house name/number** (these default by splitting
 the full name; correct them if needed — HMRC is fussy).
 

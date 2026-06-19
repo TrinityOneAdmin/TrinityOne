@@ -86,7 +86,7 @@ Pilot congregation throughout: **Littlehampton** (your home church) as the first
 
 ## Stage 4 — Giving Pilot (Littlehampton, tiny amounts)
 
-**User experience:** giving appears, **only in your home church, only with trivial sums** at first (think £1–£5 / a few hundred sats). Members can give to the church inside the app; a steward can send a disbursement to a member. This is the first time real money moves, so it gets its own slow, deliberate stage.
+**User experience:** giving appears, **only in your home church, only with trivial sums** at first (think pocket change / a few hundred sats). Members can give to the church inside the app; a steward can send a disbursement to a member. This is the first time real money moves, so it gets its own slow, deliberate stage.
 
 **What they can do:** give to the church (NIP-57 zap to the church Lightning Address); stewards disburse to a member's address via the treasury (NWC).
 

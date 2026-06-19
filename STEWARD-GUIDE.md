@@ -63,11 +63,11 @@ taken then. Steward-booked for now.
 Reading plans and devotionals you share with the church, with scheduled (drip) release and ordering.
 
 ### Finance  *(optional — turn on in Settings)*
-A treasurer's ledger for the church: record giving, keep **Gift-Aid-ready donor records**, categorise
-funds, and **import a bank statement** (it matches deposits to donors) then **export CSV / the HMRC
-schedule**. Every record is **encrypted to your church key** — nothing leaves the device in the clear.
+A treasurer's ledger for the church: record giving, keep **donor records**, categorise
+funds, and **import a bank statement** (it matches deposits to donors), then **export a CSV or
+year-end statements**. With the optional **UK Gift Aid** add-on, it also builds the HMRC claim schedule. Every record is **encrypted to your church key** — nothing leaves the device in the clear.
 (This is record-keeping; in-app **Lightning giving** is a separate, not-yet-shipped feature — see *Where this is heading*.)
-- **Year-end giving statements** — *Donors* tab → **Statements** → pick a year → a printable, per-donor statement (itemised gifts, total, Gift-Aid note) opens for print / save-as-PDF — what you send each donor for their records.
+- **Year-end giving statements** — *Donors* tab → **Statements** → pick a year → a printable, per-donor statement (itemised gifts, total) opens for print / save-as-PDF — what you send each donor for their records.
 
 ### Members
 Everyone who's joined.
