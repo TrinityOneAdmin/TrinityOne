@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>TrinityOne — Bible Study</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#C25A38" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="TrinityOne" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<link rel="icon" type="image/png" href="icons/icon-192.png" />
+<link rel="stylesheet" href="vendor/fonts/fonts.css" />
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: #ddd6c8;
+    background-image: radial-gradient(circle at 30% 20%, #e7e0d1, #cfc7b6);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Sora', system-ui, sans-serif;
+    overflow: hidden;
+  }
+  #root { display: flex; align-items: center; justify-content: center; }
+
+  /* ── TrinityOne design tokens (light) — Halo brand.css ── */
+  .trinity {
+    --paper:      #F4EEE2;
+    --paper-soft: #FBF6EC;
+    --surface:    #FFFDF8;
+    --surface-2:  #FBF5EA;
+    --ink:        #221C16;
+    --ink-2:      #6B6052;
+    --ink-3:      #A89E8E;
+    --line:       rgba(34,28,22,0.10);
+    --line-2:     rgba(34,28,22,0.05);
+    --clay:       #C25A38;
+    --clay-deep:  #9C4327;
+    --clay-ink:   #A8462A;
+    --clay-soft:  #F3DECF;
+    --gold:       #C8962E;
+    --gold-soft:  #E0B860;
+    --gold-tint:  #F3E4C4;
+    --sage:       #5E8C6A;
+    --sage-soft:  #D8E6DC;
+    --midnight:   #17120B;
+    --midnight-2: #241C12;
+    --spark:      var(--gold);
+
+    --r-sm: 10px;  --r-md: 16px;  --r-lg: 24px;  --r-xl: 32px;
+    --shadow:    0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);
+    --shadow-sm: 0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);
+    --shadow-md: 0 4px 12px rgba(34,28,16,.10), 0 20px 44px rgba(34,28,16,.12);
+    --shadow-lg: 0 10px 30px rgba(34,28,16,.14), 0 40px 80px rgba(34,28,16,.18);
+    --ease: cubic-bezier(.32,.72,0,1);
+
+    --hl-yellow: #FCE08A;
+    --hl-green:  #BFE3AE;
+    --hl-pink:   #F7C2CE;
+    --hl-blue:   #BCD6F2;
+    --hl-clay:   #F2CBB4;
+
+    /* Halo type: Sora for display + UI, Newsreader for scripture/reading */
+    --font-ui: 'Sora', system-ui, sans-serif;
+    --font-display: 'Sora', system-ui, sans-serif;
+    --font-read: 'Newsreader', Georgia, serif;
+    --font-serif: 'Newsreader', Georgia, serif;
+    --read-scale: 1;
+  }
+  /* ── dark ── */
+  .trinity.dark {
+    --paper:     #16120C;
+    --surface:   #211B13;
+    --surface-2: #2A2218;
+    --ink:       #F3ECDC;
+    --ink-2:     #B6AB96;
+    --ink-3:     #7C7261;
+    --line:      rgba(243,236,220,0.11);
+    --line-2:    rgba(243,236,220,0.06);
+    --clay:      #E68A66;
+    --clay-ink:  #EE9E7E;
+    --clay-soft: #43271B;
+    --gold:      #D9AE5A;
+    --sage:      #7FAE8A;
+    --shadow:    0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.45);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,.5), 0 28px 60px rgba(0,0,0,.6);
+
+    --hl-yellow: #6E5A1E;
+    --hl-green:  #2F4A2A;
+    --hl-pink:   #5A2E37;
+    --hl-blue:   #233f57;
+    --hl-clay:   #5A3422;
+  }
+
+  ::-webkit-scrollbar { width: 0; height: 0; }
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+
+  /* ── live scripture markup (rendered from MySword / USFM) ── */
+  .reader-body sup.st { font-family: var(--font-ui); font-size: .56em; font-weight: 700; color: var(--clay); vertical-align: super; line-height: 0; cursor: pointer; margin: 0 1px; }
+  .reader-body.hide-strong sup.st { display: none; }
+  .reader-body .red { color: var(--clay); }
+  .reader-body i.sup { font-style: italic; color: var(--ink-2); }
+  .reader-body .fn { font-size: .8em; color: var(--ink-3); font-style: italic; }
+  .reader-body .nd { font-variant: small-caps; letter-spacing: .3px; }
+  .reader-body .sec { display: block; font-family: var(--font-ui); font-weight: 700; font-size: .6em; letter-spacing: .6px; color: var(--clay); margin: 1em 0 .15em; text-transform: uppercase; }
+  .reader-body .parref { display: block; font-family: var(--font-ui); font-style: italic; font-size: .66em; color: var(--ink-3); margin-bottom: .3em; }
+
+  @keyframes trinityFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes trinityRise { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: none; } }
+  @keyframes trinityScale { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+  @keyframes trinitySpin { to { transform: rotate(360deg); } }
+
+  /* ── TrinityOne "Halo" boot splash ── */
+  .to-splash {
+    position: absolute; inset: 0; z-index: 60; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    background: radial-gradient(120% 90% at 50% 38%, #F3E4C4, var(--paper) 60%);
+    animation: spOut .45s ease 1.9s forwards;
+  }
+  .to-splash .sp-mark { width: 126px; height: 126px; }
+  .to-splash .sp-arc { fill: none; stroke: var(--ink); stroke-width: 7; stroke-linecap: round; stroke-dasharray: 58; stroke-dashoffset: 0; }
+  .to-splash .sp-spark { fill: var(--gold); transform-box: fill-box; transform-origin: center; transform: scale(1); }
+  .to-splash .sp-wm { font-family: var(--font-display); font-weight: 800; font-size: 26px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink); }
+  .to-splash .sp-wm .one { color: var(--clay); }
+  .to-splash .sp-tag { font-family: var(--font-ui); font-weight: 600; font-size: 10.5px; letter-spacing: 3px; text-transform: uppercase; color: var(--ink-2); margin-top: -8px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .to-splash .sp-mark { animation: spSpin .82s cubic-bezier(.32,.72,0,1) both; }
+    .to-splash .sp-arc  { stroke-dashoffset: 58; animation: spDraw .62s cubic-bezier(.4,0,.2,1) both; }
+    .to-splash .sp-arc.a1 { animation-delay: .12s; }
+    .to-splash .sp-arc.a2 { animation-delay: .22s; }
+    .to-splash .sp-arc.a3 { animation-delay: .32s; }
+    .to-splash .sp-spark { transform: scale(0); animation: spPop .5s cubic-bezier(.34,1.56,.64,1) .7s both; }
+    .to-splash .sp-wm  { transform: translateY(10px); opacity: 0; animation: spRise .6s cubic-bezier(.32,.72,0,1) .98s both; }
+    .to-splash .sp-tag { transform: translateY(8px); opacity: 0; animation: spRise .6s cubic-bezier(.32,.72,0,1) 1.12s both; }
+  }
+  @keyframes spDraw { to { stroke-dashoffset: 0; } }
+  @keyframes spSpin { from { transform: rotate(-16deg) scale(.86); opacity: .4; } to { transform: none; opacity: 1; } }
+  @keyframes spPop  { from { transform: scale(0); } to { transform: scale(1); } }
+  @keyframes spRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  @keyframes spOut  { to { opacity: 0; visibility: hidden; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="vendor/react.development.js"></script>
+<script src="vendor/react-dom.development.js"></script>
+<script src="vendor/babel.min.js"></script>
+
+<!-- data layer: in-browser unzip + SQLite-WASM (vendored locally for offline use) -->
+<script src="vendor/fflate.js"></script>
+<script src="vendor/sqljs/sql-wasm.js"></script>
+<!-- jsQR: pure-JS QR decoder, so in-app scanning works in the Android WebView (no BarcodeDetector there) -->
+<script src="vendor/jsqr.js"></script>
+<!-- TrinityOne engine: loads MySword + open.bible USFM modules, exposes window.Bible -->
+<script src="engine.js"></script>
+<!-- Self-custodial Nostr identity (BIP-39 → NIP-06), bundled; exposes window.TrinityIdentity -->
+<script src="vendor/identity.js"></script>
+<!-- Nostr chat transport (signed kind-1 over relays); exposes window.Fellowship -->
+<script src="vendor/fellowship.js"></script>
+<!-- In-app self-custodial Cashu (ecash) wallet, keyed to the Nostr identity; exposes window.TrinityWallet -->
+<script src="vendor/wallet.js"></script>
+<!-- User-owned data store (local backend now; encrypted-Nostr swap later); exposes window.MyData -->
+<script src="vendor/mydata.js"></script>
+<!-- Real public-domain Library: window.TrinityLibrary (previews + available); full books in vendor/library/*.json.gz -->
+<script src="vendor/library/index.js"></script>
+
+<!-- TrinityOne UI (JSX, transpiled in-browser by Babel) -->
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="ui.jsx"></script>
+<script type="text/babel" src="identity-avatar.jsx"></script>
+<script type="text/babel" src="identity.jsx"></script>
+<script type="text/babel" src="identity-extras.jsx"></script>
+<script type="text/babel" src="screens-today.jsx"></script>
+<script type="text/babel" src="screens-read.jsx"></script>
+<script type="text/babel" src="screens-plans.jsx"></script>
+<script type="text/babel" src="screens-library.jsx"></script>
+<script type="text/babel" src="screens-bookreader.jsx"></script>
+<script type="text/babel" src="screens-watch.jsx"></script>
+<script type="text/babel" src="screens-search.jsx"></script>
+<script type="text/babel" src="screens-concordance.jsx"></script>
+<script type="text/babel" src="screens-audio.jsx"></script>
+<script type="text/babel" src="screens-extras.jsx"></script>
+<script type="text/babel" src="giving-ln.jsx"></script>
+<script type="text/babel" src="screens-giving.jsx"></script>
+<script type="text/babel" src="screens-church.jsx"></script>
+<script type="text/babel" src="reminders.jsx"></script>
+<script type="text/babel" src="backup.jsx"></script>
+<script type="text/babel" src="screens-serving.jsx"></script>
+<script type="text/babel" src="screens-chat.jsx"></script>
+<script type="text/babel" src="screens-onboarding.jsx"></script>
+<script type="text/babel" src="help-illustrations.jsx"></script>
+<script type="text/babel" src="help-data.jsx"></script>
+<script type="text/babel" src="screens-help.jsx"></script>
+<script type="text/babel" src="screens-help-main.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+
+<!-- register the offline service worker (caches the app shell; modules live in IndexedDB) -->
+<script src="sw-register.js"></script>
+</body>
+</html>

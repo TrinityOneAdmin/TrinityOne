@@ -1,0 +1,5 @@
+# Caddy terminates TLS and proxies the WebSocket upgrade to nostr-rs-relay.
+# Replace the domain; Caddy fetches a Let's Encrypt cert automatically (port 80/443 must be open).
+relay.CHANGE-ME.org {
+	reverse_proxy nostr-relay:8080
+}

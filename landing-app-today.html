@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TrinityOne — live Today preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #root { display: block; }
+
+  /* ── Lumen design tokens (light) — mirrors index.html ── */
+  .lumen {
+    --paper:     #F4EEE2;
+    --surface:   #FFFDF8;
+    --surface-2: #FBF5EA;
+    --ink:       #221C16;
+    --ink-2:     #6B6052;
+    --ink-3:     #A89E8E;
+    --line:      rgba(34,28,18,0.10);
+    --line-2:    rgba(34,28,18,0.05);
+    --clay:      #C25A38;
+    --clay-ink:  #A8462A;
+    --clay-soft: #F3DECF;
+    --clay-deep: #9C4327;
+    --gold:      #C8962E;
+    --gold-soft: #E0B860;
+    --gold-tint: #F3E4C4;
+    --midnight:  #17120B;
+    --sage:      #5E8C6A;
+    --shadow:    0 1px 2px rgba(34,28,16,.05), 0 8px 24px rgba(34,28,16,.06);
+    --shadow-lg: 0 4px 12px rgba(34,28,16,.10), 0 24px 48px rgba(34,28,16,.14);
+    --hl-yellow: #FCE08A; --hl-green: #BFE3AE; --hl-pink: #F7C2CE; --hl-blue: #BCD6F2; --hl-clay: #F2CBB4;
+    --font-ui: 'Sora', system-ui, sans-serif;
+    --font-display: 'Sora', system-ui, sans-serif;
+    --font-read: 'Newsreader', Georgia, serif;
+    --read-scale: 1;
+  }
+  ::-webkit-scrollbar { width: 0; height: 0; }
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+
+  @keyframes lumenFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes lumenRise { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: none; } }
+  @keyframes lumenScale { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+  @keyframes lumenSpin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- real app source — this preview renders the ACTUAL Today screen, so it can't drift -->
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="ui.jsx"></script>
+<script type="text/babel" src="identity-avatar.jsx"></script>
+<script type="text/babel" src="screens-today.jsx"></script>
+
+<script type="text/babel">
+  const D = window.LumenData;
+  // a friendly, signed-in identity so the hero reads as a real, lived-in screen
+  const ctx = {
+    identity: { name: 'Maria', avatar: { kind: 'monogram', color: '#C25A38' } },
+    dark: false,
+    toggleDark() {}, openProfile() {}, openShare() {}, openReader() {},
+    openListen() {}, openPlans() {}, openDevotional() {}, openSearch() {},
+    go() {}, toast() {},
+  };
+
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <div className="lumen" style={{ width: 392, height: 846 }}>
+      <PhoneFrame>
+        <div style={{ position: 'absolute', inset: 0 }}><TodayScreen ctx={ctx} /></div>
+        <TabBar active="today" onChange={() => {}} />
+      </PhoneFrame>
+    </div>
+  );
+</script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+# Stamp the build commit + date into version.txt when `git archive` makes the relay bundle.
+# (export-subst substitutes the $Format$ placeholders only in the archive, not the working tree.)
+version.txt export-subst

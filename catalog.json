@@ -1,0 +1,42 @@
+{
+  "categories": [
+    {
+      "id": "bibles",
+      "name": "Bible Translations",
+      "icon": "book",
+      "items": [
+        { "id": "engbsb", "name": "Berean Standard Bible", "abbr": "BSB", "lang": "English", "size": "3.0 MB", "license": "Public Domain", "kind": "bible", "format": "USFM", "url": "modules/engbsb.zip", "featured": true, "desc": "A clear, accurate modern English translation — free for everyone to use. Recommended." },
+        { "id": "eng-kjv", "name": "King James Version", "abbr": "KJV", "lang": "English", "size": "2.6 MB", "license": "Public Domain", "kind": "bible", "format": "USFM", "url": "modules/eng-kjv.zip", "desc": "The 1769 Authorized Version — the classic English Bible." },
+        { "id": "eng-web", "name": "World English Bible", "abbr": "WEB", "lang": "English", "size": "3.1 MB", "license": "Public Domain", "kind": "bible", "format": "USFM", "url": "modules/eng-web.zip", "desc": "A modern, readable public-domain translation." },
+        { "id": "eng-asv", "name": "American Standard Version", "abbr": "ASV", "lang": "English", "size": "2.7 MB", "license": "Public Domain", "kind": "bible", "format": "USFM", "url": "modules/eng-asv.zip", "desc": "The 1901 ASV — precise and literal." },
+        { "id": "eng-akjv", "name": "KJV with Strong's Numbers", "abbr": "AKJV+S", "lang": "English", "size": "8.4 MB", "license": "Public Domain", "kind": "bible", "format": "MySword", "url": "modules/eng-akjv.bbl.mybible", "desc": "King James text tagged with Strong's numbers — tap a word for the lexicon." },
+        { "id": "ahirani", "name": "Ahirani New Testament", "abbr": "Ahirani", "lang": "Ahirani (मराठी)", "size": "0.9 MB", "license": "Open / Biblica", "kind": "bible", "format": "USFM", "url": "modules/ahirani-usfm.zip", "desc": "An example of a non-English module (open.bible USFM)." }
+      ]
+    },
+    {
+      "id": "dictionaries",
+      "name": "Dictionaries & Lexicons",
+      "icon": "lex",
+      "items": [
+        { "id": "strongs", "name": "Strong's Greek & Hebrew Dictionary", "abbr": "Strong's", "lang": "Greek / Hebrew", "size": "4.0 MB", "license": "CC-BY-SA · 1890 Strong's", "kind": "dict", "format": "JSON", "url": "modules/strongs-dict.json", "desc": "14,197 full lexical entries (definition + etymology + KJV usage). Every Strong's number in the reader opens a complete definition." },
+        { "id": "import-dict", "name": "Import a dictionary…", "kind": "import", "accept": "dictionary", "desc": "Add your own MySword .dct.mybible dictionary or lexicon." }
+      ]
+    },
+    {
+      "id": "commentaries",
+      "name": "Commentaries",
+      "icon": "comment",
+      "items": [
+        { "id": "import-cmt", "name": "Import a commentary…", "kind": "import", "accept": "commentary", "desc": "Add a MySword .cmt.mybible commentary you already have. Hosted public-domain commentaries are coming." }
+      ]
+    },
+    {
+      "id": "devotionals",
+      "name": "Devotionals",
+      "icon": "sun",
+      "items": [
+        { "id": "import-dvt", "name": "Import a devotional…", "kind": "import", "accept": "devotional", "desc": "Add a MySword .dvn.mybible devotional you already have. Hosted devotionals are coming." }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "appId": "com.trinityone.app",
+  "appName": "TrinityOne",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Roadmap — TrinityOne</title>
+<meta name="description" content="What's coming to TrinityOne: Lightning giving and the Keykeeper signer. Honest about what's live today and what's on the way." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,700;6..72,800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --paper:#f7f2ea; --surface:#fffdf9; --surface-2:#f1eae0; --ink:#2a2018; --ink-2:#5b4f42; --ink-3:#9a8e7e;
+    --line:#e7ddcd; --clay:#c25a38; --clay-ink:#a8482b; --clay-soft:#f6e1d8; --sage:#5e8c6a; --sage-soft:#dfeadf;
+    --gold:#c2913a; --gold-soft:#f3e7c9; --gold-tint:#f7eed6; --shadow:0 1px 3px rgba(60,40,20,.08),0 6px 20px rgba(60,40,20,.06);
+    --font-ui:'Inter',system-ui,sans-serif; --font-display:'Newsreader',Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--font-ui);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:780px;margin:0 auto;padding:0 22px}
+  header.hero{background:radial-gradient(120% 80% at 50% -10%, var(--gold-soft), transparent 55%);padding:56px 0 30px;text-align:center}
+  .pill{display:inline-flex;align-items:center;gap:7px;background:var(--sage-soft);color:#345c41;font-weight:700;font-size:12.5px;padding:6px 13px;border-radius:999px}
+  .soon{background:var(--gold-tint);color:#8a6717}
+  h1{font-family:var(--font-display);font-weight:800;font-size:clamp(30px,5vw,44px);letter-spacing:-.5px;margin:16px 0 8px}
+  h2{font-family:var(--font-display);font-weight:700;font-size:24px;letter-spacing:-.3px;margin:0 0 4px}
+  p{font-size:15.5px;color:var(--ink-2);margin:10px 0}
+  .lead{font-size:17px;color:var(--ink-2);max-width:620px;margin:10px auto 0}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shadow);margin:18px 0}
+  .tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;padding:4px 10px;border-radius:999px;background:var(--gold-tint);color:#8a6717}
+  ul.clean{list-style:none;padding:0;margin:12px 0;display:flex;flex-direction:column;gap:9px}
+  ul.clean li{display:flex;gap:10px;font-size:15px;color:var(--ink-2)}
+  .tick{flex-shrink:0;width:22px;height:22px;border-radius:999px;background:var(--sage-soft);color:#345c41;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px}
+  .note{display:flex;gap:11px;padding:14px 16px;border-radius:14px;background:var(--gold-tint);border:1px solid color-mix(in oklab,var(--gold) 28%,transparent);margin:14px 0 0;font-size:13.5px;color:var(--ink-2)}
+  a.back{display:inline-block;margin:8px 0 0;color:var(--clay-ink);font-weight:700;text-decoration:none}
+  footer{border-top:1px solid var(--line);margin-top:40px;padding:26px 0 50px;color:var(--ink-3);font-size:13px;text-align:center}
+  b{color:var(--ink)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="pill">Roadmap</span>
+    <h1>What’s live, and what’s on the way</h1>
+    <p class="lead">TrinityOne is honest about where it is. Reading, church chat, groups, serving rotas, the calendar, teaching, stewards and your own relay are <b>live today</b>. Here’s what’s still being built — we’d rather show you the plan than overpromise.</p>
+    <a class="back" href="welcome.html">← Back to TrinityOne</a>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <span class="tag">Coming soon</span>
+    <h2 style="margin-top:12px">Give at the speed of Lightning</h2>
+    <p>Tithes, missions and benevolence sent instantly over the <b>Lightning Network</b> with near-zero fees — given from a wallet <b>you</b> control, landing straight with the church. No card processor taking a cut, no middleman holding the money.</p>
+    <ul class="clean">
+      <li><span class="tick">✓</span>Top up in a tap, give to any fund, or zap a prayer</li>
+      <li><span class="tick">✓</span>Self-custodial — the church holds its own funds</li>
+      <li><span class="tick">✓</span>Year-end statements, on your terms</li>
+    </ul>
+    <div class="note"><span>⏳</span><div>The wallet is in build and being security-reviewed before it touches real money. It’s <b>not in the pilot yet</b> — the rest of TrinityOne works fully without it.</div></div>
+  </div>
+
+  <div class="card">
+    <span class="tag">Coming soon</span>
+    <h2 style="margin-top:12px">Keykeeper — keep your church key on a device of its own</h2>
+    <p>Today a steward’s key lives on their everyday phone or laptop, encrypted behind a PIN — which protects against a lost or borrowed device. <b>Keykeeper</b> goes a step further: it holds the key on a <b>separate signer</b> (a small hardware device, or an isolated extension), so the everyday app only ever gets <b>signatures, never the secret</b>.</p>
+    <ul class="clean">
+      <li><span class="tick">✓</span><b>A hacked computer can’t post in your church’s name</b> or steal the key</li>
+      <li><span class="tick">✓</span>Approve sensitive actions with a physical button (hardware version)</li>
+      <li><span class="tick">✓</span>Same recovery phrase — restore on any device, or the app itself</li>
+    </ul>
+    <div class="note"><span>⏳</span><div>Honest take: for a small church the <b>PIN lock already covers the everyday risks</b>. Keykeeper is for when the stakes rise — real giving, larger congregations, or the security-conscious. A nice-to-have, not a day-one essential.</div></div>
+  </div>
+
+  <p style="text-align:center;margin-top:30px"><a class="back" href="welcome.html">← Back to TrinityOne</a></p>
+
+</div>
+
+<footer>© 2026 TrinityOne · Made for the church, owned by no one.</footer>
+
+</body>
+</html>

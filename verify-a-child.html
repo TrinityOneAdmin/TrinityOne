@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Verifying a child — TrinityOne</title>
+<meta name="description" content="How a church confirms that a member is a child, so TrinityOne can keep young people safe." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,700;6..72,800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --paper:#f7f2ea; --surface:#fffdf9; --surface-2:#f1eae0; --ink:#2a2018; --ink-2:#5b4f42; --ink-3:#9a8e7e;
+    --line:#e7ddcd; --clay:#c25a38; --clay-ink:#a8482b; --clay-soft:#f6e1d8; --sage:#5e8c6a; --sage-soft:#dfeadf;
+    --gold:#c2913a; --gold-soft:#f3e7c9; --shadow:0 1px 3px rgba(60,40,20,.08),0 6px 20px rgba(60,40,20,.06);
+    --font-ui:'Inter',system-ui,sans-serif; --font-display:'Newsreader',Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--font-ui);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto;padding:0 22px}
+  header.hero{background:radial-gradient(120% 80% at 50% -10%, var(--gold-soft), transparent 55%);padding:54px 0 30px;text-align:center}
+  .pill{display:inline-flex;align-items:center;gap:7px;background:var(--sage-soft);color:#345c41;font-weight:700;font-size:12.5px;padding:6px 13px;border-radius:999px}
+  h1{font-family:var(--font-display);font-weight:800;font-size:clamp(28px,5vw,40px);letter-spacing:-.5px;margin:16px 0 8px}
+  h2{font-family:var(--font-display);font-weight:700;font-size:23px;letter-spacing:-.3px;margin:36px 0 6px}
+  h3{font-family:var(--font-display);font-weight:700;font-size:18px;margin:0 0 4px}
+  p{font-size:15.5px;color:var(--ink-2);margin:10px 0}
+  .lead{font-size:17px;color:var(--ink-2);max-width:620px;margin:10px auto 0}
+  .note{display:flex;gap:11px;padding:14px 16px;border-radius:14px;background:var(--sage-soft);border:1px solid color-mix(in oklab,var(--sage) 26%,transparent);margin:18px 0;font-size:14px;color:var(--ink-2)}
+  .note.gold{background:var(--gold-soft);border-color:color-mix(in oklab,var(--gold) 30%,transparent)}
+  .note.clay{background:var(--clay-soft);border-color:color-mix(in oklab,var(--clay) 26%,transparent)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:var(--shadow);margin:16px 0}
+  .step{display:flex;gap:16px;align-items:flex-start;margin:18px 0}
+  .num{flex-shrink:0;width:30px;height:30px;border-radius:999px;background:var(--clay);color:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;font-family:var(--font-display)}
+  .step .body{flex:1;min-width:0}
+  /* a faux UI chip/row to mimic the console */
+  .mock{background:var(--surface-2);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}
+  .mrow{display:flex;align-items:center;gap:11px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:11px 13px}
+  .av{width:34px;height:34px;border-radius:10px;background:var(--gold-soft);color:#8a6717;display:flex;align-items:center;justify-content:center;font-weight:800;flex-shrink:0}
+  .grow{flex:1;min-width:0}
+  .nm{font-weight:700;font-size:14.5px}
+  .sub{font-size:12px;color:var(--ink-3)}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:9px;padding:7px 11px;font-weight:700;font-size:12.5px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);white-space:nowrap}
+  .btn.child{border-color:color-mix(in oklab,var(--clay) 40%,var(--line));background:color-mix(in oklab,var(--clay) 12%,var(--surface));color:var(--clay)}
+  .btn.cleared{border-color:color-mix(in oklab,var(--gold) 45%,var(--line));background:color-mix(in oklab,var(--gold) 14%,var(--surface));color:#8a6717}
+  .btn.clay{background:var(--clay);color:#fff;border:none}
+  .tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px}
+  .tag.clay{background:var(--clay-soft);color:var(--clay-ink)} .tag.sage{background:var(--sage-soft);color:#345c41}
+  /* screenshot placeholder */
+  .shot{border:2px dashed color-mix(in oklab,var(--clay) 35%,var(--line));border-radius:14px;background:repeating-linear-gradient(45deg,var(--surface),var(--surface) 12px,var(--surface-2) 12px,var(--surface-2) 24px);padding:26px 18px;text-align:center;color:var(--ink-3);font-size:13px;font-weight:600;margin:12px 0}
+  ul.clean{list-style:none;padding:0;margin:12px 0;display:flex;flex-direction:column;gap:9px}
+  ul.clean li{display:flex;gap:10px;font-size:15px;color:var(--ink-2)}
+  .tick{flex-shrink:0;width:22px;height:22px;border-radius:999px;background:var(--sage-soft);color:#345c41;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px}
+  footer{border-top:1px solid var(--line);margin-top:40px;padding:26px 0 50px;color:var(--ink-3);font-size:13px;text-align:center}
+  b{color:var(--ink)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="pill">🛡️ Safeguarding</span>
+    <h1>How a child is verified</h1>
+    <p class="lead">TrinityOne keeps young people safe by anchoring trust in <b>your church</b> — the people who actually know who the children are — not a meaningless "are you over 18?" tick-box. This is how a child gets verified, and what changes once they are.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="note">
+    <span>★</span>
+    <div><b>The principle.</b> A child is only ever marked by a <b>steward</b> (or confirmed from a parent's request) — never self-declared. This works <b>alongside</b> your church's safeguarding (background-checked leaders, policy), and never replaces it.</div>
+  </div>
+
+  <h2>What "verified" unlocks</h2>
+  <p>Once a member is verified as a child, the relay (the server carrying your church's messages) enforces two protections automatically — they can't be switched off by tampering with a phone:</p>
+  <ul class="clean">
+    <li><span class="tick">✓</span><div><b>Child-safe groups only.</b> A verified child sees and joins only the groups you've marked <b>child-safe</b>. Adult spaces never appear for them.</div></li>
+    <li><span class="tick">✓</span><div><b>Protected private messages.</b> A one-to-one message between a child and an adult is <b>blocked</b> unless that adult is <b>cleared for youth</b> (or is the child's own linked parent). Both directions.</div></li>
+    <li><span class="tick">✓</span><div><b>Your leaders stay reachable.</b> A child can always message the church itself if they need help.</div></li>
+  </ul>
+
+  <h2>Two ways to verify a child</h2>
+  <p>Most churches use the first; the second is for parents setting up a younger child.</p>
+
+  <!-- METHOD A -->
+  <div class="card">
+    <h3>Method 1 — A steward marks them <span class="tag sage">recommended</span></h3>
+    <p>If a young person is already in your church, a steward marks them directly.</p>
+
+    <div class="step"><div class="num">1</div><div class="body">
+      <b>Open the steward console → Members.</b> Find the young person in the list.
+    </div></div>
+    <div class="step"><div class="num">2</div><div class="body">
+      <b>Tap “Child”.</b> A clay <span class="tag clay">child</span> badge appears. That's it — they're verified, and the two protections above kick in.
+      <div class="mock">
+        <div class="mrow">
+          <span class="av">SC</span>
+          <div class="grow"><div class="nm">Sam Carter</div><div class="sub">@samc · joined 2 days ago</div></div>
+          <span class="btn child">👶 Child ✓</span>
+          <span class="btn">Clear for youth</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--ink-3);margin-top:8px">Tapping <b>Child</b> verifies them. <b>Clear for youth</b> is for adults — see below.</div>
+      </div>
+    </div></div>
+    <div class="step"><div class="num">3</div><div class="body">
+      <b>Clear your youth workers.</b> For each adult who's background-checked to work with young people, tap <span class="tag" style="background:var(--gold-soft);color:#8a6717">cleared for youth</span>. Only cleared adults can privately message a child. Keep this list matched to your real cleared-worker list.
+    </div></div>
+
+    <div class="shot">📸 Screenshot placeholder — the <b>Members</b> tab showing a member row with the <b>Child</b> and <b>Clear for youth</b> buttons.<br/>Replace this box with a real screenshot from your console.</div>
+  </div>
+
+  <!-- METHOD B -->
+  <div class="card">
+    <h3>Method 2 — A parent sets up the child, you confirm</h3>
+    <p>A parent can create and hold their child's account from their own phone, then ask you to confirm the link. This is the best route for younger children.</p>
+
+    <div class="step"><div class="num">1</div><div class="body">
+      <b>The parent adds the child</b> in their app: <i>You → My family → Children's accounts → Add a child</i>. They keep the child's recovery words and hand the account to the child's device with a one-scan code.
+    </div></div>
+    <div class="step"><div class="num">2</div><div class="body">
+      <b>You get a request to confirm.</b> In the steward console's <b>Members</b> tab, a “Parent / child links to confirm” card appears.
+      <div class="mock">
+        <div style="font-size:12.5px;font-weight:800;color:var(--clay);margin-bottom:8px">🙏 Parent / child links to confirm · 1</div>
+        <div class="mrow">
+          <div class="grow"><div style="font-size:13px;color:var(--ink-2)"><b>Jane Carter</b> set up a child account for <b>Sam Carter</b>. Confirm to link them and mark the child as under-18.</div></div>
+          <span class="btn clay">✓ Confirm</span>
+        </div>
+      </div>
+    </div></div>
+    <div class="step"><div class="num">3</div><div class="body">
+      <b>Tap “Confirm”.</b> This links the parent to the child <i>and</i> verifies the child in one step. The parent can now always message their own child; everyone else is held to the rules above.
+    </div></div>
+
+    <div class="shot">📸 Screenshot placeholder — the <b>“Parent / child links to confirm”</b> card in the Members tab.<br/>Replace with a real screenshot.</div>
+
+    <div class="note">
+      <span>🔒</span>
+      <div><b>You confirm every link.</b> A parent can't quietly attach themselves to a child who isn't theirs — nothing takes effect until a steward confirms it.</div>
+    </div>
+  </div>
+
+  <h2>Make your groups child-safe</h2>
+  <p>So a verified child has somewhere to be, mark the groups they belong in as <b>child-safe</b>: in <b>Groups</b>, use the <b>Child-safe</b> toggle on each group (e.g. Youth, Whole-church notices). Groups left un-marked stay hidden from children.</p>
+  <div class="shot">📸 Screenshot placeholder — a group card with the <b>Child-safe</b> toggle.</div>
+
+  <div class="note clay">
+    <span>⚠️</span>
+    <div><b>This supports your safeguarding — it doesn't replace it.</b> It doesn't perform background checks, supervise relationships, or read message content; it applies <i>your</i> decisions. Keep your policy, training and supervision fully in place, and speak to your safeguarding lead with any concern.</div>
+  </div>
+
+</div>
+
+<footer>
+  <div class="wrap">TrinityOne · Safeguarding is anchored in the church that knows its people. · See also the full SAFEGUARDING guide.</div>
+</footer>
+
+</body>
+</html>

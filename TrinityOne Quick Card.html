@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TrinityOne — Your 12 words (printable card)</title>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root { --ink:#1a1a1a; --mute:#444; --line:#000; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: #d8d3c7; font-family: 'Sora', system-ui, sans-serif; color: var(--ink); padding: 24px; }
+
+  /* screen toolbar */
+  .bar { max-width: 760px; margin: 0 auto 18px; display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+  .bar .t { font-weight: 700; color: #4a4034; font-size: 14px; }
+  .printbtn { display: inline-flex; align-items: center; gap: 8px; background: #1a1a1a; color: #fff; border: none; border-radius: 10px; padding: 11px 18px; font-weight: 700; font-size: 14px; cursor: pointer; font-family: inherit; }
+
+  /* the card — A6-ish handout, prints clean B/W */
+  .card { width: 148mm; max-width: 100%; margin: 0 auto; background: #fff; border: 2px solid var(--line); border-radius: 8px; padding: 12mm 12mm 10mm; }
+  .brand { display: flex; align-items: center; gap: 9px; }
+  .brand .nm { font-family: 'Sora', sans-serif; font-weight: 800; font-size: 20px; letter-spacing: -.3px; }
+  .kicker { margin-left: auto; font-size: 10.5px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--mute); }
+
+  h1 { font-family: 'Sora', sans-serif; font-weight: 800; font-size: 26px; line-height: 1.1; letter-spacing: -.6px; margin: 18px 0 4px; }
+  .sub { font-family: 'Newsreader', Georgia, serif; font-size: 15px; line-height: 1.45; color: var(--mute); margin: 0 0 18px; }
+
+  .rule { display: flex; gap: 13px; padding: 13px 0; border-top: 1px solid #ccc; align-items: flex-start; }
+  .rule:first-of-type { border-top: 1.5px solid #000; }
+  .num { width: 28px; height: 28px; border: 2px solid #000; border-radius: 999px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-family: 'Sora', sans-serif; font-weight: 800; font-size: 14px; }
+  .rule .ico { width: 30px; flex-shrink: 0; display: flex; justify-content: center; padding-top: 1px; }
+  .rule .tx { font-size: 14.5px; line-height: 1.4; font-weight: 500; }
+  .rule .tx b { font-weight: 800; }
+
+  .words { margin: 16px 0 4px; border: 1.5px dashed #000; border-radius: 8px; padding: 12px 14px; }
+  .words .wl { font-size: 10.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: var(--mute); margin-bottom: 9px; display: flex; align-items: center; gap: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px 14px; }
+  .slot { display: flex; align-items: center; gap: 7px; border-bottom: 1px solid #999; padding-bottom: 5px; }
+  .slot .i { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #777; width: 14px; }
+
+  .foot { margin-top: 14px; padding-top: 12px; border-top: 1.5px solid #000; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .foot .big { font-family: 'Sora', sans-serif; font-weight: 800; font-size: 14px; }
+  .foot .small { font-size: 11px; color: var(--mute); max-width: 60%; line-height: 1.35; }
+
+  @media print {
+    @page { size: A5 portrait; margin: 10mm; }
+    body { background: #fff; padding: 0; }
+    .bar { display: none; }
+    .card { width: 100%; border-width: 2px; border-radius: 0; padding: 8mm; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <span class="t">Print this on one page (A5) — or save as PDF. Designed to print clean in black &amp; white.</span>
+    <button class="printbtn" onclick="window.print()">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z"/></svg>
+      Print card
+    </button>
+  </div>
+
+  <div class="card">
+    <div class="brand">
+      <svg width="30" height="30" viewBox="0 0 100 100"><circle cx="50" cy="50" r="36" fill="none" stroke="#000" stroke-width="8" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)"/><circle cx="50" cy="50" r="7" fill="#000"/></svg>
+      <span class="nm">TrinityOne</span>
+      <span class="kicker">Keep this safe</span>
+    </div>
+
+    <h1>Your account = your 12 words</h1>
+    <p class="sub">There is no password and no company that can reset your account. These 12 words are the only key. Look after them and you’re safe.</p>
+
+    <div class="rule">
+      <div class="ico"><svg width="26" height="26" viewBox="0 0 120 116" fill="none" stroke="#000" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><rect x="26" y="22" width="52" height="64" rx="6"/><path d="M36 40h26M36 52h32M36 64h20" stroke-width="3.4"/><path d="M70 78c6-3 11-9 16-19 2-4-3-8-6-5-6 6-9 14-10 24Z"/></svg></div>
+      <div class="tx"><b>Write them on paper, in order.</b> By hand. Keep the paper somewhere safe at home — with important documents, or in a safe.</div>
+    </div>
+    <div class="rule">
+      <div class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M4 4 20 20"/></svg></div>
+      <div class="tx"><b>Never photograph, type online, or share them.</b> Not in a text, email, or any website.</div>
+    </div>
+    <div class="rule">
+      <div class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="16" height="13" rx="2"/><path d="M3 9h16"/><rect x="14" y="13" width="7" height="8" rx="1.4" fill="#fff"/><path d="M17.5 4V2.5"/></svg></div>
+      <div class="tx"><b>New phone?</b> Choose <b>Restore</b> and type your 12 words. You’re back — same name, same groups.</div>
+    </div>
+    <div class="rule">
+      <div class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 19 6v5.2c0 4.2-2.9 7-7 8.3-4.1-1.3-7-4.1-7-8.3V6Z"/><path d="m9.2 11.8 1.9 1.9 3.7-3.9"/></svg></div>
+      <div class="tx"><b>Anyone asking for your words is a scammer.</b> The church will never ask. We will never ask. If unsure, close the app and ask someone you trust.</div>
+    </div>
+
+    <div class="words">
+      <div class="wl"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 4.5 19.5 7.5 8.5 18.5l-3.6.9.9-3.6L16.5 4.5Z"/></svg> Write your 12 words here (in pencil), then store this card safely</div>
+      <div class="grid">
+        <div class="slot"><span class="i">1</span></div><div class="slot"><span class="i">2</span></div><div class="slot"><span class="i">3</span></div>
+        <div class="slot"><span class="i">4</span></div><div class="slot"><span class="i">5</span></div><div class="slot"><span class="i">6</span></div>
+        <div class="slot"><span class="i">7</span></div><div class="slot"><span class="i">8</span></div><div class="slot"><span class="i">9</span></div>
+        <div class="slot"><span class="i">10</span></div><div class="slot"><span class="i">11</span></div><div class="slot"><span class="i">12</span></div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="big">The 12 words live on paper — only you have them.</div>
+      <div class="small">Need help? Ask any steward at church — they’ll gladly help you write them down.</div>
+    </div>
+  </div>
+
+</body>
+</html>

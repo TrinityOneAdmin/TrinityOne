@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stewards & handing over a church — TrinityOne</title>
+<meta name="description" content="The two ways to let someone help run a church in TrinityOne: a revocable delegated steward, or a full handoff. Who needs which app, step by step." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,700;6..72,800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --paper:#f7f2ea; --surface:#fffdf9; --surface-2:#f1eae0; --ink:#2a2018; --ink-2:#5b4f42; --ink-3:#9a8e7e;
+    --line:#e7ddcd; --clay:#c25a38; --clay-ink:#a8482b; --clay-soft:#f6e1d8; --sage:#5e8c6a; --sage-soft:#dfeadf;
+    --gold:#c2913a; --gold-soft:#f3e7c9; --shadow:0 1px 3px rgba(60,40,20,.08),0 6px 20px rgba(60,40,20,.06);
+    --font-ui:'Inter',system-ui,sans-serif; --font-display:'Newsreader',Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--font-ui);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto;padding:0 22px}
+  header.hero{background:radial-gradient(120% 80% at 50% -10%, var(--gold-soft), transparent 55%);padding:54px 0 30px;text-align:center}
+  .pill{display:inline-flex;align-items:center;gap:7px;background:var(--sage-soft);color:#345c41;font-weight:700;font-size:12.5px;padding:6px 13px;border-radius:999px}
+  h1{font-family:var(--font-display);font-weight:800;font-size:clamp(28px,5vw,40px);letter-spacing:-.5px;margin:16px 0 8px}
+  h2{font-family:var(--font-display);font-weight:700;font-size:23px;letter-spacing:-.3px;margin:40px 0 6px}
+  h3{font-family:var(--font-display);font-weight:700;font-size:18px;margin:0 0 4px}
+  p{font-size:15.5px;color:var(--ink-2);margin:10px 0}
+  .lead{font-size:17px;color:var(--ink-2);max-width:640px;margin:10px auto 0}
+  .note{display:flex;gap:11px;padding:14px 16px;border-radius:14px;background:var(--sage-soft);border:1px solid color-mix(in oklab,var(--sage) 26%,transparent);margin:18px 0;font-size:14px;color:var(--ink-2)}
+  .note.gold{background:var(--gold-soft);border-color:color-mix(in oklab,var(--gold) 30%,transparent)}
+  .note.clay{background:var(--clay-soft);border-color:color-mix(in oklab,var(--clay) 26%,transparent)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:var(--shadow);margin:16px 0}
+  .step{display:flex;gap:16px;align-items:flex-start;margin:18px 0}
+  .num{flex-shrink:0;width:30px;height:30px;border-radius:999px;background:var(--clay);color:#fff;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;font-family:var(--font-display)}
+  .step .body{flex:1;min-width:0}
+  .who{display:flex;gap:6px;align-items:center;font-size:11.5px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;color:var(--ink-3);margin-bottom:3px}
+  .who .dot{width:8px;height:8px;border-radius:999px;background:var(--clay)}
+  .who.helper .dot{background:var(--gold)}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:640px){.cols{grid-template-columns:1fr}}
+  .path{background:var(--surface-2);border-radius:8px;padding:6px 10px;font-size:13px;font-weight:600;color:var(--ink);display:inline-block;margin:4px 0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-3)}
+  ul.clean{list-style:none;padding:0;margin:12px 0;display:flex;flex-direction:column;gap:9px}
+  ul.clean li{display:flex;gap:10px;font-size:15px;color:var(--ink-2)}
+  .tick{flex-shrink:0;width:22px;height:22px;border-radius:999px;background:var(--sage-soft);color:#345c41;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px}
+  .no{background:var(--clay-soft);color:var(--clay-ink)}
+  footer{border-top:1px solid var(--line);margin-top:40px;padding:26px 0 50px;color:var(--ink-3);font-size:13px;text-align:center}
+  b{color:var(--ink)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="pill">⛪ Stewards</span>
+    <h1>Letting others help run a church</h1>
+    <p class="lead">There are <b>two</b> ways to share control of a church. They look similar but work very differently — and the difference is mostly about <b>whether you can undo it</b>.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <h2>The two ways, at a glance</h2>
+  <table>
+    <tr><th></th><th>Delegated steward <span style="color:var(--sage)">(recommended)</span></th><th>Full handoff</th></tr>
+    <tr><td><b>What you share</b></td><td><b>Nothing secret</b> — you send an invite, they request, you approve. The church key is never shared</td><td>The church’s <b>recovery phrase</b> (the master key)</td></tr>
+    <tr><td><b>They become</b></td><td>A helper — post, manage who joins, create groups & studies. They act under <b>their own</b> key</td><td>A <b>co-owner</b> — full control, same as you</td></tr>
+    <tr><td><b>Undo it?</b></td><td><b>Yes, instantly</b> — revoke them and they lose access</td><td><b>No</b> — once they have the phrase, they have it for good (rotate the church to undo)</td></tr>
+    <tr><td><b>Use it for</b></td><td>Volunteers, a second leader you might change</td><td>Someone you trust to <b>be</b> the church forever</td></tr>
+  </table>
+  <div class="note"><span>★</span><div><b>Rule of thumb:</b> share the recovery phrase only with someone you’d trust to be the church permanently. For everyone else, make them a <b>delegated steward</b>.</div></div>
+
+  <h2>Which app does each person need?</h2>
+  <p>Everyone here uses the <b>Steward app</b> (the console) — <b>not</b> the member app. The member app is for taking part as a member; only the Steward app can act on a church’s behalf.</p>
+  <ul class="clean">
+    <li><span class="tick">●</span><div><b>The owner</b> runs the Steward app holding the church key.</div></li>
+    <li><span class="tick">●</span><div><b>A delegated steward</b> runs the Steward app with <b>their own</b> key (the app makes one when they start the steps below). The church key is never copied to their device.</div></li>
+    <li><span class="tick">●</span><div><b>A full-handoff co-owner</b> runs the Steward app and restores the church from its recovery phrase.</div></li>
+  </ul>
+
+  <h2>Make someone a delegated steward</h2>
+  <p>This is the revocable way, and nothing secret changes hands. It’s a three-step handshake — the owner <b>invites</b>, the helper <b>requests</b>, the owner <b>approves</b>.</p>
+
+  <div class="card">
+    <div class="step">
+      <div class="num">1</div>
+      <div class="body">
+        <div class="who"><span class="dot"></span>The owner · Steward app</div>
+        <h3>Send an invite</h3>
+        <p>Go to <span class="path">Settings → Security → Delegated stewards → Add a steward</span>. It shows an <b>invite</b> — a QR to scan, or <b>Copy invite</b> to send as text.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <div class="body">
+        <div class="who helper"><span class="dot"></span>The helper · Steward app</div>
+        <h3>Open the invite & request</h3>
+        <p>Open the Steward app and choose <span class="path">Settings → Security → Become a steward</span> (or, on the very first run, the <span class="path">Help run a church</span> option in the wizard) → <b>Scan a church’s invite</b> (or paste it — there’s a no-camera paste fallback). This <b>sends a request</b> to the owner. The app makes your own key and offers a <b>PIN</b> to protect it — set one.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <div class="body">
+        <div class="who"><span class="dot"></span>The owner · Steward app</div>
+        <h3>Approve the request</h3>
+        <p>You’ll see <b>“someone wants to help steward”</b> — a banner on the <b>Overview</b> and under <b>Delegated stewards</b>. Tap to <b>approve</b> (PIN-gated if you’ve set a console PIN). Check the friendly <b>name</b> shown matches the person you meant to add.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">4</div>
+      <div class="body">
+        <div class="who helper"><span class="dot"></span>The helper</div>
+        <h3>Switch to the church</h3>
+        <p>Within a few seconds, the church appears in their <b>top-left switcher</b> as <b>“acting as steward of <church>.”</b> Tap it (a <b>STEWARD</b> badge shows) and they can post announcements, manage who joins, and create groups & studies.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note"><span>★</span><div><b>The friendly name is your cross-check.</b> Every identity has an automatically-generated name (e.g. “Quiet Olive 28”). It shows on both sides, so when the owner approves a request they can confirm the name matches the person they meant to add.</div></div>
+
+  <div class="note clay"><span>↩︎</span><div><b>To remove a steward (instant):</b> the owner goes to <span class="path">Settings → Security → Delegated stewards</span> and taps <b>Revoke</b>. It takes effect immediately for new actions — they can no longer act for the church. (Their past announcements may stay visible; they just can’t post new ones.)</div></div>
+
+  <h2>Hand a church over completely (full handoff)</h2>
+  <div class="card">
+    <div class="step">
+      <div class="num">1</div>
+      <div class="body">
+        <div class="who"><span class="dot"></span>The owner · Steward app</div>
+        <h3>Show the handoff QR</h3>
+        <p><span class="path">Settings → Security → Stewards & handoff → Show handoff QR</span> (or reveal the 12-word phrase). <b>This carries the master key</b> — show it <b>in person</b>, only to someone you fully trust.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <div class="body">
+        <div class="who helper"><span class="dot"></span>The other person · Steward app</div>
+        <h3>Restore the church</h3>
+        <p>On the first screen tap <span class="path">Restore a church</span> → <b>Scan</b> the QR (or paste the phrase). They now hold the church too. Handing it over entirely? The original holder can then <b>Remove it from this device</b>.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>Protecting the key with a PIN</h2>
+  <p>A church key — and a steward key — can act for a church, so keep it locked. Set or change a PIN under <span class="path">Settings → Security → Console lock</span>; it encrypts the key on the device and asks for the PIN to open the console. <b>Removing the PIN requires entering it</b>, so a left-open console can’t be stripped. Don’t forget it — without the PIN (or the recovery phrase) that device can’t open the church.</p>
+
+  <h2>What a delegated steward can and can’t do</h2>
+  <div class="cols">
+    <div class="card" style="margin:0">
+      <h3 style="color:#345c41">Can</h3>
+      <ul class="clean">
+        <li><span class="tick">✓</span>Post announcements & broadcasts</li>
+        <li><span class="tick">✓</span>Manage who joins (approve / admit)</li>
+        <li><span class="tick">✓</span>Create content — groups & studies</li>
+      </ul>
+    </div>
+    <div class="card" style="margin:0">
+      <h3 style="color:var(--clay-ink)">Can’t (owner only)</h3>
+      <ul class="clean">
+        <li><span class="tick no">✕</span>Add or remove other stewards</li>
+        <li><span class="tick no">✕</span>Ban members or change the church key</li>
+        <li><span class="tick no">✕</span>Change the relay / network settings</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>If it’s “not showing up”</h2>
+  <ul class="clean">
+    <li><span class="tick">●</span><div><b>Owner didn’t see the request?</b> Look for the <b>“someone wants to help steward”</b> banner on the Overview and under Delegated stewards — the helper must have sent the request (step 2) first.</div></li>
+    <li><span class="tick">●</span><div><b>Steward sees no “acting as steward of …”?</b> Make sure the owner has <b>approved</b> the request, then give it a few seconds to find the roster.</div></li>
+    <li><span class="tick">●</span><div><b>On an old build?</b> Reinstall the latest APK, or refresh the web console (the version is at the foot of Settings).</div></li>
+  </ul>
+
+</div>
+
+<footer>TrinityOne · a church, gathered. This guide explains stewards & church handover.</footer>
+
+</body>
+</html>

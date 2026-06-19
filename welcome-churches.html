@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TrinityOne — Relays &amp; joining (for churches)</title>
+<meta name="description" content="Run your own TrinityOne relay and share your church's joining code." />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="brand.css" />
+<style>
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 28px; }
+  a { color: inherit; }
+  html, body { overflow-x: clip; max-width: 100%; }
+
+  /* nav */
+  nav.top { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--paper) 86%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--line-2); }
+  nav.top .wrap { display: flex; align-items: center; gap: 24px; height: 72px; }
+  nav .links { display: flex; gap: 28px; margin-left: 20px; }
+  nav .links a { font-weight: 600; font-size: 14.5px; color: var(--ink-2); text-decoration: none; transition: color .15s; }
+  nav .links a:hover { color: var(--ink); }
+  nav .spacer { flex: 1; }
+  .wm-sm { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: -.3px; }
+  .wm-sm .one { color: var(--clay); }
+
+  .band { padding: 72px 0 90px; }
+  .eyebrow { display:flex; justify-content:center; margin-bottom: 18px; }
+  .band h2 { font-family: var(--font-display); font-weight: 700; font-size: clamp(30px,4.4vw,46px); letter-spacing: -1px; text-align: center; margin: 0 auto; max-width: 720px; line-height: 1.04; }
+  .band .intro { text-align:center; font-family: var(--font-serif); font-size: 19px; color: var(--ink-2); max-width: 560px; margin: 18px auto 0; line-height: 1.5; text-wrap: pretty; }
+
+  .church .mono { font-family: 'Newsreader', monospace; font-style: normal; font-weight: 600; color: var(--clay-ink); background: var(--clay-soft); padding: 1px 6px; border-radius: 6px; font-size: .92em; }
+  .church-cards { display: grid; grid-template-columns: 1.05fr .95fr; gap: 22px; margin-top: 40px; }
+  .ch-card { border-radius: var(--r-xl); padding: 36px; display: flex; flex-direction: column; }
+  .ch-head h3 { font-family: var(--font-display); font-weight: 700; font-size: 26px; letter-spacing: -.5px; margin: 14px 0 0; }
+  .ch-head p { font-size: 15.5px; line-height: 1.6; margin: 12px 0 0; }
+
+  /* relay (dark / terminal) */
+  .ch-relay { background: linear-gradient(160deg, var(--midnight-2), var(--midnight)); color: var(--paper); box-shadow: var(--shadow-lg); }
+  .ch-relay .ch-head p { color: color-mix(in oklab, var(--paper) 76%, transparent); }
+  .relay-console { margin-top: 24px; border-radius: 16px; overflow: hidden; background: #0c0a07; border: 1px solid rgba(255,255,255,.1); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .rc-bar { display: flex; align-items: center; gap: 7px; padding: 11px 15px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .rc-bar span { width: 11px; height: 11px; border-radius: 999px; background: rgba(255,255,255,.18); }
+  .rc-bar span:nth-child(1){background:#E06C5B}.rc-bar span:nth-child(2){background:#E0B860}.rc-bar span:nth-child(3){background:#5E8C6A}
+  .rc-bar b { margin-left: auto; font-family: var(--font-ui); font-weight: 600; font-size: 11.5px; letter-spacing: .4px; color: rgba(255,255,255,.55); }
+  .rc-body { padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+  .rc-row { display: flex; align-items: center; gap: 11px; padding: 11px 12px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); }
+  .rc-ic { color: #8fc79c; display: flex; flex-shrink: 0; }
+  .rc-tx { flex: 1; min-width: 0; }
+  .rc-name { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 13px; color: #e7e1d3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rc-sub { font-size: 11.5px; color: rgba(255,255,255,.42); margin-top: 1px; }
+  .rc-tag { font-family: var(--font-ui); font-size: 10.5px; font-weight: 800; letter-spacing: .3px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; flex-shrink: 0; }
+  .rc-tag--shared { background: rgba(255,255,255,.1); color: rgba(255,255,255,.7); }
+  .rc-tag--own { background: rgba(226,128,80,.18); color: #E68A66; }
+  .rc-live { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: #8fc79c; flex-shrink: 0; }
+  .rc-dot { width: 7px; height: 7px; border-radius: 999px; background: #8fc79c; }
+  .rc-add { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 11px; border-radius: 12px; border: 1px dashed rgba(255,255,255,.22); background: transparent; color: rgba(255,255,255,.72); font-family: var(--font-ui); font-weight: 700; font-size: 13px; cursor: pointer; transition: border-color .2s, color .2s; }
+  .rc-add:hover { border-color: var(--gold-soft); color: var(--gold-soft); }
+  .rc-foot { display: flex; align-items: center; gap: 8px; padding: 12px 15px; border-top: 1px solid rgba(255,255,255,.07); font-size: 12px; color: rgba(255,255,255,.5); line-height: 1.4; }
+  .rc-foot .rc-lock { color: #8fc79c; display: flex; flex-shrink: 0; }
+
+  /* joining (light) */
+  .ch-join { background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-sm); }
+  .join-card { margin-top: 24px; display: flex; gap: 22px; align-items: center; padding: 22px; border-radius: var(--r-lg); background: var(--paper); border: 1px solid var(--line); }
+  .join-qr { width: 124px; height: 124px; border-radius: 16px; background: #fff; box-shadow: var(--shadow-md); display: flex; align-items: center; justify-content: center; flex-shrink: 0; position: relative; }
+  .join-qr #churchQR { width: 104px; height: 104px; }
+  .join-label { font-size: 11px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; color: var(--ink-3); }
+  .join-code { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-weight: 700; font-size: 30px; letter-spacing: 2px; color: var(--ink); margin-top: 4px; }
+  .join-sub { font-size: 13px; color: var(--ink-2); font-weight: 600; margin-top: 3px; }
+  .join-copy { display: inline-flex; align-items: center; gap: 7px; margin-top: 16px; padding: 9px 15px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-family: var(--font-ui); font-weight: 700; font-size: 13px; cursor: pointer; transition: border-color .15s, transform .15s; }
+  .join-copy:hover { border-color: var(--clay); transform: translateY(-1px); }
+  .join-ways { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 22px; }
+  @media (min-width: 881px) { .join-ways { margin-top: auto; padding-top: 22px; } .ch-list { margin-top: auto; padding-top: 22px; } }
+  .join-ways span { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); color: var(--ink-2); font-weight: 600; font-size: 13px; }
+  .join-ways span svg { color: var(--clay); }
+
+  .ch-list { list-style: none; padding: 0; margin: 22px 0 0; display: flex; flex-direction: column; gap: 11px; }
+  .ch-list li { display: flex; align-items: center; gap: 11px; font-weight: 600; font-size: 14.5px; }
+  .ch-list .tick { width: 22px; height: 22px; border-radius: 999px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .tick--gold { background: rgba(224,184,96,.16); color: var(--gold-soft); }
+  .ch-list--dark li { color: color-mix(in oklab, var(--paper) 88%, transparent); }
+
+  /* advanced: terminal install for the self-hosted relay */
+  .relay-cli { margin-top: 20px; border-top: 1px solid rgba(255,255,255,.09); padding-top: 16px; }
+  .relay-cli summary { cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--gold-soft); list-style: none; }
+  .relay-cli summary::-webkit-details-marker { display: none; }
+  .relay-cli summary::before { content: '▸ '; }
+  .relay-cli[open] summary::before { content: '▾ '; }
+  .relay-cli p { color: color-mix(in oklab, var(--paper) 70%, transparent); font-size: 13px; line-height: 1.55; margin: 12px 0 12px; }
+  .cli-line { display: flex; align-items: stretch; gap: 8px; }
+  .cli-line code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; background: rgba(0,0,0,.32); border: 1px solid rgba(255,255,255,.1); border-radius: 10px; padding: 11px 13px; font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 12.5px; color: #cfe8d6; }
+  .cli-copy { flex-shrink: 0; background: var(--gold-soft); color: var(--midnight); border: none; border-radius: 10px; padding: 0 15px; font-family: var(--font-ui); font-weight: 700; font-size: 12.5px; cursor: pointer; }
+  .cli-copy:hover { filter: brightness(1.06); }
+
+  .church-cta { display: flex; gap: 14px; justify-content: center; margin-top: 44px; flex-wrap: wrap; }
+
+  footer { background: var(--midnight); color: var(--ink-3); padding: 40px 0; }
+  footer .wrap { display:flex; align-items:center; justify-content:space-between; gap: 20px; flex-wrap: wrap; font-size: 14px; }
+  footer a { color: var(--ink-3); text-decoration: none; }
+  footer a:hover { color: var(--paper); }
+
+  @media (max-width: 880px) {
+    .church-cards { grid-template-columns: 1fr; }
+    nav .links { display:none; }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 0 18px; }
+    .join-card { flex-direction: column; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="to-halo" viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="36" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)" />
+    <circle cx="50" cy="50" r="6.5" fill="var(--spark)" />
+  </symbol>
+  <!-- the full brand mark (matches the app icon): clay tile + cream halo + gold spark -->
+  <symbol id="to-mark" viewBox="0 0 512 512">
+    <rect width="512" height="512" rx="112" fill="#C25A38" />
+    <g transform="scale(5.12)" fill="none" stroke="#F4EEE2" stroke-width="7" stroke-linecap="round">
+      <path d="M81.2 67.9 A36 36 0 0 1 31.3 80.7" />
+      <path d="M18.8 68.0 A36 36 0 0 1 32.7 18.4" />
+      <path d="M49.9 14.0 A36 36 0 0 1 86.0 50.8" />
+    </g>
+    <circle cx="256" cy="256" r="33.3" fill="#E0B860" />
+  </symbol>
+</svg>
+
+<nav class="top">
+  <div class="wrap">
+    <a href="welcome.html" class="wm-sm" style="text-decoration:none;gap:11px"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span class="wm-txt">Trinity<span class="one">One</span></span></a>
+    <div class="links">
+      <a href="welcome.html#church">For churches</a><a href="welcome.html#get">Get the app</a>
+    </div>
+    <div class="spacer"></div>
+    <a href="./steward.html?setup=1" data-steward-cta class="to-btn to-btn--clay" style="padding:11px 20px;font-size:14px">Start a church</a>
+  </div>
+</nav>
+
+<section class="band" style="padding-bottom:6px">
+  <div class="wrap">
+    <div class="eyebrow"><span class="to-pill" style="background:var(--sage-soft);color:#345c41">A church home you own</span></div>
+    <h1 style="font-family:var(--font-display);font-weight:800;font-size:clamp(30px,5vw,52px);letter-spacing:-1.2px;line-height:1.04;margin:14px 0 0;max-width:780px">Don’t build your church on ground you don’t own.</h1>
+    <p class="intro" style="max-width:660px">Your members, your giving, your groups, your children’s details — today they sit on platforms that charge for the tools, mine the data, and can change the rules overnight. <b>TrinityOne is the alternative, built for churches:</b> the whole life of your church on infrastructure you hold the keys to. No company in the middle. Nothing mined.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:22px">
+      <a href="./steward.html?setup=1" data-steward-cta class="to-btn to-btn--clay">Start a church — free</a>
+      <a href="#church" class="to-btn to-btn--ghost">See how it works</a>
+    </div>
+    <p style="margin:16px 0 0;font-size:14px"><a href="migrate.html" style="color:var(--clay-ink,#8f3f2f);font-weight:700;text-decoration:none">Already on WhatsApp, ChurchSuite or Planning Center? See the move-over guide →</a></p>
+  </div>
+</section>
+
+<!-- DE-RISK: switching feels safe -->
+<section class="band" style="padding-top:8px">
+  <div class="wrap">
+    <div class="eyebrow"><span class="to-pill">Switching is easy</span></div>
+    <h2>Move at your pace. Nothing's locked in.</h2>
+    <p class="intro" style="max-width:640px">You don't have to flip a switch and hope. Start with one group, keep your current tools running alongside, and bring people across when they're ready — and because it's self-custodial, your data is always yours to take.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-top:26px">
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px">
+        <div style="font-family:var(--font-display);font-weight:700;font-size:19px;margin-bottom:6px">Start with one group</div>
+        <p style="font-size:14px;color:var(--ink-2);margin:0;line-height:1.6">Your leadership, or a single life group. Prove it with a small win before moving anyone else.</p>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px">
+        <div style="font-family:var(--font-display);font-weight:700;font-size:19px;margin-bottom:6px">Run alongside</div>
+        <p style="font-size:14px;color:var(--ink-2);margin:0;line-height:1.6">Keep WhatsApp and your old software going. No cut-over cliff, no deadline, no pressure.</p>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px">
+        <div style="font-family:var(--font-display);font-weight:700;font-size:19px;margin-bottom:6px">No lock-in, ever</div>
+        <p style="font-size:14px;color:var(--ink-2);margin:0;line-height:1.6">Your church is a key you hold — not an account a company holds. Export anytime; no one can lock you out.</p>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px">
+        <div style="font-family:var(--font-display);font-weight:700;font-size:19px;margin-bottom:6px">Free — for good</div>
+        <p style="font-size:14px;color:var(--ink-2);margin:0;line-height:1.6">No subscription after setup, no per-member fee, no tier to upgrade to. Free now, free at any size — there's no company in the middle to bill you.</p>
+      </div>
+    </div>
+    <div style="margin-top:24px"><a href="migrate.html" class="to-btn to-btn--clay">Read the move-over guide →</a></div>
+  </div>
+</section>
+
+<section class="band church" id="church">
+  <div class="wrap">
+    <div class="eyebrow"><span class="to-pill" style="background:var(--sage-soft);color:#345c41">For pastors &amp; stewards</span></div>
+    <h2>Relays &amp; joining codes</h2>
+    <p class="intro">Run a copy of your church's data on hardware you control, and hand your people a code to join. Both are optional — TrinityOne works out of the box on shared relays.</p>
+
+    <div class="church-cards">
+
+      <!-- RELAY -->
+      <div class="ch-card ch-relay" id="church-relay">
+        <div class="ch-head">
+          <span class="to-pill" style="background:rgba(255,255,255,.1);color:var(--gold-soft)">Your own relay · optional</span>
+          <h3>Run your own relay</h3>
+          <p>Your church runs on TrinityOne’s shared relays out of the box — nothing to set up. Want a copy of every event on hardware you control? Order a <b style="color:var(--paper)">managed relay</b> in a click, or run the free <b style="color:var(--paper)">TrinityOne Relay app</b> on any Mac, Windows, or Linux machine. The Steward console just points your church at it — your key signs each change, and never leaves your device.</p>
+        </div>
+        <ul class="ch-list ch-list--dark">
+          <li><span class="tick tick--gold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Managed by us, or the desktop Relay app — your call</li>
+          <li><span class="tick tick--gold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Relay app runs on Mac, Windows or Linux — no command line</li>
+          <li><span class="tick tick--gold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Always falls back to shared relays</li>
+        </ul>
+        <details class="relay-cli">
+          <summary>Run it yourself — one line, then finish in your browser</summary>
+          <p>Paste this on any Debian/Ubuntu/Raspberry Pi box (a Pi, mini-PC, old laptop or VPS). It installs the relay as a boot service, then prints a dashboard link — open it and click <b>Connect → Make it public</b> for a secure public address. No GitHub account, and no more terminal after this line.</p>
+          <div class="cli-line">
+            <code id="relayInstallCmd">curl -fsSL https://trinityone.tailbeaac0.ts.net/relay-app/install.sh | sudo bash</code>
+            <button type="button" class="cli-copy" onclick="(function(b){navigator.clipboard&amp;&amp;navigator.clipboard.writeText(document.getElementById('relayInstallCmd').textContent);b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1400);})(this)">Copy</button>
+          </div>
+        </details>
+      </div>
+
+      <!-- JOINING CODE -->
+      <div class="ch-card ch-join" id="church-join">
+        <div class="ch-head">
+          <span class="to-pill">How people join</span>
+          <h3>Share a joining code</h3>
+          <p>Every church gets a friendly code and a matching QR. It carries your <span class="mono">npub</span> and relay hints — so one scan follows your church and pulls in your groups.</p>
+        </div>
+        <div class="join-card">
+          <div class="join-qr"><div id="churchQR"></div></div>
+          <div class="join-meta">
+            <div class="join-label">Church code</div>
+            <div class="join-code">GRACE‑7K2</div>
+            <div class="join-sub">Grace Chapel · Riverside</div>
+            <button class="join-copy" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2.2"/><path d="M5.5 15.5H5a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 5 3.5h9A1.5 1.5 0 0 1 15.5 5v.5"/></svg> Copy code</button>
+          </div>
+        </div>
+        <div class="join-ways">
+          <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h12v17l-2.5-2-2 2-2-2-2 2-2-2L6 20.5Z"/><path d="M9 8h6M9 11.5h4"/></svg> Print on the bulletin</span>
+          <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg> Show it on the screen</span>
+          <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H10l-4 3v-3a2 2 0 0 1-1.5-1.9Z"/></svg> Text it to a friend</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="church-cta">
+      <a href="./steward.html?setup=1" data-steward-cta class="to-btn to-btn--clay">Start a church</a>
+      <a href="welcome.html#church" class="to-btn to-btn--ghost">← Back to overview</a>
+    </div>
+  </div>
+</section>
+
+<section class="band safe" id="safe" style="background:var(--sage-soft)">
+  <div class="wrap">
+    <div class="eyebrow"><span class="to-pill" style="background:#fff;color:#345c41">Safe &amp; well-run</span></div>
+    <h2>A community you can keep safe</h2>
+    <p class="intro">Because the church knows its people, protection is anchored in your leaders — not a meaningless tick-box. These tools <b>support</b> your safeguarding policy and background checks; they don't replace them.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;margin-top:38px">
+
+      <div style="background:#fff;border-radius:18px;padding:26px;box-shadow:var(--shadow)">
+        <span style="display:inline-flex;width:44px;height:44px;border-radius:13px;align-items:center;justify-content:center;background:var(--sage-soft);color:#345c41;margin-bottom:14px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v6c0 4 3 6.5 7 9 4-2.5 7-5 7-9V6l-7-3Z"/></svg></span>
+        <h3 style="font-family:var(--font-display);font-weight:700;font-size:20px;margin:0 0 8px">Safeguarding for under-18s</h3>
+        <p style="font-size:14.5px;line-height:1.6;margin:0;color:var(--ink-2)">Mark who's a child and which adults are cleared for youth. Children see only child-safe groups, and a private message between a child and an adult is blocked unless that adult is cleared — <b>enforced on your relay</b>, not just the app.</p>
+      </div>
+
+      <div style="background:#fff;border-radius:18px;padding:26px;box-shadow:var(--shadow)">
+        <span style="display:inline-flex;width:44px;height:44px;border-radius:13px;align-items:center;justify-content:center;background:var(--sage-soft);color:#345c41;margin-bottom:14px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><circle cx="17.5" cy="10" r="2.4"/><path d="M15 19c0-2.2 1.3-3.6 3-3.6"/></svg></span>
+        <h3 style="font-family:var(--font-display);font-weight:700;font-size:20px;margin:0 0 8px">Parent-linked accounts</h3>
+        <p style="font-size:14.5px;line-height:1.6;margin:0;color:var(--ink-2)">A parent sets up and holds their child's account from their own phone, and can always reach their own child. You <b>confirm every link</b>, so no one can attach themselves to a child who isn't theirs.</p>
+      </div>
+
+      <div style="background:#fff;border-radius:18px;padding:26px;box-shadow:var(--shadow)">
+        <span style="display:inline-flex;width:44px;height:44px;border-radius:13px;align-items:center;justify-content:center;background:var(--sage-soft);color:#345c41;margin-bottom:14px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 10 17l9-10"/></svg></span>
+        <h3 style="font-family:var(--font-display);font-weight:700;font-size:20px;margin:0 0 8px">Choose how people join</h3>
+        <p style="font-size:14.5px;line-height:1.6;margin:0;color:var(--ink-2)">Keep it open — anyone with your code or QR joins instantly — or switch on <b>approval</b>, and new people wait in a simple requests list until a steward lets them in.</p>
+      </div>
+
+      <div style="background:#fff;border-radius:18px;padding:26px;box-shadow:var(--shadow)">
+        <span style="display:inline-flex;width:44px;height:44px;border-radius:13px;align-items:center;justify-content:center;background:var(--sage-soft);color:#345c41;margin-bottom:14px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span>
+        <h3 style="font-family:var(--font-display);font-weight:700;font-size:20px;margin:0 0 8px">Shape your space</h3>
+        <p style="font-size:14.5px;line-height:1.6;margin:0;color:var(--ink-2)">Turn whole features on or off for your congregation, pin an announcement to the top of a group, and remove a message or block a member when you need to.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="band run" id="run">
+  <div class="wrap">
+    <div class="eyebrow"><span class="to-pill" style="background:var(--gold-soft);color:#8a6717">Run your church</span></div>
+    <h2>The admin, handled</h2>
+    <p class="intro">The behind-the-scenes work a church actually runs on — sharing the load, giving records &amp; Gift Aid, rooms and rotas — in the same place your people already are. Self-custodial, so no company holds your data.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;margin-top:38px">
+
+      <div style="background:var(--surface);border-radius:18px;padding:26px;box-shadow:var(--shadow);border:1px solid var(--line)">
+        <span style="display:inline-flex;width:44px;height:44px;border-radius:13px;align-items:center;justify-content:center;background:var(--gold-soft);color:#8a6717;margin-bottom:14px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><circle cx="17.5" cy="9" r="2.4"/><path d="M15.5 18.5c0-2.4 1.4-4 3.5-4"/></svg></span>
+        <h3 style="font-family:var(--font-display);font-weight:700;font-size:20px;margin:0 0 8px">Share the load with stewards</h3>
+        <p style="font-size:14.5px;line-height:1.6;margin:0;color:var(--ink-2)">Don't run it alone. Invite a trusted helper as a <b>steward</b> to help manage the church — and here's the careful part: each steward acts under <b>their own key</b>, never yours. <b>Your church key is never shared</b>, and you can add or remove a steward at any time.</p>
+      </div>
+
+      <div style="background:var(--surface);border-radius:18px;padding:26px;box-shadow:var(--shadow);border:1px solid var(--line)">
+        <span style="display:inline-flex;width:44px;height:44px;border-radius:13px;align-items:center;justify-content:center;background:var(--gold-soft);color:#8a6717;margin-bottom:14px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h9l3 3V20a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 5.5 20V4a.5.5 0 0 1 .5-.5Z"/><path d="M8.5 9.5h7M8.5 13h7M8.5 16.5h4"/></svg></span>
+        <h3 style="font-family:var(--font-display);font-weight:700;font-size:20px;margin:0 0 8px">Giving records &amp; Gift Aid <span style="font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:#8a6717;background:var(--gold-soft);border-radius:999px;padding:3px 8px;vertical-align:middle">Optional</span></h3>
+        <p style="font-size:14.5px;line-height:1.6;margin:0;color:var(--ink-2)">An optional treasurer's ledger: keep <b>Gift-Aid-ready donor records</b>, categorise funds, and <b>import a bank statement</b> — it matches deposits to donors — then export the HMRC schedule. Every record is <b>encrypted to your church key</b>. (Record-keeping only; in-app Lightning giving is on the <a href="roadmap.html" style="color:var(--clay-ink)">roadmap</a>.)</p>
+      </div>
+
+      <div style="background:var(--surface);border-radius:18px;padding:26px;box-shadow:var(--shadow);border:1px solid var(--line)">
+        <span style="display:inline-flex;width:44px;height:44px;border-radius:13px;align-items:center;justify-content:center;background:var(--gold-soft);color:#8a6717;margin-bottom:14px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.4"/></svg></span>
+        <h3 style="font-family:var(--font-display);font-weight:700;font-size:20px;margin:0 0 8px">Shared room calendar</h3>
+        <p style="font-size:14.5px;line-height:1.6;margin:0;color:var(--ink-2)">Book the hall, rooms and spaces in one place — with a <b>double-booking check</b> so the same room is never promised twice. See what's on, when, at a glance.</p>
+      </div>
+
+      <div style="background:var(--surface);border-radius:18px;padding:26px;box-shadow:var(--shadow);border:1px solid var(--line)">
+        <span style="display:inline-flex;width:44px;height:44px;border-radius:13px;align-items:center;justify-content:center;background:var(--gold-soft);color:#8a6717;margin-bottom:14px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="2.4"/><path d="M3.5 9h17M8 3v3M16 3v3M8 13l2.5 2.5L16 11"/></svg></span>
+        <h3 style="font-family:var(--font-display);font-weight:700;font-size:20px;margin:0 0 8px">Serving &amp; rotas</h3>
+        <p style="font-size:14.5px;line-height:1.6;margin:0;color:var(--ink-2)">Build teams and rotas, save <b>serving pods</b> that rotate week to week, and send "Can you serve?" — members get a <b>notification</b> on their phone and reply in a tap.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>© TrinityOne — Read · Gather · Share</span>
+    <span style="display:flex;gap:22px;align-items:center"><a href="mailto:31app@proton.me">Contact</a><a href="migrate.html">Moving over</a><a href="roadmap.html">Roadmap</a><a href="welcome.html">← trinityone.app</a></span>
+  </div>
+</footer>
+
+<script>
+  // ── procedural faux-QR for the church joining card (matches the in-app style) ──
+  (function () {
+    const seed = 'GRACE-7K2';
+    let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    const rnd = (i) => { const x = Math.sin(h + i * 12.9898) * 43758.5453; return x - Math.floor(x); };
+    const N = 19, cells = [];
+    const finder = (r, c) => r < 6 && c < 6;
+    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+      const isF = finder(r, c) || finder(r, N - 1 - c) || finder(N - 1 - r, c);
+      let on;
+      if (isF) { const br = r < 6 ? r : N - 1 - r, bc = c < 6 ? c : N - 1 - c; on = br === 0 || br === 5 || bc === 0 || bc === 5 || (br >= 2 && br <= 3 && bc >= 2 && bc <= 3); }
+      else on = rnd(r * N + c) > 0.55;
+      if (on) cells.push('<rect x="' + c + '" y="' + r + '" width="1" height="1" rx="0.18"/>');
+    }
+    const el = document.getElementById('churchQR');
+    if (el) el.innerHTML =
+      '<svg viewBox="0 0 19 19" width="100%" height="100%"><rect width="19" height="19" fill="#fff"/>' +
+      '<g fill="#1a1410">' + cells.join('') + '</g>' +
+      '<circle cx="9.5" cy="9.5" r="2.6" fill="#fff"/>' +
+      '<use href="#to-halo" x="7" y="7" width="5" height="5" style="color:var(--ink);--spark:var(--clay)"/></svg>';
+  })();
+
+  // ── copy the joining code ──
+  document.querySelectorAll('.join-copy').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const code = btn.closest('.join-meta')?.querySelector('.join-code')?.textContent?.replace(/‑/g, '-').trim() || '';
+      if (navigator.clipboard) navigator.clipboard.writeText(code).catch(() => {});
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg> Copied';
+      setTimeout(() => { btn.innerHTML = orig; }, 1600);
+    });
+  });
+</script>
+{SCRIPT}
+<script>(function(){if(!/Android/i.test(navigator.userAgent))return;document.querySelectorAll("[data-steward-cta]").forEach(function(a){a.href="./trinityone-steward.apk";a.setAttribute("download","");if(/start a church/i.test(a.textContent))a.textContent="Get the Steward app (Android)";});})();</script>
+</body>
+</html>

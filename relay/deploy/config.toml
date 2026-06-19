@@ -1,0 +1,34 @@
+# nostr-rs-relay configuration for TrinityOne.
+# Full reference: https://github.com/scsibug/nostr-rs-relay/blob/master/config.toml
+
+[info]
+relay_url = "wss://relay.CHANGE-ME.org/"     # <- your public wss URL (match the Caddyfile domain)
+name = "TrinityOne"
+description = "TrinityOne fellowship relay"
+# pubkey = "<hex pubkey of the operator>"    # optional contact
+# contact = "mailto:steward@CHANGE-ME.org"
+
+[database]
+data_directory = "/usr/src/app/db"           # persisted in the relay-data volume
+
+[network]
+address = "0.0.0.0"
+port = 8080
+
+[options]
+reject_future_seconds = 1800                  # drop events dated >30 min in the future
+
+[limits]
+messages_per_sec = 10                         # per-connection write rate
+max_event_bytes = 131072                      # 128 KB
+max_ws_message_bytes = 262144
+max_ws_frame_bytes = 262144
+
+# ── Lock the relay down to your congregation (RECOMMENDED for a real church relay) ──
+# Until you fill this in, ANYONE can post. To restrict WRITES to known members, list their
+# Nostr public keys (64-char hex — derive from each member's npub). Reads stay open.
+[authorization]
+# pubkey_whitelist = [
+#   "abc123...memberpubkeyhex...",
+#   "def456...memberpubkeyhex...",
+# ]

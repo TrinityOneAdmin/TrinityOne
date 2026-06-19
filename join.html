@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Join your church on TrinityOne</title>
+<meta name="robots" content="noindex" />
+<meta name="description" content="Join your church on TrinityOne — Scripture, groups and serving in one private place. No account, no password." />
+<!-- Link preview (WhatsApp, iMessage, Messenger, Signal, social) -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="TrinityOne" />
+<meta property="og:title" content="Join your church on TrinityOne" />
+<meta property="og:description" content="Scripture, groups and serving in one private place. No account, no password — tap to join." />
+<meta property="og:image" content="https://trinityone.pages.dev/og-join.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:url" content="https://trinityone.pages.dev/join" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Join your church on TrinityOne" />
+<meta name="twitter:description" content="Scripture, groups and serving in one private place. No account, no password." />
+<meta name="twitter:image" content="https://trinityone.pages.dev/og-join.png" />
+<style>
+  :root{--paper:#FBF7F0;--surface:#fff;--ink:#1b1714;--ink-2:#5b5246;--ink-3:#8a8073;--line:#e9e1d4;--clay:#b4533f;--clay-deep:#8f3f2f;--sage:#5E8C6A;--gold:#C99A4B;--font-display:"Fraunces",Georgia,serif;--font-ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font-ui);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100dvh;display:flex;flex-direction:column;align-items:center;padding:24px 18px 40px}
+  .mark{display:flex;align-items:center;gap:10px;margin:14px 0 28px;font-weight:800;font-size:19px;letter-spacing:-.3px}
+  .mark .o{color:var(--clay)}
+  .card{width:100%;max-width:420px;background:var(--surface);border:1px solid var(--line);border-radius:24px;box-shadow:0 18px 50px rgba(60,40,20,.10);padding:26px 22px 24px;text-align:center}
+  .pill{display:inline-block;font-size:12px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--clay-deep);background:color-mix(in oklab,var(--clay) 12%,var(--surface));border-radius:999px;padding:5px 12px;margin-bottom:14px}
+  h1{font-family:var(--font-display);font-weight:800;font-size:clamp(24px,7vw,32px);letter-spacing:-.8px;line-height:1.08;margin:0 0 8px}
+  .sub{font-size:15px;line-height:1.55;color:var(--ink-2);margin:0 0 22px}
+  .btn{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;border:none;border-radius:15px;padding:15px;font-family:var(--font-ui);font-weight:700;font-size:16px;cursor:pointer;text-decoration:none;margin-bottom:11px}
+  .btn-clay{background:var(--clay);color:#fff}
+  .btn-ghost{background:var(--surface);color:var(--ink);border:1px solid var(--line)}
+  .btn small{display:block;font-weight:600;font-size:11.5px;opacity:.8}
+  .note{font-size:12.5px;line-height:1.5;color:var(--ink-3);margin:14px 4px 0}
+  .foot{font-size:12px;color:var(--ink-3);margin-top:26px;max-width:380px;text-align:center;line-height:1.5}
+  .hide{display:none}
+</style>
+</head>
+<body>
+  <div class="mark">
+    <svg width="30" height="30" viewBox="0 0 512 512" aria-hidden="true"><circle cx="256" cy="170" r="46" fill="#b4533f"/><circle cx="170" cy="320" r="46" fill="#C99A4B"/><circle cx="342" cy="320" r="46" fill="#5E8C6A"/></svg>
+    <span>Trinity<span class="o">One</span></span>
+  </div>
+
+  <div class="card">
+    <div class="pill" id="pill">You're invited</div>
+    <h1 id="head">Join your church</h1>
+    <p class="sub" id="sub">A warm, private home for your church — Scripture, groups, serving and more. No account, no password.</p>
+
+    <a class="btn btn-clay" id="openNow" href="#"><span>Open TrinityOne now<small id="openSub">Works straight away — no download</small></span></a>
+    <a class="btn btn-ghost hide" id="getApp" href="#"><span id="getAppLabel">Get the app</span></a>
+
+    <div class="note" id="note"></div>
+  </div>
+
+  <div class="foot">Scanned a printed slip? You're in the right place. TrinityOne keeps no account and no password — your phone holds a private key that <em>is</em> you. The next screen sets you up in seconds.</div>
+
+<script>(function(){
+  var q = new URLSearchParams(location.search);
+  var follow = q.get('follow') || '';
+  var name = q.get('name') || '';
+  var relay = q.get('relay') || '';
+  var church = q.get('c') || '';
+  var APK = 'https://trinityone.tailbeaac0.ts.net/trinityone.apk';
+
+  // the instant path: open the web app with the join context (key minted on-device, name pre-filled, church followed)
+  var app = '/?follow=' + encodeURIComponent(follow);
+  if (name)  app += '&name=' + encodeURIComponent(name);
+  if (relay) app += '&relay=' + encodeURIComponent(relay);
+
+  if (name)   { try { document.getElementById('pill').textContent = 'Hi, ' + decodeURIComponent(name); } catch(e){} }
+  if (church) { try { document.getElementById('head').textContent = 'Join ' + decodeURIComponent(church); } catch(e){} }
+
+  var ua = navigator.userAgent || '';
+  var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var isAndroid = /Android/i.test(ua);
+
+  document.getElementById('openNow').href = app;
+
+  var getApp = document.getElementById('getApp');
+  var note = document.getElementById('note');
+  if (isAndroid) {
+    getApp.classList.remove('hide');
+    getApp.href = APK;
+    getApp.setAttribute('download','');
+    document.getElementById('getAppLabel').innerHTML = 'Get the Android app';
+    note.innerHTML = 'Tapping <b>Open now</b> joins you instantly in your browser. Prefer an app icon? Install the Android app, then open it and follow your church — or just use <b>Open now</b>.';
+  } else if (isIOS) {
+    note.innerHTML = 'Tap <b>Open now</b>, then Share <span aria-hidden="true">⬆️</span> → <b>Add to Home Screen</b> to keep TrinityOne like an app. (An App Store version is on the way.)';
+  } else {
+    note.innerHTML = 'Tap <b>Open now</b> to begin in your browser. On a phone you can add it to your Home Screen like an app.';
+  }
+})();</script>
+</body>
+</html>

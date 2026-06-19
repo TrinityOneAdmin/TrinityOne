@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TrinityOne Relay",
+  "version": "0.7.1",
+  "identifier": "com.trinityone.relay",
+  "build": {
+    "frontendDist": "../../control"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "TrinityOne Relay",
+        "width": 840,
+        "height": 760,
+        "resizable": true,
+        "visible": false,
+        "label": "control"
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
+    "category": "Utility",
+    "shortDescription": "Run your church's TrinityOne relay.",
+    "externalBin": ["binaries/trinityone-relay"]
+  }
+}

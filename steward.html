@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TrinityOne — Steward Console</title>
+<link rel="stylesheet" href="vendor/fonts/fonts.css" />
+<link rel="stylesheet" href="brand.css" />
+<style>
+  /* token supplements not in brand.css */
+  :root {
+    --surface-2: #FBF5EA;
+    --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
+    --font-read: 'Newsreader', Georgia, serif;
+  }
+  html, body { margin: 0; height: 100%; background: #efece6; }
+  #root { height: 100vh; }
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  /* masonry card layout: packs variable-height cards tightly, no dead rows */
+  .sk-masonry { column-width: 330px; column-gap: 16px; }
+  .sk-masonry > * { break-inside: avoid; -webkit-column-break-inside: avoid; margin-bottom: 16px; }
+  .stew-root *::-webkit-scrollbar { width: 0; height: 0; }
+
+  /* steward UI primitives (from the handoff's Steward Surfaces stylesheet) */
+  .sk-pill { display:inline-flex; align-items:center; gap:6px; font-family:var(--font-ui); font-weight:700; font-size:11px; letter-spacing:1.2px; text-transform:uppercase; padding:5px 11px; border-radius:999px; background:var(--clay-soft); color:var(--clay-ink); }
+  .sk-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; font-family:var(--font-ui); font-weight:700; font-size:14px; padding:11px 18px; border-radius:12px; border:none; cursor:pointer; background:var(--ink); color:var(--paper); line-height:1; transition:transform .15s, box-shadow .15s, background .15s; }
+  .sk-btn:hover { transform:translateY(-1px); box-shadow:var(--shadow-md); }
+  .sk-btn--clay { background:var(--clay); color:#fff; }
+  .sk-btn--gold { background:var(--gold); color:var(--midnight); }
+  .sk-btn--ghost { background:transparent; color:var(--ink); box-shadow:inset 0 0 0 1.4px var(--line); }
+  .sk-btn--ghost:hover { box-shadow:inset 0 0 0 1.4px var(--ink); }
+  .sk-mono { font-family:var(--mono); }
+
+  @keyframes lumenFade  { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes lumenScale { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
+  @keyframes trinitySpin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="vendor/react.development.js"></script>
+<script src="vendor/react-dom.development.js"></script>
+<script src="vendor/babel.min.js"></script>
+
+<!-- church identity + Nostr publishing (church key, funds, profile); exposes window.Steward -->
+<script src="vendor/steward.js"></script>
+<!-- optional Finance module (treasurer's ledger; encrypted to the church key); exposes window.StewardFinance -->
+<script src="vendor/steward-finance.js"></script>
+<script src="vendor/jsqr.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<!-- shared line icons (window.Icon + window.Halo) -->
+<script type="text/babel" src="icons.jsx"></script>
+<!-- steward surfaces (mock SK data + the four surfaces) -->
+<script type="text/babel" src="stew-data.jsx"></script>
+<script type="text/babel" src="stew-console.jsx"></script>
+<script type="text/babel" src="stew-schedule.jsx"></script>
+<script type="text/babel" src="stew-templates.jsx"></script>
+<script type="text/babel" src="stew-dashboard.jsx"></script>
+<script type="text/babel" src="stew-finance.jsx"></script>
+<script type="text/babel" src="stew-relay.jsx"></script>
+<script type="text/babel" src="stew-extension.jsx"></script>
+<script type="text/babel" src="stew-phone.jsx"></script>
+<script type="text/babel" src="stew-custody.jsx"></script>
+<script type="text/babel" src="backup.jsx"></script>
+<script type="text/babel" src="steward-root.jsx"></script>
+<!-- shared service worker registration (web-push for join alerts) — external so CSP can drop inline -->
+<script src="sw-register.js"></script>
+</body>
+</html>

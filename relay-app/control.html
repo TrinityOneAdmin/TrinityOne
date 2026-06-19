@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TrinityOne — Relay app</title>
+<style>
+  :root { --paper:#efece6; --surface:#fff; --surface-2:#f6f3ec; --line:#e4ded2; --ink:#1f1a14; --ink-2:#5b5346; --ink-3:#9a9082; --clay:#C25A38; --clay-soft:#F3DECF; --sage:#5E8C6A; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--paper); color:var(--ink); }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 26px 20px 60px; }
+  .brand { display:flex; align-items:center; gap:9px; margin-bottom:22px; }
+  .brand b { font-weight:800; font-size:18px; } .brand .clay { color:var(--clay); }
+  .tag { font-size:10px; font-weight:700; letter-spacing:.5px; color:var(--ink-3); border:1px solid var(--line); border-radius:6px; padding:2px 6px; }
+  .hero { display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 1px 3px rgba(0,0,0,.05); margin-bottom:16px; }
+  .dot { width:12px; height:12px; border-radius:999px; flex-shrink:0; }
+  .dot.on { background:var(--sage); box-shadow:0 0 0 4px color-mix(in oklab, var(--sage) 22%, transparent); }
+  .dot.off { background:var(--ink-3); }
+  .hero h1 { margin:0; font-size:20px; } .hero .sub { color:var(--ink-2); font-size:13.5px; margin-top:3px; }
+  .grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-bottom:16px; }
+  .stat { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:13px; }
+  .stat .n { font-size:24px; font-weight:800; } .stat .l { font-size:11.5px; color:var(--ink-3); font-weight:600; margin-top:2px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:18px; margin-bottom:16px; }
+  .card h2 { margin:0 0 12px; font-size:15px; }
+  .row { display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:12px; background:var(--surface-2); border:1px solid var(--line); margin-bottom:9px; }
+  .row .k { font-size:11px; font-weight:700; letter-spacing:.4px; color:var(--ink-3); text-transform:uppercase; width:110px; flex-shrink:0; }
+  .row .v { flex:1; font-family: ui-monospace, monospace; font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  button { border:none; cursor:pointer; font-family:inherit; font-weight:700; border-radius:10px; }
+  .btn-clay { background:var(--clay); color:#fff; padding:8px 13px; font-size:13px; }
+  .btn-ghost { background:var(--surface); border:1px solid var(--line); color:var(--ink-2); padding:7px 11px; font-size:12.5px; }
+  .ch { display:flex; align-items:center; gap:9px; padding:9px 12px; border-radius:11px; background:var(--surface-2); border:1px solid var(--line); margin-bottom:8px; }
+  .ch .badge { width:30px; height:30px; border-radius:9px; background:color-mix(in oklab, var(--clay) 14%, var(--surface)); color:var(--clay); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; flex-shrink:0; }
+  .warn { display:flex; gap:9px; padding:12px 14px; border-radius:12px; background:color-mix(in oklab, var(--clay) 8%, var(--surface)); border:1px solid color-mix(in oklab, var(--clay) 28%, transparent); font-size:13px; color:var(--ink-2); line-height:1.5; }
+  .muted { color:var(--ink-3); font-size:12.5px; }
+  input { width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:9px; background:var(--surface); color:var(--ink); font-family:inherit; font-size:13px; outline:none; }
+  input:focus { border-color:var(--clay); }
+  code { background:var(--surface-2); border:1px solid var(--line); border-radius:5px; padding:1px 5px; font-size:11.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><b>Trinity<span class="clay">One</span></b> <span class="tag">RELAY APP</span></div>
+
+  <div class="hero">
+    <span class="dot off" id="dot"></span>
+    <div style="flex:1; min-width:0">
+      <h1 id="title">Connecting to your relay…</h1>
+      <div class="sub" id="sub">The box that carries your church's messages.</div>
+    </div>
+    <button class="btn-clay" id="openConsole">Open Steward console</button>
+  </div>
+
+  <div class="grid">
+    <div class="stat"><div class="n" id="s-churches">—</div><div class="l">Churches</div></div>
+    <div class="stat"><div class="n" id="s-members">—</div><div class="l">Members</div></div>
+    <div class="stat"><div class="n" id="s-events">—</div><div class="l">Events stored</div></div>
+    <div class="stat"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
+  </div>
+
+  <div class="card">
+    <h2>How members reach you</h2>
+    <div id="reach"></div>
+    <div class="row"><span class="k">Member relay</span><span class="v" id="wss">—</span><button class="btn-ghost" data-copy="wss">Copy</button></div>
+    <div class="row"><span class="k">Console</span><span class="v" id="console">—</span><button class="btn-ghost" data-copy="console">Copy</button></div>
+    <div class="muted" style="margin-top:6px">Members join with the invite QR you share from the console — it carries this relay automatically.</div>
+  </div>
+
+  <div class="card" id="goPublic">
+    <h2>Reach members from anywhere <span class="muted" id="gpStatus" style="font-weight:600"></span></h2>
+    <div id="gpBody"><div class="muted">Checking…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Churches on this relay <span class="muted" id="cfgStatus" style="font-weight:600"></span></h2>
+    <!-- token gate: shown only when configuring from another device (loopback is trusted) -->
+    <div id="cfgGate" style="display:none">
+      <div class="warn" style="margin-bottom:10px">⚠ Enter the relay's <b>admin token</b> to manage churches — shown in the install output, or run <code>journalctl -u trinityone-relay | grep "admin token"</code> on the relay box.</div>
+      <div style="display:flex; gap:8px; margin-bottom:6px"><input id="tok" type="password" placeholder="admin token" autocomplete="off" /><button class="btn-clay" id="tokGo" style="white-space:nowrap">Connect</button></div>
+    </div>
+    <div id="cfgList"><div class="muted">Loading…</div></div>
+    <div id="cfgBody" style="display:none">
+      <button class="btn-ghost" id="addCh">+ Add church</button>
+      <div style="display:flex; align-items:center; gap:12px; margin-top:14px">
+        <button class="btn-clay" id="saveCfg">Save changes</button>
+        <span class="muted" id="cfgMsg"></span>
+      </div>
+    </div>
+    <div class="muted" style="margin-top:10px">Create a church in the Steward console, copy its <code>npub</code>, paste it here and Save. The relay only accepts writes from churches listed here — applied instantly, no restart.</div>
+  </div>
+
+  <div class="card" id="servesCard" style="display:none">
+    <h2>What this relay serves <span class="muted" id="servesMsg" style="font-weight:600"></span></h2>
+    <div class="muted" style="margin-bottom:14px">Beyond carrying your church's messages, this box can also host extras. Switch off anything you don't want it to serve — applied instantly, no restart.</div>
+    <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:12px 0; border-top:1px solid var(--line)"><span><b>The web app</b><br><span class="muted">A copy of TrinityOne served from this box, so your church can use it at your own web address.</span></span><input type="checkbox" id="t-app" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
+    <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:12px 0; border-top:1px solid var(--line)"><span><b>Bible &amp; dictionary downloads</b><br><span class="muted">Members download study modules from this box.</span></span><input type="checkbox" id="t-modules" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
+    <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:12px 0; border-top:1px solid var(--line)"><span><b>Audio Bibles &amp; media</b><br><span class="muted">The audio-Bible / podcast proxy. Uses the most bandwidth.</span></span><input type="checkbox" id="t-audio" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
+    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line)">
+      <div class="muted" style="margin-bottom:6px">Your church's web address (optional) — where members reach the app, e.g. <code>https://grace.org</code>. Point that domain's DNS at this box and the app, joining codes and handles all read as yours.</div>
+      <input id="t-appurl" placeholder="https://yourchurch.org" spellcheck="false" autocapitalize="none" style="width:100%; box-sizing:border-box; font-size:13px" />
+    </div>
+    <div style="margin-top:14px"><button class="btn-clay" id="saveServes">Save</button></div>
+  </div>
+
+  <div class="card" id="updateCard" style="display:none">
+    <h2>Relay software <span class="muted" id="updateMsg" style="font-weight:600"></span></h2>
+    <div class="row"><span class="k">This relay's build</span><span class="v" id="u-current">—</span></div>
+    <div id="u-body" class="muted" style="margin-top:10px">Checking for updates…</div>
+  </div>
+</div>
+
+<script>
+  const qs = new URLSearchParams(location.search);
+  // public base: the Funnel URL once it's up (set by the wizard), else ?public=…, else this origin
+  let publicBase = qs.get('public') || location.origin;
+  const copyMap = { wss: '', console: '' };
+  function reachInfo() {
+    const wssUrl = publicBase.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:') + '/relay';
+    const consoleUrl = publicBase + '/steward.html';
+    const isPublic = /^https:|\.ts\.net|trycloudflare|\.app/i.test(publicBase) && !/localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\./.test(publicBase);
+    return { wssUrl, consoleUrl, isPublic };
+  }
+  function refreshReach() {
+    const { wssUrl, consoleUrl, isPublic } = reachInfo();
+    document.getElementById('wss').textContent = wssUrl;
+    document.getElementById('console').textContent = consoleUrl;
+    copyMap.wss = wssUrl; copyMap.console = consoleUrl;
+    document.getElementById('reach').innerHTML = isPublic
+      ? '<div class="row" style="background:color-mix(in oklab, var(--sage) 9%, var(--surface)); border-color:color-mix(in oklab, var(--sage) 28%, transparent)"><span style="color:var(--sage); font-weight:700; font-size:13px">✓ Reachable from anywhere</span><span class="muted" style="margin-left:auto">'+publicBase.replace(/^https?:\/\//,'')+'</span></div>'
+      : '<div class="warn">⚠ This relay is only reachable on your computer / local network. Turn on public access below — one click, no terminal.</div>';
+  }
+  document.getElementById('openConsole').onclick = () => window.open(reachInfo().consoleUrl, '_blank');
+  document.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(copyMap[b.dataset.copy]); b.textContent = 'Copied'; setTimeout(()=>b.textContent='Copy', 1400); } catch(e){}
+  });
+  refreshReach();
+
+  const initials = (n) => (n||'?').split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  async function poll() {
+    try {
+      const r = await fetch('/status', { cache:'no-store' });
+      const s = await r.json();
+      document.getElementById('dot').className = 'dot on';
+      document.getElementById('title').textContent = 'Your relay is running';
+      const up = Math.floor(s.uptimeMs/1000); const h=Math.floor(up/3600), m=Math.floor((up%3600)/60);
+      document.getElementById('sub').textContent = 'Up ' + (h?h+'h ':'') + m + 'm · port ' + s.port;
+      document.getElementById('s-churches').textContent = s.counts.churches;
+      document.getElementById('s-members').textContent = s.counts.members;
+      document.getElementById('s-events').textContent = s.counts.events;
+      document.getElementById('s-conns').textContent = s.counts.connections;
+    } catch (e) {
+      document.getElementById('dot').className = 'dot off';
+      document.getElementById('title').textContent = 'Relay not reachable';
+      document.getElementById('sub').textContent = 'Is the relay running? Restart the app.';
+    }
+  }
+  poll(); setInterval(poll, 5000);
+
+  // ── setup wizard: read/write the relay's write policy (church.json) via /config ──
+  const TOKEN_KEY = 'to_relay_admin_token';
+  let adminToken = localStorage.getItem(TOKEN_KEY) || '';
+  let cfgChurches = [];
+  const esc = (s) => String(s||'').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const authHeaders = () => adminToken ? { 'Authorization': 'Bearer ' + adminToken } : {};
+
+  function renderCfg() {
+    const list = document.getElementById('cfgList');
+    list.innerHTML = cfgChurches.length ? cfgChurches.map((c, i) =>
+      '<div class="ch">' +
+        '<div class="badge">'+initials(c.name)+'</div>' +
+        '<div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:6px">' +
+          '<input data-i="'+i+'" data-f="name" value="'+esc(c.name)+'" placeholder="Church name" />' +
+          '<input data-i="'+i+'" data-f="npub" value="'+esc(c.npub)+'" placeholder="npub1…" spellcheck="false" autocapitalize="none" style="font-family:ui-monospace,monospace; font-size:12px" />' +
+        '</div>' +
+        '<button class="btn-ghost" data-rm="'+i+'" style="align-self:flex-start">Remove</button>' +
+      '</div>').join('') : '<div class="muted" style="margin-bottom:8px">No churches yet — add one below.</div>';
+    list.querySelectorAll('input').forEach(inp => inp.oninput = () => { cfgChurches[+inp.dataset.i][inp.dataset.f] = inp.value; });
+    list.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { cfgChurches.splice(+b.dataset.rm, 1); renderCfg(); });
+  }
+
+  async function loadConfig() {
+    const gate = document.getElementById('cfgGate'), body = document.getElementById('cfgBody'), st = document.getElementById('cfgStatus');
+    try {
+      const r = await fetch('/config', { headers: authHeaders(), cache: 'no-store' });
+      if (r.status === 401) { gate.style.display = 'block'; body.style.display = 'none'; document.getElementById('cfgList').innerHTML = ''; st.textContent = '· locked'; document.getElementById('servesCard').style.display = 'none'; document.getElementById('updateCard').style.display = 'none'; return; }
+      const s = await r.json();
+      gate.style.display = 'none'; body.style.display = 'block';
+      st.textContent = s.configured ? '' : '· not set up yet';
+      cfgChurches = (s.churches || []).map(c => ({ npub: c.npub, name: c.name }));
+      renderCfg();
+      loadServes();
+      loadUpdate();
+    } catch (e) { /* relay down — the hero card shows it */ }
+  }
+
+  async function saveConfig() {
+    const msg = document.getElementById('cfgMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = 'Saving…';
+    const churches = cfgChurches.map(c => ({ npub: (c.npub||'').trim(), name: (c.name||'').trim() })).filter(c => c.npub);
+    try {
+      const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ churches }) });
+      const s = await r.json();
+      if (!r.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '✗ ' + (s.error || 'save failed'); return; }
+      cfgChurches = s.churches.map(c => ({ npub: c.npub, name: c.name })); renderCfg();
+      document.getElementById('cfgStatus').textContent = '';
+      msg.style.color = 'var(--sage)'; msg.textContent = '✓ Saved — members can join now';
+      setTimeout(() => { msg.textContent = ''; }, 2600);
+    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '✗ ' + e.message; }
+  }
+
+  // ── what this relay serves (audio / modules / web-app mirror + church URL) via /settings ──
+  async function loadServes() {
+    const card = document.getElementById('servesCard');
+    try {
+      const r = await fetch('/settings', { headers: authHeaders(), cache: 'no-store' });
+      if (r.status === 401) { card.style.display = 'none'; return; }   // shown only when unlocked with the admin token
+      const s = (await r.json()).settings || {};
+      card.style.display = 'block';
+      document.getElementById('t-app').checked = s.serveApp !== false;
+      document.getElementById('t-modules').checked = s.serveModules !== false;
+      document.getElementById('t-audio').checked = s.serveAudio !== false;
+      document.getElementById('t-appurl').value = s.appUrl || '';
+    } catch (e) { /* relay down — the hero card shows it */ }
+  }
+  async function saveServes() {
+    const msg = document.getElementById('servesMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = '· saving…';
+    const body = { serveApp: document.getElementById('t-app').checked, serveModules: document.getElementById('t-modules').checked, serveAudio: document.getElementById('t-audio').checked, appUrl: document.getElementById('t-appurl').value.trim() };
+    try {
+      const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
+      const s = await r.json();
+      if (!r.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (s.error || 'save failed'); return; }
+      msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ saved'; setTimeout(() => { msg.textContent = ''; }, 2400);
+    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
+  }
+  document.getElementById('saveServes').onclick = saveServes;
+
+  // ── relay software updates (version check + one-click "Update now") via /update + /status ──
+  let relayVersion = '';
+  async function loadUpdate() {
+    const card = document.getElementById('updateCard');
+    try {
+      const r = await fetch('/update', { headers: authHeaders(), cache: 'no-store' });
+      if (r.status === 401) { card.style.display = 'none'; return; }
+      const cur = await r.json(); relayVersion = cur.version || '';
+      card.style.display = 'block';
+      document.getElementById('u-current').textContent = (cur.versionShort || '—') + (cur.builtAt ? ' · ' + cur.builtAt.slice(0, 10) : '');
+      const body = document.getElementById('u-body');
+      if (cur.pending) { body.innerHTML = '⏳ An update is in progress…'; pollUpdate(); return; }
+      if (!cur.origin) { body.innerHTML = 'This is the release source — nothing to pull here.'; return; }
+      let latest = null;
+      try { latest = await (await fetch(cur.origin.replace(/\/+$/, '') + '/status', { cache: 'no-store' })).json(); } catch (e) {}
+      if (!latest || !latest.version) { body.innerHTML = 'Couldn’t reach the update source (' + esc(cur.origin) + ') to check.'; return; }
+      if (latest.version === cur.version) { body.innerHTML = '<span style="color:var(--sage)">✓ Up to date.</span>'; return; }
+      body.innerHTML = 'A new build is available (' + esc((latest.versionShort || '') + (latest.builtAt ? ' · ' + latest.builtAt.slice(0, 10) : '')) + '). '
+        + '<button class="btn-clay" id="doUpdate" style="margin-top:8px">Update now</button>';
+      document.getElementById('doUpdate').onclick = doUpdate;
+    } catch (e) { /* relay down — hero card shows it */ }
+  }
+  async function doUpdate() {
+    if (!confirm('Update this relay now? It will briefly restart — members reconnect automatically.')) return;
+    const msg = document.getElementById('updateMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = '· starting…';
+    try {
+      const r = await fetch('/update', { method: 'POST', headers: authHeaders() });
+      const s = await r.json();
+      if (!r.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (s.error || 'failed'); return; }
+      document.getElementById('u-body').innerHTML = '⏳ Updating — the relay restarts shortly…';
+      pollUpdate();
+    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
+  }
+  function pollUpdate() {
+    const msg = document.getElementById('updateMsg'); let n = 0;
+    const iv = setInterval(async () => {
+      n++;
+      try {
+        const s = await (await fetch('/status', { cache: 'no-store' })).json();
+        if (s.version && relayVersion && s.version !== relayVersion) { clearInterval(iv); msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ updated'; setTimeout(loadUpdate, 800); }
+      } catch (e) { /* restarting — keep polling */ }
+      if (n > 40) { clearInterval(iv); msg.textContent = '· taking a while — check: journalctl -u trinityone-update'; }
+    }, 3000);
+  }
+
+  document.getElementById('addCh').onclick = () => { cfgChurches.push({ npub: '', name: '' }); renderCfg(); document.querySelector('#cfgList .ch:last-child input')?.focus(); };
+  document.getElementById('saveCfg').onclick = saveConfig;
+  document.getElementById('tokGo').onclick = () => { adminToken = document.getElementById('tok').value.trim(); if (adminToken) localStorage.setItem(TOKEN_KEY, adminToken); loadConfig(); gpTick(); };
+  document.getElementById('tok').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('tokGo').click(); });
+  loadConfig();
+
+  // ── "Go public" wizard: bring the node onto Tailscale + turn on Funnel (public HTTPS/WSS) ──
+  let tsBusy = false;       // pause polling while an action is mid-flight (so it can't clobber the view)
+  let lastAuthUrl = '';     // the login link from `tailscale up`, until the node reports connected
+  const gpWarn = (h) => '<div class="warn">'+h+'</div>';
+  const gpCopy = (t, b) => { navigator.clipboard.writeText(t).then(()=>{ b.textContent='Copied'; setTimeout(()=>b.textContent='Copy',1400); }).catch(()=>{}); };
+  window.gpTick = gpTick; window.gpCopy = gpCopy;
+
+  function renderGoPublic(s) {
+    const body = document.getElementById('gpBody'), st = document.getElementById('gpStatus');
+    if (s.locked)         { st.textContent='· locked';   body.innerHTML = gpWarn('🔒 Enter the <b>admin token</b> in the Churches card below — it unlocks one-click public access too.'); return; }
+    if (s.installed === false) { st.textContent='';      body.innerHTML = gpWarn('Tailscale isn’t installed on this box. Re-run the installer to enable one-click public access.'); return; }
+    if (s.needsOperator)  { st.textContent='· needs a nudge'; body.innerHTML = gpWarn('The relay can’t manage Tailscale yet. On the relay box, run once:<br><br><code>sudo tailscale set --operator=trinityone</code><br><br>then <button class="btn-ghost" onclick="gpTick()">refresh</button>.'); return; }
+    if (s.funnelOn && s.publicUrl) {
+      st.textContent=''; publicBase = s.publicUrl; refreshReach();
+      body.innerHTML =
+        '<div class="row" style="background:color-mix(in oklab,var(--sage) 9%,var(--surface));border-color:color-mix(in oklab,var(--sage) 28%,transparent)"><span style="color:var(--sage);font-weight:700;font-size:13px">✓ Reachable from anywhere — no terminal needed</span></div>' +
+        '<div class="row"><span class="k">Public URL</span><span class="v">'+esc(s.publicUrl)+'</span><button class="btn-ghost" onclick="gpCopy(\''+esc(s.publicUrl)+'\',this)">Copy</button></div>' +
+        '<div class="muted" style="margin-top:6px">Test it from your phone on <b>mobile data</b> (Wi-Fi off): <a href="'+esc(s.publicUrl)+'/status" target="_blank">'+esc(s.publicUrl)+'/status</a> — JSON means it’s live worldwide.</div>';
+      return;
+    }
+    if (s.loggedIn) {
+      st.textContent='· on your network';
+      body.innerHTML =
+        '<div class="muted" style="margin-bottom:11px">✓ This relay is on your Tailscale network'+(s.dnsName?' as <code>'+esc(s.dnsName)+'</code>':'')+'. One more click to let members reach it over the internet.</div>' +
+        '<button class="btn-clay" id="gpFunnel">Make it public (HTTPS) →</button> <span class="muted" id="gpMsg"></span>';
+      document.getElementById('gpFunnel').onclick = doFunnel;
+      return;
+    }
+    if (lastAuthUrl) {
+      st.textContent='· waiting for sign-in';
+      body.innerHTML =
+        '<a class="btn-clay" href="'+esc(lastAuthUrl)+'" target="_blank" style="display:inline-block;text-decoration:none">Authorize this machine ↗</a>' +
+        '<div class="muted" style="margin-top:11px">A Tailscale tab opened — sign in (same account as your other devices) and approve this machine. This updates on its own once it’s connected… ⏳</div>';
+      return;
+    }
+    st.textContent='· not public yet';
+    body.innerHTML =
+      '<div class="muted" style="margin-bottom:11px">Make this relay reachable from anywhere — free, secure HTTPS, no fixed IP. Two clicks.</div>' +
+      '<button class="btn-clay" id="gpUp">Connect to Tailscale →</button> <span class="muted" id="gpMsg"></span>';
+    document.getElementById('gpUp').onclick = doUp;
+  }
+
+  async function gpTick() {
+    if (tsBusy) return;
+    try {
+      const r = await fetch('/tailscale/state', { headers: authHeaders(), cache:'no-store' });
+      if (r.status === 401) { renderGoPublic({ locked:true }); return; }
+      const s = await r.json();
+      if (s.loggedIn) lastAuthUrl = '';
+      renderGoPublic(s);
+    } catch (e) { /* relay unreachable — the hero card already says so */ }
+  }
+
+  async function doUp() {
+    const msg = document.getElementById('gpMsg'); if (msg) msg.textContent = 'Connecting…';
+    tsBusy = true;
+    try {
+      const r = await fetch('/tailscale/up', { method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body:'{}' });
+      const s = await r.json(); tsBusy = false;
+      if (s.authUrl) { lastAuthUrl = s.authUrl; window.open(s.authUrl, '_blank'); renderGoPublic({}); }
+      else if (s.running) { lastAuthUrl=''; }
+      else if (s.error && msg) { msg.style.color='var(--clay)'; msg.textContent='✗ '+s.error; }
+      gpTick();
+    } catch (e) { tsBusy = false; if (msg) { msg.style.color='var(--clay)'; msg.textContent='✗ '+e.message; } }
+  }
+
+  async function doFunnel() {
+    const msg = document.getElementById('gpMsg'); if (msg) msg.textContent = 'Turning on HTTPS…';
+    tsBusy = true;
+    try {
+      const r = await fetch('/tailscale/funnel', { method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body:'{}' });
+      const s = await r.json(); tsBusy = false;
+      if (s.ok) gpTick();
+      else if (s.needsPolicy && msg) { msg.style.color='var(--clay)'; msg.innerHTML='✗ Funnel isn’t enabled for your tailnet yet. <a href="https://login.tailscale.com/admin/settings/features" target="_blank">Enable it here</a>, then click again.'; }
+      else if (msg) { msg.style.color='var(--clay)'; msg.textContent='✗ '+(s.error||'failed'); }
+    } catch (e) { tsBusy = false; if (msg) { msg.style.color='var(--clay)'; msg.textContent='✗ '+e.message; } }
+  }
+
+  gpTick(); setInterval(gpTick, 4000);
+</script>
+</body>
+</html>

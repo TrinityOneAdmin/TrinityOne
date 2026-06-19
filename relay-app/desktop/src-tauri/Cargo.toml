@@ -1,0 +1,17 @@
+[package]
+name = "trinityone-relay"
+version = "0.7.1"
+edition = "2021"
+description = "Run your church's TrinityOne relay"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+serde_json = "1"
+
+[profile.release]
+strip = true
+lto = true
