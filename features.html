@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TrinityOne — Features in depth</title>
+<meta name="description" content="A deep dive into everything TrinityOne does — the Bible reader, fellowship, serving, calendar, safeguarding, giving, and self-hosting — on infrastructure your church owns." />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="brand.css" />
+<style>
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 28px; }
+  a { color: inherit; }
+  html, body { overflow-x: clip; max-width: 100%; }
+
+  /* top nav */
+  nav.top { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--paper) 86%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--line-2); }
+  nav.top .wrap { display: flex; align-items: center; gap: 24px; height: 72px; }
+  nav .spacer { flex: 1; }
+  .wm-sm { display: inline-flex; align-items: center; gap: 11px; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: -.3px; text-decoration: none; }
+  .wm-sm .one { color: var(--clay); }
+  .nav-back { font-weight: 600; font-size: 14.5px; color: var(--ink-2); text-decoration: none; }
+  .nav-back:hover { color: var(--ink); }
+
+  /* sticky section nav */
+  .secnav { position: sticky; top: 72px; z-index: 40; background: color-mix(in oklab, var(--paper) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line-2); }
+  .secnav .wrap { display: flex; gap: 5px; overflow-x: auto; height: 52px; align-items: center; scrollbar-width: none; }
+  .secnav .wrap::-webkit-scrollbar { display: none; }
+  .secnav a { white-space: nowrap; font-size: 13.5px; font-weight: 600; color: var(--ink-2); text-decoration: none; padding: 7px 14px; border-radius: 999px; transition: background .15s, color .15s; }
+  .secnav a:hover { background: var(--surface); color: var(--ink); }
+
+  /* hero */
+  .fhero { background: radial-gradient(120% 90% at 80% -10%, var(--gold-tint), transparent 48%), var(--paper); }
+  .fhero .wrap { padding: 72px 28px 40px; text-align: center; }
+  .fhero h1 { font-family: var(--font-display); font-weight: 800; font-size: clamp(36px, 6vw, 64px); line-height: .98; letter-spacing: -1.6px; margin: 18px auto 0; max-width: 800px; }
+  .fhero h1 .one { color: var(--clay); }
+  .fhero .sub { font-family: var(--font-serif); font-size: 20px; line-height: 1.55; color: var(--ink-2); max-width: 600px; margin: 22px auto 0; text-wrap: pretty; }
+
+  /* eyebrow pill (shared look) */
+  .to-pill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-ui); font-weight: 700; font-size: 12px; letter-spacing: .5px; text-transform: uppercase; padding: 6px 13px; border-radius: 999px; background: var(--clay-soft); color: var(--clay-ink); }
+
+  /* feature rows */
+  .feat { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; padding: 56px 0; border-top: 1px solid var(--line-2); scroll-margin-top: 132px; }
+  .feat:first-of-type { border-top: none; }
+  .feat.alt .ftext { order: 2; }
+  .ftext h3 { font-family: var(--font-display); font-weight: 700; font-size: clamp(26px,3.4vw,36px); letter-spacing: -.6px; margin: 14px 0 0; line-height: 1.06; }
+  .ftext .lead { color: var(--ink-2); font-size: 16.5px; line-height: 1.62; margin: 16px 0 0; max-width: 470px; }
+  .ftext ul { list-style: none; padding: 0; margin: 22px 0 0; display: flex; flex-direction: column; gap: 12px; }
+  .ftext li { display: flex; align-items: flex-start; gap: 11px; font-weight: 600; font-size: 15px; line-height: 1.4; }
+  .ftext li .tick { width: 24px; height: 24px; border-radius: 999px; background: var(--clay-soft); color: var(--clay-ink); display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .steward-note { margin-top: 20px; display: flex; gap: 11px; align-items: flex-start; padding: 13px 15px; border-radius: 14px; background: var(--sage-soft); border: 1px solid color-mix(in oklab, var(--sage) 30%, var(--line)); font-size: 13.5px; line-height: 1.5; color: #2f5740; max-width: 470px; }
+  .steward-note b { color: #234430; }
+  .fvis { border-radius: var(--r-xl); padding: 40px; min-height: 360px; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+
+  /* simple panel visual (for sections without a phone mockup yet) */
+  .fpanel { width: 100%; max-width: 360px; background: var(--surface); border-radius: 22px; border: 1px solid var(--line); box-shadow: var(--shadow-lg); padding: 22px; }
+  .fpanel .ph { display: flex; align-items: center; gap: 11px; margin-bottom: 16px; }
+  .fpanel .ph .ic { width: 38px; height: 38px; border-radius: 11px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .fpanel .ph .t { font-family: var(--font-display); font-weight: 700; font-size: 15px; }
+  .fpanel .ph .s { font-size: 11.5px; color: var(--ink-3); }
+  .frow { display: flex; align-items: center; gap: 11px; padding: 11px; border-radius: 14px; background: var(--paper-soft); border: 1px solid var(--line); margin-top: 9px; }
+  .frow .lbl { font-family: var(--font-display); font-weight: 700; font-size: 14px; }
+  .frow .sub { font-size: 11.5px; color: var(--ink-2); }
+  .frow .pill { margin-left: auto; flex-shrink: 0; font-weight: 700; font-size: 11.5px; color: #fff; background: var(--sage); padding: 6px 12px; border-radius: 999px; }
+
+  .soon-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-ui); font-weight: 800; font-size: 11px; letter-spacing: .6px; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; background: var(--gold-tint); color: #8a6717; border: 1px solid color-mix(in oklab, var(--gold) 38%, transparent); }
+  .soon-pill::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--gold); }
+
+  /* mini month calendar (Calendar mockup) */
+  .mcal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .mcal .h { text-align: center; font-size: 9.5px; font-weight: 800; letter-spacing: .3px; text-transform: uppercase; color: var(--ink-3); padding-bottom: 5px; }
+  .mcal .c { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 9px; font-family: var(--font-display); font-weight: 700; font-size: 12.5px; color: var(--ink-2); position: relative; }
+  .mcal .c.muted { opacity: 0; }
+  .mcal .c.today { background: var(--clay); color: #fff; }
+  .mcal .c .ev { position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 999px; }
+
+  /* final cta */
+  .ffinal { text-align: center; padding: 90px 28px; background: var(--paper-soft); border-top: 1px solid var(--line); }
+  .ffinal h2 { font-family: var(--font-display); font-weight: 800; font-size: clamp(30px,4.6vw,52px); letter-spacing: -1.4px; margin: 0 auto; max-width: 640px; line-height: 1.0; }
+  .ffinal h2 .one { color: var(--clay); }
+  .ffinal .cta { display: flex; gap: 14px; justify-content: center; margin-top: 30px; flex-wrap: wrap; }
+
+  footer { background: var(--midnight); color: var(--ink-3); padding: 50px 0 40px; }
+  footer .wrap { display: flex; align-items: center; justify-content: space-between; gap: 22px; flex-wrap: wrap; }
+  footer a { color: var(--ink-3); text-decoration: none; }
+  footer a:hover { color: var(--paper); }
+
+  @media (max-width: 880px) {
+    .feat { grid-template-columns: 1fr; gap: 30px; }
+    .feat.alt .ftext { order: 0; }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 0 18px; }
+    .feat { padding: 40px 0; }
+    .fvis { min-height: 240px; padding: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="to-mark" viewBox="0 0 512 512">
+    <rect width="512" height="512" rx="112" fill="#C25A38" />
+    <g transform="scale(5.12)" fill="none" stroke="#F4EEE2" stroke-width="7" stroke-linecap="round">
+      <path d="M81.2 67.9 A36 36 0 0 1 31.3 80.7" />
+      <path d="M18.8 68.0 A36 36 0 0 1 32.7 18.4" />
+      <path d="M49.9 14.0 A36 36 0 0 1 86.0 50.8" />
+    </g>
+    <circle cx="256" cy="256" r="33.3" fill="#E0B860" />
+  </symbol>
+</svg>
+
+<nav class="top">
+  <div class="wrap">
+    <a href="welcome.html" class="wm-sm"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span>Trinity<span class="one">One</span></span></a>
+    <div class="spacer"></div>
+    <a href="welcome.html" class="nav-back">&larr; Overview</a>
+    <a href="welcome.html#get" class="to-btn" style="padding:11px 20px;font-size:14px">Get the app</a>
+  </div>
+</nav>
+
+<div class="secnav">
+  <div class="wrap">
+    <a href="#read">Read</a>
+    <a href="#gather">Gather</a>
+    <a href="#serving">Serving</a>
+    <a href="#calendar">Calendar</a>
+    <a href="#library">Plans &amp; Library</a>
+    <a href="#safeguarding">Safeguarding</a>
+    <a href="#giving">Giving</a>
+    <a href="#selfhost">Self-hosting</a>
+    <a href="#privacy">Your keys</a>
+  </div>
+</div>
+
+<header class="fhero">
+  <div class="wrap">
+    <span class="to-pill">Features, in depth</span>
+    <h1>Everything a church needs &mdash; <span class="one">nothing it doesn't own</span></h1>
+    <p class="sub">The short version is on the <a href="welcome.html" style="color:var(--clay-ink);font-weight:600">home page</a>. This is the long one: every part of TrinityOne, what it does, and why it works the way it does.</p>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- READ -->
+  <section class="feat" id="read">
+    <div class="ftext">
+      <span class="to-pill">Read</span>
+      <h3>A Bible you'll want to stay in</h3>
+      <p class="lead">A complete offline Bible the moment you open the app, set in clean, book-quality type &mdash; warm paper by day, gentle dark mode at night. Tap any word for its Greek or Hebrew root, and highlight like a real marker.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Berean Standard installed on first launch &mdash; works fully offline</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span><b>1,000+ translations</b> to download, from a live eBible.org mirror</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Strong's word study, cross-references &amp; commentaries</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Highlights, notes &amp; bookmarks &mdash; kept on your device, never harvested</span></li>
+      </ul>
+    </div>
+    <div class="fvis" style="background:linear-gradient(155deg,var(--clay),var(--clay-deep))">
+      <div style="background:var(--surface);border-radius:20px;padding:26px;box-shadow:var(--shadow-lg);max-width:300px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:var(--clay);text-transform:uppercase">John 1 &middot; The Word</div>
+        <p style="font-family:var(--font-serif);font-size:19px;color:var(--ink);margin:12px 0 0;line-height:1.5">In him was <mark style="background:#FCE08A;border-radius:3px;padding:0 2px">life</mark>, and the life was the <span style="color:var(--clay-ink);border-bottom:1.5px dotted var(--clay)">light</span> of men.</p>
+        <div style="display:flex;gap:8px;margin-top:18px">
+          <span style="width:30px;height:30px;border-radius:999px;background:#FCE08A"></span>
+          <span style="width:30px;height:30px;border-radius:999px;background:#BFE3AE"></span>
+          <span style="width:30px;height:30px;border-radius:999px;background:#F7C2CE"></span>
+          <span style="width:30px;height:30px;border-radius:999px;background:#BCD6F2"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- GATHER -->
+  <section class="feat alt" id="gather">
+    <div class="ftext">
+      <span class="to-pill" style="background:var(--sage-soft);color:#345c41">Gather</span>
+      <h3>Real conversation, no social-media baggage</h3>
+      <p class="lead">Chat runs on Nostr &mdash; an open protocol &mdash; so there's no account to create and nothing to mine. Life-group, ministry and prayer rooms for your church, and a wider network to gather across congregations.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Life-group, ministry &amp; prayer rooms</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Share verses &amp; say &ldquo;Amen&rdquo; to prayer requests</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>End-to-end encrypted direct messages</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Invite-only and fully-encrypted groups</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>No account &mdash; no email or phone number</span></li>
+      </ul>
+    </div>
+    <div class="fvis" style="background:linear-gradient(155deg,var(--sage),#3c6e57)">
+      <div style="width:312px;max-width:100%;background:var(--paper);border-radius:26px;box-shadow:var(--shadow-lg);border:1px solid var(--line);overflow:hidden">
+        <div style="display:flex;align-items:center;gap:10px;padding:13px 15px;border-bottom:1px solid var(--line)">
+          <div style="width:36px;height:36px;border-radius:11px;background:color-mix(in oklab,var(--sage) 22%,var(--surface));color:#345c41;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.2a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2H10l-4.2 3.2v-3.2a2 2 0 0 1-1.3-1.9Z"/></svg></div>
+          <div style="flex:1;min-width:0"><div style="font-family:var(--font-display);font-weight:700;font-size:15px">Tuesday Life Group</div><div style="font-size:11.5px;color:var(--ink-3)">14 members &middot; Grace Church</div></div>
+          <span style="width:8px;height:8px;border-radius:999px;background:var(--sage);flex-shrink:0"></span>
+        </div>
+        <div style="padding:16px 14px;display:flex;flex-direction:column;gap:13px;min-height:300px">
+          <div style="display:flex;gap:9px;align-items:flex-end">
+            <div style="width:28px;height:28px;border-radius:999px;background:#7a9b8a;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0">S</div>
+            <div style="min-width:0"><div style="font-size:11px;color:var(--ink-3);font-weight:600;margin:0 0 3px 2px">Sarah M.</div>
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;border-bottom-left-radius:5px;padding:10px 13px;font-size:14px;line-height:1.4;max-width:212px;box-shadow:var(--shadow-sm)">The &ldquo;light shines in the darkness&rdquo; line has been with me all week.</div></div>
+          </div>
+          <div style="display:flex;justify-content:flex-end">
+            <div style="background:var(--clay);color:#fff;border-radius:16px;border-bottom-right-radius:5px;padding:10px 13px;font-size:14px;line-height:1.4;max-width:212px;box-shadow:var(--shadow-sm)">Same. Praying for your interview today &#128591;</div>
+          </div>
+          <div style="display:flex;gap:9px;align-items:flex-end">
+            <div style="width:28px;height:28px;border-radius:999px;background:#c79a5b;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0">J</div>
+            <div style="min-width:0"><div style="font-size:11px;color:var(--ink-3);font-weight:600;margin:0 0 3px 2px">James K.</div>
+              <div style="display:inline-flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:9px 14px;font-size:13px;color:var(--gold);font-weight:700;box-shadow:var(--shadow-sm)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4c-1 2.4-2 3.8-2 6.2V14M12 4c1 2.4 2 3.8 2 6.2V14"/><path d="M8 14c-1.4.4-2.2 1.4-2.2 3v2.5h12.4V17c0-1.6-.8-2.6-2.2-3"/><path d="M10 14h4"/></svg> Amen &middot; 23</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SERVING -->
+  <section class="feat" id="serving">
+    <div class="ftext">
+      <span class="to-pill" style="background:var(--sage-soft);color:#345c41">Serving</span>
+      <h3>Know when you're on &mdash; and swap in a tap</h3>
+      <p class="lead">The serving rota lives in your pocket. See when you're next on, who's on the team beside you, and the time to arrive. Can't make it? Ask a teammate to swap, or mark yourself away &mdash; no awkward group texts.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Accept or decline a serving request</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Ask someone to swap &mdash; nothing changes till they say yes</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>A push notification when you're asked &mdash; even with the app closed</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Set the days you're away so you're not asked</span></li>
+      </ul>
+      <div class="steward-note"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2f5740" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M12 3.5 19 6v5.2c0 4.2-2.9 7-7 8.3-4.1-1.3-7-4.1-7-8.3V6Z"/><path d="m9.2 11.8 1.9 1.9 3.7-3.9"/></svg><span><b>For stewards:</b> build the rota from the console, with run-sheets for each role and team, and the app handles the asking, swapping and reminders.</span></div>
+    </div>
+    <div class="fvis" style="background:linear-gradient(155deg,var(--sage),#3c6e57)">
+      <div style="width:332px;max-width:100%;background:var(--paper);border-radius:26px;padding:16px;box-shadow:var(--shadow-lg);border:1px solid var(--line)">
+        <div style="display:flex;align-items:center;gap:10px;padding:2px 4px 13px">
+          <div style="width:34px;height:34px;border-radius:10px;background:color-mix(in oklab,var(--sage) 22%,var(--surface));color:#345c41;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V5.4a1.4 1.4 0 0 1 2.8 0V10M11.8 10V4.3a1.4 1.4 0 0 1 2.8 0V10M14.6 10V6.1a1.4 1.4 0 0 1 2.8 0V13c0 3.6-2.4 6.3-6 6.3-1.9 0-3.2-.8-4.5-2.6l-2-2.8a1.5 1.5 0 0 1 2.2-2L9 11.4"/></svg></div>
+          <div style="flex:1;min-width:0"><div style="font-family:var(--font-display);font-weight:700;font-size:15px">Serving</div><div style="font-size:11.5px;color:var(--ink-3)">Grace Chapel</div></div>
+        </div>
+        <div style="position:relative;border-radius:20px;overflow:hidden;color:#fff;background:linear-gradient(155deg,#6BA17C,#3C6E57);box-shadow:var(--shadow)">
+          <div style="position:relative;padding:15px 17px 16px">
+            <div style="display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;opacity:.92"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14.5" rx="2.5"/><path d="M3.5 9.5h17M8 3.5v3M16 3.5v3M9 14l2 2 3.5-3.5"/></svg> You're next serving</div>
+            <div style="display:flex;align-items:flex-end;gap:11px;margin:11px 0 2px">
+              <div style="font-family:var(--font-display);font-weight:800;font-size:34px;line-height:.9;letter-spacing:-1px">Sun 22</div>
+              <div style="padding-bottom:3px"><div style="font-weight:700;font-size:13.5px">Jun &middot; 10:30</div><div style="font-size:11.5px;opacity:.9">arrive 09:45</div></div>
+            </div>
+            <div style="display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.18);padding:6px 12px;border-radius:999px;font-size:12.5px;font-weight:700;margin-top:8px">Welcome &middot; Welcome desk</div>
+            <div style="display:flex;align-items:center;gap:9px;margin-top:13px">
+              <div style="display:flex">
+                <div style="width:30px;height:30px;border-radius:999px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--font-display);font-weight:800;font-size:11px;box-shadow:0 0 0 2px #4a7a5c;background:#cf9a5e">M</div>
+                <div style="margin-left:-9px;width:30px;height:30px;border-radius:999px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--font-display);font-weight:800;font-size:11px;box-shadow:0 0 0 2px #4a7a5c;background:#7a9b8a">G</div>
+                <div style="margin-left:-9px;width:30px;height:30px;border-radius:999px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--font-display);font-weight:800;font-size:10px;box-shadow:0 0 0 2px #4a7a5c;background:var(--ink)">You</div>
+              </div>
+              <span style="font-size:12px;font-weight:600;opacity:.95">4 on the team today</span>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:12px;border-radius:16px;padding:13px;background:var(--surface);border:1.5px solid color-mix(in oklab,var(--gold) 48%,var(--line));box-shadow:var(--shadow-sm)">
+          <div style="display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:800;letter-spacing:.6px;color:#8a6717;margin-bottom:10px">CAN YOU SWAP?</div>
+          <div style="display:flex;align-items:center;gap:11px">
+            <div style="width:46px;flex-shrink:0;text-align:center;border-radius:11px;padding:6px 0;background:color-mix(in oklab,var(--clay) 13%,var(--surface));border:1px solid color-mix(in oklab,var(--clay) 26%,transparent)"><div style="font-size:9.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:var(--clay)">Sun</div><div style="font-family:var(--font-display);font-weight:800;font-size:19px;line-height:1;color:var(--ink)">29</div></div>
+            <div style="flex:1;min-width:0"><div style="font-family:var(--font-display);font-weight:700;font-size:14.5px">Welcome &middot; Door</div><div style="font-size:12px;color:var(--ink-2);margin-top:1px">Dan asked you to cover</div></div>
+            <span style="flex-shrink:0;font-weight:700;font-size:12.5px;color:#fff;background:var(--sage);padding:8px 15px;border-radius:999px">Yes</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CALENDAR -->
+  <section class="feat alt" id="calendar">
+    <div class="ftext">
+      <span class="to-pill" style="background:var(--gold-tint);color:#8a6717">Calendar</span>
+      <h3>The whole church's week, in one place</h3>
+      <p class="lead">Every service, group and event on one warm calendar. RSVP with a tap, add it to your phone, and never miss the workday, the newcomers' lunch, or Wednesday prayer.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>See what's on this week and beyond</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>RSVP going, maybe or can't &mdash; in a tap</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Add any event to your own phone calendar</span></li>
+      </ul>
+    </div>
+    <div class="fvis" style="background:linear-gradient(160deg,var(--gold-tint),#e7dcc6)">
+      <div style="width:336px;max-width:100%;background:var(--paper);border-radius:26px;padding:18px;box-shadow:var(--shadow-lg);border:1px solid var(--line)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:0 2px 14px">
+          <span style="font-family:var(--font-display);font-weight:800;font-size:19px;letter-spacing:-.2px">June 2026</span>
+        </div>
+        <div id="miniCal" class="mcal"></div>
+        <div style="display:flex;align-items:center;gap:15px;margin:14px 2px;font-size:11px;color:var(--ink-3);font-weight:600">
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:999px;background:var(--clay)"></span> Service</span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:999px;background:var(--gold)"></span> Workday</span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:999px;background:var(--sage)"></span> Prayer</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <div style="display:flex;align-items:center;gap:11px;padding:11px;border-radius:15px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-sm)">
+            <div style="width:44px;flex-shrink:0;text-align:center;border-radius:11px;padding:6px 0;background:color-mix(in oklab,var(--gold) 14%,var(--surface));border:1px solid color-mix(in oklab,var(--gold) 28%,transparent)"><div style="font-size:9.5px;font-weight:800;text-transform:uppercase;color:#8a6717">Sat</div><div style="font-family:var(--font-display);font-weight:800;font-size:18px;line-height:1;color:var(--ink)">14</div></div>
+            <div style="flex:1;min-width:0"><div style="font-family:var(--font-display);font-weight:700;font-size:14.5px">Church workday</div><div style="font-size:11.5px;color:var(--ink-2)">09:00 &middot; Grounds &amp; hall</div></div>
+            <span style="flex-shrink:0;font-weight:700;font-size:12px;color:#fff;background:var(--sage);padding:7px 13px;border-radius:999px">Going</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:11px;padding:11px;border-radius:15px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-sm)">
+            <div style="width:44px;flex-shrink:0;text-align:center;border-radius:11px;padding:6px 0;background:color-mix(in oklab,var(--sage) 16%,var(--surface));border:1px solid color-mix(in oklab,var(--sage) 30%,transparent)"><div style="font-size:9.5px;font-weight:800;text-transform:uppercase;color:#345c41">Wed</div><div style="font-family:var(--font-display);font-weight:800;font-size:18px;line-height:1;color:var(--ink)">25</div></div>
+            <div style="flex:1;min-width:0"><div style="font-family:var(--font-display);font-weight:700;font-size:14.5px">Prayer evening</div><div style="font-size:11.5px;color:var(--ink-2)">19:30 &middot; Prayer chapel</div></div>
+            <span style="flex-shrink:0;font-weight:700;font-size:12px;color:var(--midnight);background:var(--gold);padding:7px 13px;border-radius:999px">Maybe</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PLANS & LIBRARY -->
+  <section class="feat" id="library">
+    <div class="ftext">
+      <span class="to-pill">Plans &amp; Library</span>
+      <h3>Plans, search, and a church library</h3>
+      <p class="lead">Read with a plan and keep your place, search every translation you've installed, and find your church's sermons, audio Bibles and study guides gathered in one place &mdash; ready before you've left the car park.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Reading plans with real progress tracking</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Fast full-text search across installed translations</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Sermons, audio Bibles &amp; the church's linked podcast/video</span></li>
+      </ul>
+    </div>
+    <div class="fvis" style="background:linear-gradient(155deg,#2a2218,#16120c)">
+      <div class="fpanel">
+        <div class="ph"><div class="ic" style="background:var(--clay-soft);color:var(--clay-ink)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5.6C10.4 4.5 8.2 4 5.8 4 4.8 4 4 4.8 4 5.8v11.4c0 1 .8 1.6 1.8 1.6 2.4 0 4.6.5 6.2 1.6 1.6-1.1 3.8-1.6 6.2-1.6 1 0 1.8-.6 1.8-1.6V5.8C20 4.8 19.2 4 18.2 4c-2.4 0-4.6.5-6.2 1.6Z"/><path d="M12 5.6v13.4"/></svg></div><div><div class="t">This week's plan</div><div class="s">Gospel of John &middot; Day 4 of 21</div></div></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">John 4 &middot; The well</div><div class="sub">~6 min read</div></div><span class="pill">Continue</span></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">Search &ldquo;living water&rdquo;</div><div class="sub">37 results across 3 translations</div></div></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">Sunday's sermon</div><div class="sub">Audio + notes &middot; Grace Chapel</div></div><span class="pill" style="background:var(--clay)">Play</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SAFEGUARDING -->
+  <section class="feat alt" id="safeguarding">
+    <div class="ftext">
+      <span class="to-pill" style="background:var(--sage-soft);color:#345c41">Safeguarding</span>
+      <h3>Protection anchored in your leaders</h3>
+      <p class="lead">The young people in your care are guarded by the same trust you already extend in person &mdash; not a meaningless &ldquo;are you 18?&rdquo; tick-box. Your leaders set who is a minor and who is an approved, checked adult, and the app enforces it everywhere.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Child-safe groups &mdash; adults present, conversations visible to leaders</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Direct messages between a child and an adult are gated</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Parents linked to their children, in control</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Enforced on the relay &mdash; a tampered app can't bypass it</span></li>
+      </ul>
+      <div class="steward-note"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2f5740" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M12 3.5 19 6v5.2c0 4.2-2.9 7-7 8.3-4.1-1.3-7-4.1-7-8.3V6Z"/><path d="m9.2 11.8 1.9 1.9 3.7-3.9"/></svg><span><b>For stewards:</b> the safeguarding lists are owner-only, and each country's own background-check process fits &mdash; nothing is hard-wired to one nation's scheme.</span></div>
+    </div>
+    <div class="fvis" style="background:linear-gradient(155deg,var(--sage),#3c6e57)">
+      <div class="fpanel">
+        <div class="ph"><div class="ic" style="background:var(--sage-soft);color:#345c41"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 19 6v5.2c0 4.2-2.9 7-7 8.3-4.1-1.3-7-4.1-7-8.3V6Z"/><path d="m9.2 11.8 1.9 1.9 3.7-3.9"/></svg></div><div><div class="t">Youth Group</div><div class="s">Child-safe &middot; 2 leaders present</div></div></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">Approved adults</div><div class="sub">Checked by your leaders</div></div><span class="pill" style="background:var(--sage)">3</span></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">Young people</div><div class="sub">Linked to a parent</div></div><span class="pill" style="background:var(--clay)">11</span></div>
+        <div class="frow" style="background:var(--sage-soft);border-color:color-mix(in oklab,var(--sage) 30%,var(--line))"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#345c41" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><rect x="4" y="10" width="16" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><div style="flex:1"><div class="lbl" style="font-size:13px">Child &harr; adult DMs gated</div><div class="sub">Enforced on the relay</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- GIVING -->
+  <section class="feat" id="giving">
+    <div class="ftext">
+      <span class="to-pill" style="background:var(--gold-tint);color:#8a6717">Giving &amp; Gift-Aid</span>
+      <h3>Giving that lands with the church &mdash; not a processor</h3>
+      <p class="lead">An optional treasurer's module keeps Gift-Aid-ready donor records, categorises funds, and even imports a bank statement to match deposits to donors &mdash; then exports the HMRC schedule. Every record is encrypted to your church's key.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Encrypted donor records &amp; fund categories</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Bank-statement import &mdash; matches deposits to donors</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Export the HMRC Gift-Aid schedule &amp; annual statements</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span><b>Lightning giving</b> &mdash; give from your own wallet, straight to the church <span class="soon-pill">Coming soon</span></span></li>
+      </ul>
+    </div>
+    <div class="fvis" style="background:linear-gradient(160deg,var(--gold-tint),#e7dcc6)">
+      <div class="fpanel">
+        <div class="ph"><div class="ic" style="background:var(--gold-tint);color:#8a6717"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg></div><div><div class="t">Gift-Aid schedule</div><div class="s">2026 &middot; ready to export</div></div></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">General fund</div><div class="sub">42 gifts &middot; matched to donors</div></div><span style="font-family:var(--font-display);font-weight:800">&pound;3,180</span></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">Building fund</div><div class="sub">9 gifts</div></div><span style="font-family:var(--font-display);font-weight:800">&pound;1,450</span></div>
+        <div class="frow" style="background:var(--gold-tint);border-color:color-mix(in oklab,var(--gold) 34%,var(--line))"><div style="flex:1"><div class="lbl" style="font-size:13px">Gift-Aid to reclaim</div><div class="sub">25% &middot; HMRC schedule</div></div><span style="font-family:var(--font-display);font-weight:800;color:#8a6717">&pound;1,157</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SELF-HOSTING -->
+  <section class="feat alt" id="selfhost">
+    <div class="ftext">
+      <span class="to-pill">Self-hosting</span>
+      <h3>Run the whole thing on a box you own</h3>
+      <p class="lead">A church can run its own relay on a Raspberry Pi, mini-PC or VPS &mdash; one line in a terminal, then finish in the browser. Your messages and data live on your hardware, behind your own domain. No company in the middle, nothing to switch off.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>One-line installer &mdash; sets up the relay as a boot service</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>A secure public address via Cloudflare &mdash; or your own domain</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Signed self-updates &mdash; the relay keeps itself current, safely</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Walk away anytime with all of your church's data</span></li>
+      </ul>
+    </div>
+    <div class="fvis" style="background:linear-gradient(155deg,#2a2218,#16120c)">
+      <div style="width:100%;max-width:360px;background:#0f0d0b;border-radius:18px;border:1px solid rgba(255,255,255,.1);box-shadow:var(--shadow-lg);overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+        <div style="display:flex;align-items:center;gap:7px;padding:11px 14px;border-bottom:1px solid rgba(255,255,255,.08)">
+          <span style="width:11px;height:11px;border-radius:999px;background:#ff5f57"></span><span style="width:11px;height:11px;border-radius:999px;background:#febc2e"></span><span style="width:11px;height:11px;border-radius:999px;background:#28c840"></span>
+          <span style="margin-left:8px;font-size:11px;color:#9a9488">relay.yourchurch.org</span>
+        </div>
+        <div style="padding:16px;font-size:12.5px;line-height:1.7;color:#cfc8ba">
+          <div><span style="color:#5E8C6A">$</span> curl -fsSL trinityone.app/relay-app/install.sh | sudo bash</div>
+          <div style="color:#8a8478">&nbsp;&nbsp;installing relay&hellip; <span style="color:#5E8C6A">done</span></div>
+          <div style="color:#8a8478">&nbsp;&nbsp;public address&hellip; <span style="color:#E0B860">relay.yourchurch.org</span></div>
+          <div style="margin-top:8px;color:#cfc8ba">&#10003; Your relay is live. Finish in the browser.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- KEYS & PRIVACY -->
+  <section class="feat" id="privacy">
+    <div class="ftext">
+      <span class="to-pill">Your keys &amp; privacy</span>
+      <h3>No passwords. No company holding your data. Just you.</h3>
+      <p class="lead">TrinityOne has no account and no password &mdash; your device holds a private key that <em>is</em> you. That's wonderful for privacy, and it means one gentle, one-time step keeps your identity yours: write down twelve words.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>No email, no phone number &mdash; just a name your church knows</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Twelve recovery words &mdash; get back in on any device</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Strict CSP &amp; an optional PIN protect the key on your device</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Study notes &amp; highlights stay on your device, never harvested</span></li>
+      </ul>
+    </div>
+    <div class="fvis" style="background:linear-gradient(155deg,var(--clay),var(--clay-deep))">
+      <div class="fpanel">
+        <div class="ph"><div class="ic" style="background:var(--gold-tint);color:#8a6717"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3.5" width="14" height="17" rx="2.5"/><path d="M8.5 8h7M8.5 11.5h7M8.5 15h4"/></svg></div><div><div class="t">Your recovery phrase</div><div class="s">Write these on paper &mdash; the only key</div></div></div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:4px">
+          <div style="background:var(--paper-soft);border:1px solid var(--line);border-radius:10px;padding:8px 6px;font-size:12px;font-family:var(--font-display);font-weight:700"><span style="color:var(--ink-3);font-size:9px">1</span> harvest</div>
+          <div style="background:var(--paper-soft);border:1px solid var(--line);border-radius:10px;padding:8px 6px;font-size:12px;font-family:var(--font-display);font-weight:700"><span style="color:var(--ink-3);font-size:9px">2</span> shepherd</div>
+          <div style="background:var(--paper-soft);border:1px solid var(--line);border-radius:10px;padding:8px 6px;font-size:12px;font-family:var(--font-display);font-weight:700"><span style="color:var(--ink-3);font-size:9px">3</span> lantern</div>
+          <div style="background:var(--paper-soft);border:1px solid var(--line);border-radius:10px;padding:8px 6px;font-size:12px;font-family:var(--font-display);font-weight:700"><span style="color:var(--ink-3);font-size:9px">4</span> river</div>
+          <div style="background:var(--paper-soft);border:1px solid var(--line);border-radius:10px;padding:8px 6px;font-size:12px;font-family:var(--font-display);font-weight:700"><span style="color:var(--ink-3);font-size:9px">5</span> covenant</div>
+          <div style="background:var(--paper-soft);border:1px solid var(--line);border-radius:10px;padding:8px 6px;font-size:12px;font-family:var(--font-display);font-weight:700"><span style="color:var(--ink-3);font-size:9px">6</span> &hellip;</div>
+        </div>
+        <div class="frow" style="margin-top:11px;background:var(--clay-soft);border-color:color-mix(in oklab,var(--clay) 26%,var(--line))"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--clay-ink)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="12" cy="12" r="9"/><path d="M9 12.5 11 14.5 15 9.5"/></svg><div style="flex:1"><div class="lbl" style="font-size:13px">No one will ever ask for them</div><div class="sub">Not us, not your church</div></div></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<section class="ffinal">
+  <span class="to-pill">Ready when you are</span>
+  <h2>Your church's whole life &mdash; on ground <span class="one">you own</span>.</h2>
+  <div class="cta">
+    <a href="welcome.html#get" class="to-btn to-btn--clay" style="padding:14px 26px">Get the app</a>
+    <a href="welcome-churches.html" class="to-btn to-btn--ghost" style="padding:14px 26px">Start a church</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <a href="welcome.html" class="wm-sm" style="color:var(--paper)"><svg width="30" height="30" viewBox="0 0 512 512" style="display:block"><use href="#to-mark" /></svg><span>Trinity<span style="color:var(--gold-soft)">One</span></span></a>
+    <span style="display:flex;gap:22px;align-items:center;flex-wrap:wrap;font-size:14px">
+      <a href="welcome.html">Overview</a>
+      <a href="welcome-churches.html">For churches</a>
+      <a href="mailto:31app@proton.me">Contact</a>
+      <a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener">Source</a>
+    </span>
+  </div>
+  <div class="wrap" style="margin-top:32px;padding-top:22px;border-top:1px solid rgba(255,255,255,.08);font-size:12.5px;color:var(--ink-3)">&copy; 2026 TrinityOne &middot; Made for the church, owned by no one.</div>
+</footer>
+
+<script>
+  // mini June calendar for the Calendar mockup
+  (function () {
+    var el = document.getElementById('miniCal');
+    if (!el) return;
+    var H = ['S', 'M', 'T', 'W', 'T', 'F', 'S'], html = '';
+    H.forEach(function (d) { html += '<div class="h">' + d + '</div>'; });
+    var ev = { 14: 'var(--gold)', 22: 'var(--clay)', 25: 'var(--sage)' };
+    for (var d = 1; d <= 30; d++) {
+      var on = d === 15;
+      var dot = (!on && ev[d]) ? '<span class="ev" style="background:' + ev[d] + '"></span>' : '';
+      html += '<div class="c' + (on ? ' today' : '') + '">' + d + dot + '</div>';
+    }
+    el.innerHTML = html;
+  })();
+</script>
+
+</body>
+</html>
