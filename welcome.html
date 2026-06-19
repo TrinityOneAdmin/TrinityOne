@@ -74,8 +74,8 @@
   .ftext h3 { font-family: var(--font-display); font-weight: 700; font-size: clamp(26px,3.4vw,36px); letter-spacing:-.6px; margin: 16px 0 0; line-height: 1.06; }
   .ftext p { color: var(--ink-2); font-size: 16.5px; line-height: 1.62; margin: 16px 0 0; max-width: 460px; }
   .ftext ul { list-style:none; padding:0; margin: 22px 0 0; display:flex; flex-direction:column; gap: 12px; }
-  .ftext li { display:flex; align-items:center; gap: 11px; font-weight: 600; font-size: 15px; }
-  .ftext li .tick { width:24px;height:24px;border-radius:999px;background:var(--clay-soft);color:var(--clay-ink);display:flex;align-items:center;justify-content:center;flex-shrink:0; }
+  .ftext li { display:flex; align-items:flex-start; gap: 11px; font-weight: 600; font-size: 15px; line-height: 1.4; }
+  .ftext li .tick { width:24px;height:24px;border-radius:999px;background:var(--clay-soft);color:var(--clay-ink);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px; }
   .fvis { border-radius: var(--r-xl); padding: 40px; min-height: 360px; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; }
 
   /* protocol band */
@@ -255,12 +255,13 @@
       <h3>Gather your church &mdash; together, all week</h3>
       <p>Real conversation without the social-media baggage &mdash; plus the everyday coordination that keeps a church running. <b>Chat, the serving rota and a shared calendar</b>, all in one place. Chat runs on Nostr &mdash; an open protocol &mdash; so there&rsquo;s no account to create and nothing to mine.</p>
       <ul>
-        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Life-group, ministry &amp; prayer rooms &mdash; share verses, say &ldquo;Amen&rdquo;</li>
-        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Join a wider <b>network</b> to gather across congregations</li>
-        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> <b>Serving rota</b> in your pocket &mdash; see when you&rsquo;re on, swap in a tap</li>
-        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> <b>One shared calendar</b> &mdash; RSVP to services, workdays &amp; events</li>
-        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> Safeguarding built in &mdash; young people protected, parents in control</li>
-        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span> No account &mdash; no email or phone number</li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Life-group, ministry &amp; prayer rooms</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Share verses &amp; say &ldquo;Amen&rdquo; to requests</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span><b>Serving rota</b> &mdash; see when you&rsquo;re on, swap in a tap</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span><b>Shared calendar</b> &mdash; RSVP to services &amp; events</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>A wider network across congregations</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Safeguarding built in, parents in control</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>No account &mdash; no email or phone number</span></li>
       </ul>
     </div>
     <div class="fvis" style="background:linear-gradient(155deg,var(--sage),#3c6e57)" data-comment-anchor="b0d5b34fd2-div">
