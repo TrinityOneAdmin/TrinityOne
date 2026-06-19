@@ -141,16 +141,17 @@
           localStorage.setItem(enKey(), doc.enabled ? "1" : "0");
         } catch {
         }
-        cb({ enabled: !!doc.enabled, baseCurrency: doc.baseCurrency || "GBP" });
+        cb({ enabled: !!doc.enabled, baseCurrency: doc.baseCurrency || "GBP", giftAid: !!doc.giftAid });
       });
     }
-    function setEnabled(on, baseCurrency) {
+    function setEnabled(on, opts) {
       if (!S() || !S().encPublish) return Promise.resolve(null);
+      opts = opts || {};
       try {
         localStorage.setItem(enKey(), on ? "1" : "0");
       } catch {
       }
-      return S().encPublish(SETTINGS_D, { enabled: !!on, baseCurrency: baseCurrency || "GBP", updated: Math.floor(Date.now() / 1e3) });
+      return S().encPublish(SETTINGS_D, { enabled: !!on, baseCurrency: opts.baseCurrency || "GBP", giftAid: !!opts.giftAid, updated: Math.floor(Date.now() / 1e3) });
     }
     function subscribeDonors(cb) {
       if (!S() || !S().encSubscribe) {

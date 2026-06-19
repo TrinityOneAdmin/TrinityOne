@@ -29,22 +29,36 @@ const finLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterS
 function DashFinancePanel({ church }) {
   const s = window.useFinanceSettings ? window.useFinanceSettings() : { enabled: false };
   const on = !!s.enabled;
+  const ga = !!s.giftAid;
+  const setFin = (en, gift) => window.StewardFinance.setEnabled(en, { baseCurrency: s.baseCurrency, giftAid: gift });
+  const toggleBtn = (active, onClick, label) => (
+    <button onClick={onClick} aria-label={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+      <span style={{ position: 'absolute', top: 3, left: active ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+    </button>
+  );
   return (
     <Panel title="Finance &amp; giving records">
       <div style={{ display: 'flex', gap: 10, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', marginBottom: 14 }}>
         <Icon name="lock" size={17} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Unlike the rest of TrinityOne, this keeps <b>named, identified</b> records (donor names, addresses, Gift Aid declarations). Everything is <b>encrypted to your church key</b> — the relay only stores unreadable ciphertext, and only this console can open it. Use it only if you’re the treasurer and you handle this data under your church’s privacy policy.</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Unlike the rest of TrinityOne, this keeps <b>named, identified</b> records (donor names and giving history). Everything is <b>encrypted to your church key</b> — the relay only stores unreadable ciphertext, and only this console can open it. Use it only if you’re the treasurer and you handle this data under your church’s privacy policy.</div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Giving records (Finance)</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{on ? 'On — a “Finance” tab is in your sidebar. A treasurer’s ledger with Gift-Aid-ready records and CSV export.' : 'Off — turn on to keep a giving ledger, donor records and Gift Aid declarations.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{on ? 'On — a “Finance” tab is in your sidebar: a treasurer’s ledger with donor records, funds and printable year-end statements.' : 'Off — turn on to keep a giving ledger, donor records and year-end statements.'}</div>
         </div>
-        <button onClick={() => window.StewardFinance.setEnabled(!on)} aria-label="Toggle finance module" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
-          <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
-        </button>
+        {toggleBtn(on, () => setFin(!on, ga), 'Toggle finance module')}
       </div>
-      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Gift Aid records are a foundation for a claim, not an HMRC submission — exports can feed Xero or a future filing.</div>
+      {on ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: ga ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5 }}>UK Gift Aid <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: '#8a6717', background: 'var(--gold-tint)', borderRadius: 999, padding: '2px 8px', verticalAlign: 'middle' }}>UK only</span></div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{ga ? 'On — track donor declarations, mark eligible gifts, and build the HMRC Gift Aid claim schedule.' : 'Off — turn on only if your church reclaims UK Gift Aid. Adds declarations, eligibility and the HMRC claim builder.'}</div>
+          </div>
+          {toggleBtn(ga, () => setFin(on, !ga), 'Toggle UK Gift Aid')}
+        </div>
+      ) : null}
+      {ga ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Gift Aid records are a foundation for a claim, not an HMRC submission — exports can feed Xero or a future filing.</div> : null}
     </Panel>
   );
 }
@@ -62,6 +76,9 @@ function DashFinance() {
   const [donorImport, setDonorImport] = React.useState(false);   // migration: import a donor roster from another app's CSV
   const [newFund, setNewFund] = React.useState('');
   const F = window.StewardFinance;
+  const sset = window.useFinanceSettings ? window.useFinanceSettings() : {};
+  const giftAid = !!sset.giftAid;   // UK Gift Aid add-on — off by default; the core ledger is nationality-agnostic
+  const cur = sset.baseCurrency || 'GBP';
   const donorById = Object.fromEntries(donors.map(d => [d.id, d]));
   const fundById = Object.fromEntries(funds.map(f => [f.id, f]));
   const ga = F ? F.giftAidSummary(txs, donors) : { eligibleTotal: 0, reclaimable: 0, count: 0 };
@@ -102,14 +119,18 @@ function DashFinance() {
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         {tile('Total recorded', totalLine, txs.length + ' ' + (txs.length === 1 ? 'entry' : 'entries'))}
-        {tile('Gift Aid eligible', '£' + ga.eligibleTotal.toFixed(2), ga.count + ' donation' + (ga.count === 1 ? '' : 's'), 'var(--sage)')}
-        {tile('Reclaimable (est.)', '£' + ga.reclaimable.toFixed(2), '25% basic-rate top-up', '#8a6717')}
+        {giftAid
+          ? tile('Gift Aid eligible', finMoney(ga.eligibleTotal, cur), ga.count + ' donation' + (ga.count === 1 ? '' : 's'), 'var(--sage)')
+          : tile('Donors', String(donors.length), 'on file', 'var(--sage)')}
+        {giftAid
+          ? tile('Reclaimable (est.)', finMoney(ga.reclaimable, cur), '25% basic-rate top-up', '#8a6717')
+          : tile('Funds', String(funds.length), funds.length === 1 ? 'category' : 'categories', '#8a6717')}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        {tab('ledger', 'Ledger')}{tab('donors', 'Donors')}{tab('funds', 'Funds')}{tab('giftaid', 'Gift Aid')}
-        {view === 'donors' ? <React.Fragment><button onClick={() => setDonorImport(true)} title="Import a donor list from ChurchSuite, Breeze or Planning Center" className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5, marginLeft: 'auto' }}><Icon name="globe" size={13} color="currentColor" /> Import</button><button onClick={genStatements} title="Printable year-end giving statements" className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5 }}><Icon name="share" size={13} color="currentColor" /> Statements</button><button onClick={() => setDonorModal({})} className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5 }}><Icon name="plus" size={13} color="currentColor" /> Add donor</button></React.Fragment> : null}
-        {view === 'ledger' ? <button onClick={exportGiftAid} title="Gift Aid schedule (declared donors only)" className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5, marginLeft: 'auto' }}><Icon name="share" size={13} color="currentColor" /> Gift Aid CSV</button> : null}
+        {tab('ledger', 'Ledger')}{tab('donors', 'Donors')}{tab('funds', 'Funds')}{giftAid ? tab('giftaid', 'Gift Aid') : null}
+        {view === 'donors' ? <React.Fragment><button onClick={() => setDonorImport(true)} title="Import a donor list from your previous church software (CSV)" className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5, marginLeft: 'auto' }}><Icon name="globe" size={13} color="currentColor" /> Import</button><button onClick={genStatements} title="Printable year-end giving statements" className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5 }}><Icon name="share" size={13} color="currentColor" /> Statements</button><button onClick={() => setDonorModal({})} className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5 }}><Icon name="plus" size={13} color="currentColor" /> Add donor</button></React.Fragment> : null}
+        {view === 'ledger' && giftAid ? <button onClick={exportGiftAid} title="Gift Aid schedule (declared donors only)" className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5, marginLeft: 'auto' }}><Icon name="share" size={13} color="currentColor" /> Gift Aid CSV</button> : null}
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 9 }}>
@@ -122,20 +143,20 @@ function DashFinance() {
                 <div style={{ fontWeight: 700, fontSize: 14.5 }}>{finMoney(t.amount, t.currency)} <span style={{ fontWeight: 500, color: 'var(--ink-3)', fontSize: 12.5 }}>· {(FIN_METHODS.find(m => m[0] === t.method) || [, t.method])[1]}</span></div>
                 <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.date} · {(donorById[t.donorId] && donorById[t.donorId].name) || 'Anonymous'}{t.fundId && fundById[t.fundId] ? ' · ' + fundById[t.fundId].name : ''}{t.note ? ' · ' + t.note : ''}</div>
               </div>
-              {t.giftAid ? <SkPill tint="sage">Gift Aid</SkPill> : null}
+              {giftAid && t.giftAid ? <SkPill tint="sage">Gift Aid</SkPill> : null}
               <button onClick={() => setTxModal(t)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="pen" size={14} color="currentColor" /></button>
               <button onClick={() => F.removeTx(t.id)} title="Delete" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={14} color="currentColor" /></button>
             </div>
           ))
         ) : view === 'donors' ? (
-          donors.length === 0 ? <FinEmpty icon="pray" text="No donors yet. Add a donor to attach giving to a name and record their Gift Aid declaration." />
+          donors.length === 0 ? <FinEmpty icon="pray" text="No donors yet. Add a donor to attach giving to a name." />
           : donors.map(d => (
             <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 14.5 }}>{d.name || '—'}</div>
                 <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[d.postcode, d.email].filter(Boolean).join(' · ') || 'No address on file'}</div>
               </div>
-              {d.giftAid && d.giftAid.declared ? <SkPill tint="sage">Gift Aid ✓</SkPill> : <SkPill tint="ink">No declaration</SkPill>}
+              {giftAid ? (d.giftAid && d.giftAid.declared ? <SkPill tint="sage">Gift Aid ✓</SkPill> : <SkPill tint="ink">No declaration</SkPill>) : null}
               <button onClick={() => setDonorModal(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="pen" size={14} color="currentColor" /></button>
               <button onClick={() => F.removeDonor(d.id)} title="Delete" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={14} color="currentColor" /></button>
             </div>
@@ -154,9 +175,9 @@ function DashFinance() {
                 </div>
               ))}
           </React.Fragment>
-        ) : (
+        ) : giftAid ? (
           <FinGiftAidClaim txs={txs} donors={donors} onEditDonor={setDonorModal} />
-        )}
+        ) : null}
       </div>
 
       {txModal ? <FinTxModal tx={txModal} donors={donors} funds={funds} onClose={() => setTxModal(null)} /> : null}
@@ -201,6 +222,7 @@ function FinTxModal({ tx, donors, funds, onClose }) {
   const [donorId, setDonorId] = React.useState(tx.donorId || '');
   const [giftAid, setGiftAid] = React.useState(!!tx.giftAid);
   const [note, setNote] = React.useState(tx.note || '');
+  const gaOn = !!(window.useFinanceSettings ? window.useFinanceSettings().giftAid : false);
   const save = () => {
     if (!(Number(amount) > 0)) return;
     window.StewardFinance.saveTx({ id: tx.id, date, amount, currency, method, fundId, donorId, giftAid, note });
@@ -221,10 +243,12 @@ function FinTxModal({ tx, donors, funds, onClose }) {
         <div style={{ flex: 1 }}><div style={finLbl}>DONOR</div><select value={donorId} onChange={e => setDonorId(e.target.value)} style={sel}><option value="">Anonymous</option>{donors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
         <div style={{ flex: 1 }}><div style={finLbl}>FUND</div><select value={fundId} onChange={e => setFundId(e.target.value)} style={sel}><option value="">General</option>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></div>
       </div>
+      {gaOn ? (
       <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '14px 0 0', cursor: 'pointer' }}>
         <input type="checkbox" checked={giftAid} onChange={e => setGiftAid(e.target.checked)} style={{ marginTop: 2 }} />
         <span style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.45 }}><b>Gift Aid this donation</b> — only counts toward a claim when the donor has a declaration on file and it’s a GBP gift.</span>
       </label>
+      ) : null}
       <div style={{ marginTop: 12 }}><div style={finLbl}>NOTE (OPTIONAL)</div><input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Sunday offering" style={finFld} /></div>
     </FinModalShell>
   );
@@ -242,6 +266,7 @@ function FinDonorModal({ donor, onClose }) {
   const [refs, setRefs] = React.useState((donor.bankRefs || []).join(', '));
   const [declared, setDeclared] = React.useState(!!(donor.giftAid && donor.giftAid.declared));
   const [note, setNote] = React.useState(donor.note || '');
+  const gaOn = !!(window.useFinanceSettings ? window.useFinanceSettings().giftAid : false);
   const save = () => {
     if (!name.trim()) return;
     const bankRefs = refs.split(',').map(s => s.trim()).filter(Boolean);
@@ -253,10 +278,10 @@ function FinDonorModal({ donor, onClose }) {
       <div><div style={finLbl}>FULL NAME</div><input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Jane Smith" style={finFld} /></div>
       <div style={{ marginTop: 12 }}><div style={finLbl}>HOME ADDRESS</div><input value={address} onChange={e => setAddress(e.target.value)} placeholder="House name/number and street" style={finFld} /></div>
       <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-        <div style={{ flex: 1 }}><div style={finLbl}>POSTCODE</div><input value={postcode} onChange={e => setPostcode(e.target.value)} placeholder="AB1 2CD" style={finFld} /></div>
+        <div style={{ flex: 1 }}><div style={finLbl}>POSTAL CODE</div><input value={postcode} onChange={e => setPostcode(e.target.value)} placeholder="Postal / ZIP code" style={finFld} /></div>
         <div style={{ flex: 1 }}><div style={finLbl}>EMAIL (OPTIONAL)</div><input value={email} onChange={e => setEmail(e.target.value)} placeholder="optional" style={finFld} /></div>
       </div>
-      {declared ? (
+      {declared && gaOn ? (
         <div style={{ marginTop: 14, padding: '12px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="shield" size={14} color="var(--sage)" /> For the HMRC Gift Aid claim</div>
           <div style={{ display: 'flex', gap: 10 }}>
@@ -269,10 +294,12 @@ function FinDonorModal({ donor, onClose }) {
         </div>
       ) : null}
       <div style={{ marginTop: 12 }}><div style={finLbl}>BANK REFERENCE(S)</div><input value={refs} onChange={e => setRefs(e.target.value)} placeholder="e.g. their name as it shows on transfers, or a giving code" style={finFld} /><div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 5, lineHeight: 1.4 }}>How this donor appears on bank deposits — used to auto-match imported statements. The console also learns this automatically when you confirm a match. Separate several with commas.</div></div>
+      {gaOn ? (
       <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '16px 0 0', cursor: 'pointer' }}>
         <input type="checkbox" checked={declared} onChange={e => setDeclared(e.target.checked)} style={{ marginTop: 2 }} />
         <span style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.45 }}><b>Gift Aid declaration on file</b> — this donor has confirmed they’re a UK taxpayer and want Gift Aid claimed on their giving. Keep the signed/recorded declaration with your church records.</span>
       </label>
+      ) : null}
       <div style={{ marginTop: 12 }}><div style={finLbl}>NOTE (OPTIONAL)</div><input value={note} onChange={e => setNote(e.target.value)} placeholder="optional" style={finFld} /></div>
       <div style={{ display: 'flex', gap: 9, padding: '11px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 24%, transparent)', marginTop: 14 }}>
         <Icon name="lock" size={15} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
@@ -288,6 +315,8 @@ function FinImportModal({ txs, donors, funds, onClose }) {
   const [step, setStep] = React.useState('upload');   // upload | review
   const [parsed, setParsed] = React.useState(null);
   const [mapping, setMapping] = React.useState({ date: 0, amount: 1, ref: 2 });
+  const cur = (window.useFinanceSettings ? window.useFinanceSettings().baseCurrency : '') || 'GBP';
+  const gaOn = !!(window.useFinanceSettings ? window.useFinanceSettings().giftAid : false);
   const [over, setOver] = React.useState({});         // importKey → { donorId, giftAid, skip }
   const [fundId, setFundId] = React.useState('');
   const [err, setErr] = React.useState('');
@@ -329,7 +358,7 @@ function FinImportModal({ txs, donors, funds, onClose }) {
   const doImport = async () => {
     const learn = {};   // donorId → Set(new normalised refs)
     for (const r of toImport) {
-      await F.saveTx({ date: r.date, amount: r.amount, currency: 'GBP', method: 'bank', fundId, donorId: r.donorId, giftAid: r.giftAid, note: r.ref, importKey: r.importKey });
+      await F.saveTx({ date: r.date, amount: r.amount, currency: cur, method: 'bank', fundId, donorId: r.donorId, giftAid: r.giftAid, note: r.ref, importKey: r.importKey });
       if (r.donorId) { const nr = F.normRef(r.ref); const d = donorById[r.donorId]; if (nr && d && !(d.bankRefs || []).includes(nr)) (learn[r.donorId] = learn[r.donorId] || new Set()).add(nr); }
     }
     for (const id of Object.keys(learn)) { const d = donorById[id]; if (d) await F.saveDonor({ ...d, bankRefs: [...(d.bankRefs || []), ...learn[id]] }); }
@@ -379,12 +408,12 @@ function FinImportModal({ txs, donors, funds, onClose }) {
                     <div style={{ fontSize: 12, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.ref}>{r.ref || '—'}</div>
                     <select value={r.donorId} onChange={e => setRow(r.importKey, { donorId: e.target.value })} style={{ ...finFld, height: 32, fontSize: 12.5, marginTop: 3, appearance: 'auto' }}>
                       <option value="">Anonymous</option>
-                      {donors.map(d => <option key={d.id} value={d.id}>{d.name}{d.giftAid && d.giftAid.declared ? ' (Gift Aid)' : ''}</option>)}
+                      {donors.map(d => <option key={d.id} value={d.id}>{d.name}{gaOn && d.giftAid && d.giftAid.declared ? ' (Gift Aid)' : ''}</option>)}
                     </select>
                   </div>
                   {r.auto && r.donorId ? <span title={r.auto === 'ref' ? 'matched by reference' : 'matched by name'} style={{ flexShrink: 0 }}><SkPill tint="sage">{r.auto === 'ref' ? 'ref' : 'name'}</SkPill></span> : null}
                   {r.dup ? <span title="already imported" style={{ flexShrink: 0 }}><SkPill tint="ink">seen</SkPill></span> : null}
-                  <label title="Gift Aid" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--ink-2)', flexShrink: 0, cursor: 'pointer' }}><input type="checkbox" checked={r.giftAid} onChange={e => setRow(r.importKey, { giftAid: e.target.checked })} /> GA</label>
+                  {gaOn ? <label title="Gift Aid" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--ink-2)', flexShrink: 0, cursor: 'pointer' }}><input type="checkbox" checked={r.giftAid} onChange={e => setRow(r.importKey, { giftAid: e.target.checked })} /> GA</label> : null}
                   <button onClick={() => setRow(r.importKey, { skip: !r.skip })} title={r.skip ? 'Include' : 'Skip'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name={r.skip ? 'plus' : 'x'} size={13} color="currentColor" /></button>
                 </div>
               ))}
@@ -401,6 +430,7 @@ function FinDonorImportModal({ donors, onClose }) {
   const F = window.StewardFinance;
   const [step, setStep] = React.useState('upload');
   const [parsed, setParsed] = React.useState(null);
+  const gaOn = !!(window.useFinanceSettings ? window.useFinanceSettings().giftAid : false);
   const [map, setMap] = React.useState({ name: -1, first: -1, last: -1, address: -1, postcode: -1, email: -1, giftAid: -1 });
   const [skip, setSkip] = React.useState({});
   const [err, setErr] = React.useState('');
@@ -439,7 +469,7 @@ function FinDonorImportModal({ donors, onClose }) {
     <FinModalShell title="Import donors" onClose={onClose} onSave={step === 'review' ? doImport : null} saveLabel={'Import ' + toImport.length + ' donor' + (toImport.length === 1 ? '' : 's')}>
       {step === 'upload' ? (
         <React.Fragment>
-          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 14px' }}>Moving from ChurchSuite, Breeze or Planning Center? Export your <b>donors / contacts</b> as a CSV and drop it in — names, addresses, postcodes and Gift-Aid declarations come straight over. It’s read on your device and stored <b>encrypted to your church key</b>.</p>
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 14px' }}>Moving from another church platform? Export your <b>donors / contacts</b> as a CSV and drop it in — names, addresses and postal codes come straight over. It’s read on your device and stored <b>encrypted to your church key</b>.</p>
           <label style={{ display: 'block', border: '2px dashed var(--line)', borderRadius: 14, padding: '26px 18px', textAlign: 'center', cursor: 'pointer', background: 'var(--surface-2)' }}>
             <input type="file" accept=".csv,text/csv,text/plain" onChange={onFile} style={{ display: 'none' }} />
             <Icon name="users" size={26} color="var(--ink-3)" />
@@ -453,7 +483,7 @@ function FinDonorImportModal({ donors, onClose }) {
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 8 }}>{fileName ? fileName + ' · ' : ''}match the columns:</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 6 }}>
             <div><div style={finLbl}>FULL NAME</div>{sel(map.name, v => setMap(m => ({ ...m, name: v })))}</div>
-            <div><div style={finLbl}>GIFT AID</div>{sel(map.giftAid, v => setMap(m => ({ ...m, giftAid: v })))}</div>
+            {gaOn ? <div><div style={finLbl}>GIFT AID</div>{sel(map.giftAid, v => setMap(m => ({ ...m, giftAid: v })))}</div> : null}
             <div><div style={finLbl}>FIRST NAME</div>{sel(map.first, v => setMap(m => ({ ...m, first: v })))}</div>
             <div><div style={finLbl}>LAST NAME</div>{sel(map.last, v => setMap(m => ({ ...m, last: v })))}</div>
             <div><div style={finLbl}>ADDRESS</div>{sel(map.address, v => setMap(m => ({ ...m, address: v })))}</div>
@@ -467,7 +497,7 @@ function FinDonorImportModal({ donors, onClose }) {
                   <div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '— no name —'}</div>
                   <div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[r.postcode, r.email].filter(Boolean).join(' · ') || r.address || ''}</div>
                 </div>
-                {r.giftAid ? <SkPill tint="gold">Gift Aid</SkPill> : null}
+                {gaOn && r.giftAid ? <SkPill tint="gold">Gift Aid</SkPill> : null}
                 {r.dup ? <SkPill tint="ink">already a donor</SkPill> : null}
                 <button onClick={() => setSkip(s => ({ ...s, [r.i]: !sk }))} title={sk ? 'Include' : 'Skip'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name={sk ? 'plus' : 'x'} size={13} color="currentColor" /></button>
               </div>

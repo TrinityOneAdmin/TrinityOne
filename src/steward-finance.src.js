@@ -112,13 +112,16 @@
       // SETTINGS_D has no suffix, so the single doc lands with id === '' — pick it (or defaults)
       const doc = items.find(x => x.id === '') || items[0] || {};
       try { localStorage.setItem(enKey(), doc.enabled ? '1' : '0'); } catch {}
-      cb({ enabled: !!doc.enabled, baseCurrency: doc.baseCurrency || 'GBP' });
+      cb({ enabled: !!doc.enabled, baseCurrency: doc.baseCurrency || 'GBP', giftAid: !!doc.giftAid });
     });
   }
-  function setEnabled(on, baseCurrency) {
+  // opts: { baseCurrency, giftAid }. Gift Aid is the optional UK add-on, off by default — the core
+  // ledger (donor records, funds, statements) is nationality-agnostic.
+  function setEnabled(on, opts) {
     if (!S() || !S().encPublish) return Promise.resolve(null);
+    opts = opts || {};
     try { localStorage.setItem(enKey(), on ? '1' : '0'); } catch {}   // cache immediately so it persists for next load
-    return S().encPublish(SETTINGS_D, { enabled: !!on, baseCurrency: baseCurrency || 'GBP', updated: Math.floor(Date.now() / 1000) });
+    return S().encPublish(SETTINGS_D, { enabled: !!on, baseCurrency: opts.baseCurrency || 'GBP', giftAid: !!opts.giftAid, updated: Math.floor(Date.now() / 1000) });
   }
 
   // ---- donors (PII: name, address, Gift Aid declaration) ----
