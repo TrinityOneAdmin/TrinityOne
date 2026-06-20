@@ -741,7 +741,7 @@ window.Fellowship = {
     if (!pubk) { _noPhoto = new Set(); onLists({ minors: [], approved: [], guardians: {}, nophoto: [], isMinor: false }); return () => {}; }
     let minors = [], approved = [], guardians = {}, nophoto = [];   // guardians: { childPub: [parentPub, …] }
     const me = window.Fellowship.myPubkey || pub;
-    const emit = () => { _noPhoto = new Set(nophoto); onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)) }); };
+    const emit = () => { _noPhoto = new Set(nophoto); onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)), photoBlocked: !!(me && nophoto.includes(me)) }); };
     const makeSub = () => {
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
         onevent(e) {
