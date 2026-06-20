@@ -3099,6 +3099,9 @@ function DashFeaturesPanel({ church }) {
     window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
   };
   const toggleEncryptAll = () => { if (encOn) window.Steward.publishProfile({ features: { ...f, encryptComms: false } }); else setConfirmEnc(true); };
+  // member photos — opt-in; off by default. Children (minors) can never set one (enforced member-side by safeguard.isMinor).
+  const photosOn = f.memberPhotos === true;
+  const togglePhotos = () => window.Steward.publishProfile({ features: { ...f, memberPhotos: !photosOn } });
   const approval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
   const rules = church.rules || {};
   const fullName = !!rules.fullName;
@@ -3157,6 +3160,17 @@ function DashFeaturesPanel({ church }) {
         </button>
       </div>
       {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body="Every group’s messages will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new groups will be sealed by default too." onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow member photos</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{photosOn ? 'On — adult members may set a real photo as their picture. Children never can.' : 'Off — members use a colour, initial or symbol (recommended for privacy). No uploaded photos.'}</div>
+        </div>
+        <button onClick={togglePhotos} aria-label="Toggle member photos" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+          <span style={{ position: 'absolute', top: 3, left: photosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+        </button>
+      </div>
+      {photosOn ? <div style={{ display: 'flex', gap: 9, padding: '11px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 24%, transparent)', marginTop: 10 }}><Icon name="shield" size={15} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} /><div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45 }}>Photos are visible to your whole church, and anyone you’ve marked as a child can never add one. You can switch this off again any time.</div></div> : null}
 
       <div style={{ height: 1, background: 'var(--line)', margin: '18px 0 14px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Joining</div>
