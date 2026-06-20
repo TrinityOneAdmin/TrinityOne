@@ -76,13 +76,13 @@ function RosterModal({ team, roster, members, onClose }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 9 }}>
         {roles.map(r => (
           <span key={r.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 8px 6px 11px', borderRadius: 999, background: `color-mix(in oklab, ${m.accent} 12%, var(--surface))`, border: `1px solid color-mix(in oklab, ${m.accent} 26%, transparent)`, fontSize: 13, fontWeight: 700 }}>
-            {r.name}<button onClick={() => setRoles(x => x.filter(y => y.id !== r.id))} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={13} /></button></span>
+            {r.name}<button onClick={() => setRoles(x => x.filter(y => y.id !== r.id))} title="Remove this role" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={13} /></button></span>
         ))}
         {roles.length === 0 ? <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>No roles yet.</span> : null}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <input value={newRole} onChange={e => setNewRole(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addRole(); }} placeholder="Add a role — e.g. Sound" style={schFld} />
-        <button onClick={addRole} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', flexShrink: 0 }}><Icon name="plus" size={15} color="currentColor" /></button>
+        <button onClick={addRole} title="Add this role to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', flexShrink: 0 }}><Icon name="plus" size={15} color="currentColor" /></button>
       </div>
       <div style={schLbl}>People who can serve</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 9 }}>
@@ -90,7 +90,7 @@ function RosterModal({ team, roster, members, onClose }) {
           <div key={pp.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <div style={{ width: 30, height: 30, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{(pp.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{pp.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{pp.pub ? 'On the app · gets reminders' : 'Off-app'}</div></div>
-            <button onClick={() => setPeople(x => x.filter(y => y.id !== pp.id))} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} /></button>
+            <button onClick={() => setPeople(x => x.filter(y => y.id !== pp.id))} title="Remove this person from the team" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} /></button>
           </div>
         ))}
         {people.length === 0 ? <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>No one added yet.</span> : null}
@@ -101,7 +101,7 @@ function RosterModal({ team, roster, members, onClose }) {
           <option value="">…or link a member</option>
           {(members || []).map(mm => <option key={mm.pubkey} value={mm.pubkey}>{memDisplay(mm)}</option>)}
         </select>
-        <button onClick={addPerson} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px' }}><Icon name="plus" size={15} color="currentColor" /></button>
+        <button onClick={addPerson} title="Add this person to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px' }}><Icon name="plus" size={15} color="currentColor" /></button>
       </div>
       <div style={schLbl}>Serving pods <span style={{ fontWeight: 500, color: 'var(--ink-3)' }}>— a set of people who serve together; apply one to a service in a tap</span></div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 9 }}>
@@ -109,7 +109,7 @@ function RosterModal({ team, roster, members, onClose }) {
           <div key={pod.id} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 11, background: 'var(--surface-2)' }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: roles.length ? 9 : 0 }}>
               <input value={pod.name} onChange={e => setPodName(pod.id, e.target.value)} style={{ ...schFld, fontWeight: 700 }} />
-              <button onClick={() => delPod(pod.id)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={14} /></button>
+              <button onClick={() => delPod(pod.id)} title="Remove this pod" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={14} /></button>
             </div>
             {roles.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Add roles above first, then pick who fills each.</div> : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -165,7 +165,7 @@ function AssignModal({ slot, roster, assign, unavail, onAssign, onClear, onClose
           const stTxt = p.isThis ? 'Assigned here' : p.away ? 'Away' : p.onRota ? 'On rota' : 'Free';
           const stCol = p.isThis ? 'var(--clay)' : p.away ? 'var(--ink-3)' : p.onRota ? '#8a6717' : 'var(--sage)';
           return (
-            <button key={p.id} onClick={() => onAssign(p)} disabled={p.away} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 11, borderRadius: 13, cursor: p.away ? 'not-allowed' : 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', opacity: p.away ? 0.6 : 1,
+            <button key={p.id} onClick={() => onAssign(p)} disabled={p.away} title={p.away ? 'Away — can’t be assigned right now' : 'Assign this person to the slot'} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 11, borderRadius: 13, cursor: p.away ? 'not-allowed' : 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', opacity: p.away ? 0.6 : 1,
               border: p.isThis ? '2px solid var(--clay)' : '1px solid var(--line)', background: 'var(--surface)' }}>
               <div style={{ width: 34, height: 34, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12 }}>{(p.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
               <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{p.pub ? 'On the app' : 'Off-app'}</div></div>
@@ -238,8 +238,8 @@ function RunsheetModal({ service, sheet, onClose }) {
         {items.map((it, i) => (
           <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: 9, borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingTop: 2 }}>
-              <button onClick={() => move(i, -1)} disabled={i === 0} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 0, opacity: i === 0 ? 0.3 : 1 }}><Icon name="chevU" size={14} /></button>
-              <button onClick={() => move(i, 1)} disabled={i === items.length - 1} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 0, opacity: i === items.length - 1 ? 0.3 : 1 }}><Icon name="chevD" size={14} /></button>
+              <button onClick={() => move(i, -1)} disabled={i === 0} title="Move this item up" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 0, opacity: i === 0 ? 0.3 : 1 }}><Icon name="chevU" size={14} /></button>
+              <button onClick={() => move(i, 1)} disabled={i === items.length - 1} title="Move this item down" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 0, opacity: i === items.length - 1 ? 0.3 : 1 }}><Icon name="chevD" size={14} /></button>
             </div>
             <input value={it.time || ''} onChange={e => set(i, 'time', e.target.value)} placeholder="time" style={{ ...rsFld, width: 64, flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -449,14 +449,14 @@ function DashRota({ onNewTeam }) {
         {sortedSvcs.map(s => {
           const on = s.id === svcId; const p = schParts(s.date);
           return (
-            <button key={s.id} onClick={() => setSel(s.id)} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
+            <button key={s.id} onClick={() => setSel(s.id)} title="Show this service’s rota" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
               border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)' }}>
               <div style={{ textAlign: 'center', lineHeight: 1 }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--clay)', textTransform: 'uppercase' }}>{p.dow}</div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{p.day}</div></div>
               <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{s.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{p.mon} · {s.time}</div></div>
             </button>
           );
         })}
-        <button onClick={() => setAdding(true)} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', border: '1px dashed var(--line)', background: 'transparent', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}><Icon name="plus" size={15} color="currentColor" /> Service</button>
+        <button onClick={() => setAdding(true)} title="Add a service to put people on" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', border: '1px dashed var(--line)', background: 'transparent', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}><Icon name="plus" size={15} color="currentColor" /> Service</button>
       </div>
 
       {!svc ? (
@@ -475,7 +475,7 @@ function DashRota({ onNewTeam }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0, flexWrap: 'wrap', justifyContent: narrow ? 'flex-end' : 'initial' }}>
             <button onClick={copyLastWeek} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="copy" size={15} color="currentColor" /> Copy last week</button>
             <div style={{ position: 'relative' }}>
-              <button onClick={() => setFillMenu(v => !v)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill <Icon name="chevD" size={13} color="currentColor" /></button>
+              <button onClick={() => setFillMenu(v => !v)} title="Let the app suggest people to fill the empty roles" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill <Icon name="chevD" size={13} color="currentColor" /></button>
               {fillMenu ? (
                 <React.Fragment>
                   <div onClick={() => setFillMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
@@ -492,7 +492,7 @@ function DashRota({ onNewTeam }) {
                 </React.Fragment>
               ) : null}
             </div>
-            <button onClick={() => setRunsheetOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="note" size={15} color="currentColor" /> Run sheet</button>
+            <button onClick={() => setRunsheetOpen(true)} title="Plan the order of service — items, who leads each, and songs" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="note" size={15} color="currentColor" /> Run sheet</button>
             <button onClick={publish} className={isPublished ? 'sk-btn' : 'sk-btn sk-btn--clay'} style={{ padding: '9px 15px', fontSize: 13, background: isPublished ? 'var(--sage)' : undefined, color: '#fff' }}>
               <Icon name={isPublished ? 'check' : 'send'} size={15} color="#fff" /> {isPublished ? 'Published' : (pers && pers.published ? 'Publish changes' : 'Publish rota')}</button>
             </div>
@@ -540,7 +540,7 @@ function DashRota({ onNewTeam }) {
                         };
                         const vm = vmap[verdict] || vmap[''];
                         return (
-                          <button key={role.id} onClick={() => setAssignSlot(slot)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
+                          <button key={role.id} onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
                             <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 10.5 }}>{a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}{vm.label ? <span style={{ color: vm.fg, marginLeft: 6, fontWeight: 700 }}>· {vm.label}</span> : null}</div>
@@ -659,7 +659,7 @@ function SchEventModal({ day, onClose }) {
       {image ? (
         <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 4, border: '1px solid var(--line)' }}>
           <img src={image} alt="" style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block' }} />
-          <button onClick={() => setImage('')} style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 999, border: 'none', background: 'rgba(20,15,10,.6)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="x" size={16} color="#fff" /></button>
+          <button onClick={() => setImage('')} title="Remove this photo" style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 999, border: 'none', background: 'rgba(20,15,10,.6)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="x" size={16} color="#fff" /></button>
         </div>
       ) : (
         <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 64, borderRadius: 12, border: '1.5px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>
@@ -726,8 +726,8 @@ function DashCalendar() {
       <div style={{ flex: narrow ? 'none' : 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexShrink: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][view.m]} {view.y}</div>
-          <button onClick={() => setView(v => ({ y: v.m === 0 ? v.y - 1 : v.y, m: v.m === 0 ? 11 : v.m - 1 }))} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="chevL" size={16} /></button>
-          <button onClick={() => setView(v => ({ y: v.m === 11 ? v.y + 1 : v.y, m: v.m === 11 ? 0 : v.m + 1 }))} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="chevR" size={16} /></button>
+          <button onClick={() => setView(v => ({ y: v.m === 0 ? v.y - 1 : v.y, m: v.m === 0 ? 11 : v.m - 1 }))} title="Previous month" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="chevL" size={16} /></button>
+          <button onClick={() => setView(v => ({ y: v.m === 11 ? v.y + 1 : v.y, m: v.m === 11 ? 0 : v.m + 1 }))} title="Next month" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="chevR" size={16} /></button>
           <div style={{ flex: 1 }} />
           {rooms.length ? <button onClick={() => setShowBookings(v => !v)} title="Show room bookings on the calendar" className="sk-btn sk-btn--ghost" style={{ padding: '8px 11px', fontSize: 12.5, opacity: showBookings ? 1 : 0.55 }}><Icon name="marker" size={14} color="currentColor" /> {showBookings ? 'Rooms on' : 'Rooms off'}</button> : null}
           <button onClick={() => setAdding('')} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="calPlus" size={15} color="currentColor" /> New event</button>
@@ -741,7 +741,7 @@ function DashCalendar() {
             const key = monKey(d); const it = dayItems(key); const isToday = key === schKey(today);
             const has = it.services.length || it.events.length;
             return (
-              <button key={i} onClick={() => setPickedDay(key)} style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
+              <button key={i} onClick={() => setPickedDay(key)} title="See what’s on this day" style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
                 border: pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay)' : 'var(--ink-2)' }}>{d}</div>
                 {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 5, height: 5, borderRadius: 999, background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} />{s.name}</div>; })}
@@ -762,7 +762,7 @@ function DashCalendar() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
                 <SchDateBlock dateStr={pickedDay} />
                 <div style={{ flex: 1 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{p.dow} {p.day} {p.mon}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{it.services.length + it.events.length + it.bookings.length} on this day</div></div>
-                <button onClick={() => setPickedDay(null)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
+                <button onClick={() => setPickedDay(null)} title="Close this day" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
               </div>
               {it.services.map(s => { const c = coverageFor(s.id); return (
                 <div key={s.id} style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
@@ -845,7 +845,7 @@ function SchEventDetail({ event, onClose }) {
       <div onClick={ev => ev.stopPropagation()} style={{ width: 440, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 4px' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink-3)' }}>Event</div>
-          <button onClick={onClose} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
+          <button onClick={onClose} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px 22px 20px' }}>
           {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 160, objectFit: 'cover', borderRadius: 14, display: 'block', marginBottom: 14 }} /> : null}

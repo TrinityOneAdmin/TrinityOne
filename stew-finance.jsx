@@ -32,7 +32,7 @@ function DashFinancePanel({ church }) {
   const ga = !!s.giftAid;
   const setFin = (en, gift) => window.StewardFinance.setEnabled(en, { baseCurrency: s.baseCurrency, giftAid: gift });
   const toggleBtn = (active, onClick, label) => (
-    <button onClick={onClick} aria-label={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+    <button onClick={onClick} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
       <span style={{ position: 'absolute', top: 3, left: active ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
     </button>
   );
@@ -113,7 +113,7 @@ function DashFinance() {
   return (
     <Panel title="Finance" action={<span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
       <button onClick={() => setImporting(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5 }}><Icon name="globe" size={14} color="currentColor" /> Import statement</button>
-      <button onClick={exportLedger} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5 }}><Icon name="share" size={14} color="currentColor" /> Export CSV</button>
+      <button onClick={exportLedger} title="Download all your giving entries as a spreadsheet file you can open in Excel" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5 }}><Icon name="share" size={14} color="currentColor" /> Export CSV</button>
       <button onClick={() => setTxModal({})} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="plus" size={14} color="#fff" /> Record giving</button>
     </span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
 
@@ -543,8 +543,8 @@ function FinGiftAidClaim({ txs, donors, onEditDonor }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
         <div><div style={finLbl}>FROM</div><input type="date" value={from} onChange={e => setFrom(e.target.value)} style={dInp} /></div>
         <div><div style={finLbl}>TO</div><input type="date" value={to} onChange={e => setTo(e.target.value)} style={dInp} /></div>
-        <button onClick={() => { const t = finUkTaxYear(); setFrom(t.from); setTo(t.to); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12, alignSelf: 'flex-end' }}>This tax year</button>
-        <button onClick={() => { setFrom(''); setTo(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12, alignSelf: 'flex-end' }}>All unclaimed</button>
+        <button onClick={() => { const t = finUkTaxYear(); setFrom(t.from); setTo(t.to); }} title="Set the dates to the current UK tax year (6 April to 5 April)" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12, alignSelf: 'flex-end' }}>This tax year</button>
+        <button onClick={() => { setFrom(''); setTo(''); }} title="Clear the dates to show every eligible gift you haven’t claimed yet" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12, alignSelf: 'flex-end' }}>All unclaimed</button>
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -580,7 +580,7 @@ function FinGiftAidClaim({ txs, donors, onEditDonor }) {
                   <div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{donor.name}</div>
                   {probs.length ? <div style={{ fontSize: 11.5, color: 'var(--clay-ink)' }}>missing: {probs.join(', ')}</div> : <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{donor.postcode}</div>}
                 </div>
-                {probs.length ? <button onClick={() => onEditDonor(donor)} className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>Fix</button> : <SkPill tint="sage">ready</SkPill>}
+                {probs.length ? <button onClick={() => onEditDonor(donor)} title="Open this donor to fill in the details HMRC needs" className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>Fix</button> : <SkPill tint="sage">ready</SkPill>}
               </div>
             );
           })}

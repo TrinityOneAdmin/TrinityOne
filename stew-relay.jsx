@@ -165,10 +165,10 @@ function RelayDashboard({ os, setOs }) {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 9, flexShrink: 0 }}>
-                <button onClick={() => setRunning(r => !r)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 15px', borderRadius: 11, border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.08)', color: 'var(--paper)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+                <button onClick={() => setRunning(r => !r)} title={running ? 'Stop the relay — members and giving will stop loading until you start it again' : 'Start the relay so your church’s messages and giving load again'} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 15px', borderRadius: 11, border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.08)', color: 'var(--paper)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
                   <Icon name="power" size={16} color={running ? '#E0A85B' : '#7DC893'} /> {running ? 'Stop' : 'Start'}
                 </button>
-                <button style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 15px', borderRadius: 11, border: 'none', background: 'rgba(255,255,255,.12)', color: 'var(--paper)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+                <button title="Restart the relay — briefly stops and starts it again (handy after a settings change)" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 15px', borderRadius: 11, border: 'none', background: 'rgba(255,255,255,.12)', color: 'var(--paper)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
                   <Icon name="refresh" size={15} color="var(--paper)" /> Restart
                 </button>
               </div>
