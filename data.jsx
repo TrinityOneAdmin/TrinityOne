@@ -311,7 +311,7 @@ const VIDEOS = [];   // no seeded videos
 // (lib/identity.js) derives a key, it overrides window.TrinityData.CHAT_IDENTITY.
 const HANDLE_POOL = ['Cedar', 'River', 'Sparrow', 'Olive', 'Wren', 'Maple', 'Reed', 'Dove', 'Ash', 'Linden', 'Heron', 'Bramble'];
 
-// avatar picker: Halo-styled symbols + a brand color palette (no photo uploads)
+// avatar picker: Halo-styled symbols + a brand color palette (+ an optional photo when the church allows it and the member isn't a minor)
 const AVATAR_COLORS = ['#C25A38', '#5E8C6A', '#C8962E', '#5360D6', '#C24B7A', '#2A8C82', '#9C5BB8', '#46708C'];
 const AVATAR_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 'crook', 'chalice', 'olive', 'mountain', 'well', 'star'];
 
