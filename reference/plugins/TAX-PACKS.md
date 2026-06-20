@@ -1,7 +1,13 @@
 # Plugin: Per-country tax packs
 
-*Post-pilot. Branch `claude/plugins`. Turns the nationality-agnostic Finance decision into product:
-the core ledger is free; each country's tax-relief/statement module is a paid drop-in pack.*
+*Post-pilot. Branch `claude/plugins`. Per-country tax/statement modules — they live **inside the
+Treasury plugin** ([`TREASURY.md`](TREASURY.md)), each its own entitlement tier.*
+
+> **Note (2026-06-20):** the parent decision moved — the **whole accounting module is now the paid
+> "Treasury" plugin** ([`TREASURY.md`](TREASURY.md)), not "free core ledger + paid country packs". So
+> "core ledger free" below means *free to self-host*, not bundled-free in the official build; the tax
+> packs are the maintained, recurring-value layer **within** Treasury. The `TaxPack` interface is
+> unchanged.
 
 See [`README.md`](README.md) for the plugin architecture and `reference/SPINE.md` (Finance v1 +
 nationality-agnostic decision, 2026-06-19/20). Treasurer guide: `TREASURY.md`.

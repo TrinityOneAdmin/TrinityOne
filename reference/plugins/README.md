@@ -4,8 +4,13 @@
 optional add-ons, mostly paid first-party services, that ride a stable seam.*
 
 This folder scopes the **add-on/plugin system** and the first plugins. See `reference/SPINE.md` →
-"Add-ons / plugins" for the strategy. Per-plugin scoping: [`TAX-PACKS.md`](TAX-PACKS.md),
-[`LIVESTREAM.md`](LIVESTREAM.md).
+"Add-ons / plugins" for the strategy. Per-plugin scoping:
+- [`TREASURY.md`](TREASURY.md) — the accounting module → paid plugin (Giving stays core); parent of:
+  - [`TAX-PACKS.md`](TAX-PACKS.md) — per-country tax/statement packs (inside Treasury)
+- [`LIVESTREAM.md`](LIVESTREAM.md) — sermon/service broadcast
+- [`CALLS.md`](CALLS.md) — prayer & meeting calls
+- [`FORMS.md`](FORMS.md) — connect cards & forms
+- [`TICKETING.md`](TICKETING.md) — paid/registered events (payment via core Lightning)
 
 ---
 
