@@ -39,6 +39,7 @@ const NETWORK_D = 'trinityone/network:';    // church -> network membership ("we
 const BLOCKED_D = 'trinityone/blocked:';    // this church's blocklist (banned member pubkeys), d=blocked:<churchpub>
 const MINORS_D = 'trinityone/minors:';      // safeguarding: this church's minors (children), d=minors:<churchpub>
 const APPROVED_D = 'trinityone/approved:';  // safeguarding: adults cleared to contact youth, d=approved:<churchpub>
+const NOPHOTO_D = 'trinityone/nophoto:';    // moderation: members whose uploaded photo is suppressed, d=nophoto:<churchpub>
 const GUARDREQ_D = 'trinityone/guardreq:';  // safeguarding v2: a parent's guardian-link request (parent-authored), d=guardreq:<childpub>
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-confirmed parent↔child map, d=guardians:<churchpub>
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
@@ -614,17 +615,23 @@ window.Steward = {
   // (should mirror the church's real DBS/cleared list). The relay rejects a kind-4 DM where one party is
   // a minor and the other isn't on the approved list. The member app uses minors to show a child only
   // child-safe groups. Replaceable docs, church-only writes. ----
-  subscribeSafeguard(onLists) {   // onLists({ minors:[…], approved:[…] })
-    let minors = [], approved = [];
+  subscribeSafeguard(onLists) {   // onLists({ minors:[…], approved:[…], nophoto:[…] })
+    let minors = [], approved = [], nophoto = [];
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (d === MINORS_D + pub) { try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved }); }
-        else if (d === APPROVED_D + pub) { try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved }); }
+        if (d === MINORS_D + pub) { try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
+        else if (d === APPROVED_D + pub) { try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
+        else if (d === NOPHOTO_D + pub) { try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
       },
-      oneose() { onLists({ minors, approved }); },
+      oneose() { onLists({ minors, approved, nophoto }); },
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  setNoPhoto(pubkeys) {   // replace the whole photo-suppression list (church-signed, owner-only)
+    if (!sk) return Promise.resolve(null);
+    const list = [...new Set((pubkeys || []).filter(Boolean))];
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
   },
   setMinors(pubkeys) {   // replace the whole minors list (pass hex pubkeys)
     if (!sk) return Promise.resolve(null);
@@ -1155,7 +1162,7 @@ window.Steward = {
     const ensureProfile = (pk) => {
       if (profSubs.has(pk)) return;
       const s = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pk] }], {
-        onevent(e) { try { const meta = JSON.parse(e.content); const m = byPub.get(pk); if (m) { m.name = meta.name || meta.display_name || ''; m.picture = meta.picture || ''; m.nip05 = meta.nip05 || ''; emit(); } } catch {} },
+        onevent(e) { try { const meta = JSON.parse(e.content); const m = byPub.get(pk); if (m) { m.name = meta.name || meta.display_name || ''; m.picture = meta.picture || ''; m.nip05 = meta.nip05 || ''; m.av = meta.av || undefined; m.hasPhoto = !!(meta.av && meta.av.kind === 'photo' && meta.av.photo); emit(); } } catch {} },
         oneose() {},
       });
       profSubs.set(pk, s);

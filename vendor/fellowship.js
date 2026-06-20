@@ -5979,10 +5979,15 @@
     return by === void 0 || by === cp || !!(_churchRoster.get(cp) && _churchRoster.get(cp).has(by)) || !!(gid && _groupLeaders.get(gid) && _groupLeaders.get(gid).has(by));
   }
   var AV_SYMBOLS = ["halo", "dove", "fish", "flame", "vine", "wheat", "anchor", "crook", "chalice", "olive", "mountain", "well", "star"];
+  var _noPhoto = /* @__PURE__ */ new Set();
+  function _avSuppressPhoto(pubkey, av) {
+    if (av && av.kind === "photo" && _noPhoto.has(pubkey)) return { kind: "symbol", color: av.color, symbol: av.symbol || AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] };
+    return av;
+  }
   function displayFor(pubkey) {
     const base = profile(pubkey);
     const p = profiles[pubkey];
-    const av = p && p.av || { kind: "symbol", color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] };
+    const av = _avSuppressPhoto(pubkey, p && p.av || { kind: "symbol", color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] });
     const handle = p && p.name || base.handle;
     return { pubkey, handle, name: handle, color: av.color || base.color, av, picture: p && p.picture, nip05: p && p.nip05 || "" };
   }
@@ -6850,13 +6855,17 @@
     subscribeChurchSafeguard(churchNpub, onLists) {
       const pubk = toPub(churchNpub);
       if (!pubk) {
-        onLists({ minors: [], approved: [], guardians: {}, isMinor: false });
+        _noPhoto = /* @__PURE__ */ new Set();
+        onLists({ minors: [], approved: [], guardians: {}, nophoto: [], isMinor: false });
         return () => {
         };
       }
-      let minors = [], approved = [], guardians = {};
+      let minors = [], approved = [], guardians = {}, nophoto = [];
       const me = window.Fellowship.myPubkey || pub;
-      const emit = () => onLists({ minors, approved, guardians, isMinor: !!(me && minors.includes(me)) });
+      const emit = () => {
+        _noPhoto = new Set(nophoto);
+        onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)) });
+      };
       const makeSub = () => {
         const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], "#t": [NET] }, { kinds: [30078], "#church": [pubk], "#t": [NET] }], {
           onevent(e) {
@@ -6881,6 +6890,13 @@
                 guardians = JSON.parse(e.content).links || {};
               } catch {
                 guardians = {};
+              }
+              emit();
+            } else if (d === "trinityone/nophoto:" + pubk) {
+              try {
+                nophoto = JSON.parse(e.content).pubkeys || [];
+              } catch {
+                nophoto = [];
               }
               emit();
             }

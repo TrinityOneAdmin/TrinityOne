@@ -54,7 +54,7 @@ window.HelpData = {
       blocks: [
         { type: 'list', items: [
           { lead: 'Name', text: 'Tap your circle at the top, choose Display name, and type a friendly name — e.g. “Maria from Tuesday group”. Leave it blank to keep it private.' },
-          { lead: 'Picture', text: 'Pick a symbol or your initial on a colour you choose. If your church turns on member photos, adults can also set a real photo — children always keep a symbol or initial, for safety.' },
+          { lead: 'Picture', text: 'Pick a symbol or your initial on a colour you choose. If your church turns on member photos, adults can also set a real photo — children always keep a symbol or initial, for safety. A steward can reset a photo that isn’t suitable.' },
         ] },
         { type: 'note', text: 'You can change these any time. They’re the only things others see — never your phone number, email, or real name.' },
         { type: 'callout', tone: 'sage', text: 'Some churches ask everyone to use a real first and last name so people recognise each other. If yours does, you’ll see a gentle nudge to add your surname — it stays within your church and shares no other details.' },

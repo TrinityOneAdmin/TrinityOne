@@ -2328,12 +2328,16 @@ window.BulkInviteModal = BulkInviteModal;
 
 function DashMembers() {
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
+  const church = window.useStewardChurch ? window.useStewardChurch() : {};
+  const photosAllowed = !!(church.features && church.features.memberPhotos);   // member photos enabled for this church
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const blockedSet = new Set(blockedList);
   // safeguarding: who's a child, and which adults are cleared to contact youth (mirrors the church's cleared-worker list)
-  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
+  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], nophoto: [] };
   const minorsSet = new Set(sg.minors || []);
   const approvedSet = new Set(sg.approved || []);
+  const nophotoSet = new Set(sg.nophoto || []);
+  const toggleNoPhoto = (pk) => window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk]);
   const toggleMinor = (pk) => window.Steward.setMinors(minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk]);
   const toggleApproved = (pk) => window.Steward.setApproved(approvedSet.has(pk) ? (sg.approved || []).filter(p => p !== pk) : [...(sg.approved || []), pk]);
   // safeguarding v2: parent↔child links — pending parent requests + the confirmed map
@@ -2434,6 +2438,10 @@ function DashMembers() {
           {minorsSet.has(m.pubkey) ? (
             <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
               <Icon name="users" size={14} color="currentColor" /> {(guardians[m.pubkey] && guardians[m.pubkey].length) ? 'Parents' : 'Link parent'}</button>
+          ) : null}
+          {photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
+            <button onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photo is reset — your church sees their symbol/initial. Tap to allow their photo again.' : 'Reset this member’s photo — your church will see their symbol/initial instead, until they choose a new picture.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+              <Icon name="refresh" size={14} color="currentColor" /> {nophotoSet.has(m.pubkey) ? 'Photo reset ✓' : 'Reset photo'}</button>
           ) : null}
           </React.Fragment>) : null}
         </div>

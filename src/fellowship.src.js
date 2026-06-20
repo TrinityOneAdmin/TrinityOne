@@ -201,11 +201,19 @@ function _noteGroupLeaders(cp, id, content, author) {
 function _groupEventTrusted(cp, gid, by) { return by === undefined || by === cp || !!(_churchRoster.get(cp) && _churchRoster.get(cp).has(by)) || !!(gid && _groupLeaders.get(gid) && _groupLeaders.get(gid).has(by)); }
 
 const AV_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 'crook', 'chalice', 'olive', 'mountain', 'well', 'star'];
+// church-signed photo-suppression: pubkeys whose uploaded photo a steward has reset. Populated by
+// subscribeChurchSafeguard (owner-only). The member can't be forced to change their key, but this
+// church's clients won't *show* the photo — they fall back to the member's symbol/initial.
+let _noPhoto = new Set();
+function _avSuppressPhoto(pubkey, av) {
+  if (av && av.kind === 'photo' && _noPhoto.has(pubkey)) return { kind: 'symbol', color: av.color, symbol: av.symbol || AV_SYMBOLS[hashStr(pubkey || '') % AV_SYMBOLS.length] };
+  return av;
+}
 // resolved display = kind-0 name/avatar if known, else a deterministic anonymous handle + symbol
 function displayFor(pubkey) {
   const base = profile(pubkey);
   const p = profiles[pubkey];
-  const av = (p && p.av) || { kind: 'symbol', color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || '') % AV_SYMBOLS.length] };
+  const av = _avSuppressPhoto(pubkey, (p && p.av) || { kind: 'symbol', color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || '') % AV_SYMBOLS.length] });
   const handle = (p && p.name) || base.handle;
   return { pubkey, handle, name: handle, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '' };
 }
@@ -730,10 +738,10 @@ window.Fellowship = {
   // real enforcement is on the relay (gateway accept/canRead); this is the client-side experience.
   subscribeChurchSafeguard(churchNpub, onLists) {
     const pubk = toPub(churchNpub);
-    if (!pubk) { onLists({ minors: [], approved: [], guardians: {}, isMinor: false }); return () => {}; }
-    let minors = [], approved = [], guardians = {};   // guardians: { childPub: [parentPub, …] }
+    if (!pubk) { _noPhoto = new Set(); onLists({ minors: [], approved: [], guardians: {}, nophoto: [], isMinor: false }); return () => {}; }
+    let minors = [], approved = [], guardians = {}, nophoto = [];   // guardians: { childPub: [parentPub, …] }
     const me = window.Fellowship.myPubkey || pub;
-    const emit = () => onLists({ minors, approved, guardians, isMinor: !!(me && minors.includes(me)) });
+    const emit = () => { _noPhoto = new Set(nophoto); onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)) }); };
     const makeSub = () => {
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
         onevent(e) {
@@ -742,6 +750,7 @@ window.Fellowship = {
           if (d === 'trinityone/minors:' + pubk) { try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
           else if (d === 'trinityone/approved:' + pubk) { try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
           else if (d === 'trinityone/guardians:' + pubk) { try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
+          else if (d === 'trinityone/nophoto:' + pubk) { try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } emit(); }
         },
         oneose() { emit(); },
       });

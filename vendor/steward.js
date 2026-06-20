@@ -9574,6 +9574,7 @@ zoo`.split("\n");
   var BLOCKED_D = "trinityone/blocked:";
   var MINORS_D = "trinityone/minors:";
   var APPROVED_D = "trinityone/approved:";
+  var NOPHOTO_D = "trinityone/nophoto:";
   var GUARDREQ_D = "trinityone/guardreq:";
   var GUARDIANS_D = "trinityone/guardians:";
   var JOINPOLICY_D = "trinityone/joinpolicy:";
@@ -10415,7 +10416,7 @@ zoo`.split("\n");
     // a minor and the other isn't on the approved list. The member app uses minors to show a child only
     // child-safe groups. Replaceable docs, church-only writes. ----
     subscribeSafeguard(onLists) {
-      let minors = [], approved = [];
+      let minors = [], approved = [], nophoto = [];
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -10425,18 +10426,25 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved });
+            onLists({ minors, approved, nophoto });
           } else if (d === APPROVED_D + pub) {
             try {
               approved = JSON.parse(e.content).pubkeys || [];
             } catch {
               approved = [];
             }
-            onLists({ minors, approved });
+            onLists({ minors, approved, nophoto });
+          } else if (d === NOPHOTO_D + pub) {
+            try {
+              nophoto = JSON.parse(e.content).pubkeys || [];
+            } catch {
+              nophoto = [];
+            }
+            onLists({ minors, approved, nophoto });
           }
         },
         oneose() {
-          onLists({ minors, approved });
+          onLists({ minors, approved, nophoto });
         }
       });
       return () => {
@@ -10445,6 +10453,11 @@ zoo`.split("\n");
         } catch {
         }
       };
+    },
+    setNoPhoto(pubkeys) {
+      if (!sk) return Promise.resolve(null);
+      const list = [...new Set((pubkeys || []).filter(Boolean))];
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
     },
     setMinors(pubkeys) {
       if (!sk) return Promise.resolve(null);
@@ -11315,6 +11328,8 @@ zoo`.split("\n");
                 m.name = meta.name || meta.display_name || "";
                 m.picture = meta.picture || "";
                 m.nip05 = meta.nip05 || "";
+                m.av = meta.av || void 0;
+                m.hasPhoto = !!(meta.av && meta.av.kind === "photo" && meta.av.photo);
                 emit();
               }
             } catch {
