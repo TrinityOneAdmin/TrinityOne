@@ -41,7 +41,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
 }
 
 // ── header ──
-function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare, onCompare, onListen, narrating, canListen }) {
+function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSettings, compare, onCompare, onListen, narrating, canListen }) {
   return (
     <div style={{
       position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, paddingTop: 50,
@@ -57,7 +57,12 @@ function ReadHeader({ ctx, loc, version, onBook, onVersion, onSettings, compare,
           display: 'flex', alignItems: 'center', gap: 5, border: 'none', cursor: 'pointer', flexShrink: 0,
           background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 12, padding: '8px 11px',
           fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap',
-        }}>{loc.book} {loc.ch}<Icon name="chevD" size={14} stroke={2.2} color="var(--ink-3)" /></button>
+        }}>{loc.book}<Icon name="chevD" size={14} stroke={2.2} color="var(--ink-3)" /></button>
+        <button onClick={(ev) => onChapter(ev.currentTarget.getBoundingClientRect())} style={{
+          display: 'flex', alignItems: 'center', gap: 4, border: 'none', cursor: 'pointer', flexShrink: 0,
+          background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 12, padding: '8px 10px',
+          fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap',
+        }}>{loc.ch}<Icon name="chevD" size={14} stroke={2.2} color="var(--ink-3)" /></button>
         <button onClick={onVersion} style={{
           display: 'flex', alignItems: 'center', gap: 4, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', flexShrink: 1, minWidth: 0,
           borderRadius: 12, padding: '8px 9px', fontWeight: 700, fontSize: 12.5, color: 'var(--clay)',
@@ -462,16 +467,11 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
 }
 
 // ── book + chapter picker (live across the loaded module) ──
-function BookPicker({ open, onClose, onPick, version, loc }) {
+function BookPicker({ open, onClose, onPick, version }) {
   const B = window.Bible.bookMeta();
   const [book, setBook] = useS(null);   // selected book (showing chapters)
   const [chap, setChap] = useS(null);   // selected chapter (showing verses)
-  // On open, land on the current book's chapters so you can swap chapter/verse
-  // without re-picking the book (the back chevron still reaches the book list).
-  useE(() => {
-    if (open) { setBook((loc && B.find(b => b.num === loc.book)) || null); setChap(null); }
-    else { setBook(null); setChap(null); }
-  }, [open]);
+  useE(() => { if (!open) { setBook(null); setChap(null); } }, [open]);
   const groups = [['ot', 'OLD TESTAMENT'], ['nt', 'NEW TESTAMENT']].filter(([g]) => B.some(b => b.group === g));
   const back = () => { if (chap) setChap(null); else if (book) setBook(null); else onClose(); };
   const title = chap ? `${book.name} ${chap}` : book ? book.name : 'Books';
@@ -521,6 +521,41 @@ function BookPicker({ open, onClose, onPick, version, loc }) {
         )}
       </div>
     </Overlay>
+  );
+}
+
+// ── compact chapter + verse dropdown, anchored under the header's chapter pill ──
+// Lets you swap chapter/verse within the current book without opening the full book picker.
+function ChapterVerseMenu({ open, onClose, anchor, loc, version, onPick }) {
+  const Bible = window.Bible;
+  const [pick, setPick] = useS(loc.chap);   // chapter whose verses are listed below
+  useE(() => { if (open) setPick(loc.chap); }, [open, loc.chap]);
+  if (!open || !anchor) return null;
+  const nCh = Bible.maxChapter(loc.book, version) || 1;
+  const nV = ((Bible.getVerses(loc.book, pick, version) || []).length) || 1;
+  const vw = (typeof window !== 'undefined' && window.innerWidth) || 360;
+  const left = Math.max(8, Math.min(anchor.left, vw - 296));
+  const cell = (active) => ({ aspectRatio: '1', borderRadius: 10, border: '1px solid var(--line)', background: active ? 'var(--clay)' : 'var(--surface-2)', color: active ? '#fff' : 'var(--ink)', cursor: 'pointer', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-display)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 });
+  const hd = { fontSize: 11, fontWeight: 700, letterSpacing: '.5px', color: 'var(--ink-3)' };
+  return (
+    <React.Fragment>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+      <div className="no-scrollbar" style={{ position: 'fixed', top: anchor.bottom + 6, left, width: 288, maxHeight: '62vh', overflowY: 'auto', zIndex: 41,
+        background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, boxShadow: 'var(--shadow-lg)', padding: 13, animation: 'trinityRise .16s ease both' }}>
+        <div style={{ ...hd, margin: '2px 0 8px' }}>CHAPTER</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 6 }}>
+          {Array.from({ length: nCh }, (_, i) => i + 1).map(c => (
+            <button key={c} onClick={() => { setPick(c); onPick(c); }} style={cell(c === pick)}>{c}</button>
+          ))}
+        </div>
+        <div style={{ ...hd, margin: '15px 0 8px' }}>VERSE</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 6 }}>
+          {Array.from({ length: nV }, (_, i) => i + 1).map(v => (
+            <button key={v} onClick={() => { onPick(pick, v); onClose(); }} style={cell(false)}>{v}</button>
+          ))}
+        </div>
+      </div>
+    </React.Fragment>
   );
 }
 
@@ -642,6 +677,7 @@ function ReadScreen({ ctx }) {
   const [sel, setSel] = useS(null);
   const [sheet, setSheet] = useS(new URLSearchParams(location.search).get('sheet') || null);
   const [wordId, setWordId] = useS(new URLSearchParams(location.search).get('word') || null);
+  const [cvAnchor, setCvAnchor] = useS(null);   // header chapter-pill rect for the chapter/verse dropdown
   const [commentaryOpen, setCommentaryOpen] = useS(false);
   // ── narration (Listen): read the chapter aloud with the device's speech engine (offline, no audio files) ──
   const [narrateState, setNarrateState] = useS('idle');   // idle | playing | paused
@@ -725,7 +761,7 @@ function ReadScreen({ ctx }) {
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
       <ReadHeader ctx={ctx} loc={{ book: bname, ch: loc.chap }} version={version}
-        onBook={() => setSheet('book')} onVersion={() => setSheet('version')}
+        onBook={() => setSheet('book')} onChapter={(rect) => { setCvAnchor(rect); setSheet('cv'); }} onVersion={() => setSheet('version')}
         onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)}
         onListen={listenChapter} narrating={audioOnThis && audio.playing} canListen={true} />
 
@@ -792,8 +828,10 @@ function ReadScreen({ ctx }) {
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
       <SettingsSheet open={sheet === 'settings'} onClose={close} scale={scale} setScale={setScale}
         serif={serif} setSerif={setSerif} showStrongs={showStrongs} setShowStrongs={setShowStrongs} ctx={ctx} />
-      <BookPicker open={sheet === 'book'} onClose={close} version={version} loc={loc}
+      <BookPicker open={sheet === 'book'} onClose={close} version={version}
         onPick={(book, c, v) => { close(); ctx.setLoc({ book, chap: c, verse: v || undefined }); }} />
+      <ChapterVerseMenu open={sheet === 'cv'} onClose={close} anchor={cvAnchor} loc={loc} version={version}
+        onPick={(c, v) => { ctx.setLoc({ book: loc.book, chap: c, verse: v || undefined }); if (v != null) close(); }} />
 
       {/* narration control bar — appears while the chapter is being read aloud */}
       {narrateState !== 'idle' ? (
