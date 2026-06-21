@@ -33,6 +33,14 @@ function useStewardGroups() {
 }
 window.useStewardGroups = useStewardGroups;
 
+function useStewardCategories() {
+  const idv = useStewardIdv();
+  const [cats, setCats] = useSt([]);
+  useStE(() => window.Steward.subscribeCategories ? window.Steward.subscribeCategories(setCats) : undefined, [idv]);
+  return cats;
+}
+window.useStewardCategories = useStewardCategories;
+
 function useStewardPlans() {
   const idv = useStewardIdv();
   const [plans, setPlans] = useSt([]);

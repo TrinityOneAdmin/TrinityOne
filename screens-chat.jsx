@@ -254,12 +254,19 @@ function ChatScreen({ ctx }) {
   const [unread, setUnread] = useC({});        // gid -> count
   const [q, setQ] = useC('');                  // chat search query
   const [realGroups, setRealGroups] = useC([]); // the active church's REAL groups (steward console)
+  const [cats, setCats] = useC([]);             // the church's group categories (named containers)
   const msgBuf = useCR([]);                     // recent messages buffer (for search)
 
   // read the active church's real group definitions (kind-30078) when it has an npub
   useCE(() => {
     if (!ctx.church || !ctx.church.npub || !(window.Fellowship && window.Fellowship.subscribeChurchGroups)) { setRealGroups([]); return; }
     return window.Fellowship.subscribeChurchGroups(ctx.church.npub, setRealGroups);
+  }, [ctx.church && ctx.church.npub]);
+
+  // read the church's group categories so we can section the list by them
+  useCE(() => {
+    if (!ctx.church || !ctx.church.npub || !(window.Fellowship && window.Fellowship.subscribeChurchCategories)) { setCats([]); return; }
+    return window.Fellowship.subscribeChurchCategories(ctx.church.npub, setCats);
   }, [ctx.church && ctx.church.npub]);
 
   const accentFor = (s) => { const cs = ['var(--clay)', 'var(--sage)', 'var(--gold)', '#5360D6', '#C24B7A']; let h = 0; for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return cs[h % cs.length]; };
@@ -271,7 +278,7 @@ function ChatScreen({ ctx }) {
     ? realGroups
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
         .filter(g => !iAmMinor || g.childsafe)
-        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted }))
+        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category }))
     : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id));
   const notJoined = !(ctx.church && ctx.church.npub);   // hasn't joined a real church yet
   const teamGroups = churchGroups.filter(g => g.team);
@@ -489,18 +496,39 @@ function ChatScreen({ ctx }) {
         </React.Fragment>
       ) : null}
 
-      <SectionLabel>Your groups</SectionLabel>
       {plainGroups.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '38px 24px', color: 'var(--ink-3)', animation: 'trinityFade .4s ease both' }}>
-          <div style={{ width: 56, height: 56, borderRadius: 18, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="chat" size={28} color="var(--ink-3)" /></div>
-          <p style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink-2)', margin: '0 0 4px' }}>No groups yet</p>
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, margin: 0, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto' }}>{ctx.church && ctx.church.name ? `${ctx.church.name} hasn’t opened any chat rooms yet — they’ll appear here when it does.` : 'Chat rooms will appear here once your church opens them.'}</p>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, animation: 'trinityFade .5s ease .1s both' }}>
-          {plainGroups.map(groupCard)}
-        </div>
-      )}
+        <React.Fragment>
+          <SectionLabel>Your groups</SectionLabel>
+          <div style={{ textAlign: 'center', padding: '38px 24px', color: 'var(--ink-3)', animation: 'trinityFade .4s ease both' }}>
+            <div style={{ width: 56, height: 56, borderRadius: 18, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}><Icon name="chat" size={28} color="var(--ink-3)" /></div>
+            <p style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink-2)', margin: '0 0 4px' }}>No groups yet</p>
+            <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, margin: 0, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto' }}>{ctx.church && ctx.church.name ? `${ctx.church.name} hasn’t opened any chat rooms yet — they’ll appear here when it does.` : 'Chat rooms will appear here once your church opens them.'}</p>
+          </div>
+        </React.Fragment>
+      ) : (() => {
+        // section the groups under the steward's named categories; anything uncategorised (or in a
+        // since-deleted category) falls into a final "Other groups" / "Your groups" section.
+        const catIds = new Set(cats.map(c => c.id));
+        const known = cats.filter(c => plainGroups.some(g => g.category === c.id));
+        const uncategorised = plainGroups.filter(g => !g.category || !catIds.has(g.category));
+        const listStyle = { display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .1s both' };
+        return (
+          <React.Fragment>
+            {known.map(c => (
+              <React.Fragment key={c.id}>
+                <SectionLabel>{c.name}</SectionLabel>
+                <div style={listStyle}>{plainGroups.filter(g => g.category === c.id).map(groupCard)}</div>
+              </React.Fragment>
+            ))}
+            {uncategorised.length ? (
+              <React.Fragment>
+                <SectionLabel>{known.length ? 'Other groups' : 'Your groups'}</SectionLabel>
+                <div style={listStyle}>{uncategorised.map(groupCard)}</div>
+              </React.Fragment>
+            ) : null}
+          </React.Fragment>
+        );
+      })()}
       </React.Fragment>
       )}
       </React.Fragment>

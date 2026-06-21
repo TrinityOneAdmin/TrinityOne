@@ -17,6 +17,7 @@ function toPub(npubOrHex) {
   try { const d = nip19decode(npubOrHex); return d.type === 'npub' ? d.data : null; } catch { return null; }
 }
 const GROUP_D = 'trinityone/group:';
+const CATEGORY_D = 'trinityone/category:';   // church-signed named container that groups belong to (e.g. "Lifegroups")
 const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the group key wrapped to each member
 // safeguarding v2: a parent's local record of the child accounts they set up (no secrets — just the link)
 const FAMILY_KEY = 'trinityone.family';
@@ -729,6 +730,31 @@ window.Fellowship = {
       return () => { try { sub.close(); } catch {} };
     };
     if (byId.size) emit();   // paint cached groups before the relay answers
+    return withReconnect(makeSub);
+  },
+
+  // ── read the church's group categories (named containers, kind-30078) ──
+  // onCats([{ id, name, order, ts }]) sorted by the steward's order. Members section the group list by these.
+  subscribeChurchCategories(churchNpub, onCats) {
+    const pubk = toPub(churchNpub);
+    if (!pubk) { onCats([]); return () => {}; }
+    const byId = new Map();
+    for (const c of loadDocCache('categories', pubk)) { if (c && c.id) byId.set(c.id, c); }   // paint cached instantly
+    const emit = () => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
+    const makeSub = () => {
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          if (!d.startsWith(CATEGORY_D)) return;
+          const id = d.slice(CATEGORY_D.length);
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+          try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+        },
+        oneose() { emit(); },
+      });
+      return () => { try { sub.close(); } catch {} };
+    };
+    if (byId.size) emit();   // paint cached categories before the relay answers
     return withReconnect(makeSub);
   },
 

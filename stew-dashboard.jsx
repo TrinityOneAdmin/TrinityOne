@@ -1143,7 +1143,7 @@ function DashGiving() {
   );
 }
 
-function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, empty, reorderable, onReorder }) {
+function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, empty, reorderable, onReorder, headerExtra }) {
   const [order, setOrder] = React.useState(null);   // working copy while dragging
   const [dragId, setDragId] = React.useState(null);
   const [overId, setOverId] = React.useState(null);
@@ -1168,7 +1168,7 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, em
   const move = (idx, dir) => { const arr = items.slice(); const j = idx + dir; if (j < 0 || j >= arr.length) return; const t = arr[idx]; arr[idx] = arr[j]; arr[j] = t; if (onReorder) onReorder(arr); };
   const fld = { width: '100%', boxSizing: 'border-box', height: 40, padding: '0 14px 0 38px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   return (
-    <Panel title={title} action={<button onClick={onAdd} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {addLabel}</button>} style={{ height: '100%' }} scroll>
+    <Panel title={title} action={<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerExtra || null}<button onClick={onAdd} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {addLabel}</button></div>} style={{ height: '100%' }} scroll>
       {searchable ? (
         <div style={{ position: 'relative', marginBottom: 12, flexShrink: 0 }}>
           <Icon name="search" size={16} color="var(--ink-3)" style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
@@ -1211,15 +1211,18 @@ function NewGroupModal({ open, onClose }) {
   const [encrypted, setEncrypted] = React.useState(false);
   const [childsafe, setChildsafe] = React.useState(false);
   const [sel, setSel] = React.useState(new Set());   // chosen member pubkeys for an invite-only group
+  const [category, setCategory] = React.useState('');   // chosen category id ('' = uncategorised)
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const cats = window.useStewardCategories ? window.useStewardCategories() : [];
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
   const encByDefault = !!(church.features && church.features.encryptComms);   // "Encrypt all comms" → new groups sealed by default
-  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); } }, [open]);
+  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); } }, [open]);
   if (!open) return null;
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const create = () => {
     if (!name.trim()) return;
     const g = { name: name.trim(), kind, sub: sub.trim() };
+    if (category) g.category = category;
     if (kind === 'group' && inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
     if (kind === 'group' && encrypted) g.encrypted = true;
     if (childsafe) g.childsafe = true;
@@ -1248,6 +1251,15 @@ function NewGroupModal({ open, onClose }) {
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '6px 0 16px', lineHeight: 1.45 }}>{kind === 'broadcast' ? 'Only stewards post; everyone reads. Good for announcements.' : 'Everyone in the group can post and reply.'}</div>
           <div style={lbl}>DESCRIPTION</div>
           <input value={sub} onChange={e => setSub(e.target.value)} placeholder="Optional — e.g. Whole church" style={{ ...fld, fontSize: 14.5 }} />
+          {cats.length ? (
+            <React.Fragment>
+              <div style={{ ...lbl, margin: '16px 0 7px' }}>CATEGORY</div>
+              <select value={category} onChange={e => setCategory(e.target.value)} style={{ ...fld, fontSize: 14.5, cursor: 'pointer' }}>
+                <option value="">Uncategorised</option>
+                {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </React.Fragment>
+          ) : null}
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '18px 0 0', cursor: 'pointer' }}>
             <input type="checkbox" checked={childsafe} onChange={e => setChildsafe(e.target.checked)} style={{ marginTop: 2 }} />
             <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>👶 Child-safe</b> — members marked as a child can see and join this group. Groups that aren’t child-safe are hidden from children.</span>
@@ -1463,10 +1475,84 @@ function GroupChatModal({ group, onClose }) {
   );
 }
 
+// Manage the church's group categories — named containers (e.g. "Lifegroups", "Cell groups") the
+// steward sorts groups into. Add / rename / reorder / delete; deleting just un-categorises its groups.
+function CategoriesModal({ cats, groups, onClose }) {
+  const [adding, setAdding] = React.useState('');
+  const [editId, setEditId] = React.useState(null);
+  const [editName, setEditName] = React.useState('');
+  const [pendingDelete, setPendingDelete] = React.useState(null);
+  const countIn = (id) => (groups || []).filter(g => g.category === id).length;
+  const add = () => { const n = adding.trim(); if (!n) return; window.Steward.publishCategory({ name: n, order: cats.length }); setAdding(''); };
+  const saveEdit = () => { const c = cats.find(x => x.id === editId); if (c && editName.trim()) window.Steward.publishCategory({ ...c, name: editName.trim() }); setEditId(null); setEditName(''); };
+  const move = (idx, dir) => { const j = idx + dir; if (j < 0 || j >= cats.length) return; const arr = cats.slice(); const t = arr[idx]; arr[idx] = arr[j]; arr[j] = t; arr.forEach((c, i) => { if (c.order !== i) window.Steward.publishCategory({ ...c, order: i }); }); };
+  const del = () => { const c = pendingDelete; setPendingDelete(null); if (!c) return;
+    (groups || []).filter(g => g.category === c.id).forEach(g => window.Steward.publishGroup({ ...g, category: undefined }));   // un-categorise its groups
+    window.Steward.removeCategory(c.id);
+  };
+  const fld = { flex: 1, minWidth: 0, boxSizing: 'border-box', height: 42, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
+  const iconBtn = (extra) => ({ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', ...extra });
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 30, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+        <div className="no-scrollbar" style={{ padding: '24px 26px 0', maxHeight: '66vh', overflowY: 'auto' }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, marginBottom: 4 }}>Group categories</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18, lineHeight: 1.5 }}>Name your own groupings — e.g. <b>Lifegroups</b>, <b>Cell groups</b>, <b>Ministries</b> — then sort each group into one. Members see their groups under these headings.</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <input autoFocus value={adding} onChange={e => setAdding(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }} placeholder="New category name…" style={fld} />
+            <button onClick={add} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: adding.trim() ? 1 : .5 }}><Icon name="plus" size={15} color="#fff" /> Add</button>
+          </div>
+          {cats.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '24px 10px', color: 'var(--ink-3)', fontSize: 13.5 }}>No categories yet. Add one above, then assign groups to it.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {cats.map((c, i) => (
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                  <Icon name="books" size={17} color="var(--clay)" />
+                  {editId === c.id ? (
+                    <input autoFocus value={editName} onChange={e => setEditName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') { setEditId(null); setEditName(''); } }} onBlur={saveEdit} style={{ ...fld, height: 34 }} />
+                  ) : (
+                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{countIn(c.id)} group{countIn(c.id) === 1 ? '' : 's'}</div></div>
+                  )}
+                  {editId === c.id ? null : (
+                    <React.Fragment>
+                      <button onClick={() => move(i, -1)} disabled={i === 0} title="Move up" style={iconBtn({ opacity: i === 0 ? .35 : 1 })}><Icon name="chevU" size={15} color="currentColor" /></button>
+                      <button onClick={() => move(i, 1)} disabled={i === cats.length - 1} title="Move down" style={iconBtn({ opacity: i === cats.length - 1 ? .35 : 1 })}><Icon name="chevD" size={15} color="currentColor" /></button>
+                      <button onClick={() => { setEditId(c.id); setEditName(c.name); }} title="Rename" style={iconBtn()}><Icon name="pen" size={15} color="currentColor" /></button>
+                      <button onClick={() => setPendingDelete(c)} title="Delete category" style={iconBtn({ color: 'var(--clay)' })}><Icon name="trash" size={15} color="currentColor" /></button>
+                    </React.Fragment>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 10, padding: '20px 26px 22px' }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px' }}>Done</button>
+        </div>
+      </div>
+      {pendingDelete ? (
+        <div onClick={(e) => { e.stopPropagation(); setPendingDelete(null); }} style={{ position: 'absolute', inset: 0, zIndex: 61, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 8 }}>Delete “{pendingDelete.name}”?</div>
+            <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px' }}>The category is removed. Its {countIn(pendingDelete.id)} group{countIn(pendingDelete.id) === 1 ? '' : 's'} stay — they just become uncategorised.</p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setPendingDelete(null)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Keep it</button>
+              <button onClick={del} className="sk-btn" style={{ flex: 1, padding: 12, background: 'var(--clay)', color: '#fff' }}><Icon name="trash" size={15} color="#fff" /> Delete</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function DashGroups() {
   const all = window.useStewardGroups();   // groups AND teams (teams are chat channels too)
   const rosters = window.useStewardRosters();
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const cats = window.useStewardCategories ? window.useStewardCategories() : [];   // named containers groups sit in
+  const [catsOpen, setCatsOpen] = React.useState(false);
   const recipsFor = (g) => g.visibility === 'invite' ? (g.members || []) : members.map(m => m.pubkey);
   // seal/unseal a single group. Enabling loses nothing (past plaintext stays); KeyDistributor keys new members after.
   const [sealing, setSealing] = React.useState(null);   // { g, on } → styled confirm before (un)sealing
@@ -1491,7 +1577,7 @@ function DashGroups() {
     setPendingDelete(null); setUndo(g);
     clearTimeout(undoTimer.current); undoTimer.current = setTimeout(() => setUndo(null), 9000);
   };
-  const doUndo = () => { if (undo) window.Steward.publishGroup({ id: undo.id, name: undo.name, kind: undo.kind, sub: undo.sub, icon: undo.icon, accent: undo.accent }); clearTimeout(undoTimer.current); setUndo(null); };
+  const doUndo = () => { if (undo) window.Steward.publishGroup({ id: undo.id, name: undo.name, kind: undo.kind, sub: undo.sub, icon: undo.icon, accent: undo.accent, category: undo.category }); clearTimeout(undoTimer.current); setUndo(null); };
   return (
     <div style={{ position: 'relative', height: '100%' }}>
       {pendingDelete ? (
@@ -1519,8 +1605,15 @@ function DashGroups() {
       <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items}
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...g, order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
+        headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
         renderRight={(it) => (
           <React.Fragment>
+            {it.kind !== 'team' && cats.length ? (
+              <select value={it.category || ''} onChange={(e) => window.Steward.publishGroup({ ...it, category: e.target.value || undefined })} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+                <option value="">No category</option>
+                {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            ) : null}
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
@@ -1535,6 +1628,7 @@ function DashGroups() {
           <button onClick={() => setPendingDelete(it)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
         )} />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
+      {catsOpen ? <CategoriesModal cats={cats} groups={all} onClose={() => setCatsOpen(false)} /> : null}
       {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}
       {teamMembers ? (
         <div onClick={() => setTeamMembers(null)} style={{ position: 'absolute', inset: 0, zIndex: 92, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>

@@ -9559,6 +9559,7 @@ zoo`.split("\n");
   var KEY_LS = "trinityone.steward.church-key";
   var FUND_D = "trinityone/fund:";
   var GROUP_D = "trinityone/group:";
+  var CATEGORY_D = "trinityone/category:";
   var PLAN_D = "trinityone/plan:";
   var DEVO_D = "trinityone/devotional:";
   var ROSTER_D = "trinityone/roster:";
@@ -10337,12 +10338,54 @@ zoo`.split("\n");
         }
       };
     },
+    // ---- categories (named containers that group the church's groups, e.g. "Lifegroups") ----
+    publishCategory(cat) {
+      if (!sk) return Promise.resolve(null);
+      const id = cat.id || "cat" + Date.now();
+      const content = JSON.stringify({ name: cat.name || "Category", order: typeof cat.order === "number" ? cat.order : void 0 });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CATEGORY_D + id], ["t", NET]], content })).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
+    },
+    removeCategory(id) {
+      if (!sk) return Promise.resolve(null);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CATEGORY_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+    },
+    subscribeCategories(onCats) {
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => onCats([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(CATEGORY_D)) return;
+          const id = d.slice(CATEGORY_D.length);
+          const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
+          if (deleted) {
+            byId.delete(id);
+            emit();
+            return;
+          }
+          try {
+            byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
     // ---- groups (the church's chat rooms) ----
     publishGroup(group) {
       if (!sk) return Promise.resolve(null);
       const id = group.id || "grp" + Date.now();
       const inviteOnly = group.visibility === "invite";
-      const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === "number" ? group.order : void 0, visibility: inviteOnly ? "invite" : void 0, members: inviteOnly && Array.isArray(group.members) ? group.members : void 0, encrypted: group.encrypted ? true : void 0, childsafe: group.childsafe ? true : void 0 });
+      const content = JSON.stringify({ name: group.name || "Group", kind: group.kind || "group", sub: group.sub || "", icon: group.icon || "", accent: group.accent || "", leaders: Array.isArray(group.leaders) ? group.leaders : [], order: typeof group.order === "number" ? group.order : void 0, category: group.category || void 0, visibility: inviteOnly ? "invite" : void 0, members: inviteOnly && Array.isArray(group.members) ? group.members : void 0, encrypted: group.encrypted ? true : void 0, childsafe: group.childsafe ? true : void 0 });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET]], content })).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
     // set which members can post events for a group (re-publishes the group def, preserving its fields)
