@@ -49,30 +49,32 @@ function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSetting
       backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
       borderBottom: '1px solid var(--line-2)',
     }}>
-      <div style={{ padding: '8px 14px 0' }}>
-        <ReadPlansTabs ctx={ctx} />
+      {/* row 1 — Bible/Plans tabs share the line with the action icons */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px 0' }}>
+        <div style={{ flex: 1, minWidth: 0 }}><ReadPlansTabs ctx={ctx} /></div>
+        <IconBtn name="study" size={18} onClick={() => ctx.openSearch()} style={{ width: 36, height: 36 }} />
+        {canListen ? <IconBtn name="headphones" size={18} onClick={onListen} style={narrating ? { width: 36, height: 36, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} /> : null}
+        <IconBtn name="compare" size={18} onClick={onCompare} style={compare ? { width: 36, height: 36, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} />
+        <IconBtn name="sliders" size={18} onClick={onSettings} style={{ width: 36, height: 36 }} />
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px 11px' }}>
+      {/* row 2 — book / chapter / version selectors get the full width to breathe */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 11px' }}>
         <button onClick={onBook} style={{
-          display: 'flex', alignItems: 'center', gap: 5, border: 'none', cursor: 'pointer', flexShrink: 0,
-          background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 12, padding: '8px 11px',
-          fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap',
-        }}>{loc.book}<Icon name="chevD" size={14} stroke={2.2} color="var(--ink-3)" /></button>
+          display: 'flex', alignItems: 'center', gap: 5, border: 'none', cursor: 'pointer', flexShrink: 1, minWidth: 0,
+          background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 12, padding: '9px 13px',
+          fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)', whiteSpace: 'nowrap',
+        }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{loc.book}</span><Icon name="chevD" size={14} stroke={2.2} color="var(--ink-3)" style={{ flexShrink: 0 }} /></button>
         <button onClick={(ev) => onChapter(ev.currentTarget.getBoundingClientRect())} style={{
           display: 'flex', alignItems: 'center', gap: 4, border: 'none', cursor: 'pointer', flexShrink: 0,
-          background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 12, padding: '8px 10px',
-          fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap',
+          background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 12, padding: '9px 13px',
+          fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)', whiteSpace: 'nowrap',
         }}>{loc.ch}<Icon name="chevD" size={14} stroke={2.2} color="var(--ink-3)" /></button>
         <button onClick={onVersion} style={{
           display: 'flex', alignItems: 'center', gap: 4, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', flexShrink: 1, minWidth: 0,
-          borderRadius: 12, padding: '8px 9px', fontWeight: 700, fontSize: 12.5, color: 'var(--clay)',
-          boxShadow: 'var(--shadow)', maxWidth: 96, whiteSpace: 'nowrap',
+          borderRadius: 12, padding: '9px 12px', fontWeight: 700, fontSize: 13, color: 'var(--clay)',
+          boxShadow: 'var(--shadow)', maxWidth: 150, whiteSpace: 'nowrap',
         }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{version}</span><Icon name="chevD" size={13} stroke={2.2} color="var(--clay)" style={{ flexShrink: 0 }} /></button>
         <div style={{ flex: 1, minWidth: 4 }} />
-        <IconBtn name="study" size={18} onClick={() => ctx.openSearch()} style={{ width: 38, height: 38 }} />
-        {canListen ? <IconBtn name="headphones" size={18} onClick={onListen} style={narrating ? { width: 38, height: 38, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 38, height: 38 }} /> : null}
-        <IconBtn name="compare" size={18} onClick={onCompare} style={compare ? { width: 38, height: 38, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 38, height: 38 }} />
-        <IconBtn name="sliders" size={18} onClick={onSettings} style={{ width: 38, height: 38 }} />
       </div>
     </div>
   );
