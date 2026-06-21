@@ -97,18 +97,17 @@ function ChurchPill({ ctx }) {
       </button>
     );
   }
+  // compact single-line pill — the badge + chevron already say "tap to switch church",
+  // so the old two-line "Your church" caption is dropped to save vertical space.
   return (
     <button onClick={ctx.openChurchSwitcher} style={{
-      display: 'flex', alignItems: 'center', gap: 12, width: '100%', border: '1px solid var(--line)',
-      background: 'var(--surface)', borderRadius: 18, padding: '12px 14px', cursor: 'pointer',
+      display: 'flex', alignItems: 'center', gap: 10, width: '100%', border: '1px solid var(--line)',
+      background: 'var(--surface)', borderRadius: 14, padding: '7px 11px', cursor: 'pointer',
       boxShadow: 'var(--shadow)', textAlign: 'left',
     }}>
-      <ChurchBadge church={c} size={44} radius={13} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600 }}>Your church</div>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.15 }}>{c.name}</div>
-      </div>
-      <Icon name="chevD" size={20} stroke={2.2} color="var(--ink-3)" />
+      <ChurchBadge church={c} size={30} radius={9} />
+      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 }}>{c.name}</div>
+      <Icon name="chevD" size={18} stroke={2.2} color="var(--ink-3)" />
     </button>
   );
 }
