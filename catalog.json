@@ -18,7 +18,9 @@
       "name": "Dictionaries & Lexicons",
       "icon": "lex",
       "items": [
-        { "id": "strongs", "name": "Strong's Greek & Hebrew Dictionary", "abbr": "Strong's", "lang": "Greek / Hebrew", "size": "4.0 MB", "license": "CC-BY-SA · 1890 Strong's", "kind": "dict", "format": "JSON", "url": "modules/strongs-dict.json", "desc": "14,197 full lexical entries (definition + etymology + KJV usage). Every Strong's number in the reader opens a complete definition." },
+        { "id": "strongs", "name": "Strong's Greek & Hebrew Dictionary", "abbr": "Strong's", "lang": "Greek / Hebrew", "size": "4.0 MB", "license": "CC-BY-SA · 1890 Strong's", "kind": "dict", "format": "JSON", "url": "modules/strongs-dict.json", "featured": true, "desc": "14,197 full lexical entries (definition + etymology + KJV usage). Every Strong's number in the reader opens a complete definition." },
+        { "id": "abbott-smith", "name": "Abbott-Smith Greek Lexicon", "abbr": "Abbott-Smith", "lang": "Greek", "size": "3.9 MB", "license": "CC BY 4.0 · STEPBible", "kind": "dict", "format": "JSON", "url": "modules/lex-abbott-smith.json", "desc": "10,847 New-Testament Greek entries (Abbott-Smith), keyed to Strong's numbers — tap any Greek word in the reader for its definition." },
+        { "id": "bdb", "name": "Brown–Driver–Briggs Hebrew Lexicon", "abbr": "BDB", "lang": "Hebrew / Aramaic", "size": "2.1 MB", "license": "CC BY 4.0 · STEPBible", "kind": "dict", "format": "JSON", "url": "modules/lex-bdb.json", "desc": "8,181 Hebrew & Aramaic entries from Brown–Driver–Briggs, keyed to Strong's numbers — tap any Hebrew word in the reader for its definition." },
         { "id": "import-dict", "name": "Import a dictionary…", "kind": "import", "accept": "dictionary", "desc": "Add your own MySword .dct.mybible dictionary or lexicon." }
       ]
     },
