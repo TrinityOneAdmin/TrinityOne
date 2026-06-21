@@ -123,7 +123,7 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
 }
 
 // ── word study (real lexicon via window.Bible.lex) ──
-function WordStudySheet({ id, open, onClose, docked }) {
+function WordStudySheet({ id, open, onClose, docked, onWord }) {
   const e = id ? window.Bible.lex(id) : null;
   return (
     <BottomSheet open={open} onClose={onClose} docked={docked}>
@@ -155,7 +155,14 @@ function WordStudySheet({ id, open, onClose, docked }) {
           {e.deriv ? (
             <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>Derivation</div>
-              <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{e.deriv}</div>
+              <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+                {/* turn each Strong's cross-reference (G3956 / H1234) into a tappable link to that entry */}
+                {e.deriv.split(/([GH]\d{1,5})/).map((part, i) => (
+                  /^[GH]\d{1,5}$/.test(part) && onWord && !window.Bible.lex(part).missing
+                    ? <span key={i} onClick={() => onWord(part)} style={{ color: 'var(--clay)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'color-mix(in oklab, var(--clay) 45%, transparent)', textUnderlineOffset: 2 }}>{part}</span>
+                    : part
+                ))}
+              </div>
             </div>
           ) : null}
           {e.kjv ? (
@@ -455,11 +462,16 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
 }
 
 // ── book + chapter picker (live across the loaded module) ──
-function BookPicker({ open, onClose, onPick, version }) {
+function BookPicker({ open, onClose, onPick, version, loc }) {
   const B = window.Bible.bookMeta();
   const [book, setBook] = useS(null);   // selected book (showing chapters)
   const [chap, setChap] = useS(null);   // selected chapter (showing verses)
-  useE(() => { if (!open) { setBook(null); setChap(null); } }, [open]);
+  // On open, land on the current book's chapters so you can swap chapter/verse
+  // without re-picking the book (the back chevron still reaches the book list).
+  useE(() => {
+    if (open) { setBook((loc && B.find(b => b.num === loc.book)) || null); setChap(null); }
+    else { setBook(null); setChap(null); }
+  }, [open]);
   const groups = [['ot', 'OLD TESTAMENT'], ['nt', 'NEW TESTAMENT']].filter(([g]) => B.some(b => b.group === g));
   const back = () => { if (chap) setChap(null); else if (book) setBook(null); else onClose(); };
   const title = chap ? `${book.name} ${chap}` : book ? book.name : 'Books';
@@ -771,7 +783,7 @@ function ReadScreen({ ctx }) {
         curColor={ctx.highlights[keyOf(sel)]} onColor={(c) => { ctx.setHighlight(keyOf(sel), c); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel))} hasNote={!!ctx.notes[keyOf(sel)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
-      <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} />
+      <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={openWord} />
       <CrossRefSheet loc={loc} v={sel} label={labelOf(sel)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />
       <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />
@@ -780,7 +792,7 @@ function ReadScreen({ ctx }) {
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
       <SettingsSheet open={sheet === 'settings'} onClose={close} scale={scale} setScale={setScale}
         serif={serif} setSerif={setSerif} showStrongs={showStrongs} setShowStrongs={setShowStrongs} ctx={ctx} />
-      <BookPicker open={sheet === 'book'} onClose={close} version={version}
+      <BookPicker open={sheet === 'book'} onClose={close} version={version} loc={loc}
         onPick={(book, c, v) => { close(); ctx.setLoc({ book, chap: c, verse: v || undefined }); }} />
 
       {/* narration control bar — appears while the chapter is being read aloud */}
