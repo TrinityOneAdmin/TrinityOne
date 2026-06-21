@@ -130,13 +130,15 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
 }
 
 // ── word study (real lexicon via window.Bible.lex) ──
-function WordStudySheet({ id, open, onClose, docked, onWord }) {
+function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack }) {
   const e = id ? window.Bible.lex(id) : null;
   return (
     <BottomSheet open={open} onClose={onClose} docked={docked}>
       {e ? <div style={{ paddingBottom: 6 }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-          <div>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
+            {canBack ? <IconBtn name="chevL" onClick={onBack} title="Back to the previous definition" /> : null}
+            <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 700, letterSpacing: '.5px' }}>STRONG'S {e.id} · {e.lang}</div>
             {e.missing
               ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 30, fontWeight: 500, lineHeight: 1.1, marginTop: 6 }}>{e.id}</div>
@@ -144,6 +146,7 @@ function WordStudySheet({ id, open, onClose, docked, onWord }) {
                   <div style={{ fontFamily: 'var(--font-read)', fontSize: 38, fontWeight: 500, lineHeight: 1.1, marginTop: 4 }}>{e.lemma}</div>
                   <div style={{ fontSize: 16, color: 'var(--ink-2)', fontStyle: 'italic', fontFamily: 'var(--font-read)' }}>{e.translit} · <span style={{ fontStyle: 'normal', fontFamily: 'var(--font-ui)', fontSize: 13 }}>{e.pos}</span></div>
                 </React.Fragment>}
+            </div>
           </div>
           <IconBtn name="x" onClick={onClose} />
         </div>
@@ -678,7 +681,10 @@ function ReadScreen({ ctx }) {
   const [showStrongs, setShowStrongs] = useS(false);
   const [sel, setSel] = useS(null);
   const [sheet, setSheet] = useS(new URLSearchParams(location.search).get('sheet') || null);
-  const [wordId, setWordId] = useS(new URLSearchParams(location.search).get('word') || null);
+  // word-study history: a stack of Strong's ids so following a cross-reference can be walked back
+  const _initWord = new URLSearchParams(location.search).get('word') || null;
+  const [wordStack, setWordStack] = useS(_initWord ? [_initWord] : []);
+  const wordId = wordStack.length ? wordStack[wordStack.length - 1] : null;
   const [cvAnchor, setCvAnchor] = useS(null);   // header chapter-pill rect for the chapter/verse dropdown
   const [commentaryOpen, setCommentaryOpen] = useS(false);
   // ── narration (Listen): read the chapter aloud with the device's speech engine (offline, no audio files) ──
@@ -716,7 +722,9 @@ function ReadScreen({ ctx }) {
   const close = () => setSheet(null);
   // tap a verse to select (opens the action sheet); tap the same verse again to deselect.
   const selectVerse = (n) => { if (String(sel) === String(n)) { setSel(null); setSheet(null); } else { setSel(n); setSheet('action'); } };
-  const openWord = (id) => { setWordId(id); setSheet('word'); };
+  const openWord = (id) => { setWordStack([id]); setSheet('word'); };            // fresh lookup (tapping a verse's Strong's number)
+  const pushWord = (id) => { setWordStack(s => [...s, id]); };                    // follow a cross-reference, keeping history
+  const backWord = () => setWordStack(s => s.length > 1 ? s.slice(0, -1) : s);    // return to the previous definition
 
   const selRow = verses.find(x => String(x.v) === String(sel));
   const sheetCtx = {
@@ -821,7 +829,7 @@ function ReadScreen({ ctx }) {
         curColor={ctx.highlights[keyOf(sel)]} onColor={(c) => { ctx.setHighlight(keyOf(sel), c); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel))} hasNote={!!ctx.notes[keyOf(sel)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
-      <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={openWord} />
+      <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
       <CrossRefSheet loc={loc} v={sel} label={labelOf(sel)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />
       <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />
