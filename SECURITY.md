@@ -4,7 +4,7 @@ TrinityOne handles things that matter — a church's identity keys, private mess
 
 ## Reporting a vulnerability
 
-**Please email [31app@proton.me](mailto:31app@proton.me)** with:
+**Please email [security@trinityone.church](mailto:security@trinityone.church)** with:
 
 - what you found and where (a file/URL/endpoint, or steps to reproduce),
 - the impact you think it has, and
