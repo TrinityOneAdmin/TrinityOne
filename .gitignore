@@ -58,3 +58,7 @@ relay/*.demo-backup*
 reference/TrinityOne.zip
 reference/nas-relay/
 payments-options.html
+relay/catalog-key.json
+
+# Phase-1+2 Blossom: torrent build artifacts (magnet URIs ship in catalog.json instead)
+modules/torrents/

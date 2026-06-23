@@ -1,8 +1,19 @@
 # Censorship-resistant module distribution — design proposal
 
-*Branch: `claude/blossom` · Scoped 2026-06-23. **Not yet built.** Replaces the current single-host
-HTTP module fetch with hash-addressed multi-mirror download (Phase 1) and Blossom + signed-Nostr
-catalog (Phase 2). Disaster-archive layer via torrents is optional, listed last.*
+*Branch: `claude/blossom` · Scoped + **built end-to-end** 2026-06-23. Phases 1 & 2 ship together;
+torrent disaster-archive layer is in (mktorrent-best-effort). E2E test passes on the dev box.*
+
+**Decisions locked in (2026-06-23):**
+- **Content-key custody:** lives at `relay/catalog-key.json` on the release host — same custody
+  model as `relay/release-key.pem`. (Mechanically a separate key, because Nostr is secp256k1 and
+  release-key.pem is Ed25519; "same" = same operational practice, same disk, same backup story.)
+- **Phase 1 + 2 ship together** in this branch's merge to main.
+- **Torrent archive layer IN scope.** Best-effort: `scripts/build-torrents.sh` warns-and-skips
+  if `mktorrent` isn't installed (`sudo apt install mktorrent` to enable).
+
+**Catalog publisher pubkey:**
+`e328e19897fb925307b2c2044c2d874cf56e4478b04952d67d7ab3fd93411f10`
+(burned into `engine.js` as `CATALOG_PUB` and `scripts/gateway.mjs` as the relay-side carve-out.)
 
 ---
 

@@ -12,7 +12,8 @@ import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { verifyEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
-import { randomBytes, timingSafeEqual } from 'crypto';
+import { randomBytes, timingSafeEqual, createHash } from 'crypto';
+import { readdirSync } from 'node:fs';
 import { spawn, spawnSync } from 'child_process';
 
 const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
@@ -115,6 +116,11 @@ const JOINPOLICY_D = 'trinityone/joinpolicy:'; // church-signed join policy — 
 const ADMITTED_D = 'trinityone/admitted:';   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
 const STEWARDS_D = 'trinityone/stewards:';   // church-signed steward roster — d=stewards:<churchpub>, content {pubkeys:[…]}; delegates day-to-day church powers to those keys (revocable: owner re-signs without them). Owner-only to edit. See STEWARD-ROSTER-DESIGN.md.
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's REQUEST to a church — d=stewardreq:<churchpub>, authored by the requester (openly writable, like a join). The owner reviews + approves it into the roster (owner-only).
+// Project-wide catalog publisher: ONE pubkey is trusted to publish the signed kind:30078 module
+// catalog (d='catalog:trinityone'). The corresponding sk lives at relay/catalog-key.json on the
+// release host (gitignored). Burned in here so future relay installs trust it without configuration.
+const CATALOG_PUB = 'e328e19897fb925307b2c2044c2d874cf56e4478b04952d67d7ab3fd93411f10';
+const CATALOG_D = 'catalog:trinityone';
 function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch { return null; } }
 // the relay can host MULTIPLE churches — each manages its own data, scoped by author. Configure via
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
@@ -372,6 +378,8 @@ function accept(e) {
   }
   if (k === 30078) {
     const d = dtag(e);
+    // project-wide module catalog: only the dedicated catalog publisher key may write it.
+    if (d === CATALOG_D) return e.pubkey === CATALOG_PUB;
     // Steward authority is ADDITIVE (see STEWARD-ROSTER-DESIGN.md): isLeader (the church/network key) always
     // passes exactly as before; a rostered steward of the relevant church ALSO passes for DELEGATED ops.
     // OWNER-ONLY ops never consult the roster — so they stay church-key-only automatically.
@@ -648,8 +656,70 @@ async function tsState() {
   return { installed: true, backendState, loggedIn: backendState === 'Running', dnsName, funnelOn, publicUrl, relayWss: publicUrl ? publicUrl.replace(/^https/, 'wss') + '/relay' : '' };
 }
 
+// ── Blossom: hash-addressed module mirror ──
+// GET /blossom/<sha256>  → the file under modules/ whose sha256 matches (404 otherwise)
+// GET /blossom/list      → JSON: { sha256: { name, size, contentType } } for monitoring
+// The sha256 IS the ETag — perfect cache key. Look-ups are O(1) against an in-memory map built
+// at startup. Files are 1–10 MB so re-hashing them all on boot is cheap.
+// The catalog (catalog.json, the kind:30078 signed event) carries the (sha256 → server) routing;
+// any relay holding the bytes serves them, and the engine verifies sha256 before parsing — so a
+// malicious relay can't poison content. See reference/proposal-blossom.md.
+const BLOSSOM_DIR = join(ROOT, 'modules');
+const BLOSSOM_TYPES = { '.json': 'application/json', '.zip': 'application/zip', '.mybible': 'application/x-sqlite3', '.bbl': 'application/x-sqlite3' };
+let BLOSSOM_INDEX = new Map();   // sha256 -> { path, size, contentType, name }
+function rebuildBlossomIndex() {
+  const idx = new Map();
+  let names = [];
+  try { names = readdirSync(BLOSSOM_DIR); } catch { /* no modules/ → empty index, /blossom/* will 404 cleanly */ }
+  for (const name of names) {
+    const p = join(BLOSSOM_DIR, name);
+    let st; try { st = statSync(p); } catch { continue; }
+    if (!st.isFile()) continue;
+    const h = createHash('sha256'); h.update(readFileSync(p)); const sha = h.digest('hex');
+    const ext = ('.' + name.split('.').pop()).toLowerCase();
+    idx.set(sha, { path: p, size: st.size, contentType: BLOSSOM_TYPES[ext] || 'application/octet-stream', name });
+  }
+  BLOSSOM_INDEX = idx;
+}
+rebuildBlossomIndex();   // at startup; /blossom/rebuild lets ops refresh after dropping new modules
+function serveBlossom(route, req, res) {
+  if (route === '/blossom/list') {
+    const out = {};
+    for (const [sha, m] of BLOSSOM_INDEX) out[sha] = { name: m.name, size: m.size, contentType: m.contentType };
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(out));
+    return true;
+  }
+  if (route === '/blossom/rebuild') {
+    rebuildBlossomIndex();
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ ok: true, count: BLOSSOM_INDEX.size }));
+    return true;
+  }
+  // GET /blossom/<sha256>(.ext)? — strip an optional extension so URLs like /blossom/<hash>.json work too
+  const m = route.match(/^\/blossom\/([0-9a-f]{64})(?:\.[a-z0-9]+)?$/i);
+  if (!m) return false;
+  const sha = m[1].toLowerCase();
+  const blob = BLOSSOM_INDEX.get(sha);
+  if (!blob) { res.writeHead(404, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' }); res.end('not found'); return true; }
+  // If-None-Match handling — the sha is the strongest possible ETag.
+  if (req.headers['if-none-match'] === '"' + sha + '"') { res.writeHead(304, { 'ETag': '"' + sha + '"' }); res.end(); return true; }
+  res.writeHead(200, {
+    'Content-Type': blob.contentType,
+    'Content-Length': blob.size,
+    'ETag': '"' + sha + '"',
+    'Cache-Control': 'public, max-age=31536000, immutable',   // hash-addressed: bytes never change for a given URL
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Expose-Headers': 'ETag',
+  });
+  createReadStream(blob.path).on('error', () => { try { res.destroy(); } catch {} }).pipe(res);
+  return true;
+}
+
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
+  // Blossom is its own little router branch — claim the request before the static-file fallback below.
+  if (route.startsWith('/blossom')) { if (serveBlossom(route, req, res)) return; }
   // relay status (for the Relay app control dashboard)
   if (route === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });

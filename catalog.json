@@ -5,12 +5,133 @@
       "name": "Bible Translations",
       "icon": "book",
       "items": [
-        { "id": "engbsb", "name": "Berean Standard Bible", "abbr": "BSB", "lang": "English", "size": "3.0 MB", "license": "Public Domain", "kind": "bible", "format": "USFM", "url": "modules/engbsb.zip", "featured": true, "desc": "A clear, accurate modern English translation — free for everyone to use. Recommended." },
-        { "id": "eng-kjv", "name": "King James Version", "abbr": "KJV", "lang": "English", "size": "2.6 MB", "license": "Public Domain", "kind": "bible", "format": "USFM", "url": "modules/eng-kjv.zip", "desc": "The 1769 Authorized Version — the classic English Bible." },
-        { "id": "eng-web", "name": "World English Bible", "abbr": "WEB", "lang": "English", "size": "3.1 MB", "license": "Public Domain", "kind": "bible", "format": "USFM", "url": "modules/eng-web.zip", "desc": "A modern, readable public-domain translation." },
-        { "id": "eng-asv", "name": "American Standard Version", "abbr": "ASV", "lang": "English", "size": "2.7 MB", "license": "Public Domain", "kind": "bible", "format": "USFM", "url": "modules/eng-asv.zip", "desc": "The 1901 ASV — precise and literal." },
-        { "id": "eng-akjv", "name": "KJV with Strong's Numbers", "abbr": "AKJV+S", "lang": "English", "size": "8.4 MB", "license": "Public Domain", "kind": "bible", "format": "MySword", "url": "modules/eng-akjv.bbl.mybible", "desc": "King James text tagged with Strong's numbers — tap a word for the lexicon." },
-        { "id": "ahirani", "name": "Ahirani New Testament", "abbr": "Ahirani", "lang": "Ahirani (मराठी)", "size": "0.9 MB", "license": "Open / Biblica", "kind": "bible", "format": "USFM", "url": "modules/ahirani-usfm.zip", "desc": "An example of a non-English module (open.bible USFM)." }
+        {
+          "id": "engbsb",
+          "name": "Berean Standard Bible",
+          "abbr": "BSB",
+          "lang": "English",
+          "size": "3.0 MB",
+          "license": "Public Domain",
+          "kind": "bible",
+          "format": "USFM",
+          "url": "modules/engbsb.zip",
+          "featured": true,
+          "desc": "A clear, accurate modern English translation — free for everyone to use. Recommended.",
+          "sha256": "a7f61bf7986aa11cf3ced7044af79dadce029053573ce99703c2a8d66601e41b",
+          "bytes": 3021299,
+          "mirrors": [
+            "https://trinityone.tailbeaac0.ts.net/modules/engbsb.zip",
+            "https://trinityone-master-01.tailbeaac0.ts.net/modules/engbsb.zip"
+          ],
+          "servers": [
+            "https://trinityone.tailbeaac0.ts.net/blossom"
+          ]
+        },
+        {
+          "id": "eng-kjv",
+          "name": "King James Version",
+          "abbr": "KJV",
+          "lang": "English",
+          "size": "2.6 MB",
+          "license": "Public Domain",
+          "kind": "bible",
+          "format": "USFM",
+          "url": "modules/eng-kjv.zip",
+          "desc": "The 1769 Authorized Version — the classic English Bible.",
+          "sha256": "f049ea8bc5075bc3ba4dd8b471872a76f480e406bd0cdcf8fd154229ae18bbe2",
+          "bytes": 2770411,
+          "mirrors": [
+            "https://trinityone.tailbeaac0.ts.net/modules/eng-kjv.zip",
+            "https://trinityone-master-01.tailbeaac0.ts.net/modules/eng-kjv.zip"
+          ],
+          "servers": [
+            "https://trinityone.tailbeaac0.ts.net/blossom"
+          ]
+        },
+        {
+          "id": "eng-web",
+          "name": "World English Bible",
+          "abbr": "WEB",
+          "lang": "English",
+          "size": "3.1 MB",
+          "license": "Public Domain",
+          "kind": "bible",
+          "format": "USFM",
+          "url": "modules/eng-web.zip",
+          "desc": "A modern, readable public-domain translation.",
+          "sha256": "a745365f53ab95570e9c39a60a7d245ba10bbf6c863832006876b01ea8654f8e",
+          "bytes": 3249612,
+          "mirrors": [
+            "https://trinityone.tailbeaac0.ts.net/modules/eng-web.zip",
+            "https://trinityone-master-01.tailbeaac0.ts.net/modules/eng-web.zip"
+          ],
+          "servers": [
+            "https://trinityone.tailbeaac0.ts.net/blossom"
+          ]
+        },
+        {
+          "id": "eng-asv",
+          "name": "American Standard Version",
+          "abbr": "ASV",
+          "lang": "English",
+          "size": "2.7 MB",
+          "license": "Public Domain",
+          "kind": "bible",
+          "format": "USFM",
+          "url": "modules/eng-asv.zip",
+          "desc": "The 1901 ASV — precise and literal.",
+          "sha256": "5368b15746bdf444ac5cdc63210f597e75d2bd96ad279bdd3e1614c3227b1692",
+          "bytes": 2874966,
+          "mirrors": [
+            "https://trinityone.tailbeaac0.ts.net/modules/eng-asv.zip",
+            "https://trinityone-master-01.tailbeaac0.ts.net/modules/eng-asv.zip"
+          ],
+          "servers": [
+            "https://trinityone.tailbeaac0.ts.net/blossom"
+          ]
+        },
+        {
+          "id": "eng-akjv",
+          "name": "KJV with Strong's Numbers",
+          "abbr": "AKJV+S",
+          "lang": "English",
+          "size": "8.4 MB",
+          "license": "Public Domain",
+          "kind": "bible",
+          "format": "MySword",
+          "url": "modules/eng-akjv.bbl.mybible",
+          "desc": "King James text tagged with Strong's numbers — tap a word for the lexicon.",
+          "sha256": "ba7345ae6ea76fcc85823b6c5c4035772b9dc4b96365f1d9ffa5e41f98870cac",
+          "bytes": 8781824,
+          "mirrors": [
+            "https://trinityone.tailbeaac0.ts.net/modules/eng-akjv.bbl.mybible",
+            "https://trinityone-master-01.tailbeaac0.ts.net/modules/eng-akjv.bbl.mybible"
+          ],
+          "servers": [
+            "https://trinityone.tailbeaac0.ts.net/blossom"
+          ]
+        },
+        {
+          "id": "ahirani",
+          "name": "Ahirani New Testament",
+          "abbr": "Ahirani",
+          "lang": "Ahirani (मराठी)",
+          "size": "0.9 MB",
+          "license": "Open / Biblica",
+          "kind": "bible",
+          "format": "USFM",
+          "url": "modules/ahirani-usfm.zip",
+          "desc": "An example of a non-English module (open.bible USFM).",
+          "sha256": "1a6c2779f4822d99dbabb00d35fa13b1c0283b03f5c2feb2fdb63ec94e9092e7",
+          "bytes": 951965,
+          "mirrors": [
+            "https://trinityone.tailbeaac0.ts.net/modules/ahirani-usfm.zip",
+            "https://trinityone-master-01.tailbeaac0.ts.net/modules/ahirani-usfm.zip"
+          ],
+          "servers": [
+            "https://trinityone.tailbeaac0.ts.net/blossom"
+          ]
+        }
       ]
     },
     {
@@ -18,10 +139,77 @@
       "name": "Dictionaries & Lexicons",
       "icon": "lex",
       "items": [
-        { "id": "strongs", "name": "Strong's Greek & Hebrew Dictionary", "abbr": "Strong's", "lang": "Greek / Hebrew", "size": "4.0 MB", "license": "CC-BY-SA · 1890 Strong's", "kind": "dict", "format": "JSON", "url": "modules/strongs-dict.json", "featured": true, "desc": "14,197 full lexical entries (definition + etymology + KJV usage). Every Strong's number in the reader opens a complete definition." },
-        { "id": "abbott-smith", "name": "Abbott-Smith Greek Lexicon", "abbr": "Abbott-Smith", "lang": "Greek", "size": "3.9 MB", "license": "CC BY 4.0 · STEPBible", "kind": "dict", "format": "JSON", "url": "modules/lex-abbott-smith.json", "desc": "10,847 New-Testament Greek entries (Abbott-Smith), keyed to Strong's numbers — tap any Greek word in the reader for its definition." },
-        { "id": "bdb", "name": "Brown–Driver–Briggs Hebrew Lexicon", "abbr": "BDB", "lang": "Hebrew / Aramaic", "size": "2.1 MB", "license": "CC BY 4.0 · STEPBible", "kind": "dict", "format": "JSON", "url": "modules/lex-bdb.json", "desc": "8,181 Hebrew & Aramaic entries from Brown–Driver–Briggs, keyed to Strong's numbers — tap any Hebrew word in the reader for its definition." },
-        { "id": "import-dict", "name": "Import a dictionary…", "kind": "import", "accept": "dictionary", "desc": "Add your own MySword .dct.mybible dictionary or lexicon." }
+        {
+          "id": "strongs",
+          "name": "Strong's Greek & Hebrew Dictionary",
+          "abbr": "Strong's",
+          "lang": "Greek / Hebrew",
+          "size": "4.0 MB",
+          "license": "CC-BY-SA · 1890 Strong's",
+          "kind": "dict",
+          "format": "JSON",
+          "url": "modules/strongs-dict.json",
+          "featured": true,
+          "desc": "14,197 full lexical entries (definition + etymology + KJV usage). Every Strong's number in the reader opens a complete definition.",
+          "sha256": "8a2a130d8e0f2c0ec22bd1891c186cd9eed9477152e57f582ed0dbfb6f3769c1",
+          "bytes": 4012877,
+          "mirrors": [
+            "https://trinityone.tailbeaac0.ts.net/modules/strongs-dict.json",
+            "https://trinityone-master-01.tailbeaac0.ts.net/modules/strongs-dict.json"
+          ],
+          "servers": [
+            "https://trinityone.tailbeaac0.ts.net/blossom"
+          ]
+        },
+        {
+          "id": "abbott-smith",
+          "name": "Abbott-Smith Greek Lexicon",
+          "abbr": "Abbott-Smith",
+          "lang": "Greek",
+          "size": "3.9 MB",
+          "license": "CC BY 4.0 · STEPBible",
+          "kind": "dict",
+          "format": "JSON",
+          "url": "modules/lex-abbott-smith.json",
+          "desc": "10,847 New-Testament Greek entries (Abbott-Smith), keyed to Strong's numbers — tap any Greek word in the reader for its definition.",
+          "sha256": "cb29a11833aec8c5e31c72914d1fb91a22b83f858af81b6f29741e32458f955a",
+          "bytes": 3859072,
+          "mirrors": [
+            "https://trinityone.tailbeaac0.ts.net/modules/lex-abbott-smith.json",
+            "https://trinityone-master-01.tailbeaac0.ts.net/modules/lex-abbott-smith.json"
+          ],
+          "servers": [
+            "https://trinityone.tailbeaac0.ts.net/blossom"
+          ]
+        },
+        {
+          "id": "bdb",
+          "name": "Brown–Driver–Briggs Hebrew Lexicon",
+          "abbr": "BDB",
+          "lang": "Hebrew / Aramaic",
+          "size": "2.1 MB",
+          "license": "CC BY 4.0 · STEPBible",
+          "kind": "dict",
+          "format": "JSON",
+          "url": "modules/lex-bdb.json",
+          "desc": "8,181 Hebrew & Aramaic entries from Brown–Driver–Briggs, keyed to Strong's numbers — tap any Hebrew word in the reader for its definition.",
+          "sha256": "4efe09c36381da07c4fc727f335cdc5756697372a7c48dd5c48c2ad4d8ac27da",
+          "bytes": 2131377,
+          "mirrors": [
+            "https://trinityone.tailbeaac0.ts.net/modules/lex-bdb.json",
+            "https://trinityone-master-01.tailbeaac0.ts.net/modules/lex-bdb.json"
+          ],
+          "servers": [
+            "https://trinityone.tailbeaac0.ts.net/blossom"
+          ]
+        },
+        {
+          "id": "import-dict",
+          "name": "Import a dictionary…",
+          "kind": "import",
+          "accept": "dictionary",
+          "desc": "Add your own MySword .dct.mybible dictionary or lexicon."
+        }
       ]
     },
     {
@@ -29,7 +217,13 @@
       "name": "Commentaries",
       "icon": "comment",
       "items": [
-        { "id": "import-cmt", "name": "Import a commentary…", "kind": "import", "accept": "commentary", "desc": "Add a MySword .cmt.mybible commentary you already have. Hosted public-domain commentaries are coming." }
+        {
+          "id": "import-cmt",
+          "name": "Import a commentary…",
+          "kind": "import",
+          "accept": "commentary",
+          "desc": "Add a MySword .cmt.mybible commentary you already have. Hosted public-domain commentaries are coming."
+        }
       ]
     },
     {
@@ -37,8 +231,16 @@
       "name": "Devotionals",
       "icon": "sun",
       "items": [
-        { "id": "import-dvt", "name": "Import a devotional…", "kind": "import", "accept": "devotional", "desc": "Add a MySword .dvn.mybible devotional you already have. Hosted devotionals are coming." }
+        {
+          "id": "import-dvt",
+          "name": "Import a devotional…",
+          "kind": "import",
+          "accept": "devotional",
+          "desc": "Add a MySword .dvn.mybible devotional you already have. Hosted devotionals are coming."
+        }
       ]
     }
-  ]
+  ],
+  "version": 2,
+  "builtAt": 1782208787
 }

@@ -39,6 +39,16 @@ say "service-worker cache v$cur → v$next"
 run "sed -i 's/trinity-shell-v$cur/trinity-shell-v$next/' sw.js"
 run "git add sw.js && git commit -q -m 'Release: sw cache v$cur -> v$next'"
 
+# 2.5. enrich the module catalog: sha256 + http mirrors + Blossom servers + (best-effort) magnet URIs.
+# Must happen before the web build, since build-pages.sh deploys via `git archive HEAD` — the fresh
+# catalog.json + version bump only ship if committed first. See reference/proposal-blossom.md.
+say "enriching module catalog (sha256 + mirrors + Blossom + torrents)"
+run "node scripts/build-catalog.mjs"
+run "bash scripts/build-torrents.sh"   # warn-and-skip if mktorrent isn't installed
+if ! git diff --quiet -- catalog.json; then
+  run "git add catalog.json && git commit -q -m 'Release: refresh module catalog'"
+fi
+
 # 3. web → Cloudflare Pages (production)
 if [[ $DO_WEB == 1 ]]; then
   say "building + deploying web to production"
@@ -76,6 +86,14 @@ fi
 if [[ $DO_GW == 1 ]]; then
   say "restarting the local gateway"
   run "systemctl --user restart trinity-gateway"
+fi
+
+# 6. publish the catalog as a signed kind:30078 event so the module list rides on Nostr too —
+# members fetch it from any reachable relay, not just trinityone.church. Release host only; if the
+# catalog secret isn't on this box (dev / a relay box) we skip silently. See reference/proposal-blossom.md.
+if [[ -f relay/catalog-key.json && $DO_WEB == 1 ]]; then
+  say "publishing signed module catalog over Nostr"
+  run "node scripts/publish-catalog.mjs"
 fi
 
 if [[ $DRY == 1 ]]; then

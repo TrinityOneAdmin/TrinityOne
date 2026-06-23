@@ -4,7 +4,7 @@
 // §5.2). Points at the local dev relay by default; swap window.Fellowship.relays for a
 // hosted NIP-29 relay later (the app only ever talks to window.Fellowship).
 import { SimplePool } from 'nostr-tools/pool';
-import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
+import { finalizeEvent, getPublicKey, verifyEvent } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
@@ -250,6 +250,23 @@ window.Fellowship = {
   ready: null,
   profile,
   displayFor,
+  verifyEvent,            // expose schnorr signature check so engine.js can verify the signed module catalog (Blossom design)
+  // Fetch one addressable kind:30078 event from canonical+church relays — returns the freshest
+  // signed event matching {kinds:[30078], authors:[author], '#d':[d]}, or null after `timeoutMs`.
+  // Used by engine.js getCatalog() to pull the censorship-resistant module catalog over Nostr.
+  fetchAddressableEvent(author, d, timeoutMs = 2500) {
+    const urls = [...new Set([...(window.Fellowship.CANONICAL_RELAYS || []), ...(window.Fellowship.relays || [])])];
+    if (!urls.length || !author || !d) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      let best = null, done = false;
+      const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(best); };
+      const sub = pool.subscribeMany(urls, [{ kinds: [30078], authors: [author], '#d': [d], limit: 5 }], {
+        onevent(e) { if (!best || e.created_at > best.created_at) best = e; },
+        oneose() { finish(); },
+      });
+      setTimeout(finish, timeoutMs);
+    });
+  },
   // http(s) base of the church's gateway (derived from its relay) — for the /feed video proxy
   gatewayBase() {
     const r = (window.Fellowship.relays || [])[0] || '';

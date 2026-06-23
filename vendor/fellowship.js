@@ -6031,6 +6031,36 @@
     ready: null,
     profile,
     displayFor,
+    verifyEvent: verifyEvent2,
+    // expose schnorr signature check so engine.js can verify the signed module catalog (Blossom design)
+    // Fetch one addressable kind:30078 event from canonical+church relays — returns the freshest
+    // signed event matching {kinds:[30078], authors:[author], '#d':[d]}, or null after `timeoutMs`.
+    // Used by engine.js getCatalog() to pull the censorship-resistant module catalog over Nostr.
+    fetchAddressableEvent(author, d, timeoutMs = 2500) {
+      const urls = [.../* @__PURE__ */ new Set([...window.Fellowship.CANONICAL_RELAYS || [], ...window.Fellowship.relays || []])];
+      if (!urls.length || !author || !d) return Promise.resolve(null);
+      return new Promise((resolve) => {
+        let best = null, done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          try {
+            sub.close();
+          } catch {
+          }
+          resolve(best);
+        };
+        const sub = pool.subscribeMany(urls, [{ kinds: [30078], authors: [author], "#d": [d], limit: 5 }], {
+          onevent(e) {
+            if (!best || e.created_at > best.created_at) best = e;
+          },
+          oneose() {
+            finish();
+          }
+        });
+        setTimeout(finish, timeoutMs);
+      });
+    },
     // http(s) base of the church's gateway (derived from its relay) — for the /feed video proxy
     gatewayBase() {
       const r = (window.Fellowship.relays || [])[0] || "";

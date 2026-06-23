@@ -408,8 +408,35 @@ window.sanitizeHtml = function (html) {
   function isInstalled(url){ return !!getInstalled()[url]; }
   function isInstalling(url){ return installing.has(url); }
 
+  // ── catalog fetch: prefer the signed Nostr event (any reachable relay), fall back to HTTP ──
+  // The signed event (kind:30078, d='catalog:trinityone') is published by the dedicated catalog key
+  // at release time. Its pubkey is burned in below; we verify the schnorr signature before trusting
+  // the content. If no relay returns a fresh enough event in time we fall back to the local
+  // HTTP catalog.json (works on first boot before the chat layer is up, and as a hard fallback).
+  // See reference/proposal-blossom.md.
+  const CATALOG_PUB = "e328e19897fb925307b2c2044c2d874cf56e4478b04952d67d7ab3fd93411f10";
+  const CATALOG_D = "catalog:trinityone";
   async function getCatalog(){
-    if(!catalogPromise) catalogPromise = fetch("catalog.json").then(r => r.ok ? r.json() : { categories: [] }).catch(() => ({ categories: [] }));
+    if(catalogPromise) return catalogPromise;
+    catalogPromise = (async () => {
+      // 1. Try the signed catalog over Nostr. Only kicks in once Fellowship is loaded — first boots
+      //    that don't have chat yet (truly cold) fall straight through to HTTP.
+      try {
+        const F = (typeof window !== "undefined") && window.Fellowship;
+        if (F && typeof F.fetchAddressableEvent === "function" && typeof F.verifyEvent === "function") {
+          const evt = await F.fetchAddressableEvent(CATALOG_PUB, CATALOG_D, 2500);
+          if (evt && evt.pubkey === CATALOG_PUB && F.verifyEvent(evt) && evt.content) {
+            try { return JSON.parse(evt.content); } catch {}
+          }
+        }
+      } catch {}
+      // 2. HTTP fallback — same-origin (web) or against ASSET_BASE (APK).
+      try {
+        const r = await fetch(resolveAsset("catalog.json"));
+        if (r.ok) return await r.json();
+      } catch {}
+      return { categories: [] };
+    })();
     return catalogPromise;
   }
 
@@ -431,6 +458,43 @@ window.sanitizeHtml = function (html) {
     return videosPromise;
   }
 
+  // Build the download-source list for a catalog item, censorship-resistant ordering:
+  //   1. Blossom hash-addressed GET on every server (shuffled — load-balance + each install hits
+  //      only one server so a hostile mirror can't enumerate everyone's library).
+  //   2. The primary HTTP url (back-compat with the pre-Blossom catalog shape).
+  //   3. Any extra HTTP mirrors listed in the catalog entry.
+  // sha256 is verified after fetch regardless of which source served it — so a wrong-bytes mirror
+  // is rejected and the next candidate tried.
+  function sourcesFor(item){
+    const out = [];
+    const sha = (item.sha256 || "").toLowerCase();
+    const servers = Array.isArray(item.servers) ? item.servers.slice() : [];
+    if (sha && servers.length){
+      for (let i = servers.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [servers[i], servers[j]] = [servers[j], servers[i]]; }
+      for (const s of servers) out.push(String(s).replace(/\/$/, "") + "/" + sha);
+    }
+    if (item.url) out.push(resolveAsset(item.url));
+    if (Array.isArray(item.mirrors)) for (const m of item.mirrors) if (m) out.push(m);
+    return [...new Set(out)];   // dedupe (e.g. ASSET_BASE may equal a mirror)
+  }
+
+  // Download bytes for a catalog item, trying every source in turn. The integrity check fires
+  // after each fetch so a mirror that serves the wrong bytes is rejected and the next is tried.
+  async function fetchModuleBytes(item){
+    const sources = sourcesFor(item);
+    let lastErr = new Error("no download sources for " + (item.url || item.id));
+    for (const url of sources){
+      try {
+        const res = await fetch(url);
+        if(!res.ok){ lastErr = new Error("HTTP " + res.status + " from " + url); continue; }
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        await verifyIntegrity(item.url, bytes, item.sha256);   // M3 + Blossom: declared sha256 wins
+        return bytes;
+      } catch (e) { lastErr = e; /* try next source */ }
+    }
+    throw lastErr;
+  }
+
   // install one catalog entry: download (cache-once) → load into engine → remember.
   async function installModule(item){
     if(!item || !item.url) throw new Error("nothing to install");
@@ -440,9 +504,17 @@ window.sanitizeHtml = function (html) {
       let loaded = null;
       if((item.format || "").toUpperCase() === "JSON"){
         let bytes = await cacheGet(item.url);
-        if(!bytes){ const res = await fetch(resolveAsset(item.url)); if(!res.ok) throw new Error("HTTP " + res.status); bytes = new Uint8Array(await res.arrayBuffer()); await verifyIntegrity(item.url, bytes, item.sha256); await cachePut(item.url, bytes); }   // M3: verify before cache/parse
+        if(!bytes){ bytes = await fetchModuleBytes(item); await cachePut(item.url, bytes); }
         loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)));
       }else{
+        // Non-JSON modules go through fetchAndCacheModule which expects a single url; if the catalog
+        // entry has Blossom servers or mirrors, prefer them by pre-fetching the bytes through
+        // fetchModuleBytes and seeding the cache, then letting the regular path load from cache.
+        const sources = sourcesFor(item);
+        if (sources.length > 1) {
+          const already = await cacheGet(item.url);
+          if (!already) { const bytes = await fetchModuleBytes(item); await cachePut(item.url, bytes); }
+        }
         loaded = await fetchAndCacheModule(item.url, { abbr: item.abbr, name: item.name, category: catOf(item) });
       }
       recordInstalled(item);
