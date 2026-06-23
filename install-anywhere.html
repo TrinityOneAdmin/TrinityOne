@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Install TrinityOne from any church</title>
+<meta name="description" content="TrinityOne installs from any church's own relay, not just one central site — designed for resilience, useful anywhere the main site is hard to reach." />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="TrinityOne" />
+<meta property="og:title" content="Install TrinityOne from any church" />
+<meta property="og:description" content="Every church running a relay is a complete copy of the app and its APK — you can install from a friend church's URL if the main site is blocked, slow, or just down." />
+<meta property="og:image" content="https://trinityone.pages.dev/og-join.png" />
+<style>
+  :root{--paper:#FBF7F0;--surface:#fff;--surface-2:#f4eee3;--ink:#1b1714;--ink-2:#5b5246;--ink-3:#8a8073;--line:#e9e1d4;--clay:#b4533f;--clay-deep:#8f3f2f;--clay-soft:#f3ddd5;--sage:#5E8C6A;--sage-soft:#dfece2;--gold:#C99A4B;--gold-soft:#f3e7cf;--font-display:"Fraunces",Georgia,"Times New Roman",serif;--font-ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font-ui);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.6}
+  .wrap{max-width:760px;margin:0 auto;padding:0 22px}
+  nav{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;max-width:980px;margin:0 auto}
+  .mark{display:flex;align-items:center;gap:9px;font-weight:800;font-size:18px;text-decoration:none;color:var(--ink)}
+  .mark .o{color:var(--clay)}
+  .btn{display:inline-flex;align-items:center;gap:7px;text-decoration:none;border-radius:13px;padding:10px 17px;font-weight:700;font-size:14px;font-family:var(--font-ui)}
+  .btn-clay{background:var(--clay);color:#fff}.btn-ghost{background:var(--surface);color:var(--ink);border:1px solid var(--line)}
+  header{padding:30px 0 8px}
+  .pill{display:inline-block;font-size:12px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#8f3f2f;background:var(--clay-soft);border-radius:999px;padding:5px 12px;margin-bottom:14px}
+  h1{font-family:var(--font-display);font-weight:800;font-size:clamp(30px,6vw,46px);letter-spacing:-1.2px;line-height:1.05;margin:6px 0 14px}
+  .lede{font-size:18px;color:var(--ink-2);max-width:620px;margin:0 0 8px}
+  .principles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin:30px 0 10px}
+  .principle{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px}
+  .principle b{display:block;font-size:15.5px;margin-bottom:4px}
+  .principle p{margin:0;font-size:13.5px;color:var(--ink-2)}
+  section{padding:14px 0}
+  h2{font-family:var(--font-display);font-weight:700;font-size:24px;letter-spacing:-.4px;margin:34px 0 6px}
+  .step{display:flex;gap:16px;padding:18px 0;border-top:1px solid var(--line)}
+  .num{flex-shrink:0;width:38px;height:38px;border-radius:12px;background:var(--clay-soft);color:var(--clay-deep);display:flex;align-items:center;justify-content:center;font-weight:800;font-family:var(--font-display);font-size:19px}
+  .step h3{margin:4px 0 6px;font-size:18px;font-family:var(--font-display);font-weight:700}
+  .step p{margin:0 0 8px;color:var(--ink-2);font-size:15px}
+  .step .tip{font-size:13.5px;color:var(--ink-3);background:var(--surface-2);border-radius:10px;padding:9px 12px;margin-top:6px}
+  code{font-family:var(--mono);font-size:13.5px;background:var(--surface-2);border:1px solid var(--line);border-radius:7px;padding:1px 6px;word-break:break-all}
+  .platforms{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px}
+  .platform{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px}
+  .platform h4{margin:0 0 6px;font-size:15px;font-weight:800;font-family:var(--font-display);color:var(--ink)}
+  .platform ul{margin:6px 0 0;padding-left:18px;color:var(--ink-2);font-size:14px}
+  .platform li{margin-bottom:4px}
+  .reassure{background:linear-gradient(155deg,var(--clay-soft),#fff);border:1px solid color-mix(in oklab,var(--clay) 18%,var(--line));border-radius:18px;padding:22px;margin:24px 0}
+  .reassure h2{margin:0 0 8px}
+  .cta{display:flex;gap:10px;margin:30px 0;flex-wrap:wrap}
+  footer{padding:30px 22px 50px;text-align:center;color:var(--ink-3);font-size:13px}
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="mark" href="welcome.html"><span>Trinity<span class="o">One</span></span></a>
+  <a class="btn btn-ghost" href="welcome.html">Back</a>
+</nav>
+
+<div class="wrap">
+  <header>
+    <span class="pill">Install anywhere</span>
+    <h1>Install TrinityOne from <i>any</i> church.</h1>
+    <p class="lede">Every TrinityOne church running its own relay is a complete copy of the app — the member app, the steward console, the Android APK, the Bibles. There is no single site this all depends on. If trinityone.church doesn't load where you are, install from a friend church's relay URL. Same app, same signatures, same network.</p>
+
+    <div class="principles">
+      <div class="principle"><b>Every church is a mirror</b><p>A church's relay isn't just for chat — it also serves the website, the APK and the modules. Hundreds of churches, hundreds of install points.</p></div>
+      <div class="principle"><b>By design, not a workaround</b><p>The app was built to travel <i>with the people</i>. Self-hosting churches don't just keep their own data — they keep TrinityOne reachable for everyone.</p></div>
+      <div class="principle"><b>Same app, anywhere</b><p>An APK from a friend church is the same APK as on trinityone.church — same signing key, same code, byte-for-byte identical.</p></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>How to install from a church relay</h2>
+
+    <div class="step"><div class="num">1</div><div><h3>Get a friend church's relay URL</h3>
+      <p>Ask anyone already on TrinityOne — a friend, a partner church, a steward of your own church if it runs its own relay. The URL looks like one of these:</p>
+      <p style="margin:8px 0 12px"><code>https://relay.somechurch.org</code>&nbsp; or &nbsp;<code>https://something.tailbeaac0.ts.net</code></p>
+      <p>It doesn't matter if the church is in your country, your network, your denomination — every TrinityOne relay serves the same files. You're not joining their church by installing from them; you're just downloading the app.</p>
+      <div class="tip">Don't know any TrinityOne church yet? Ask whoever shared this guide with you for the URL of <i>any</i> relay they can reach. That's the bootstrap.</div></div></div>
+
+    <div class="step"><div class="num">2</div><div><h3>Open or install from that URL</h3>
+      <p>What you do next depends on the device. The relay URL you got in step 1 replaces <code>trinityone.church</code> in every link below.</p>
+
+      <div class="platforms">
+        <div class="platform"><h4>Android phone</h4>
+          <ul>
+            <li>Open a browser (Chrome / Firefox / Brave).</li>
+            <li>Visit <code>&lt;relay-url&gt;/trinityone.apk</code> — the file downloads.</li>
+            <li>Open it; allow “install from unknown sources” if prompted.</li>
+            <li>Done — open TrinityOne and follow the wizard.</li>
+          </ul>
+        </div>
+        <div class="platform"><h4>iPhone / iPad</h4>
+          <ul>
+            <li>Open <b>Safari</b> (not Chrome — only Safari can install PWAs on iOS).</li>
+            <li>Visit <code>&lt;relay-url&gt;/</code></li>
+            <li>Tap the <b>Share</b> button → <b>Add to Home Screen</b>.</li>
+            <li>TrinityOne lives on your home screen like an app.</li>
+          </ul>
+        </div>
+        <div class="platform"><h4>Any browser (web)</h4>
+          <ul>
+            <li>Visit <code>&lt;relay-url&gt;/</code></li>
+            <li>That's it — the full member app runs in your browser. Nothing to install.</li>
+            <li>You can bookmark it; subsequent opens are offline-capable.</li>
+          </ul>
+        </div>
+        <div class="platform"><h4>Steward console</h4>
+          <ul>
+            <li>Same URL with <code>/steward.html</code> on the end.</li>
+            <li>Or the steward APK: <code>&lt;relay-url&gt;/trinityone-steward.apk</code>.</li>
+            <li>The setup wizard runs first time. Identical to the main site.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="tip" style="margin-top:14px">Once installed, the app keeps working through TrinityOne's other relays automatically — you only need that one URL for the install itself.</div></div></div>
+
+    <div class="step"><div class="num">3</div><div><h3>(Optional) verify what you got</h3>
+      <p>If you'd like to be sure the APK is the genuine one, you can compare its signing fingerprint with the one published by the project. The signing key is the same across every relay and every release — so a fingerprint match proves the APK hasn't been altered.</p>
+      <p style="margin:8px 0">On Android, the package installer shows the signing-key fingerprint before install (under “app details” → “signing certificate”). Trustworthy churches sharing a TrinityOne APK already know it's the right one — but it's there to check if you'd like to.</p>
+      <div class="tip">A formal “verify” one-click flow is coming. For now: if the church sharing the APK is one you trust, you're fine. If you don't know them, ask in your usual circles whether anyone has cross-checked the fingerprint.</div></div></div>
+  </section>
+
+  <section>
+    <h2>What this works around — and what it doesn't</h2>
+    <p style="color:var(--ink-2);font-size:15px">Some honest limits, so nobody is surprised.</p>
+
+    <ul style="color:var(--ink-2);font-size:15px;padding-left:22px;line-height:1.65">
+      <li><b>You still need internet to reach <i>some</i> relay URL.</b> If every TrinityOne relay you know is blocked, you'll need a VPN, or someone outside the firewall sharing the APK as a file (Bluetooth, USB, Signal/Telegram attachment).</li>
+      <li><b>iPhone is the hardest case.</b> Apple's design means a PWA must be installed via Safari at the relay's URL — there's no “sideload” equivalent. If every URL is blocked, a VPN is the practical answer for the first install only; the app runs normally after.</li>
+      <li><b>This is install-time.</b> Once installed, the app is much harder to disrupt — chat, Scripture and modules ride over the relay network with multiple fallbacks. See <a href="#chat-resilience" style="color:var(--clay)">the resilience design</a> for how that works.</li>
+    </ul>
+  </section>
+
+  <div class="reassure">
+    <h2>The point</h2>
+    <p style="margin:0;color:var(--ink-2);font-size:15.5px">TrinityOne is meant to be carried — not warehoused. Every church running a relay is keeping the app alive for everyone, not just for itself. If you're reading this because you couldn't reach the main site, that's a sign the design is doing its job: the app travels through its people, not through a server.</p>
+  </div>
+
+  <section>
+    <h2>If you'd like to be a mirror for others</h2>
+    <p style="color:var(--ink-2);font-size:15px">If you run a church on TrinityOne, you're already a mirror — your relay serves the app, the APK and the modules to anyone who points a browser at it. You don't have to do anything. Sharing your relay URL with another church (or an organisation that helps people in restricted regions) makes you part of the install mesh. <a href="welcome-churches.html#church-relay" style="color:var(--clay);font-weight:700">More on running a relay →</a></p>
+  </section>
+
+  <div class="cta">
+    <a class="btn btn-clay" href="welcome.html">Back to TrinityOne</a>
+    <a class="btn btn-ghost" href="welcome-churches.html">For churches</a>
+  </div>
+</div>
+
+<footer>TrinityOne — the church's life, owned by the church. Share this page with anyone who needs another way in.</footer>
+</body>
+</html>
