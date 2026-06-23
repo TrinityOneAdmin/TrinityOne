@@ -52,7 +52,7 @@
 
   /* scripture band */
   .scripband { background: var(--midnight); color: var(--paper); position: relative; overflow: hidden; }
-  .scripband .bgslot { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; }
+  .scripband .bgslot { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; object-fit: cover; object-position: center; }
   .scripband .scrim { position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(180deg, rgba(23,18,11,.72), rgba(23,18,11,.55) 45%, rgba(23,18,11,.8)); }
   .scripband::after { content:''; position:absolute; right:-80px; top:-80px; width:360px; height:360px; border-radius:999px; z-index:1; pointer-events:none; background: radial-gradient(circle, color-mix(in oklab, var(--gold) 30%, transparent), transparent 60%); mix-blend-mode: screen; }
   .scripband .wrap { padding: 110px 28px; text-align: center; position: relative; z-index: 2; pointer-events: none; }
@@ -188,7 +188,8 @@
 
 <!-- SCRIPTURE BAND -->
 <section class="scripband">
-  <image-slot id="scripture-bg" class="bgslot" shape="rect" fit="cover" placeholder="Drop a worship photo (raised hands, congregation, light)"></image-slot>
+  <!-- hero photo: Jack Gardner / Unsplash — Cambridge sanctuary, stained glass + pews -->
+  <img class="bgslot" src="assets/marketing/hero-sanctuary.jpg" alt="" loading="lazy" decoding="async">
   <div class="scrim"></div>
   <div class="wrap">
     <span class="to-pill" style="background:rgba(255,255,255,.16);color:var(--gold-soft);backdrop-filter:blur(4px)">Acts 4:32</span>
