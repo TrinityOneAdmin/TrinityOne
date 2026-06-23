@@ -2,7 +2,7 @@
 Description=TrinityOne Nostr relay (self-hosted, LAN)
 After=network.target
 [Service]
-WorkingDirectory=/mnt/storage/projects/lumen-bible
+WorkingDirectory=/mnt/storage/projects/TrinityOne
 ExecStart=/home/adminl/.nvm/versions/node/v22.22.2/bin/node relay/dev-relay.mjs
 Restart=always
 RestartSec=3

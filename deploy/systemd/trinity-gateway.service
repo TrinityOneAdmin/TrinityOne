@@ -2,7 +2,7 @@
 Description=TrinityOne gateway (app + Nostr relay, one port)
 After=network.target
 [Service]
-WorkingDirectory=/mnt/storage/projects/lumen-bible
+WorkingDirectory=/mnt/storage/projects/TrinityOne
 ExecStart=/home/adminl/.nvm/versions/node/v22.22.2/bin/node scripts/gateway.mjs 8000
 Restart=always
 RestartSec=3

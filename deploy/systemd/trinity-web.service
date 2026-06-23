@@ -2,7 +2,7 @@
 Description=TrinityOne web app (static, port 8000)
 After=network.target
 [Service]
-WorkingDirectory=/mnt/storage/projects/lumen-bible
+WorkingDirectory=/mnt/storage/projects/TrinityOne
 ExecStart=/usr/bin/python3 scripts/serve.py 8000
 Restart=always
 RestartSec=3
