@@ -534,7 +534,16 @@ window.sanitizeHtml = function (html) {
 
   // install one catalog entry: download (cache-once) → load into engine → remember.
   async function installModule(item){
-    if(!item || !item.url) throw new Error("nothing to install");
+    if(!item) throw new Error("nothing to install");
+    // SECURITY-AUDIT-2026-06-24 L3: refuse a Blossom-native catalog entry (servers + sha256 only,
+    // no `url`) with a clear error rather than crashing later in cachePut / recordInstalled, both
+    // of which key off item.url. Supporting URL-less entries needs a coordinated change to the
+    // cache key + installed registry (use item.id || item.sha256 as the key) AND to fetchModuleBytes
+    // so it doesn't need item.url at all. Not in this commit — flag and reject.
+    if (!item.url) {
+      const id = item.id || (item.sha256 && item.sha256.slice(0, 12) + '…') || '(unknown)';
+      throw new Error("catalog entry " + id + " has no `url` — Blossom-native entries (servers-only) need a coordinated installer change; refusing for now");
+    }
     if(installing.has(item.url)) return;
     installing.add(item.url); notify();
     try{

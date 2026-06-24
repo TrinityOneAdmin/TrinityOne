@@ -671,24 +671,39 @@ async function tsState() {
 const BLOSSOM_DIR = join(ROOT, 'modules');
 const BLOSSOM_TYPES = { '.json': 'application/json', '.zip': 'application/zip', '.mybible': 'application/x-sqlite3', '.bbl': 'application/x-sqlite3' };
 let BLOSSOM_INDEX = new Map();   // sha256 -> { path, size, contentType, name }
-function rebuildBlossomIndex() {
-  const idx = new Map();
-  let names = [];
-  try { names = readdirSync(BLOSSOM_DIR); } catch { /* no modules/ → empty index, /blossom/* will 404 cleanly */ }
-  for (const name of names) {
-    const p = join(BLOSSOM_DIR, name);
-    // SECURITY-AUDIT-2026-06-24 M2: lstatSync (not statSync) so we DON'T follow symlinks. A symlink
-    // under modules/ pointing at relay/catalog-key.json, /etc/passwd, etc. would otherwise become
-    // a valid /blossom/<sha> URL serving its bytes with no auth.
-    let st; try { st = lstatSync(p); } catch { continue; }
-    if (st.isSymbolicLink() || !st.isFile()) continue;
-    const h = createHash('sha256'); h.update(readFileSync(p)); const sha = h.digest('hex');
-    const ext = ('.' + name.split('.').pop()).toLowerCase();
-    idx.set(sha, { path: p, size: st.size, contentType: BLOSSOM_TYPES[ext] || 'application/octet-stream', name });
-  }
-  BLOSSOM_INDEX = idx;
+let _blossomRebuildInFlight = null;
+// SECURITY-AUDIT-2026-06-24 L1: stream-hash each file (createReadStream + pipe) so the Node event
+// loop stays responsive while indexing. The old version did `readFileSync + createHash` per file
+// which blocks the loop end-to-end — visible delay on relay first-ready, and a self-DoS during a
+// systemd restart loop. Now indexing yields cooperatively. Single-flight guard (_blossomRebuildInFlight)
+// so concurrent /blossom/rebuild calls coalesce instead of fanning out.
+async function rebuildBlossomIndex() {
+  if (_blossomRebuildInFlight) return _blossomRebuildInFlight;
+  _blossomRebuildInFlight = (async () => {
+    const idx = new Map();
+    let names = [];
+    try { names = readdirSync(BLOSSOM_DIR); } catch { /* no modules/ → empty index, /blossom/* will 404 cleanly */ }
+    for (const name of names) {
+      const p = join(BLOSSOM_DIR, name);
+      // SECURITY-AUDIT-2026-06-24 M2: lstatSync (not statSync) so we DON'T follow symlinks. A symlink
+      // under modules/ pointing at relay/catalog-key.json, /etc/passwd, etc. would otherwise become
+      // a valid /blossom/<sha> URL serving its bytes with no auth.
+      let st; try { st = lstatSync(p); } catch { continue; }
+      if (st.isSymbolicLink() || !st.isFile()) continue;
+      const sha = await new Promise((resolve, reject) => {
+        const h = createHash('sha256');
+        createReadStream(p).on('error', reject).on('data', (chunk) => h.update(chunk)).on('end', () => resolve(h.digest('hex')));
+      });
+      const ext = ('.' + name.split('.').pop()).toLowerCase();
+      idx.set(sha, { path: p, size: st.size, contentType: BLOSSOM_TYPES[ext] || 'application/octet-stream', name });
+    }
+    BLOSSOM_INDEX = idx;
+  })();
+  try { await _blossomRebuildInFlight; } finally { _blossomRebuildInFlight = null; }
 }
-rebuildBlossomIndex();   // at startup; /blossom/rebuild lets ops refresh after dropping new modules
+// Fire at startup. Don't `await` at module init — gateway can start accepting connections while
+// hashing finishes; /blossom requests will 404 until ready, which is correct (empty index = no blobs).
+rebuildBlossomIndex().catch((err) => console.warn('initial Blossom index rebuild failed:', err && err.message));
 function serveBlossom(route, req, res) {
   if (route === '/blossom/list') {
     // SECURITY-AUDIT-2026-06-24 M6: don't expose filenames cross-origin (they fingerprint a church's
@@ -703,9 +718,11 @@ function serveBlossom(route, req, res) {
     // SECURITY-AUDIT-2026-06-24 H3: gate behind admin token — unauthenticated rebuilds let an
     // attacker stall the relay (sync hashing the whole modules/ tree per request, on the event loop).
     if (!adminOK(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end('{"error":"unauthorized"}'); return true; }
-    rebuildBlossomIndex();
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-    res.end(JSON.stringify({ ok: true, count: BLOSSOM_INDEX.size }));
+    // SECURITY-AUDIT-2026-06-24 L1: await the streaming async rebuild before reporting the count,
+    // and let the single-flight guard inside rebuildBlossomIndex coalesce concurrent admin calls.
+    rebuildBlossomIndex()
+      .then(() => { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify({ ok: true, count: BLOSSOM_INDEX.size })); })
+      .catch((err) => { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: (err && err.message) || 'rebuild failed' })); });
     return true;
   }
   // GET /blossom/<sha256>(.ext)? — strip an optional extension so URLs like /blossom/<hash>.json work too

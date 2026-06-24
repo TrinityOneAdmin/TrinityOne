@@ -54,26 +54,38 @@ for f in modules/*; do
   # a Node bencode dep. Python 3 ships everywhere mktorrent does.
   magnet=$(python3 - "$out" <<'PY'
 import sys, hashlib, urllib.parse, re
+# SECURITY-AUDIT-2026-06-24 L2: bencode parser robustness.
+#   • MAX_DEPTH guards against a hostile .torrent crafted with deep `l`/`d` nesting (no input cap
+#     ⇒ Python RecursionError ⇒ release pipeline break). Today we only parse mktorrent's own output,
+#     but the comment encouraged reuse — and that's exactly when this guard becomes load-bearing.
+#   • After parse(), assert the cursor consumed the entire buffer. Trailing garbage = malformed
+#     bencode; refusing it keeps the parser strict, not lenient.
+MAX_DEPTH = 64
 def bdecode(data):
     i = [0]
-    def parse():
+    def parse(depth=0):
+        if depth > MAX_DEPTH:
+            raise ValueError('bencode nesting too deep at %d' % i[0])
         c = data[i[0]:i[0]+1]
         if c == b'd':
             i[0]+=1; d={}
             while data[i[0]:i[0]+1] != b'e':
-                k = parse(); v = parse(); d[k] = v
+                k = parse(depth+1); v = parse(depth+1); d[k] = v
             i[0]+=1; return d
         if c == b'l':
             i[0]+=1; l=[]
             while data[i[0]:i[0]+1] != b'e':
-                l.append(parse())
+                l.append(parse(depth+1))
             i[0]+=1; return l
         if c == b'i':
             i[0]+=1; end = data.index(b'e', i[0]); n=int(data[i[0]:end]); i[0]=end+1; return n
         if c.isdigit():
             end = data.index(b':', i[0]); n=int(data[i[0]:end]); i[0]=end+1+n; return data[end+1:end+1+n]
         raise ValueError('bad bencode at %d' % i[0])
-    return parse()
+    out = parse()
+    if i[0] != len(data):
+        raise ValueError('trailing garbage after bencode (parsed %d of %d bytes)' % (i[0], len(data)))
+    return out
 
 def bencode(o):
     if isinstance(o, int): return b'i' + str(o).encode() + b'e'
