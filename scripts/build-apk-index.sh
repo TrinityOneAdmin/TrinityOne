@@ -68,7 +68,12 @@ cat <<'HEAD'
        background:color-mix(in oklab,var(--clay) 12%,var(--surface)); border:1px solid color-mix(in oklab,var(--clay) 24%,transparent);
        border-radius:999px; padding:2px 9px; margin-top:5px; }
   .desc{ font-size:13px; color:var(--ink2); line-height:1.5; margin:9px 0 0; }
-  .meta{ font-size:11.5px; color:var(--ink3); font-weight:600; margin-top:9px; display:flex; gap:6px; align-items:center; }
+  .meta{ font-size:11.5px; color:var(--ink3); font-weight:600; margin-top:9px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .sha{ font-family:ui-monospace,monospace; font-size:10.5px; color:var(--ink3); background:color-mix(in oklab,var(--ink) 4%,var(--surface));
+        border:1px solid var(--line); border-radius:6px; padding:3px 7px; word-break:break-all; user-select:all; }
+  details.sha-block{ margin-top:8px; font-size:11.5px; color:var(--ink2); }
+  details.sha-block > summary{ cursor:pointer; color:var(--clay); font-weight:700; outline:none; }
+  details.sha-block code{ font-family:ui-monospace,monospace; font-size:11px; background:color-mix(in oklab,var(--ink) 5%,var(--surface)); border-radius:5px; padding:1px 5px; }
   .dl{ margin-left:auto; flex-shrink:0; display:inline-flex; align-items:center; gap:6px; background:var(--clay); color:#fff;
        font-weight:700; font-size:13.5px; padding:9px 15px; border-radius:999px; }
   footer{ text-align:center; color:var(--ink3); font-size:11.5px; margin-top:26px; line-height:1.6; }
@@ -89,6 +94,11 @@ for f in "${APKS[@]}"; do
   bytes=$(stat -c%s "$f" 2>/dev/null || echo 0)
   human=$(numfmt --to=iec --suffix=B "$bytes" 2>/dev/null || echo "${bytes}B")
   when=$(date -d "@$(stat -c%Y "$f" 2>/dev/null || echo 0)" "+%b %-d, %H:%M" 2>/dev/null || echo "")
+  # SECURITY-AUDIT-2026-06-24 M10: publish per-file SHA-256 alongside the download so a user
+  # installing from any mirror (Tailscale Funnel, friend church's relay, sneakernet, install-anywhere)
+  # can verify the bytes against this canonical page. Run sha256sum on the downloaded file and
+  # the hash MUST match. Without this, a swap on any mirror goes undetected.
+  sha=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
   initial=$(printf '%s' "$title" | cut -c1 | tr '[:lower:]' '[:upper:]')
   printf '  <a class="card" href="%s">\n' "$(printf '%s' "$f" | esc)"
   printf '    <div class="row">\n'
@@ -98,6 +108,7 @@ for f in "${APKS[@]}"; do
   printf '    </div>\n'
   printf '    <p class="desc">%s</p>\n' "$(printf '%s' "$desc" | esc)"
   printf '    <div class="meta">%s · built %s</div>\n' "$(printf '%s' "$f" | esc)" "$(printf '%s' "$when" | esc)"
+  printf '    <details class="sha-block"><summary>Verify (SHA-256)</summary><div style="margin-top:6px">After downloading, run <code>sha256sum %s</code> — the result must match the hash below:</div><div class="sha" style="margin-top:6px">%s</div></details>\n' "$(printf '%s' "$f" | esc)" "$(printf '%s' "$sha" | esc)"
   printf '  </a>\n'
 done
 

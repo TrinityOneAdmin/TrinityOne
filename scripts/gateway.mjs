@@ -100,6 +100,7 @@ function ensureSignedBundle() {
 // members (or the church) may post messages / reactions / DMs / their own data. Unset = open (dev).
 const NET = 'trinityone';
 const GROUP_D = 'trinityone/group:', FUND_D = 'trinityone/fund:', MEMBER_D = 'trinityone/member:', PLAN_D = 'trinityone/plan:', DEVO_D = 'trinityone/devotional:', ROTA_D = 'trinityone/rota:';
+const CATEGORY_D = 'trinityone/category:';   // steward-editable named container for groups (SECURITY-AUDIT-2026-06-24 M1)
 const ROSTER_D = 'trinityone/roster:', SERVICE_D = 'trinityone/service:', EVENT_D = 'trinityone/event:', REQUEST_D = 'trinityone/request:';
 const ROOM_D = 'trinityone/room:', BOOKING_D = 'trinityone/booking:';   // shared room calendar (church-only writes)
 const RUNSHEET_D = 'trinityone/runsheet:';   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
@@ -194,7 +195,7 @@ const VAPID_PATH = join(ROOT, 'relay', 'vapid.json');
 const SUBS_PATH = join(ROOT, 'relay', 'push-subs.json');
 let VAPID = null;
 try { VAPID = JSON.parse(readFileSync(VAPID_PATH, 'utf8')); }
-catch { VAPID = webpush.generateVAPIDKeys(); try { writeFileSync(VAPID_PATH, JSON.stringify(VAPID)); } catch {} }
+catch { VAPID = webpush.generateVAPIDKeys(); try { writeFileSync(VAPID_PATH, JSON.stringify(VAPID), { mode: 0o600 }); } catch {} }   // SECURITY-AUDIT-2026-06-24 M3: VAPID private key must not be group-readable
 webpush.setVapidDetails('mailto:steward@trinityone.app', VAPID.publicKey, VAPID.privateKey);
 let pushSubs = {};   // { memberHex: [PushSubscription, …] }
 try { pushSubs = JSON.parse(readFileSync(SUBS_PATH, 'utf8')); } catch {}
@@ -393,7 +394,8 @@ function accept(e) {
     // church-authored CONTENT docs: a steward names the church via a ["church", <cp>] tag
     if (d.startsWith(GROUP_D) || d.startsWith(FUND_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
       || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(REQUEST_D)
-      || d.startsWith(ROOM_D) || d.startsWith(BOOKING_D) || d.startsWith(RUNSHEET_D)) return isLeader || stewardOf(e.pubkey, namedChurch(e));
+      || d.startsWith(ROOM_D) || d.startsWith(BOOKING_D) || d.startsWith(RUNSHEET_D)
+      || d.startsWith(CATEGORY_D)) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
     if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
       if (isMember) return true;                               // a known member asking to help: always
@@ -933,23 +935,26 @@ function serveStatic(req, res) {
   // resolved from their kind-0 profiles. First-come on a slug; the church outranks members. So a member
   // gets a real verified handle for free — no third-party domain.
   if (route === '/.well-known/nostr.json') {
+    // SECURITY-AUDIT-2026-06-24 L7: scoped lookups only. The old fallback (no ?name= → return the
+    // full {names, relays} map of every kind-0 profile) leaked every member's pubkey + name slug +
+    // church affiliation cross-origin. The NIP-05 spec only requires the scoped form.
     let qName = ''; try { qName = (new URL(req.url, 'http://x').searchParams.get('name') || '').toLowerCase().trim(); } catch {}
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+    if (!qName) { res.writeHead(200, H); res.end(JSON.stringify({ names: {} })); return; }
     const host = (req.headers.host || '').split(',')[0].trim();
     const relayUrl = host ? 'wss://' + host + '/relay' : '';
     const slug = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
-    const names = {}, relays = {}, claimed = new Set();
-    // churches first (priority), then members; earliest profile wins a contested slug
+    // Resolve only the one requested slug. Churches outrank members on a contested slug; earliest
+    // profile wins among the same tier. Same precedence as before, just no bulk dump.
     const k0 = events.filter(e => e.kind === 0).sort((a, b) => (CHURCH_PUBS.has(b.pubkey) - CHURCH_PUBS.has(a.pubkey)) || ((a.created_at || 0) - (b.created_at || 0)));
     for (const e of k0) {
       if (BLOCKED.has(e.pubkey)) continue;
       let meta = {}; try { meta = JSON.parse(e.content); } catch {}
-      let local = (meta.nip05 && String(meta.nip05).includes('@')) ? slug(String(meta.nip05).split('@')[0]) : slug(meta.name);
-      if (!local || claimed.has(local)) continue;
-      claimed.add(local); names[local] = e.pubkey; if (relayUrl) relays[e.pubkey] = [relayUrl];
+      const local = (meta.nip05 && String(meta.nip05).includes('@')) ? slug(String(meta.nip05).split('@')[0]) : slug(meta.name);
+      if (local !== qName) continue;
+      res.writeHead(200, H); res.end(JSON.stringify({ names: { [qName]: e.pubkey }, relays: relayUrl ? { [e.pubkey]: [relayUrl] } : {} })); return;
     }
-    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
-    if (qName) { const pk = names[qName]; res.writeHead(200, H); res.end(JSON.stringify(pk ? { names: { [qName]: pk }, relays: relayUrl ? { [pk]: [relayUrl] } : {} } : { names: {} })); return; }
-    res.writeHead(200, H); res.end(JSON.stringify({ names, relays })); return;
+    res.writeHead(200, H); res.end(JSON.stringify({ names: {} })); return;
   }
   let p; try { p = decodeURIComponent(route); } catch { res.writeHead(400).end('bad request'); return; }
   if (p === '/' || p.endsWith('/')) p += 'index.html';

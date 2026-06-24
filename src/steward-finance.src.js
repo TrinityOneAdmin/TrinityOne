@@ -212,7 +212,10 @@
     return { eligibleTotal: eligible, reclaimable: Math.round(eligible * 0.25 * 100) / 100, count };
   }
 
-  const csvCell = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  // SECURITY-AUDIT-2026-06-24 M9: CSV cell-injection guard. A donor name / bank-ref starting with
+  // = + - @ \t \r evaluates as a formula in Excel/LibreOffice (HYPERLINK can exfiltrate other cells;
+  // DDE can RCE on legacy Office). Prefix a single-quote so it renders as text.
+  const csvCell = (v) => { let s = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = (rows) => rows.map(r => r.map(csvCell).join(',')).join('\r\n');
 
   // full ledger as CSV (all giving)

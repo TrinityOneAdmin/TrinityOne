@@ -61,7 +61,10 @@ self.addEventListener('push', (e) => {
 });
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const target = (e.notification.data && e.notification.data.url) || '/?serving=1';
+  // SECURITY-AUDIT-2026-06-24 L9: only accept same-origin paths. openWindow + cross-origin pushes
+  // could phish; reject anything that isn't a single-leading-/ path. (Also rejects '//evil.example'.)
+  const raw = (e.notification.data && e.notification.data.url) || '/?serving=1';
+  const target = (typeof raw === 'string' && raw.length > 0 && raw[0] === '/' && raw[1] !== '/') ? raw : '/?serving=1';
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((cs) => {
     for (const c of cs) { if ('focus' in c) { c.navigate(target); return c.focus(); } }
     if (self.clients.openWindow) return self.clients.openWindow(target);

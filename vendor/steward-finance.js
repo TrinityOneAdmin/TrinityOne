@@ -250,7 +250,8 @@
       return { eligibleTotal: eligible, reclaimable: Math.round(eligible * 0.25 * 100) / 100, count };
     }
     const csvCell = (v) => {
-      const s = String(v == null ? "" : v);
+      let s = String(v == null ? "" : v);
+      if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
       return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
     const csv = (rows) => rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
