@@ -43,6 +43,11 @@ relay/.code-backup.tgz
 relay/release-key.pem
 # per-HEAD cached self-update bundle + detached signature (generated on demand)
 relay/.bundle-cache/
+# catalog publisher secret — pulled from claude/blossom; the matching PUBKEY is
+# baked into engine.js / scripts/gateway.mjs as CATALOG_PUB. Loss = forced ecosystem
+# rotation (members trust the next-shipped pubkey instead). Anchor on main pre-emptively
+# so that if/when Blossom merges, the gitignore is already in place.
+relay/catalog-key.json
 
 # internal-only (not for the public repo)
 SECURITY-AUDIT-*.md
