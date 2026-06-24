@@ -353,11 +353,19 @@ window.sanitizeHtml = function (html) {
     return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, "0")).join("");
   }
   // throws if a pinned/declared hash doesn't match; no-op when nothing is pinned for this url.
+  // H2 (SECURITY-AUDIT-2026-06-24): KNOWN_HASHES is a HARD FLOOR for bundled defaults — when a url
+  // has a bundled-defaults pin AND the catalog also declares one, the two MUST agree (so a stale
+  // catalog can't downgrade past the pin). When only one is present, that one is authoritative.
   async function verifyIntegrity(url, u8, declaredHash){
-    const expected = (declaredHash || (url && KNOWN_HASHES[url]) || "").toLowerCase();
-    if(!expected) return;
+    const known = (url && KNOWN_HASHES[url]) || "";
+    const declared = (declaredHash || "").toLowerCase();
+    if (known && declared && known !== declared) {
+      throw new Error("integrity floor violation for " + url + " — catalog hash does not match the bundled-defaults pin (refusing a downgrade)");
+    }
+    const expected = (known || declared);
+    if (!expected) return;
     const got = await sha256hex(u8);
-    if(got !== expected) throw new Error("integrity check failed for " + (url || "module") + " — refusing a tampered download");
+    if (got !== expected) throw new Error("integrity check failed for " + (url || "module") + " — refusing a tampered download");
   }
 
   async function fetchAndCacheModule(url, meta){
@@ -414,8 +422,26 @@ window.sanitizeHtml = function (html) {
   // the content. If no relay returns a fresh enough event in time we fall back to the local
   // HTTP catalog.json (works on first boot before the chat layer is up, and as a hard fallback).
   // See reference/proposal-blossom.md.
+  // SECURITY-AUDIT-2026-06-24 H1+H2+M8 hardening:
+  //   • H1: require evt.kind === 30078 AND d-tag === CATALOG_D (sig alone isn't enough — a hostile
+  //         relay could otherwise hand back any other CATALOG_PUB-signed event that JSON-parses).
+  //   • H2: enforce a per-device version floor (lastCatalogVersion in localStorage); never accept a
+  //         downgrade. Together with verifyIntegrity's KNOWN_HASHES hard-floor this closes the
+  //         catalog-replay → integrity-bypass attack.
+  //   • M8: reject events whose created_at is far in the future (>5 min skew).
   const CATALOG_PUB = "e328e19897fb925307b2c2044c2d874cf56e4478b04952d67d7ab3fd93411f10";
   const CATALOG_D = "catalog:trinityone";
+  const CATALOG_FRESHNESS_KEY = "trinityone.catalogFreshness";
+  function _catalogFreshness(){ try { return JSON.parse(localStorage.getItem(CATALOG_FRESHNESS_KEY) || "null"); } catch { return null; } }
+  function _saveCatalogFreshness(v, ts){ try { if (typeof v === "number") localStorage.setItem(CATALOG_FRESHNESS_KEY, JSON.stringify({ v, ts: ts || 0 })); } catch {} }
+  function _acceptCatalogVersion(parsed){
+    const fresh = _catalogFreshness();
+    if (fresh && typeof fresh.v === "number" && typeof parsed.version === "number" && parsed.version < fresh.v) {
+      throw new Error("catalog downgrade rejected: v" + parsed.version + " < v" + fresh.v);
+    }
+    _saveCatalogFreshness(parsed.version, parsed.builtAt);
+    return parsed;
+  }
   async function getCatalog(){
     if(catalogPromise) return catalogPromise;
     catalogPromise = (async () => {
@@ -425,15 +451,26 @@ window.sanitizeHtml = function (html) {
         const F = (typeof window !== "undefined") && window.Fellowship;
         if (F && typeof F.fetchAddressableEvent === "function" && typeof F.verifyEvent === "function") {
           const evt = await F.fetchAddressableEvent(CATALOG_PUB, CATALOG_D, 2500);
-          if (evt && evt.pubkey === CATALOG_PUB && F.verifyEvent(evt) && evt.content) {
-            try { return JSON.parse(evt.content); } catch {}
+          const dtag = evt && (evt.tags || []).find(t => t && t[0] === "d") || [];
+          const nowSec = Math.floor(Date.now() / 1000);
+          if (evt
+              && evt.pubkey === CATALOG_PUB
+              && evt.kind === 30078                                  // H1: shape — kind
+              && dtag[1] === CATALOG_D                               // H1: shape — d-tag
+              && typeof evt.created_at === "number"
+              && evt.created_at <= nowSec + 300                      // M8: reject far-future events (5min skew tolerated)
+              && F.verifyEvent(evt)
+              && evt.content) {
+            try { return _acceptCatalogVersion(JSON.parse(evt.content)); } catch (e) { console.warn("catalog (Nostr) rejected:", e.message); }
           }
         }
       } catch {}
       // 2. HTTP fallback — same-origin (web) or against ASSET_BASE (APK).
       try {
         const r = await fetch(resolveAsset("catalog.json"));
-        if (r.ok) return await r.json();
+        if (r.ok) {
+          try { return _acceptCatalogVersion(await r.json()); } catch (e) { console.warn("catalog (HTTP) rejected:", e.message); }
+        }
       } catch {}
       return { categories: [] };
     })();

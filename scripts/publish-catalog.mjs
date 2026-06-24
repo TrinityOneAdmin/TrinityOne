@@ -9,7 +9,7 @@
 //
 // Broadcasts to the canonical relays (mirrors of CANONICAL_RELAYS in src/fellowship.src.js).
 // Run as the last step of scripts/release.sh.
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { finalizeEvent } from 'nostr-tools/pure';
@@ -28,6 +28,18 @@ const RELAYS = [
 if (!existsSync(KEY_PATH)) {
   console.error('✖ relay/catalog-key.json missing — run: node scripts/init-catalog-key.mjs');
   process.exit(1);
+}
+
+// SECURITY-AUDIT-2026-06-24 M7: re-assert mode 0600 on every sign. writeFileSync's { mode: 0o600 }
+// only applies on file CREATION; a later editor save / manual rotation / backup-restore can leave
+// the key world-readable. Refuse to publish if that ever happens.
+{
+  const _st = statSync(KEY_PATH);
+  if (_st.mode & 0o077) {
+    console.error('✖ relay/catalog-key.json has permissions ' + (_st.mode & 0o777).toString(8)
+      + ' — must be 0600. Run: chmod 600 ' + KEY_PATH);
+    process.exit(1);
+  }
 }
 
 const key = JSON.parse(readFileSync(KEY_PATH, 'utf8'));

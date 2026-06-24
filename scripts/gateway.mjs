@@ -13,7 +13,7 @@ import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { verifyEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
 import { randomBytes, timingSafeEqual, createHash } from 'crypto';
-import { readdirSync } from 'node:fs';
+import { readdirSync, lstatSync } from 'node:fs';
 import { spawn, spawnSync } from 'child_process';
 
 const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
@@ -379,7 +379,11 @@ function accept(e) {
   if (k === 30078) {
     const d = dtag(e);
     // project-wide module catalog: only the dedicated catalog publisher key may write it.
-    if (d === CATALOG_D) return e.pubkey === CATALOG_PUB;
+    // SECURITY-AUDIT-2026-06-24 M5: reserve the entire `catalog:*` namespace for CATALOG_PUB, not
+    // just the one d-tag. Prevents members publishing `catalog:other-thing` events that would
+    // (a) occupy relay storage and (b) cement a permissive pattern future catalog-style features
+    // would inherit.
+    if (d.startsWith('catalog:')) return e.pubkey === CATALOG_PUB;
     // Steward authority is ADDITIVE (see STEWARD-ROSTER-DESIGN.md): isLeader (the church/network key) always
     // passes exactly as before; a rostered steward of the relevant church ALSO passes for DELEGATED ops.
     // OWNER-ONLY ops never consult the roster — so they stay church-key-only automatically.
@@ -673,8 +677,11 @@ function rebuildBlossomIndex() {
   try { names = readdirSync(BLOSSOM_DIR); } catch { /* no modules/ → empty index, /blossom/* will 404 cleanly */ }
   for (const name of names) {
     const p = join(BLOSSOM_DIR, name);
-    let st; try { st = statSync(p); } catch { continue; }
-    if (!st.isFile()) continue;
+    // SECURITY-AUDIT-2026-06-24 M2: lstatSync (not statSync) so we DON'T follow symlinks. A symlink
+    // under modules/ pointing at relay/catalog-key.json, /etc/passwd, etc. would otherwise become
+    // a valid /blossom/<sha> URL serving its bytes with no auth.
+    let st; try { st = lstatSync(p); } catch { continue; }
+    if (st.isSymbolicLink() || !st.isFile()) continue;
     const h = createHash('sha256'); h.update(readFileSync(p)); const sha = h.digest('hex');
     const ext = ('.' + name.split('.').pop()).toLowerCase();
     idx.set(sha, { path: p, size: st.size, contentType: BLOSSOM_TYPES[ext] || 'application/octet-stream', name });
@@ -684,13 +691,18 @@ function rebuildBlossomIndex() {
 rebuildBlossomIndex();   // at startup; /blossom/rebuild lets ops refresh after dropping new modules
 function serveBlossom(route, req, res) {
   if (route === '/blossom/list') {
+    // SECURITY-AUDIT-2026-06-24 M6: don't expose filenames cross-origin (they fingerprint a church's
+    // module set + reveal any in-development files dropped under modules/). Emit only sha → size.
     const out = {};
-    for (const [sha, m] of BLOSSOM_INDEX) out[sha] = { name: m.name, size: m.size, contentType: m.contentType };
+    for (const [sha, m] of BLOSSOM_INDEX) out[sha] = m.size;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(out));
     return true;
   }
   if (route === '/blossom/rebuild') {
+    // SECURITY-AUDIT-2026-06-24 H3: gate behind admin token — unauthenticated rebuilds let an
+    // attacker stall the relay (sync hashing the whole modules/ tree per request, on the event loop).
+    if (!adminOK(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end('{"error":"unauthorized"}'); return true; }
     rebuildBlossomIndex();
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     res.end(JSON.stringify({ ok: true, count: BLOSSOM_INDEX.size }));

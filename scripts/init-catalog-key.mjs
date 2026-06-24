@@ -5,7 +5,7 @@
 //
 // Usage: node scripts/init-catalog-key.mjs
 // Re-runs are safe — won't overwrite an existing key.
-import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
@@ -16,6 +16,12 @@ const ROOT = join(fileURLToPath(new URL('..', import.meta.url)));
 const KEY_PATH = join(ROOT, 'relay', 'catalog-key.json');
 
 if (existsSync(KEY_PATH)) {
+  // SECURITY-AUDIT-2026-06-24 M7: warn loudly if mode has drifted from 0600 (writeFileSync's
+  // mode arg only applies at create-time, so a later editor save or restore could expose the key).
+  const _mode = statSync(KEY_PATH).mode & 0o777;
+  if (_mode !== 0o600) {
+    console.warn('⚠  ' + KEY_PATH + ' has mode ' + _mode.toString(8) + ' (expected 600). Fix with: chmod 600 ' + KEY_PATH);
+  }
   const { pubkey } = JSON.parse((await import('node:fs')).readFileSync(KEY_PATH, 'utf8'));
   console.log('catalog-key.json already exists.');
   console.log('pubkey (hex):', pubkey);
