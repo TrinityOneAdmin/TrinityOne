@@ -78,7 +78,11 @@ function RecoverySheet({ open, onClose, ctx }) {
   const [file, setFile] = useIx(null);
   useIxE(() => { if (!open) { setBk(null); setPass(''); setBkErr(''); setFile(null); } }, [open]);
   const doExport = async () => {
-    if (pass.length < 6) { setBkErr('Use a passphrase of at least 6 characters.'); return; }
+    // SECURITY-AUDIT-2026-06-24 L5: raised the floor from 6 → 10. PBKDF2-600k is already strong;
+    // the bottleneck is the user's passphrase choice. 6 alnum chars ≈ 36 bits keyspace —
+    // GPU-crackable in hours against a leaked encrypted blob. 10 chars (~60 bits) is meaningfully
+    // harder. The user-facing hint says so plainly.
+    if (pass.length < 10) { setBkErr('Use a passphrase of at least 10 characters — your backup is only as strong as this.'); return; }
     setBusy('export'); setBkErr('');
     try {
       const obj = await window.TrinityBackup.collectMember();
@@ -93,6 +97,18 @@ function RecoverySheet({ open, onClose, ctx }) {
     try {
       const text = await window.TrinityBackup.readFile(file);
       const obj = await window.TrinityBackup.decryptStr(text, pass);
+      // SECURITY-AUDIT-2026-06-24 L6: confirm before overwriting the on-device key. The 06-18 audit
+      // listed this as fixed but the confirm was missing from the code path. Without it, a user who
+      // picks the wrong file (or whose current identity wasn't itself backed up) silently destroys
+      // their on-device key with no way back. Plain `window.confirm` is deliberate — overwriting a
+      // self-custodial key is the kind of decision that should look unambiguous and a little ugly,
+      // not slick.
+      const ID = window.TrinityIdentity;
+      const curNpub = (ID && ((ID.current && ID.current.npub) || ID.npub)) || '';
+      const msg = 'This will REPLACE your current TrinityOne identity with the backup\'s identity.\n\n'
+        + (curNpub ? 'Current: ' + curNpub.slice(0, 18) + '…\n' : '')
+        + '\nYour current key will be UNRECOVERABLE unless you saved its 12 words.\n\nContinue?';
+      if (!window.confirm(msg)) { setBusy(''); return; }
       await window.TrinityBackup.applyMember(obj);
       ctx.toast('Restored — reloading…'); setTimeout(() => window.location.reload(), 800);
     } catch (e) { setBkErr(e.message || 'Restore failed.'); setBusy(''); }

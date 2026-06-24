@@ -90,7 +90,22 @@ window.sanitizeHtml = function (html) {
   // installed dictionary modules are consulted before the small built-in set
   const dicts = [];
   function addDict(entries){ if(entries) dicts.push(entries); notify(); }
-  function loadDictJSON(obj){ addDict((obj && obj.entries) || obj); }
+  // SECURITY-AUDIT-2026-06-24 N4: strip raw HTML from third-party dictionary string fields. Today
+  // every lexicon value reaches the DOM as a React text child (auto-escaped, no XSS), so this is
+  // defence in depth — but if a future change ever wraps lex output in dangerouslySetInnerHTML
+  // (e.g. someone wants bold lemmas), or a member installs a third-party `.dct` module via the
+  // Import flow, the embedded markup would suddenly become live without this strip. Single-pass
+  // tag removal is enough; we don't try to preserve formatting.
+  const _LEX_FIELDS = ['lemma','translit','pos','short','gloss','def','deriv','kjv'];
+  function _stripTags(s){ return (typeof s === 'string' && s.indexOf('<') !== -1) ? s.replace(/<[^>]*>/g, '') : s; }
+  function loadDictJSON(obj){
+    const entries = (obj && obj.entries) || obj || {};
+    for (const k in entries) {
+      const e = entries[k];
+      if (e && typeof e === 'object') for (const f of _LEX_FIELDS) if (typeof e[f] === 'string') e[f] = _stripTags(e[f]);
+    }
+    addDict(entries);
+  }
   const commentaries = {};   // abbr -> commentary source { name, getComment(book,chap) }
   function addCommentary(src){ if(!src) return null; let abbr = src.abbr || "Cmt", i = 2; while(commentaries[abbr] && commentaries[abbr].name !== src.name) abbr = (src.abbr || "Cmt") + i++; src.abbr = abbr; commentaries[abbr] = src; notify(); return abbr; }
   function lex(id){
@@ -365,7 +380,13 @@ window.sanitizeHtml = function (html) {
     if(cached) return loadModuleBytes(cached, url.split("/").pop(), meta);
     const res = await fetch(resolveAsset(url));
     if(!res.ok) throw new Error("HTTP " + res.status);
+    // SECURITY-AUDIT-2026-06-24 L4: size cap (matches the JSON branch in installModule). The
+    // ceiling is well above any real module: BSB ≈ 3 MB, the KJV+S MySword ≈ 9 MB. A compromised
+    // mirror could otherwise stream gigabytes into RAM.
+    const cl = Number(res.headers.get('content-length') || 0);
+    if (cl > 50 * 1024 * 1024) throw new Error("module too large (" + cl + " bytes — refusing)");
     const u8 = new Uint8Array(await res.arrayBuffer());
+    if (u8.byteLength > 50 * 1024 * 1024) throw new Error("module too large (" + u8.byteLength + " bytes — refusing)");
     await verifyIntegrity(url, u8, meta && meta.sha256);   // M3: verify before we cache/parse
     await cachePut(url, u8);
     return loadModuleBytes(u8, url.split("/").pop(), meta);
@@ -440,7 +461,17 @@ window.sanitizeHtml = function (html) {
       let loaded = null;
       if((item.format || "").toUpperCase() === "JSON"){
         let bytes = await cacheGet(item.url);
-        if(!bytes){ const res = await fetch(resolveAsset(item.url)); if(!res.ok) throw new Error("HTTP " + res.status); bytes = new Uint8Array(await res.arrayBuffer()); await verifyIntegrity(item.url, bytes, item.sha256); await cachePut(item.url, bytes); }   // M3: verify before cache/parse
+        if(!bytes){
+          const res = await fetch(resolveAsset(item.url)); if(!res.ok) throw new Error("HTTP " + res.status);
+          // SECURITY-AUDIT-2026-06-24 L4: size cap before arrayBuffer + JSON.parse. A compromised /
+          // un-pinned host could otherwise serve a multi-GB JSON and OOM the device. 50 MB is well above
+          // any real lexicon today (BDB ≈ 2 MB, Abbott-Smith ≈ 4 MB, Strong's ≈ 4 MB).
+          const cl = Number(res.headers.get('content-length') || 0);
+          if (cl > 50 * 1024 * 1024) throw new Error("module too large (" + cl + " bytes — refusing)");
+          bytes = new Uint8Array(await res.arrayBuffer());
+          if (bytes.byteLength > 50 * 1024 * 1024) throw new Error("module too large (" + bytes.byteLength + " bytes — refusing)");
+          await verifyIntegrity(item.url, bytes, item.sha256); await cachePut(item.url, bytes);
+        }   // M3: verify before cache/parse
         loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)));
       }else{
         loaded = await fetchAndCacheModule(item.url, { abbr: item.abbr, name: item.name, category: catOf(item) });

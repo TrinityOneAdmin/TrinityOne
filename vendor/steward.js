@@ -10397,8 +10397,20 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     // ---- encrypted groups: publish/refresh the key envelope (the group key wrapped per-member via NIP-44).
-    // Reuses the existing key on add (so new members read history); pass {rotate:true} to mint a fresh key
-    // (used on removal so the removed member can't read future messages). The church wraps to itself too. ----
+    //
+    // Contract callers MUST honour (SECURITY-AUDIT-2026-06-24 N2):
+    //   • Adding a member without rotation → reuse the existing key so new members can read history.
+    //     This is the normal case; pass NO opts (or only `reuseOnly`).
+    //   • REMOVING a member from an encrypted group → you MUST pass `{rotate: true}` so a fresh key
+    //     is minted. Without rotation, the removed member's CACHED key continues to decrypt every
+    //     future message they can scrape from any relay — the gateway's allowlist only stops the
+    //     RELAY from delivering future messages, it can't unsee bytes the member already cached, and
+    //     it can't stop the same member subscribing from a non-enforcing relay. Verified call site:
+    //     EditGroupMembersModal in stew-dashboard.jsx passes `{rotate: removed}`.
+    //   • Background re-key (`reuseOnly: true`) → must NOT mint a new key (would orphan history).
+    //
+    // The church key is always wrapped to itself (so the church can later add members without needing
+    // the original opaque key material from disk). ----
     publishGroupKey(groupId, memberPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
       if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);

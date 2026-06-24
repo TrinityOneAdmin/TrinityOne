@@ -422,6 +422,18 @@ function App() {
     (async () => {
       // a steward invite hands the recipient a ready-made anonymous identity — adopt it first, then join
       if (inviteParam && window.TrinityIdentity && window.TrinityIdentity.importMnemonic) {
+        // SECURITY-AUDIT-2026-06-24 L8: an `?invite=<seed>` URL carries a BIP-39 mnemonic in cleartext.
+        // For a fresh user this is the designed onboarding path. But if the user ALREADY has an identity,
+        // following the link silently REPLACES their current key with one whose seed the link's author
+        // also knows — total impersonation. Confirm before overwriting an existing identity.
+        const _ID = window.TrinityIdentity;
+        const _curNpub = (_ID && ((_ID.current && _ID.current.npub) || _ID.npub)) || '';
+        if (_curNpub) {
+          const _msg = 'This invite link will REPLACE your current TrinityOne identity with a new one.\n\n'
+            + 'Current: ' + _curNpub.slice(0, 18) + '…\n\n'
+            + 'Only continue if a TRUSTED STEWARD gave you this link. If you don\'t recognise it, cancel — the new identity\'s key may already be known to the link\'s author.\n\nContinue?';
+          if (!window.confirm(_msg)) { return; }   // bail the entire follow+name flow too
+        }
         const before = (window.Fellowship && window.Fellowship.myPubkey) || '';
         try {
           await window.TrinityIdentity.importMnemonic(decodeURIComponent(inviteParam));

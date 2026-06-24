@@ -3,6 +3,12 @@
 // chat + user-data survive a restart. Run: node relay/dev-relay.mjs
 // (a hardened Khatru/NIP-29 relay -- bundled in the church Relay app -- is the production upgrade;
 //  see reference/proposal-relay-app-steward-console.md)
+//
+// ⚠ ⚠ ⚠ SECURITY: DEV-ONLY. NEVER EXPOSE BEYOND THE DEV BOX. ⚠ ⚠ ⚠
+// (SECURITY-AUDIT-2026-06-24 N6.) This relay has NO `accept()` policy — any signed event from
+// any pubkey is stored and broadcast. Exposing it publicly (Tailscale Funnel, cloudflared,
+// port-forward) turns it into an open Nostr relay you don't want to be operating.
+// The production relay is `scripts/gateway.mjs` which enforces the multi-church write policy.
 import { WebSocketServer } from 'ws';
 import { readFileSync, writeFileSync, renameSync } from 'fs';
 

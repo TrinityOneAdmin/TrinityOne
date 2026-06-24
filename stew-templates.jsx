@@ -71,7 +71,11 @@ const TMPL_CSS_PRINT = `
   }
 `;
 
-const TMPL_ESC = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// SECURITY-AUDIT-2026-06-24 N5: also escape quotes. All current callers interpolate into element
+// content (where unescaped quotes are safe), but pre-emptive quote-escaping means a future caller
+// that drops a `${TMPL_ESC(x)}` into an attribute context (e.g. `<a title="...${x}...">`) doesn't
+// silently introduce attribute-context XSS.
+const TMPL_ESC = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 // ── the devotional fill-in block (verbatim from the design) ──
 const DEVO_TPL =

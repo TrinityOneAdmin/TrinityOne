@@ -580,12 +580,22 @@ async function getAudioFeed(url) {
 // build-pages produce), set STRICT_CSP=1 to drop both from script-src — keeping only 'wasm-unsafe-eval'
 // for sql.js. The Cloudflare Pages deploy is already strict via its own _headers (build-pages.sh).
 // Referrer-Policy: no-referrer also stops invite links (which carry a seed in the URL) leaking via Referer.
+//
+// SECURITY-AUDIT-2026-06-24 M4 (standing residual): default-off STRICT_CSP keeps the gateway-served
+// raw-JSX path working but leaves runtime-Babel-eval as a real XSS amplifier on every church relay
+// that runs `relay-app/install.sh`. The proper fix is to pre-transpile JSX in install.sh so STRICT_CSP=1
+// becomes the default. Tracked; not in this commit. Production-grade church operators can set
+// `STRICT_CSP=1` in the systemd unit's Environment= today AFTER they've run `bash scripts/sync-web.sh`
+// to populate www/ — but the default repo serve at `/` still loads .jsx files via Babel.
 const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN' };
 const CSP = [
   "default-src 'self'",
   process.env.STRICT_CSP ? "script-src 'self' 'wasm-unsafe-eval'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com data:",
+  // SECURITY-AUDIT-2026-06-24 M11 followup: dropped the Google Fonts allowlist now that all marketing
+  // HTML loads vendor/fonts/fonts.css locally. style-src 'unsafe-inline' stays for the marketing pages'
+  // <style> blocks; font-src self covers the local woff2s.
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob: https:",
   "connect-src 'self' https: wss: ws:",
@@ -598,7 +608,7 @@ const CSP = [
 // concurrent in-flight upstream fetches (the real protection — behind the public tunnel every client
 // shares one source address, so per-IP alone is weak), plus a light best-effort per-IP rate limit.
 const AZ_MAX_CONCURRENT = 4;                 // most simultaneous upstream fetches we'll buffer at once
-const AZ_WINDOW_MS = 60_000, AZ_MAX_PER_WINDOW = 30;   // per-IP: ~30 requests/min (a real download is a few)
+const AZ_WINDOW_MS = 60_000, AZ_MAX_PER_WINDOW = 200;   // per-IP: ~200 requests/min — SECURITY-AUDIT-2026-06-24 L11: raised from 30 because Tailscale Funnel / cloudflared collapse every public client behind one source IP. 4-concurrent global cap (AZ_MAX_CONCURRENT) remains the real DoS protection.
 let azInFlight = 0;
 const azHits = new Map();                    // ip -> [recent request timestamps]
 function clientIp(req) {

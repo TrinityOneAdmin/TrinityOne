@@ -63,7 +63,7 @@
   var name = q.get('name') || '';
   var relay = q.get('relay') || '';
   var church = q.get('c') || '';
-  var APK = 'https://trinityone.tailbeaac0.ts.net/trinityone.apk';
+  var APK = './trinityone.apk';   // SECURITY-AUDIT-2026-06-24 L12: relative path so the download resolves on whichever host served the join page (Pages, gateway, or church relay) — not pinned to the dev box's Tailnet hostname.
 
   // the instant path: open the web app with the join context (key minted on-device, name pre-filled, church followed)
   var app = '/?follow=' + encodeURIComponent(follow);
