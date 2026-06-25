@@ -111,10 +111,10 @@ const DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];   // native / static 
 // yet (e.g. the CDN-hosted app), so its name + groups resolve. Add a host's wss URL here once it joins
 // the pool — these relays don't sync to each other, so clients write to all of them.
 const CANONICAL_RELAYS = [
-  'wss://trinityone-master-01.tailbeaac0.ts.net/relay',   // master-01 — dedicated pilot relay (primary)
-  'wss://trinityone.tailbeaac0.ts.net/relay',             // dev box — secondary, for redundancy
-  // NAS node removed 2026-06-17: it was offline (and a plain nostr-rs-relay that can't enforce policy);
-  // a dead entry just added connection lag. Re-add an always-on, enforcing node here later.
+  'wss://app.trinityone.church/relay',                    // a8 / master-01 via Cloudflare — primary (own domain)
+  'wss://trinityone-master-01.tailbeaac0.ts.net/relay',   // same box via Tailscale Funnel — independent network path, fallback
+  // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
+  // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
 ];
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 // Church content (members, groups, plans, devotionals) must stay reachable on the church's SHARED relays

@@ -9642,7 +9642,7 @@ zoo`.split("\n");
     a.push(rec);
     lsSet(NETKEYS_LS, JSON.stringify(a));
   }
-  var CANONICAL_RELAYS = ["wss://trinityone-master-01.tailbeaac0.ts.net/relay", "wss://trinityone.tailbeaac0.ts.net/relay"];
+  var CANONICAL_RELAYS = ["wss://app.trinityone.church/relay", "wss://trinityone-master-01.tailbeaac0.ts.net/relay"];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function ownRelay() {
     if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;
@@ -11959,7 +11959,7 @@ zoo`.split("\n");
     joinUrl() {
       const np = window.Steward.npub || "";
       const o = typeof location !== "undefined" && location.origin || "";
-      const PUBLIC_BASE = "https://trinityone.pages.dev";
+      const PUBLIC_BASE = "https://app.trinityone.church";
       const isPublic = /^https:\/\//i.test(o) && !/^https:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(o);
       const base = isPublic ? o : PUBLIC_BASE;
       const relay = ownRelay();

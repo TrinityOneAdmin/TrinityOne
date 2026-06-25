@@ -5842,12 +5842,12 @@
   var _originRelay = !_native && !_staticHost && _loc && _loc.host ? (_loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay" : null;
   var DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];
   var CANONICAL_RELAYS = [
-    "wss://trinityone-master-01.tailbeaac0.ts.net/relay",
-    // master-01 — dedicated pilot relay (primary)
-    "wss://trinityone.tailbeaac0.ts.net/relay"
-    // dev box — secondary, for redundancy
-    // NAS node removed 2026-06-17: it was offline (and a plain nostr-rs-relay that can't enforce policy);
-    // a dead entry just added connection lag. Re-add an always-on, enforcing node here later.
+    "wss://app.trinityone.church/relay",
+    // a8 / master-01 via Cloudflare — primary (own domain)
+    "wss://trinityone-master-01.tailbeaac0.ts.net/relay"
+    // same box via Tailscale Funnel — independent network path, fallback
+    // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
+    // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
   ];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function churchRelays() {

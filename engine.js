@@ -350,7 +350,7 @@ window.sanitizeHtml = function (html) {
   // gateway serves /modules/* with CORS). Cache keys stay the ORIGINAL (relative) url so a cache hit
   // is host-independent. Swap ASSET_BASE for the church's own domain post-pilot.
   const IS_NATIVE = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  const ASSET_BASE = IS_NATIVE ? "https://trinityone.tailbeaac0.ts.net/" : "";
+  const ASSET_BASE = IS_NATIVE ? "https://app.trinityone.church/" : "";
   const resolveAsset = (u) => (ASSET_BASE && u && !/^https?:/i.test(u)) ? (ASSET_BASE + String(u).replace(/^\//, "")) : u;
 
   // ── M3: download integrity ────────────────────────────────────────────────

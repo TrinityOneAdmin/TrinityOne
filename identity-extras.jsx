@@ -193,10 +193,10 @@ function inviteUrlFor(mnemonic, ctx) {
   // the APK / local dev run on a localhost origin (capacitor://localhost, http://localhost) that no one
   // else can reach — so invite links must use the public app URL, not this device's origin.
   const usable = /^https:\/\//i.test(o) && !/localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\./i.test(o);
-  const base = usable ? o : 'https://trinityone.pages.dev';
+  const base = usable ? o : 'https://app.trinityone.church';
   // carry the church's real relay (a TrinityOne community node), not one derived from this origin
   const F = window.Fellowship;
-  const relay = (F && F.CANONICAL_RELAY) || 'wss://trinityone-master-01.tailbeaac0.ts.net/relay';
+  const relay = (F && F.CANONICAL_RELAY) || 'wss://app.trinityone.church/relay';
   const np = (ctx.church && /^npub1[0-9a-z]+$/.test(ctx.church.npub || '')) ? ctx.church.npub : '';
   return base + '/?invite=' + encodeURIComponent(mnemonic) + (np ? '&follow=' + np : '') + '&relay=' + encodeURIComponent(relay);
 }

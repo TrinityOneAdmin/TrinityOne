@@ -1009,7 +1009,15 @@ function serveStatic(req, res) {
     res.writeHead(200, H); res.end(JSON.stringify({ names: {} })); return;
   }
   let p; try { p = decodeURIComponent(route); } catch { res.writeHead(400).end('bad request'); return; }
-  if (p === '/' || p.endsWith('/')) p += 'index.html';
+  if (p === '/' || p.endsWith('/')) {
+    // Flagship host split: the bare apex (MARKETING_HOST, default trinityone.church) serves the MARKETING
+    // site at its root; the app subdomain (app.trinityone.church) — and every other host (*.ts.net,
+    // localhost, the control dashboard) — serves the web APP. Other self-hosting churches are unaffected:
+    // their Host never equals the marketing apex, so they always get index.html.
+    const host = (req.headers.host || '').split(':')[0].toLowerCase();
+    const marketingHost = (process.env.MARKETING_HOST || 'trinityone.church').toLowerCase();
+    p += (p === '/' && host === marketingHost) ? 'welcome.html' : 'index.html';
+  }
   // feature gates: the relay always serves its own control UI (/relay-app/*); module downloads + the web-app
   // mirror are switchable by the operator (the relay can be relay-only, or also host modules and/or the app).
   if (p.startsWith('/modules/')) { if (!SETTINGS.serveModules) { res.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); res.end('module hosting is off on this relay'); return; } }

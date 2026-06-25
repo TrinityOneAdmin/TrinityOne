@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # TrinityOne Relay — one-line installer for any Debian/Ubuntu/Raspberry Pi OS box.
 #
-#   curl -fsSL https://trinityone.tailbeaac0.ts.net/relay-app/install.sh | sudo bash
+#   curl -fsSL https://app.trinityone.church/relay-app/install.sh | sudo bash
 #
 # Sets up the gateway (relay + app + browser control dashboard) as a systemd service that starts on
 # boot, then optionally brings up a tunnel so the relay is reachable from outside the church LAN.
@@ -22,7 +22,7 @@
 #   -y                          non-interactive: accept defaults, no prompts
 set -euo pipefail
 
-SRC="https://trinityone.tailbeaac0.ts.net"
+SRC="https://app.trinityone.church"
 DIR="/opt/trinityone"; PORT="8000"
 CHURCH=""; CHURCH_NAME=""; TUNNEL=""; CF_TOKEN=""; CF_HOST=""; ASSUME_YES=0
 SVC_USER="trinityone"; SVC="trinityone-relay"
