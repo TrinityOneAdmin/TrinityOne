@@ -105,6 +105,11 @@
     <h2>Relay software <span class="muted" id="updateMsg" style="font-weight:600"></span></h2>
     <div class="row"><span class="k">This relay's build</span><span class="v" id="u-current">—</span></div>
     <div id="u-body" class="muted" style="margin-top:10px">Checking for updates…</div>
+    <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)">
+      <div class="row"><span class="k">APK downloads</span><span class="v" id="apkMsg" style="font-weight:600">—</span></div>
+      <div class="muted" style="margin:4px 0 9px; font-size:13px">Pull the latest member + steward APK from the build source, so the website's “Download the APK” buttons serve the current build.</div>
+      <button class="btn-clay" id="fetchApk">Fetch latest APK</button>
+    </div>
   </div>
 </div>
 
@@ -277,6 +282,19 @@
     }, 3000);
   }
 
+  document.getElementById('fetchApk')?.addEventListener('click', async () => {
+    const m = document.getElementById('apkMsg'); m.style.color = 'var(--ink-3)'; m.textContent = 'fetching…';
+    try {
+      const r = await fetch('/relay-app/fetch-apk', { method: 'POST', headers: authHeaders() });
+      const s = await r.json();
+      const files = s.files || {};
+      const ok = Object.entries(files).filter(([, v]) => v.ok).map(([k, v]) => k.replace('.apk', '') + ' (' + Math.round(v.bytes / 1048576) + 'M)');
+      const bad = Object.entries(files).filter(([, v]) => !v.ok).map(([k, v]) => k + ' — ' + v.error);
+      if (!ok.length) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + (bad.join('; ') || s.error || 'failed'); return; }
+      m.style.color = bad.length ? 'var(--clay)' : 'var(--sage)';
+      m.textContent = '✓ ' + ok.join(', ') + (bad.length ? ' · ✗ ' + bad.join('; ') : '');
+    } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
+  });
   document.getElementById('addCh').onclick = () => { cfgChurches.push({ npub: '', name: '' }); renderCfg(); document.querySelector('#cfgList .ch:last-child input')?.focus(); };
   document.getElementById('saveCfg').onclick = saveConfig;
   document.getElementById('tokGo').onclick = () => { adminToken = document.getElementById('tok').value.trim(); if (adminToken) localStorage.setItem(TOKEN_KEY, adminToken); loadConfig(); gpTick(); };

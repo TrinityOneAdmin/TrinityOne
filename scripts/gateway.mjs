@@ -897,6 +897,34 @@ function serveStatic(req, res) {
     }
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
+  // Deploy the latest APKs without SSH: pull trinityone[-steward].apk from the update ORIGIN into
+  // relay/apks/ (the one dir the sandboxed relay can write). The static handler serves /…apk from there.
+  if (route === '/relay-app/fetch-apk') {
+    const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' };
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS, ...CORS };
+    if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    if (req.method !== 'POST') { res.writeHead(405, H); res.end('{"error":"method"}'); return; }
+    if (!ORIGIN) { res.writeHead(400, H); res.end('{"error":"this relay has no origin to fetch from"}'); return; }
+    const apkDir = join(ROOT, 'relay', 'apks');
+    (async () => {
+      try { mkdirSync(apkDir, { recursive: true }); } catch {}
+      const files = {};
+      for (const f of ['trinityone.apk', 'trinityone-steward.apk']) {
+        try {
+          const r = await fetch(ORIGIN.replace(/\/+$/, '') + '/' + f);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const buf = Buffer.from(await r.arrayBuffer());
+          if (buf.length < 1000000) throw new Error('too small (' + buf.length + ' bytes) — origin may not have it');
+          const tmp = join(apkDir, f + '.tmp'); writeFileSync(tmp, buf); renameSync(tmp, join(apkDir, f));
+          files[f] = { ok: true, bytes: buf.length };
+        } catch (e) { files[f] = { ok: false, error: String((e && e.message) || e) }; }
+      }
+      const anyOk = Object.values(files).some(x => x.ok);
+      res.writeHead(anyOk ? 200 : 502, H); res.end(JSON.stringify({ origin: ORIGIN, files }));
+    })();
+    return;
+  }
   // audio (podcast) feed proxy
   if (route === '/audiofeed') {
     if (!SETTINGS.serveAudio) { res.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); res.end('{"error":"audio off"}'); return; }
@@ -1017,6 +1045,16 @@ function serveStatic(req, res) {
     const host = (req.headers.host || '').split(':')[0].toLowerCase();
     const marketingHost = (process.env.MARKETING_HOST || 'trinityone.church').toLowerCase();
     p += (p === '/' && host === marketingHost) ? 'welcome.html' : 'index.html';
+  }
+  // APKs deployed via the dashboard "Fetch latest APK" button live under relay/apks/ (writable, survives
+  // self-updates). Serve from there if present; a root-level copy (manual scp) still works as a fallback.
+  if (/^\/(trinityone|trinityone-steward)\.apk$/.test(p)) {
+    const relApk = join(ROOT, 'relay', 'apks', p.slice(1));
+    let st2 = null; try { st2 = statSync(relApk); } catch {}
+    if (st2 && st2.isFile()) {
+      res.writeHead(200, { 'Content-Type': MIME['.apk'] || 'application/octet-stream', 'Content-Length': st2.size, 'Access-Control-Allow-Origin': '*', 'Content-Disposition': 'attachment; filename="' + p.slice(1) + '"', ...SEC_HEADERS });
+      createReadStream(relApk).pipe(res); return;
+    }
   }
   // feature gates: the relay always serves its own control UI (/relay-app/*); module downloads + the web-app
   // mirror are switchable by the operator (the relay can be relay-only, or also host modules and/or the app).
