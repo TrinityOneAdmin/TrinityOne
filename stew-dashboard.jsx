@@ -394,14 +394,16 @@ function StewDashboard({ initial = 'overview' }) {
   const church = window.useStewardChurch();   // real church profile + npub from the relay
   // optional Finance module: its nav item appears only when a treasurer has switched it on
   const finOn = window.useFinanceSettings ? !!window.useFinanceSettings().enabled : false;
+  const mannaOn = window.useMannaSettings ? !!window.useMannaSettings().enabled : false;   // optional money-out module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
   const nav = React.useMemo(() => {
     const copy = NAV.slice();
     const at = () => { const i = copy.findIndex(n => n.key === 'settings'); return i < 0 ? copy.length : i; };
     if (checkinOn) copy.splice(at(), 0, { key: 'checkin', label: 'Check-in', ic: 'child' });
     if (finOn) copy.splice(at(), 0, { key: 'finance', label: 'Finance', ic: 'gift' });
+    if (mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
     return copy;
-  }, [finOn, checkinOn]);
+  }, [finOn, mannaOn, checkinOn]);
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
@@ -448,6 +450,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'members' && <DashMembers />}
       {tab === 'checkin' && <DashCheckin />}
       {tab === 'finance' && <DashFinance />}
+      {tab === 'manna' && <DashManna />}
       {tab === 'settings' && <DashSettings onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
     </React.Fragment>
   );
@@ -3779,6 +3782,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
 
       {section === 'finance' ? <React.Fragment>
       <DashFinancePanel church={church} />
+      <DashMannaPanel church={church} />
       </React.Fragment> : null}
 
       {section === 'network' ? <React.Fragment>

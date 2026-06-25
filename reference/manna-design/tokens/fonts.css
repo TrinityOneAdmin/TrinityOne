@@ -1,0 +1,4 @@
+/* Halo webfonts — Sora (display/UI) + Newsreader (serif/scripture).
+   Loaded from Google Fonts. If you hold licensed files, swap these @imports
+   for local @font-face rules pointing at the binaries. */
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap');

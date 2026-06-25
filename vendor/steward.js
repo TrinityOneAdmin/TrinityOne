@@ -9789,10 +9789,24 @@ zoo`.split("\n");
     }
     return null;
   }
+  function _publishSigned(tmpl) {
+    if (!sk) return Promise.resolve(null);
+    return publish(feChurch(tmpl));
+  }
+  function _subscribeMany(filters, handlers) {
+    return pool.subscribeMany(relays(), filters, handlers);
+  }
   window.Steward = {
     pubkey: null,
     npub: null,
     hasKey: false,
+    // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
+    // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
+    publishSigned: _publishSigned,
+    subscribeMany: _subscribeMany,
+    relayList() {
+      return relays();
+    },
     // ---- key (pilot: self-custodial in localStorage; later: a signer) ----
     locked: false,
     // true when an encrypted key exists and isn't unlocked yet

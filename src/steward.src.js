@@ -229,8 +229,27 @@ function skFor(asPub) {
   return null;
 }
 
+// ── Generic primitives exposed for optional modules (Finance, Manna, Meals, future plugins) ──
+// External bundles (vendor/steward-meals.js, etc.) don't share this IIFE's closure, so they can't
+// reach `pool`, `relays()`, `feChurch()`, or `publish()` directly. Expose them as thin helpers so
+// the abstraction stays at "I want to publish a church-signed event" / "subscribe my filters" —
+// modules never need to poke at the lower-level pool.
+function _publishSigned(tmpl) {
+  if (!sk) return Promise.resolve(null);
+  return publish(feChurch(tmpl));
+}
+function _subscribeMany(filters, handlers) {
+  return pool.subscribeMany(relays(), filters, handlers);
+}
+
 window.Steward = {
   pubkey: null, npub: null, hasKey: false,
+
+  // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
+  // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
+  publishSigned: _publishSigned,
+  subscribeMany: _subscribeMany,
+  relayList() { return relays(); },
 
   // ---- key (pilot: self-custodial in localStorage; later: a signer) ----
   locked: false,                                  // true when an encrypted key exists and isn't unlocked yet

@@ -1,0 +1,69 @@
+/* ============================================================
+   Halo — Color
+   Warm sovereign canvas. Clay is the single human action.
+   Gold is a rationed spark. Sage is success-only. Midnight is gravity.
+   ============================================================ */
+:root {
+  /* --- Canvas & neutrals --- */
+  --paper:        #F4EEE2;   /* member-app warm canvas */
+  --paper-soft:   #FBF6EC;
+  --surface:      #FFFDF8;   /* card surface */
+  --surface-2:    #FBF5EA;   /* console surface */
+
+  /* --- Ink / text --- */
+  --ink:    #221C16;
+  --ink-2:  #6B6052;
+  --ink-3:  #A89E8E;
+
+  /* --- Hairlines --- */
+  --line:   rgba(34, 28, 22, .10);
+  --line-2: rgba(34, 28, 22, .05);
+
+  /* --- Clay = PRIMARY (brand actions, CTAs, active, "One" wordmark) --- */
+  --clay:       #C25A38;
+  --clay-deep:  #9C4327;
+  --clay-ink:   #A8462A;
+  --clay-soft:  #F3DECF;
+
+  /* --- Gold = SPARK (Halo center light + rare live/unread accent). Use sparingly. --- */
+  --gold:       #C8962E;
+  --gold-soft:  #E0B860;
+  --gold-tint:  #F3E4C4;
+
+  /* --- Sage = FUNCTIONAL (success / giving-confirmed ONLY, never decorative) --- */
+  --sage:       #5E8C6A;
+  --sage-soft:  #D8E6DC;
+
+  /* --- Midnight = DARK SURFACE (night, focus/gravity moments, footers) --- */
+  --midnight:   #17120B;
+  --midnight-2: #241C12;
+
+  /* ============================================================
+     Semantic aliases — prefer these in product code
+     ============================================================ */
+  --bg-canvas:          var(--paper);
+  --bg-canvas-soft:     var(--paper-soft);
+  --surface-card:       var(--surface);
+  --surface-card-alt:   var(--surface-2);
+  --surface-dark:       var(--midnight);
+  --surface-dark-2:     var(--midnight-2);
+
+  --text-strong:        var(--ink);
+  --text-body:          var(--ink-2);
+  --text-muted:         var(--ink-3);
+  --text-on-dark:       #F4EEE2;
+
+  --border-hair:        var(--line);
+  --border-faint:       var(--line-2);
+
+  --action-primary:       var(--clay);
+  --action-primary-press: var(--clay-deep);
+  --action-primary-soft:  var(--clay-soft);
+
+  --accent-spark:       var(--gold);
+  --accent-spark-soft:  var(--gold-soft);
+  --accent-spark-tint:  var(--gold-tint);
+
+  --status-success:      var(--sage);
+  --status-success-soft: var(--sage-soft);
+}

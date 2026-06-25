@@ -1,0 +1,49 @@
+/* ============================================================
+   Halo — Space, Radius, Shadow, Motion
+   Soft layered warm shadows; generous radii; one signature ease.
+   ============================================================ */
+:root {
+  /* --- Spacing --- */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-7:  32px;
+  --space-8:  40px;
+
+  /* gaps 8–16 between elements; 12–22 section margins; cards pad 14–26 */
+  --gap-tight:    8px;
+  --gap:          12px;
+  --gap-loose:    16px;
+  --pad-card:     20px;
+  --margin-section: 18px;
+
+  /* --- Radius --- */
+  --r-sm:  10px;
+  --r-md:  16px;
+  --r-lg:  24px;
+  --r-xl:  32px;
+  --r-pill: 999px;
+
+  /* --- Shadow (soft, warm, layered) --- */
+  --shadow-sm: 0 1px 2px rgba(34,28,22,.04), 0 1px 3px rgba(34,28,22,.06);
+  --shadow-md: 0 2px 8px rgba(34,28,22,.06), 0 10px 28px rgba(34,28,22,.08);
+  --shadow-lg: 0 8px 24px rgba(34,28,22,.10), 0 28px 56px rgba(34,28,22,.13);
+
+  /* --- Motion --- */
+  --ease: cubic-bezier(.32, .72, 0, 1);  /* signature; sheets slide with this */
+  --dur-fast: 160ms;
+  --dur:      240ms;
+  --dur-slow: 420ms;
+}
+
+@keyframes trinityScale {
+  0%   { transform: scale(.6); opacity: 0; }
+  60%  { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes haloSpin {
+  to { transform: rotate(360deg); }
+}

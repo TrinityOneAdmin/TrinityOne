@@ -1,0 +1,60 @@
+/* ============================================================
+   Halo — Typography
+   Sora for everything UI; Newsreader for sacred / scripture lines only.
+   ============================================================ */
+:root {
+  --font-display: 'Sora', system-ui, sans-serif;   /* headings, wordmark */
+  --font-ui:      'Sora', system-ui, sans-serif;    /* buttons, labels, body UI */
+  --font-serif:   'Newsreader', Georgia, serif;     /* scripture / sacred */
+  --font-mono:    'SF Mono', ui-monospace, 'Roboto Mono', monospace; /* keys / npub */
+
+  /* --- Size scale (observed in practice) --- */
+  --fs-label:    11px;   /* field labels, uppercase 700 */
+  --fs-pill:     12px;   /* pill text, uppercase, 1.4px tracking */
+  --fs-caption:  13.5px; /* small body */
+  --fs-body:     15px;   /* body */
+  --fs-body-lg:  16px;
+  --fs-section:  19px;   /* section headings (SectionLabel) */
+  --fs-stat:     28px;   /* StatCard value, display 800 */
+  --fs-h1:       28px;   /* page H1 */
+  --fs-h1-lg:    34px;
+  --fs-display:  44px;   /* hero display */
+
+  /* --- Weights --- */
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+  --fw-black:    800;
+
+  /* --- Tracking --- */
+  --tracking-tight: -0.02em;  /* display headings */
+  --tracking-snug:  -0.01em;
+  --tracking-pill:  1.4px;    /* uppercase pills */
+  --tracking-label: 0.08em;   /* uppercase labels */
+
+  /* --- Line heights --- */
+  --lh-tight:  1.1;
+  --lh-snug:   1.25;
+  --lh-body:   1.5;
+  --lh-serif:  1.45;
+}
+
+/* Scripture / sacred line — pastoral, never transactional */
+.scripture {
+  font-family: var(--font-serif);
+  font-weight: var(--fw-regular);
+  font-style: italic;
+  line-height: var(--lh-serif);
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+/* Wordmark lockup — "Trinity" in ink, "One" in clay. Manna's name sits BESIDE, never replaces. */
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+}
+.wordmark .one { color: var(--clay); }

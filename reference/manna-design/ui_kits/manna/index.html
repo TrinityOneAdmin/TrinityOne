@@ -1,0 +1,464 @@
+<!-- @dsCard group="Manna" viewport="1180x760" subtitle="Six screens — Mercy, Covenant, Vouch, Keykeeper, Testimony, Treasury" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manna — UI kit</title>
+<link rel="stylesheet" href="../../styles.css">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:var(--font-ui);background:#E7E2D6;color:var(--ink);-webkit-font-smoothing:antialiased}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:rgba(34,28,22,.16);border-radius:9px}
+  ::-webkit-scrollbar-track{background:transparent}
+  button{font-family:inherit}
+  @keyframes trinityScale{0%{transform:scale(.6);opacity:0}60%{transform:scale(1.08);opacity:1}100%{transform:scale(1);opacity:1}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/plain" id="app-src">
+const { useState, useEffect } = React;
+
+/* ============================== ICONS ============================== */
+const PATHS = {
+  bolt:['M13 2 3 14h8l-1 8 11-13h-8l0-7z'],
+  gift:['M20 12v9H4v-9','M2 7h20v5H2z','M12 22V7','M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z','M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z'],
+  heart:['M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z'],
+  hand:['M11 12h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 14','m7 18 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9','m2 13 6 6'],
+  pray:['M12 3c-1.2 2-3.2 3.8-3.2 6.8V20h6.4V9.8C15.2 6.8 13.2 5 12 3z','M12 3v17'],
+  users:['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2','M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z','M22 21v-2a4 4 0 0 0-3-3.87','M16 3.13a4 4 0 0 1 0 7.75'],
+  shield:['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'],
+  lock:['M5 11h14v10H5z','M8 11V7a4 4 0 0 1 8 0v4'],
+  key:['M7.5 21a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11z','m11.4 11.6 9.6-9.6','m15.5 7.5 3 3L22 7l-3-3'],
+  check:['M20 6 9 17l-5-5'],
+  receipt:['M5 2v20l2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1z','M9 7h6','M9 11h6','M9 15h4'],
+  globe:['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z','M2 12h20','M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z'],
+  qr:['M4 4h6v6H4z','M14 4h6v6h-6z','M4 14h6v6H4z','M14 14h3v3h-3z','M20 14v3','M14 20h3','M20 20h.01'],
+  sparkle:['M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z','M19 15l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7.7-1.9z'],
+  bank:['M3 21h18','M4 10h16','M5 6l7-3 7 3','M5 10v11','M9 10v11','M15 10v11','M19 10v11'],
+  wallet:['M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z','M3 11h18','M17 15h.01'],
+  clock:['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z','M12 6v6l4 2'],
+  calendar:['M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14H4z','M4 10h16','M8 2v4','M16 2v4'],
+  calCheck:['M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14H4z','M4 10h16','M8 2v4','M16 2v4','m9 15 2 2 4-4'],
+  chevR:['m9 6 6 6-6 6'],
+  chevL:['m15 6-6 6 6 6'],
+  plus:['M12 5v14','M5 12h14'],
+  x:['M18 6 6 18','m6 6 12 12'],
+  search:['M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z','m21 21-4.3-4.3'],
+};
+const FILLED = new Set(['bolt']);
+function Icon({name, size=22, stroke=1.8, color='currentColor', style}) {
+  const d = PATHS[name]; if(!d) return null;
+  const fill = FILLED.has(name);
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill={fill?color:'none'} stroke={fill?'none':color}
+    strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round"
+    style={{display:'inline-block',flex:'none',verticalAlign:'middle',...style}}>
+    {d.map((p,i)=><path key={i} d={p}/>)}
+  </svg>;
+}
+function Halo({size=28}) {
+  return <svg width={size} height={size} viewBox="0 0 32 32" fill="none" style={{flex:'none'}}>
+    <circle cx="16" cy="16" r="12.5" stroke="var(--clay)" strokeWidth="2.2"/>
+    <circle cx="16" cy="16" r="12.5" stroke="var(--gold)" strokeWidth="2.2" strokeLinecap="round" strokeDasharray="6 72" transform="rotate(-58 16 16)"/>
+    <circle cx="16" cy="16" r="4.2" fill="var(--gold)"/>
+  </svg>;
+}
+
+/* ============================== PRIMITIVES ============================== */
+const SIZES={sm:{padding:'8px 14px',fontSize:13,gap:7,iconSize:16},md:{padding:'12px 20px',fontSize:14.5,gap:8,iconSize:18},lg:{padding:'15px 26px',fontSize:16,gap:9,iconSize:20}};
+const VARS={clay:{background:'var(--clay)',color:'#fff',boxShadow:'0 1px 2px rgba(34,28,22,.14)'},gold:{background:'var(--gold)',color:'var(--midnight)'},ghost:{background:'transparent',color:'var(--ink)',border:'1px solid var(--line)'},soft:{background:'var(--clay-soft)',color:'var(--clay-ink)'},dark:{background:'var(--midnight)',color:'var(--paper)'}};
+function Button({variant='clay',size='md',icon,iconRight,full,disabled,children,onClick,style}) {
+  const s=SIZES[size],v=VARS[variant];
+  return <button onClick={onClick} disabled={disabled} style={{display:'inline-flex',alignItems:'center',justifyContent:'center',gap:s.gap,fontWeight:600,fontSize:s.fontSize,letterSpacing:'.01em',padding:s.padding,borderRadius:999,border:'1px solid transparent',cursor:disabled?'not-allowed':'pointer',width:full?'100%':'auto',opacity:disabled?.5:1,lineHeight:1,transition:'transform .16s cubic-bezier(.32,.72,0,1),filter .16s',...v,...style}}
+    onMouseDown={e=>e.currentTarget.style.transform='scale(.97)'} onMouseUp={e=>e.currentTarget.style.transform='scale(1)'} onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}>
+    {icon&&<Icon name={icon} size={s.iconSize}/>}{children}{iconRight&&<Icon name={iconRight} size={s.iconSize}/>}
+  </button>;
+}
+function SkPill({tint='ink',dot,children,style}) {
+  const T={sage:{background:'var(--sage-soft)',color:'#3F6B4C'},clay:{background:'var(--clay-soft)',color:'var(--clay-ink)'},gold:{background:'var(--gold-tint)',color:'#8A6418'},ink:{background:'rgba(34,28,22,.06)',color:'var(--ink-2)'}}[tint];
+  return <span style={{display:'inline-flex',alignItems:'center',gap:6,fontWeight:700,fontSize:12,textTransform:'uppercase',letterSpacing:'1.4px',padding:'5px 11px',borderRadius:999,lineHeight:1,...T,...style}}>
+    {dot&&<span style={{width:6,height:6,borderRadius:999,background:'currentColor'}}/>}{children}</span>;
+}
+const AV=['var(--clay)','var(--sage)','var(--gold)','var(--clay-deep)','#6B6052'];
+function hashName(s){let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return h;}
+function initials(n){const p=(n||'').trim().split(/\s+/);return((p[0]&&p[0][0]||'')+(p.length>1?p[p.length-1][0]:'')).toUpperCase()||'?';}
+function SkBadge({name='',size=40,signed,pending,tone,style}) {
+  const bg=tone||AV[hashName(name)%AV.length];
+  return <span style={{position:'relative',display:'inline-flex',flex:'none',...style}}>
+    <span style={{width:size,height:size,borderRadius:999,background:bg,color:'#fff',display:'grid',placeItems:'center',fontFamily:'var(--font-display)',fontWeight:700,fontSize:size*0.38,boxShadow:'inset 0 0 0 1px rgba(255,255,255,.12)',opacity:pending?.5:1}}>{initials(name)}</span>
+    {signed&&<span style={{position:'absolute',right:-2,bottom:-2,width:size*0.46,height:size*0.46,borderRadius:999,background:'var(--sage)',color:'#fff',display:'grid',placeItems:'center',border:'2px solid var(--surface)'}}><Icon name="check" size={size*0.26} stroke={2.6}/></span>}
+  </span>;
+}
+function Panel({children,pad=20,tone='surface',style}) {
+  const T={surface:{background:'var(--surface)',border:'1px solid var(--line)',color:'var(--ink)'},soft:{background:'var(--paper-soft)',border:'1px solid var(--line)',color:'var(--ink)'},clay:{background:'var(--clay-soft)',border:'1px solid transparent',color:'var(--clay-ink)'},dark:{background:'var(--midnight)',border:'1px solid var(--midnight-2)',color:'var(--paper)'}}[tone];
+  return <div style={{borderRadius:24,padding:pad,boxShadow:tone==='dark'?'none':'var(--shadow-sm)',...T,...style}}>{children}</div>;
+}
+function StatCard({icon,label,value,sub,tint='ink'}) {
+  const T={clay:{box:'var(--clay-soft)',ic:'var(--clay-ink)'},sage:{box:'var(--sage-soft)',ic:'#3F6B4C'},gold:{box:'var(--gold-tint)',ic:'#8A6418'},ink:{box:'rgba(34,28,22,.06)',ic:'var(--ink-2)'}}[tint];
+  return <div style={{background:'var(--surface)',border:'1px solid var(--line)',borderRadius:20,padding:18,boxShadow:'var(--shadow-sm)',display:'flex',flexDirection:'column',gap:12}}>
+    {icon&&<span style={{width:38,height:38,borderRadius:12,background:T.box,color:T.ic,display:'grid',placeItems:'center'}}><Icon name={icon} size={20}/></span>}
+    <div><div style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:28,letterSpacing:'-.02em',lineHeight:1.05}}>{value}</div>
+    <div style={{marginTop:4,fontSize:13,fontWeight:600,color:'var(--ink-2)'}}>{label}</div>
+    {sub&&<div style={{marginTop:2,fontSize:12,color:'var(--ink-3)'}}>{sub}</div>}</div>
+  </div>;
+}
+function SectionLabel({children,action}) {
+  return <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',margin:'0 0 12px'}}>
+    <span style={{fontWeight:700,fontSize:19,letterSpacing:'-.01em'}}>{children}</span>
+    {action&&<span style={{fontSize:13,fontWeight:600,color:'var(--clay)',cursor:'pointer'}}>{action}</span>}</div>;
+}
+function SkToggle({checked,onChange,label,hint,icon='shield'}) {
+  return <label onClick={()=>onChange&&onChange(!checked)} style={{display:'flex',alignItems:'center',gap:12,cursor:'pointer',background:'var(--paper-soft)',border:'1px solid var(--line)',borderRadius:16,padding:'12px 14px'}}>
+    <span style={{width:34,height:34,borderRadius:10,flex:'none',display:'grid',placeItems:'center',background:checked?'var(--sage-soft)':'rgba(34,28,22,.06)',color:checked?'#3F6B4C':'var(--ink-3)'}}><Icon name={icon} size={18}/></span>
+    <span style={{flex:1}}><span style={{display:'block',fontSize:14,fontWeight:600}}>{label}</span>{hint&&<span style={{display:'block',fontSize:12.5,color:'var(--ink-3)',marginTop:1}}>{hint}</span>}</span>
+    <span style={{width:44,height:26,borderRadius:999,flex:'none',position:'relative',background:checked?'var(--sage)':'var(--line)',transition:'background .2s'}}><span style={{position:'absolute',top:3,left:checked?21:3,width:20,height:20,borderRadius:999,background:'#fff',boxShadow:'0 1px 2px rgba(0,0,0,.2)',transition:'left .2s cubic-bezier(.32,.72,0,1)'}}/></span>
+  </label>;
+}
+
+/* ============================== FRAMES ============================== */
+function PhoneFrame({children, label}) {
+  return <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:12}}>
+    <div style={{width:392,height:760,borderRadius:54,background:'#1a1510',padding:11,boxShadow:'0 30px 70px rgba(34,28,22,.34),0 8px 22px rgba(34,28,22,.22)'}}>
+      <div style={{position:'relative',width:'100%',height:'100%',borderRadius:44,overflow:'hidden',background:'var(--paper)'}}>
+        <div style={{position:'absolute',top:0,left:0,right:0,height:46,display:'flex',alignItems:'flex-end',justifyContent:'space-between',padding:'0 26px 8px',fontSize:13.5,fontWeight:600,zIndex:5,color:'var(--ink)'}}>
+          <span>9:41</span>
+          <span style={{position:'absolute',left:'50%',top:9,transform:'translateX(-50%)',width:108,height:26,background:'#1a1510',borderRadius:999}}/>
+          <span style={{display:'flex',gap:5,alignItems:'center'}}><Icon name="globe" size={14}/><span style={{fontWeight:700}}>5G</span></span>
+        </div>
+        <div className="screen-scroll" style={{position:'absolute',inset:0,paddingTop:46,overflowY:'auto'}}>{children}</div>
+      </div>
+    </div>
+    {label&&<span style={{fontSize:12,fontWeight:600,color:'#8a8170',letterSpacing:'.02em'}}>{label}</span>}
+  </div>;
+}
+function ConsoleChrome({active, onNav, children, title, sub}) {
+  const nav=[['heart','Overview'],['users','Covenant'],['key','Approvals'],['bank','Treasury']];
+  const activeLabel={vouch:'Covenant',approval:'Approvals',treasury:'Treasury'}[active]||'Overview';
+  return <div style={{width:1060,height:720,borderRadius:18,overflow:'hidden',display:'flex',background:'var(--surface-2)',boxShadow:'0 30px 70px rgba(34,28,22,.30)',border:'1px solid rgba(34,28,22,.14)'}}>
+    <aside style={{width:230,flex:'none',background:'var(--midnight)',color:'var(--paper)',display:'flex',flexDirection:'column',padding:'22px 16px'}}>
+      <div style={{display:'flex',alignItems:'center',gap:11,padding:'0 8px 22px'}}>
+        <Halo size={28}/><span style={{display:'flex',flexDirection:'column',lineHeight:1}}><span style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:20,letterSpacing:'-.02em'}}>Manna</span><span style={{fontSize:10,color:'rgba(244,238,226,.5)',fontWeight:600,letterSpacing:'.06em',marginTop:3}}>by TrinityOne</span></span>
+      </div>
+      <nav style={{display:'flex',flexDirection:'column',gap:3}}>
+        {nav.map(([ic,lbl])=>{const on=lbl===activeLabel;return <div key={lbl} style={{display:'flex',alignItems:'center',gap:11,padding:'11px 12px',borderRadius:12,fontSize:14.5,fontWeight:on?700:500,color:on?'#fff':'rgba(244,238,226,.62)',background:on?'rgba(200,90,56,.22)':'transparent',cursor:'pointer'}}><Icon name={ic} size={19}/>{lbl}{on&&<span style={{marginLeft:'auto',width:6,height:6,borderRadius:999,background:'var(--gold)'}}/>}</div>;})}
+      </nav>
+      <div style={{marginTop:'auto',display:'flex',alignItems:'center',gap:9,padding:'10px 8px',borderTop:'1px solid rgba(244,238,226,.12)'}}>
+        <SkBadge name="Steward Grace" size={32}/><div style={{lineHeight:1.2}}><div style={{fontSize:13,fontWeight:600}}>Grace O.</div><div style={{fontSize:11,color:'rgba(244,238,226,.5)'}}>Guardian</div></div>
+      </div>
+    </aside>
+    <main style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
+      <header style={{padding:'20px 30px 18px',borderBottom:'1px solid var(--line)',background:'var(--surface)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <div><div style={{display:'flex',alignItems:'center',gap:9}}><h1 style={{margin:0,fontFamily:'var(--font-display)',fontWeight:800,fontSize:24,letterSpacing:'-.02em'}}>{title}</h1></div>{sub&&<p style={{margin:'5px 0 0',fontSize:13.5,color:'var(--ink-2)'}}>{sub}</p>}</div>
+        <div style={{display:'flex',gap:8}}>{['Mercy','Covenant','Approve','Treasury'].map((t,i)=><span key={t} onClick={()=>onNav(['vouch','vouch','approval','treasury'][i])} style={{fontSize:13,fontWeight:600,padding:'8px 13px',borderRadius:999,cursor:'pointer',color:active===['vouch','vouch','approval','treasury'][i]?'#fff':'var(--ink-2)',background:active===['vouch','vouch','approval','treasury'][i]?'var(--clay)':'transparent',border:active===['vouch','vouch','approval','treasury'][i]?'1px solid transparent':'1px solid var(--line)'}}>{t}</span>)}</div>
+      </header>
+      <div style={{flex:1,overflowY:'auto',padding:'26px 30px',background:'var(--paper)'}}>{children}</div>
+    </main>
+  </div>;
+}
+
+/* ============================== 1 · MERCY DRAW ============================== */
+function MercyDraw() {
+  const [sel,setSel]=useState('Groceries');
+  const [state,setState]=useState('idle'); // idle | sending | done
+  const items=[['gift','Groceries'],['bolt','Fuel'],['heart','Medicine'],['hand','Nappies']];
+  function take(){setState('sending');setTimeout(()=>setState('done'),1400);}
+  return <div style={{padding:'8px 0 40px'}}>
+    <div style={{padding:'14px 22px 6px'}}>
+      <div style={{fontSize:14,color:'var(--ink-3)',fontWeight:600}}>Good morning</div>
+      <div style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:27,letterSpacing:'-.02em'}}>Ruth</div>
+    </div>
+    <div style={{padding:'10px 18px 0'}}>
+      <div style={{borderRadius:26,padding:'22px 20px 24px',background:'linear-gradient(150deg,#F3DECF 0%,#F3E4C4 100%)',position:'relative',overflow:'hidden'}}>
+        <div style={{position:'absolute',right:-30,top:-30,opacity:.5}}><Halo size={150}/></div>
+        <p className="scripture" style={{margin:'0 0 4px',fontSize:17,color:'var(--clay-ink)',position:'relative'}}>"Leave it for the poor and the foreigner."</p>
+        <div style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:23,letterSpacing:'-.02em',lineHeight:1.15,position:'relative'}}>Bread is already<br/>set aside for you.</div>
+      </div>
+    </div>
+    {state==='done' ? (
+      <div style={{padding:'40px 24px',display:'flex',flexDirection:'column',alignItems:'center',gap:18,textAlign:'center',animation:'fadeUp .4s ease'}}>
+        <div style={{width:78,height:78,borderRadius:999,background:'var(--sage)',color:'#fff',display:'grid',placeItems:'center',animation:'trinityScale .5s cubic-bezier(.32,.72,0,1)'}}><Icon name="check" size={40} stroke={2.4}/></div>
+        <div><div style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:22,letterSpacing:'-.01em'}}>It's yours.</div><p style={{margin:'6px 0 0',fontSize:14.5,color:'var(--ink-2)',maxWidth:250,lineHeight:1.5}}>No questions, no record of what you choose. Take care of yourself this week.</p></div>
+        <SkPill tint="sage" dot>Held privately</SkPill>
+      </div>
+    ) : (
+      <div style={{padding:'22px 18px 0'}}>
+        <div style={{fontSize:13,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--ink-3)',marginBottom:11}}>What would help right now</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:20}}>
+          {items.map(([ic,lbl])=>{const on=sel===lbl;return <button key={lbl} onClick={()=>setSel(lbl)} style={{display:'flex',alignItems:'center',gap:10,padding:'15px 16px',borderRadius:18,cursor:'pointer',textAlign:'left',background:on?'var(--clay)':'var(--surface)',color:on?'#fff':'var(--ink)',border:on?'1px solid transparent':'1px solid var(--line)',boxShadow:on?'0 1px 2px rgba(34,28,22,.14)':'none',fontWeight:600,fontSize:15}}><Icon name={ic} size={20}/>{lbl}</button>;})}
+        </div>
+        <Button full size="lg" icon={state==='sending'?undefined:'hand'} disabled={state==='sending'} onClick={take}>
+          {state==='sending'?<span style={{width:20,height:20,borderRadius:999,border:'2.5px solid rgba(255,255,255,.4)',borderTopColor:'#fff',animation:'spin .7s linear infinite'}}/>:"It's yours — take it"}
+        </Button>
+        <p style={{textAlign:'center',margin:'14px 0 0',fontSize:12.5,color:'var(--ink-3)',lineHeight:1.5}}>No form. No reason needed. No one is told.</p>
+      </div>
+    )}
+  </div>;
+}
+
+/* ============================== 2 · COVENANT JOURNEY ============================== */
+function CovenantJourney() {
+  const steps=[
+    ['Met for coffee','We sat down together. No agenda — just getting to know each other.','done'],
+    ['Took stock','Listed what’s steady and what’s shaky. Rent first.','done'],
+    ['Refreshed your CV','Boaz knew someone who could help. It looks good.','done'],
+    ['Two interviews','One on Thursday. We’ll pray before.','now'],
+    ['Back on your feet','The hope we’re walking toward, together.','later'],
+  ];
+  return <div style={{padding:'8px 0 44px'}}>
+    <div style={{padding:'12px 18px 0'}}>
+      <div style={{borderRadius:26,padding:'24px 20px',background:'linear-gradient(150deg,#C25A38 0%,#C8962E 130%)',color:'#fff',position:'relative',overflow:'hidden'}}>
+        <div style={{position:'absolute',right:-20,bottom:-40,opacity:.18}}><Halo size={170}/></div>
+        <div style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:'1.4px',opacity:.85}}>Covenant</div>
+        <div style={{display:'flex',alignItems:'center',gap:-8,margin:'16px 0 12px'}}>
+          <SkBadge name="Ruth Adeyemi" size={56} tone="var(--clay-deep)" style={{boxShadow:'0 0 0 3px rgba(255,255,255,.35)'}}/>
+          <SkBadge name="Boaz Mensah" size={56} style={{marginLeft:-14,boxShadow:'0 0 0 3px #C25A38'}}/>
+        </div>
+        <div style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:21,letterSpacing:'-.01em',position:'relative'}}>Ruth & Boaz</div>
+        <p style={{margin:'4px 0 0',fontSize:14,opacity:.92,position:'relative'}}>Walking together since March.</p>
+      </div>
+    </div>
+    <div style={{padding:'18px 22px 0'}}>
+      <p className="scripture" style={{fontSize:17,margin:'0 0 4px'}}>"Two are better than one, for they have a good reward for their toil."</p>
+    </div>
+    <div style={{padding:'18px 22px 0'}}>
+      <SectionLabel>The path</SectionLabel>
+      <div style={{position:'relative'}}>
+        <div style={{position:'absolute',left:15,top:14,bottom:14,width:2,background:'var(--line)'}}/>
+        {steps.map(([t,d,st],i)=>{
+          const done=st==='done',now=st==='now';
+          return <div key={i} style={{display:'flex',gap:14,position:'relative',paddingBottom:i<steps.length-1?18:0}}>
+            <span style={{width:32,height:32,borderRadius:999,flex:'none',display:'grid',placeItems:'center',zIndex:1,
+              background:done?'var(--sage)':now?'var(--clay)':'var(--surface)',color:done||now?'#fff':'var(--ink-3)',
+              border:done||now?'2px solid var(--paper)':'2px solid var(--line)',boxShadow:now?'0 0 0 4px var(--clay-soft)':'none'}}>
+              {done?<Icon name="check" size={17} stroke={2.6}/>:now?<Icon name="heart" size={15} fill/>:<span style={{fontSize:13,fontWeight:700}}>{i+1}</span>}
+            </span>
+            <div style={{paddingTop:3,opacity:st==='later'?.6:1}}>
+              <div style={{fontWeight:700,fontSize:15.5,letterSpacing:'-.01em'}}>{t}{now&&<span style={{marginLeft:8}}><SkPill tint="clay">This week</SkPill></span>}</div>
+              <p style={{margin:'3px 0 0',fontSize:13.5,color:'var(--ink-2)',lineHeight:1.5}}>{d}</p>
+            </div>
+          </div>;
+        })}
+      </div>
+    </div>
+    <div style={{padding:'20px 18px 0'}}>
+      <Panel tone="soft" style={{display:'flex',alignItems:'center',gap:13}}>
+        <SkBadge name="Boaz Mensah" size={44}/>
+        <div style={{flex:1}}><div style={{fontSize:13.5,fontWeight:600}}>A message from Boaz</div><p style={{margin:'2px 0 0',fontSize:13.5,color:'var(--ink-2)',lineHeight:1.45}}>"Thinking of you before Thursday. You've got this."</p></div>
+      </Panel>
+    </div>
+  </div>;
+}
+
+/* ============================== 3 · GIVER TESTIMONY ============================== */
+function GiverTestimony() {
+  return <div style={{padding:'18px 18px 44px'}}>
+    <div style={{padding:'0 4px'}}><SectionLabel>A quiet word of fruit</SectionLabel></div>
+    <Panel pad={24} style={{position:'relative',overflow:'hidden'}}>
+      <div style={{position:'absolute',right:-26,top:-26,opacity:.10}}><Halo size={130}/></div>
+      <div style={{width:42,height:42,borderRadius:12,background:'var(--gold-tint)',color:'#8A6418',display:'grid',placeItems:'center',marginBottom:14}}><Icon name="sparkle" size={22}/></div>
+      <p className="scripture" style={{fontSize:23,lineHeight:1.4,color:'var(--ink)',margin:'0 0 16px'}}>"A father is back in work. His children watched him leave for a job this morning."</p>
+      <div style={{display:'flex',alignItems:'center',gap:8,fontSize:12.5,color:'var(--ink-3)'}}><Icon name="lock" size={15}/> Shared with his permission. No name, no photo.</div>
+    </Panel>
+    <div style={{marginTop:14}}>
+      <Panel tone="soft" style={{display:'flex',alignItems:'center',gap:14}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:13,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--ink-3)',marginBottom:6}}>The purse, together</div>
+          <div style={{display:'flex',alignItems:'baseline',gap:8}}><span style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:24,letterSpacing:'-.02em'}}>£21,400</span><span style={{fontSize:13,color:'var(--ink-2)'}}>held for the covenant fund</span></div>
+          <div style={{marginTop:10,height:8,borderRadius:999,background:'rgba(34,28,22,.08)',overflow:'hidden'}}><div style={{width:'72%',height:'100%',borderRadius:999,background:'var(--sage)'}}/></div>
+          <div style={{marginTop:7,fontSize:12.5,color:'var(--ink-3)'}}>7 families being walked alongside this season.</div>
+        </div>
+      </Panel>
+    </div>
+    <p style={{textAlign:'center',margin:'20px 0 0',fontSize:12.5,color:'var(--ink-3)',lineHeight:1.5,padding:'0 10px'}}>You'll only ever see fruit that was freely offered. Never a list of who received.</p>
+  </div>;
+}
+
+/* ============================== 4 · NOMINATION / VOUCH (console) ============================== */
+function NominationVouch() {
+  const people=[['Ruth Adeyemi','Newcomer · 4 months','RA'],['Samuel Okonkwo','Lost work in May','SO'],['Mary Tomlin','Single parent, two children','MT']];
+  const [picked,setPicked]=useState(0);
+  const [vouched,setVouched]=useState(false);
+  return <div style={{maxWidth:760}}>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1.15fr',gap:22,alignItems:'start'}}>
+      <Panel pad={18}>
+        <div style={{position:'relative',marginBottom:14}}>
+          <span style={{position:'absolute',left:13,top:'50%',transform:'translateY(-50%)',color:'var(--ink-3)'}}><Icon name="search" size={18}/></span>
+          <input placeholder="Find someone in the family…" defaultValue="" style={{width:'100%',padding:'11px 14px 11px 40px',borderRadius:12,border:'1px solid var(--line)',background:'var(--paper-soft)',fontSize:14,fontFamily:'inherit',color:'var(--ink)',outline:'none'}}/>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:7}}>
+          {people.map(([n,sub,_],i)=>{const on=picked===i;return <div key={n} onClick={()=>{setPicked(i);setVouched(false);}} style={{display:'flex',alignItems:'center',gap:11,padding:'11px 12px',borderRadius:14,cursor:'pointer',background:on?'color-mix(in srgb,var(--sage-soft) 70%,var(--surface))':'transparent',border:on?'1px solid var(--sage)':'1px solid transparent'}}>
+            <SkBadge name={n} size={40}/>
+            <div style={{flex:1,minWidth:0}}><div style={{fontSize:14.5,fontWeight:600}}>{n}</div><div style={{fontSize:12.5,color:'var(--ink-3)'}}>{sub}</div></div>
+            {on&&<Icon name="check" size={18} color="var(--sage)" stroke={2.4}/>}
+          </div>;})}
+        </div>
+      </Panel>
+      <Panel tone="clay" pad={24} style={{background:'var(--clay-soft)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:13,marginBottom:16}}>
+          <SkBadge name={people[picked][0]} size={52}/>
+          <div><div style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:'1.4px',color:'var(--clay-ink)'}}>Stand with</div><div style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:22,letterSpacing:'-.01em',color:'var(--ink)'}}>{people[picked][0]}</div></div>
+        </div>
+        <p className="scripture" style={{fontSize:16,color:'var(--clay-ink)',margin:'0 0 14px'}}>"Carry each other's burdens."</p>
+        <div style={{background:'var(--surface)',borderRadius:16,padding:'15px 16px',marginBottom:18}}>
+          <div style={{display:'flex',gap:10,alignItems:'flex-start'}}><span style={{color:'var(--clay)',marginTop:1}}><Icon name="hand" size={20}/></span><p style={{margin:0,fontSize:14,color:'var(--ink-2)',lineHeight:1.55}}>By vouching, you're not approving a request — you're saying <b style={{color:'var(--ink)'}}>"I'll walk with this person."</b> You'll be the steady hand they can reach, and the one who quietly checks in.</p></div>
+        </div>
+        {vouched ? (
+          <div style={{display:'flex',alignItems:'center',gap:10,padding:'14px 16px',borderRadius:16,background:'var(--sage-soft)',color:'#3F6B4C',animation:'fadeUp .35s ease'}}>
+            <Icon name="check" size={20} stroke={2.4}/><span style={{fontSize:14,fontWeight:600}}>You're walking with {people[picked][0].split(' ')[0]}. The stewards have been gently notified.</span>
+          </div>
+        ) : (
+          <Button full size="lg" icon="users" onClick={()=>setVouched(true)}>I'll walk with {people[picked][0].split(' ')[0]}</Button>
+        )}
+      </Panel>
+    </div>
+  </div>;
+}
+
+/* ============================== 5 · STEWARD APPROVAL / KEYKEEPER (console) ============================== */
+function StewardApproval() {
+  const [signed,setSigned]=useState(1); // how many witnesses signed
+  const witnesses=[['Elder Boaz','EB'],['Grace O.','GO'],['Pastor Levi','PL']];
+  const [you,setYou]=useState(false);
+  function sign(){ if(!you){setYou(true); setTimeout(()=>setSigned(s=>Math.min(3,s+1)),500);} }
+  return <div style={{maxWidth:780}}>
+    <div style={{display:'grid',gridTemplateColumns:'1.1fr 1fr',gap:22,alignItems:'start'}}>
+      {/* The request, with gravity */}
+      <Panel tone="dark" pad={26}>
+        <SkPill tint="gold">Covenant · large gift</SkPill>
+        <div style={{margin:'16px 0 6px',fontFamily:'var(--font-display)',fontWeight:800,fontSize:34,letterSpacing:'-.02em'}}>£2,400</div>
+        <p style={{margin:'0 0 18px',fontSize:14,color:'rgba(244,238,226,.7)',lineHeight:1.5}}>First &amp; last month's rent, so a family can move into a stable home. Vouched by Boaz Mensah.</p>
+        <div style={{height:1,background:'rgba(244,238,226,.12)',margin:'4px 0 16px'}}/>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <span style={{width:42,height:42,borderRadius:12,background:'rgba(200,150,46,.18)',color:'var(--gold-soft)',display:'grid',placeItems:'center'}}><Icon name="shield" size={22}/></span>
+          <p style={{margin:0,fontSize:13,color:'rgba(244,238,226,.78)',lineHeight:1.45}}>No one person controls this. The console asks, each guardian approves, and the secret stays on their own device.</p>
+        </div>
+      </Panel>
+      {/* The signing moment + witness row (NET-NEW) */}
+      <Panel pad={22}>
+        <SectionLabel>More than one hand</SectionLabel>
+        <p style={{margin:'-4px 0 16px',fontSize:13.5,color:'var(--ink-2)',lineHeight:1.5}}>A covenant gift this size needs <b style={{color:'var(--ink)'}}>two of three guardians</b> present. This is comfort, not security theatre.</p>
+        <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:20}}>
+          {witnesses.map(([n,_],i)=>{const done=i<signed||(i===1&&you&&signed<2);const isYou=i===1;
+            return <div key={n} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 12px',borderRadius:14,background:done?'var(--sage-soft)':'var(--paper-soft)',border:'1px solid '+(done?'transparent':'var(--line)')}}>
+              <SkBadge name={n} size={38} signed={done} pending={!done}/>
+              <div style={{flex:1}}><div style={{fontSize:14,fontWeight:600}}>{n}{isYou&&<span style={{marginLeft:7,fontSize:11.5,color:'var(--clay)',fontWeight:700}}>YOU</span>}</div><div style={{fontSize:12.5,color:done?'#3F6B4C':'var(--ink-3)'}}>{done?'Approved & signed on device':'Awaiting approval'}</div></div>
+              {done&&<Icon name="check" size={18} color="var(--sage)" stroke={2.4}/>}
+            </div>;})}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16,fontSize:12.5,fontWeight:700,letterSpacing:'.04em',color:signed>=2?'#3F6B4C':'var(--ink-3)',textTransform:'uppercase'}}>
+          <span style={{width:8,height:8,borderRadius:999,background:signed>=2?'var(--sage)':'var(--ink-3)'}}/>{Math.min(signed,3)} of 3 present {signed>=2&&'· threshold met'}
+        </div>
+        {signed>=2 ? (
+          <div style={{display:'flex',alignItems:'center',gap:10,padding:'14px 16px',borderRadius:16,background:'var(--sage)',color:'#fff',animation:'trinityScale .45s cubic-bezier(.32,.72,0,1)'}}>
+            <Icon name="check" size={22} stroke={2.4}/><span style={{fontSize:14.5,fontWeight:700}}>Released. The rent is on its way.</span>
+          </div>
+        ) : (
+          <Button full size="lg" variant="dark" icon="key" onClick={sign} disabled={you}>
+            {you?'Signing on your device…':'Approve & sign with your key'}
+          </Button>
+        )}
+      </Panel>
+    </div>
+  </div>;
+}
+
+/* ============================== 6 · TREASURY HEALTH (console) ============================== */
+function TreasuryHealth() {
+  return <div style={{maxWidth:840}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:18}}>
+      <StatCard icon="wallet" tint="clay" value="£4,820" label="Mercy float" sub="Set aside, freely drawn"/>
+      <StatCard icon="bank" tint="sage" value="£21,400" label="Covenant reserve" sub="7 families walked alongside"/>
+      <StatCard icon="key" tint="gold" value="2 of 3" label="Hands on the purse" sub="Guardians required to release"/>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:16}}>
+      <Panel pad={22}>
+        <SectionLabel action="This season">The fund, quietly</SectionLabel>
+        <div style={{display:'flex',alignItems:'baseline',gap:10,marginBottom:6}}>
+          <span style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:30,letterSpacing:'-.02em'}}>£26,220</span>
+          <span style={{fontSize:13.5,color:'var(--ink-2)'}}>held across both tiers</span>
+        </div>
+        <div style={{height:12,borderRadius:999,background:'var(--paper-soft)',overflow:'hidden',display:'flex',border:'1px solid var(--line)'}}>
+          <div style={{width:'18%',background:'var(--clay)'}}/><div style={{width:'82%',background:'var(--sage)'}}/>
+        </div>
+        <div style={{display:'flex',gap:18,marginTop:12,fontSize:12.5,color:'var(--ink-2)'}}>
+          <span style={{display:'flex',alignItems:'center',gap:6}}><span style={{width:9,height:9,borderRadius:3,background:'var(--clay)'}}/>Mercy float (always ready)</span>
+          <span style={{display:'flex',alignItems:'center',gap:6}}><span style={{width:9,height:9,borderRadius:3,background:'var(--sage)'}}/>Covenant reserve</span>
+        </div>
+        <div style={{height:1,background:'var(--line)',margin:'20px 0'}}/>
+        <div style={{display:'flex',flexDirection:'column',gap:11}}>
+          {[['Mercy drawn this week','£640 · 23 quiet draws','clock'],['Covenant released','£2,400 · 1 family rehomed','heart'],['Given into the purse','£3,180 · 41 gifts','gift']].map(([t,v,ic])=>
+            <div key={t} style={{display:'flex',alignItems:'center',gap:12}}>
+              <span style={{width:34,height:34,borderRadius:10,background:'var(--paper-soft)',border:'1px solid var(--line)',display:'grid',placeItems:'center',color:'var(--ink-2)'}}><Icon name={ic} size={17}/></span>
+              <div style={{flex:1}}><div style={{fontSize:14,fontWeight:600}}>{t}</div></div>
+              <div style={{fontSize:13,color:'var(--ink-2)'}}>{v}</div>
+            </div>)}
+        </div>
+      </Panel>
+      <Panel tone="dark" pad={22} style={{display:'flex',flexDirection:'column'}}>
+        <span style={{width:44,height:44,borderRadius:12,background:'rgba(200,150,46,.18)',color:'var(--gold-soft)',display:'grid',placeItems:'center',marginBottom:14}}><Icon name="shield" size={24}/></span>
+        <div style={{fontFamily:'var(--font-display)',fontWeight:700,fontSize:18,letterSpacing:'-.01em',marginBottom:8}}>Safe by shared control</div>
+        <p style={{margin:0,fontSize:13.5,color:'rgba(244,238,226,.72)',lineHeight:1.55,flex:1}}>There's no state backstop here — and there doesn't need to be. No single person can move money. Every covenant gift waits for two of three guardians, each signing on their own device.</p>
+        <div style={{marginTop:16,display:'flex',gap:-8}}>
+          <SkBadge name="Elder Boaz" size={36} style={{boxShadow:'0 0 0 2px var(--midnight)'}}/>
+          <SkBadge name="Grace O" size={36} style={{marginLeft:-10,boxShadow:'0 0 0 2px var(--midnight)'}}/>
+          <SkBadge name="Pastor Levi" size={36} style={{marginLeft:-10,boxShadow:'0 0 0 2px var(--midnight)'}}/>
+        </div>
+      </Panel>
+    </div>
+  </div>;
+}
+
+/* ============================== APP SHELL ============================== */
+const SCREENS={
+  mercy:{label:'Mercy draw',sub:'Frictionless essentials',kind:'phone',el:MercyDraw,phoneLabel:'Member app · Mercy'},
+  covenant:{label:'Covenant journey',sub:'Receiver & sponsor',kind:'phone',el:CovenantJourney,phoneLabel:'Member app · Covenant'},
+  testimony:{label:'Giver testimony',sub:'Consented fruit',kind:'phone',el:GiverTestimony,phoneLabel:'Member app · Giving'},
+  vouch:{label:'Nomination',sub:'Standing with someone',kind:'console',el:NominationVouch,title:'Stand with',ctitle:'Stand with',csub:'Vouch for someone — "I’ll walk with this person."'},
+  approval:{label:'Steward approval',sub:'Keykeeper + witnesses',kind:'console',el:StewardApproval,ctitle:'Approve a covenant gift',csub:'Sober stewardship — more than one hand on the purse.'},
+  treasury:{label:'Treasury health',sub:'Quiet solidity',kind:'console',el:TreasuryHealth,ctitle:'The treasury',csub:'Solidity, not performance.'},
+};
+const ORDER=['mercy','covenant','testimony','vouch','approval','treasury'];
+
+function App() {
+  const [cur,setCur]=useState('mercy');
+  const S=SCREENS[cur];
+  const Screen=S.el;
+  return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+    {/* top bar */}
+    <div style={{display:'flex',alignItems:'center',gap:16,padding:'16px 26px',background:'var(--surface)',borderBottom:'1px solid var(--line)',position:'sticky',top:0,zIndex:20}}>
+      <div style={{display:'flex',alignItems:'center',gap:11,flex:'none',whiteSpace:'nowrap'}}><Halo size={30}/><span style={{display:'flex',flexDirection:'column',lineHeight:1}}><span style={{fontFamily:'var(--font-display)',fontWeight:800,fontSize:21,letterSpacing:'-.02em'}}>Manna</span><span style={{fontSize:10,color:'var(--ink-3)',fontWeight:600,letterSpacing:'.06em',marginTop:3}}>by TrinityOne</span></span></div>
+      <div style={{height:22,width:1,background:'var(--line)'}}/>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {ORDER.map(k=>{const on=cur===k;return <button key={k} onClick={()=>setCur(k)} style={{display:'flex',flexDirection:'column',alignItems:'flex-start',gap:1,padding:'7px 13px',borderRadius:12,cursor:'pointer',border:on?'1px solid transparent':'1px solid var(--line)',background:on?'var(--clay)':'var(--surface)',color:on?'#fff':'var(--ink)'}}>
+          <span style={{fontSize:13,fontWeight:700,letterSpacing:'-.01em'}}>{SCREENS[k].label}</span>
+          <span style={{fontSize:10.5,opacity:on?.85:.55,fontWeight:500}}>{SCREENS[k].sub}</span>
+        </button>;})}
+      </div>
+    </div>
+    {/* stage */}
+    <div style={{flex:1,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'40px 24px 60px'}}>
+      {S.kind==='phone'
+        ? <PhoneFrame label={S.phoneLabel}><Screen/></PhoneFrame>
+        : <ConsoleChrome active={cur} onNav={setCur} title={S.ctitle} sub={S.csub}><Screen/></ConsoleChrome>}
+    </div>
+  </div>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+<script>
+  (function(){
+    var src = document.getElementById('app-src').textContent;
+    var code = Babel.transform(src, {presets:[['react',{runtime:'classic'}]]}).code;
+    new Function(code)();
+  })();
+</script>
+</body>
+</html>
