@@ -1107,13 +1107,9 @@ function App() {
                       <div style={{ position: 'relative', width: '100%', maxWidth: 760 }}>{screens.read}</div>
                     </div>
                     <div style={{ width: 380, flexShrink: 0, position: 'relative', background: 'var(--surface)' }}>
-                      {wordOv ? <WordStudySheet id={wordOv} open={true} onClose={() => setWordOv(null)} docked /> : (
-                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: 'var(--ink-3)', textAlign: 'center', padding: 28 }}>
-                          <Icon name="study" size={40} stroke={1.4} color="var(--ink-3)" />
-                          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink-2)' }}>Word study</div>
-                          <div style={{ fontSize: 13.5, maxWidth: 240, lineHeight: 1.5 }}>Tap any word in the passage for its Greek or Hebrew root, definition and cross-references.</div>
-                        </div>
-                      )}
+                      {wordOv ? <WordStudySheet id={wordOv} open={true} onClose={() => setWordOv(null)} docked />
+                        : loc ? <CommentaryPanel loc={loc} label={Bible.bookName(loc.book) + ' ' + loc.chap} open={true} onClose={() => {}} ctx={ctx} docked />
+                        : null}
                     </div>
                   </div>
                 ) : (

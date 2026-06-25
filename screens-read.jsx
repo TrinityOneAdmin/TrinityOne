@@ -579,7 +579,7 @@ function CommentaryEdge({ open, onToggle }) {
     </button>
   );
 }
-function CommentaryPanel({ loc, label, open, onClose, ctx }) {
+function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
   const [view, setView] = useS('commentary');   // 'commentary' | 'notes'
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
   const [composing, setComposing] = useS(false); const [cText, setCText] = useS(''); const [cVerse, setCVerse] = useS('1');
@@ -596,18 +596,20 @@ function CommentaryPanel({ loc, label, open, onClose, ctx }) {
   );
   return (
     <React.Fragment>
-      {open ? <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 24, background: 'rgba(20,15,10,.32)', animation: 'trinityFade .25s ease both' }} /> : null}
+      {open && !docked ? <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 24, background: 'rgba(20,15,10,.32)', animation: 'trinityFade .25s ease both' }} /> : null}
       <div
         onTouchStart={(e) => { sx.current = e.touches[0].clientX; }}
-        onTouchEnd={(e) => { if (e.changedTouches[0].clientX - sx.current > 56) onClose(); }}
-        style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 25, width: 'min(440px, 88%)', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', transform: open ? 'translateX(0)' : 'translateX(101%)', transition: 'transform .32s cubic-bezier(.32,.72,0,1)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ paddingTop: 50, flexShrink: 0, borderBottom: '1px solid var(--line)' }}>
+        onTouchEnd={(e) => { if (!docked && e.changedTouches[0].clientX - sx.current > 56) onClose(); }}
+        style={docked
+          ? { position: 'absolute', inset: 0, background: 'var(--surface)', display: 'flex', flexDirection: 'column' }
+          : { position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 25, width: 'min(440px, 88%)', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', transform: open ? 'translateX(0)' : 'translateX(101%)', transition: 'transform .32s cubic-bezier(.32,.72,0,1)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ paddingTop: docked ? 16 : 50, flexShrink: 0, borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 8px' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Study</div>
               <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700, lineHeight: 1.1 }}>{label}</div>
             </div>
-            <IconBtn name="chevR" onClick={onClose} />
+            {docked ? null : <IconBtn name="chevR" onClick={onClose} />}
           </div>
           <div style={{ display: 'flex', gap: 3, padding: '0 14px 10px' }}>
             <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}</div>
@@ -831,8 +833,8 @@ function ReadScreen({ ctx }) {
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
       <CrossRefSheet loc={loc} v={sel} label={labelOf(sel)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
-      <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />
-      <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />
+      {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
+      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />}
       <NoteEditor label={labelOf(sel)} open={sheet === 'note'} value={ctx.notes[keyOf(sel)]} onClose={() => setSheet('action')}
         onSave={(t) => { ctx.setNote(keyOf(sel), t); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
