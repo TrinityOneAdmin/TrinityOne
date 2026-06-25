@@ -20,13 +20,15 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
           <UserAvatar av={av} name={name} size={84} />
         </div>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
         <h1 style={{ margin: '0 14px', fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 700, letterSpacing: '-.5px', lineHeight: 1.1 }}>
           What should your<br/>church call you?</h1>
         <p style={{ margin: '10px 26px 0', fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)', textWrap: 'pretty' }}>
           A name helps your church family recognise you and makes the chat feel like community. No email, no phone — you can stay private if you’d rather.</p>
+        </div>
       </div>
 
-      <div style={{ padding: '6px 22px 12px' }}>
+      <div style={{ padding: '6px 22px 12px', maxWidth: 480, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
         {/* name field */}
         <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '8px 0 8px' }}>DISPLAY NAME</label>
         <input value={name} onChange={e => setName(e.target.value.slice(0, 24))} autoFocus placeholder="e.g. Maria"
@@ -44,6 +46,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
 
       {/* actions */}
       <div style={{ padding: '12px 22px 26px', borderTop: '1px solid var(--line-2)', background: 'var(--paper)' }}>
+        <div style={{ maxWidth: 480, margin: '0 auto' }}>
         <button onClick={() => onSave({ name: name.trim(), avatar: av })} style={{
           width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', marginBottom: 10,
           background: name.trim() ? 'var(--clay)' : 'var(--surface-2)', color: name.trim() ? '#fff' : 'var(--ink-3)',
@@ -53,6 +56,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
           width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer',
           color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)',
         }}>Skip setup for now</button>
+        </div>
       </div>
     </div>
   );
