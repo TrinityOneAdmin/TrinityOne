@@ -113,6 +113,7 @@
 
   @media (max-width: 880px) {
     .hero .wrap, .feat, .proto .wrap { grid-template-columns: 1fr; }
+    .hero .wrap { padding: 30px 22px 44px; }   /* mobile: trim the tall top gap so the CTAs sit above the fold */
     .feat.alt .ftext { order: 0; }
     /* on mobile the hero text comes first, the app screenshot follows it (was order:-1 = above) */
     .phone-stage { order: 1; margin-top: 8px; }
