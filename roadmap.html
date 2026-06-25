@@ -30,6 +30,15 @@
   .tick{flex-shrink:0;width:22px;height:22px;border-radius:999px;background:var(--sage-soft);color:#345c41;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px}
   .note{display:flex;gap:11px;padding:14px 16px;border-radius:14px;background:var(--gold-tint);border:1px solid color-mix(in oklab,var(--gold) 28%,transparent);margin:14px 0 0;font-size:13.5px;color:var(--ink-2)}
   a.back{display:inline-block;margin:8px 0 0;color:var(--clay-ink);font-weight:700;text-decoration:none}
+  .mods{display:grid;grid-template-columns:repeat(auto-fill,minmax(238px,1fr));gap:14px;margin:18px 0}
+  .mod{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px}
+  .mod h3{font-family:var(--font-display);font-weight:700;font-size:17px;margin:9px 0 5px}
+  .mod p{font-size:13.5px;margin:0;color:var(--ink-2);line-height:1.5}
+  .ms{display:inline-block;font-size:10.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;padding:3px 9px;border-radius:999px}
+  .ms.live{background:var(--sage-soft);color:#345c41}
+  .ms.pilot{background:var(--clay-soft);color:var(--clay-ink)}
+  .ms.soon{background:var(--gold-tint);color:#8a6717}
+  .ms.svc{background:var(--surface-2);color:var(--ink-3);border:1px solid var(--line)}
   footer{border-top:1px solid var(--line);margin-top:40px;padding:26px 0 50px;color:var(--ink-3);font-size:13px;text-align:center}
   b{color:var(--ink)}
 </style>
@@ -69,6 +78,23 @@
       <li><span class="tick">✓</span>Same recovery phrase — restore on any device, or the app itself</li>
     </ul>
     <div class="note"><span>⏳</span><div>Honest take: for a small church the <b>PIN lock already covers the everyday risks</b>. Keykeeper is for when the stakes rise — real giving, larger congregations, or the security-conscious. A nice-to-have, not a day-one essential.</div></div>
+  </div>
+
+  <h2 style="margin:36px 0 4px">Modules &amp; add-ons</h2>
+  <p>TrinityOne's core — reading, church chat, groups, serving rotas, the calendar and teaching — is <b>free forever</b>. On top of that, a church switches on just the modules it needs. Most are free; a few are optional <b>add-on services</b> (the ones that cost real money to run — livestreaming, video calls) that help keep the project going. Never a paywall on fellowship. Most of these are still in build — here's the honest slate.</p>
+  <div class="mods">
+    <div class="mod"><span class="ms live">Live</span><h3>Giving records &amp; Gift Aid</h3><p>A treasurer's ledger — record giving, manage funds and donors, and build a UK Gift Aid claim. Encrypted to the church's own key.</p></div>
+    <div class="mod"><span class="ms pilot">In the pilot</span><h3>Meal trains &amp; practical care</h3><p>Someone's unwell or has a new baby — open a need and the church fills the days: a meal Tuesday, a ride Thursday, errands Saturday.</p></div>
+    <div class="mod"><span class="ms soon">In build</span><h3>Benevolence</h3><p>Help the church give from its own fund to people in need — with a “coming alongside” flow of vouching and care, not just a transfer.</p></div>
+    <div class="mod"><span class="ms soon">In build</span><h3>Youth quizzes &amp; challenges</h3><p>Stewards set quizzes on a passage or reading plan; youth groups take them. Study and recall — care-framed, never a leaderboard.</p></div>
+    <div class="mod"><span class="ms soon">In build</span><h3>Church directory</h3><p>A private, encrypted contact book for the congregation — shared only inside the church, never public, never federated.</p></div>
+    <div class="mod"><span class="ms soon">In build</span><h3>Mentorship pairing</h3><p>Older-walks-with-younger: a steward pairs two people for discipleship, with a private thread and gentle milestones.</p></div>
+    <div class="mod"><span class="ms soon">In build</span><h3>Connect cards &amp; forms</h3><p>Digital welcome cards, sign-ups and surveys — responses encrypted to the church.</p></div>
+    <div class="mod"><span class="ms soon">In build</span><h3>Prayer wall</h3><p>A shared place to post and pray for one another's requests.</p></div>
+    <div class="mod"><span class="ms svc">Add-on service</span><h3>Per-country tax packs</h3><p>Drop-in tax modules per country — UK Gift Aid first, more to follow — kept current as the rules change.</p></div>
+    <div class="mod"><span class="ms svc">Add-on service</span><h3>Livestream</h3><p>Stream your Sunday service straight into members' apps, with a live watch-along.</p></div>
+    <div class="mod"><span class="ms svc">Add-on service</span><h3>Prayer &amp; meeting calls</h3><p>Audio and video rooms for prayer meetings and small groups.</p></div>
+    <div class="mod"><span class="ms svc">Add-on service</span><h3>Event ticketing</h3><p>Sign-ups and payment for camps and conferences.</p></div>
   </div>
 
   <p style="text-align:center;margin-top:30px"><a class="back" href="welcome.html">← Back to TrinityOne</a></p>
