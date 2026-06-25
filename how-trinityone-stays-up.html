@@ -133,12 +133,12 @@
   <table>
     <thead><tr><th>Host</th><th>Runs</th><th>Status</th></tr></thead>
     <tbody>
-      <tr><td><code>trinityone-master-01.tailbeaac0.ts.net/relay</code></td><td>gateway.mjs (full Node relay)</td><td><span class="status live">Live, primary</span></td></tr>
-      <tr><td><code>trinityone.tailbeaac0.ts.net/relay</code></td><td>gateway.mjs (this dev box)</td><td><span class="status live">Live, secondary</span></td></tr>
+      <tr><td><code>app.trinityone.church/relay</code></td><td>gateway.mjs (the a8 box, via Cloudflare tunnel)</td><td><span class="status live">Live, primary</span></td></tr>
+      <tr><td><code>trinityone-master-01.tailbeaac0.ts.net/relay</code></td><td>same box, Tailscale Funnel — independent network path</td><td><span class="status live">Live, fallback</span></td></tr>
       <tr><td><code>trinityone-nas.tailbeaac0.ts.net/relay</code></td><td>nostr-rs-relay (Docker)</td><td><span class="status future">Intermittent</span></td></tr>
     </tbody>
   </table>
-  <p>The pilot is exposed via Tailscale Funnel — a free, stable tunnel that gives each host a permanent <code>*.tailbeaac0.ts.net</code> URL without configuring a domain. Post-pilot the network moves to <code>trinityone.church</code> with each church hosting its own relay (often via a Cloudflare tunnel — see the <code>relay-app/install.sh</code> one-line installer).</p>
+  <p>The app and relay now run on the network's own domain — <code>app.trinityone.church</code> — exposed via a Cloudflare tunnel (free, stable, no open ports). Each church can host its own relay the same way (or via Tailscale Funnel) with the <code>relay-app/install.sh</code> one-line installer.</p>
 </section>
 
 <section id="modules">
@@ -158,7 +158,7 @@
   "sha256": "8a2a130d8e0f2c0ec22bd1891c186cd9eed9477152e57f582ed0dbfb6f3769c1",
   "bytes": 4012877,
   "mirrors": [
-    "https://trinityone.tailbeaac0.ts.net/modules/strongs-dict.json",
+    "https://app.trinityone.church/modules/strongs-dict.json",
     "https://trinityone-master-01.tailbeaac0.ts.net/modules/strongs-dict.json"
   ]
 }</code></pre>
