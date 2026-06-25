@@ -503,6 +503,18 @@ function App() {
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchDevotionals)) { setChurchDevos([]); return; }
     return window.Fellowship.subscribeChurchDevotionals(np, setChurchDevos);
   }, [activeChurch, churches, connTick]);
+  // ── Care / Meal trains: open needs the church shared that a member can sign up to help with ──
+  const [careSettings, setCareSettings] = useA({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' });
+  const [careNeeds, setCareNeeds] = useA([]);
+  const [careSlots, setCareSlots] = useA([]);
+  const [careSkips, setCareSkips] = useA([]);
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.subscribeMealsSettings) { setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); return; }
+    const subs = [F.subscribeMealsSettings(np, setCareSettings), F.subscribeCareNeeds(np, setCareNeeds), F.subscribeCareSlots(np, setCareSlots), F.subscribeCareSkips(np, setCareSkips)];
+    return () => subs.forEach(u => { try { u && u(); } catch {} });
+  }, [activeChurch, churches, connTick]);
   // ── serving & events: the member is driven by the requests the church p-tags to them ──
   const [servReqs, setServReqs] = useA([]);     // serving requests addressed to me ("can you serve?")
   const [servReplies, setServReplies] = useA({}); // my replies: { requestId: 'accept'|'decline'|'swap' }
@@ -941,6 +953,19 @@ function App() {
     myRsvps,
     netAnnouncements, netUnread, markNetSeen, notifications,
     churchRotas, churchRosters, churchServices, churchRunsheets, churchGroups,
+    // Care / Meal trains: settings + open needs + everyone's fills/skips, plus this member's sign-up actions.
+    // Only meaningful when care.settings.enabled; the Today card and Care screen render off this.
+    care: {
+      settings: careSettings,
+      needs: careNeeds,
+      slots: careSlots,
+      skips: careSkips,
+      myPub: (window.Fellowship && window.Fellowship.myPubkey) || '',
+      fill: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); return r; }),
+      clearFill: (careId, iso) => window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); return r; }),
+      skip: (careId, iso, reason) => window.Fellowship.markCareSkip(careId, iso, reason),
+      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso),
+    },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
     joinState,   // { approval, isAdmitted, isPending } for the active church

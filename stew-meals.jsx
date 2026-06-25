@@ -243,6 +243,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const [end, setEnd]       = React.useState(need ? need.endDate : '');
   const [notes, setNotes]   = React.useState(need ? need.notes : '');
   const [recipient, setRecipient] = React.useState(need ? need.recipient : '');
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const [busy, setBusy]     = React.useState(false);
   const [err, setErr]       = React.useState('');
   const dates = mealsDateRange(start, end);
@@ -278,6 +279,13 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         <div style={mealsLbl}>WHO IS THIS FOR?</div>
         <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Sarah Jones, or “a family in our church”" autoFocus style={{ ...mealsFld, marginBottom: 6 }} />
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>You decide what reads right. A real name brings the church closer; a discreet label protects dignity. Up to you.</div>
+
+        <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
+        <select value={recipient} onChange={e => setRecipient(e.target.value)} style={{ ...mealsFld, marginBottom: 6 }}>
+          <option value="">Not linked — just a label above</option>
+          {(members || []).filter(m => m && m.pubkey).map(m => <option key={m.pubkey} value={m.pubkey}>{m.name || (m.pubkey.slice(0, 8) + '…')}</option>)}
+        </select>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>If the person uses the app, link them — then <b>they alone</b> can tick off days they’re already covered, so the church doesn’t double up. Leave unlinked if they’re not on the app.</div>
 
         <div style={mealsLbl}>WHAT KIND OF CARE?</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>

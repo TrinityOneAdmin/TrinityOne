@@ -5762,6 +5762,10 @@
   var GROUP_D = "trinityone/group:";
   var CATEGORY_D = "trinityone/category:";
   var GROUPKEY_D = "trinityone/groupkey:";
+  var MEALS_SETTINGS_D = "trinityone/meals-settings";
+  var CARE_D = "trinityone/care:";
+  var CARESLOT_D = "trinityone/careslot:";
+  var CARESKIP_D = "trinityone/careskip:";
   var FAMILY_KEY = "trinityone.family";
   function _loadChildren() {
     try {
@@ -7236,6 +7240,204 @@
     },
     subscribeChurchEvents(churchNpub, cb) {
       return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "" }), cb);
+    },
+    // ── Meal trains / Care module (member side) ──
+    // Read the church's Care config so the member app knows whether to show the Care card (and, for
+    // 'team' visibility, that the church chose to keep needs to the care team). Church-signed → church-voice.
+    subscribeMealsSettings(churchNpub, cb) {
+      const pubk = toPub(churchNpub);
+      const OFF = { enabled: false, visibility: "all", openedBy: "steward", adminGroupId: "" };
+      if (!pubk) {
+        cb({ ...OFF });
+        return () => {
+        };
+      }
+      let best = { ts: 0, doc: { ...OFF } };
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], "#t": [NET] }, { kinds: [30078], "#church": [pubk], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (_absorbRoster(pubk, d, e)) return;
+          if (d !== MEALS_SETTINGS_D || !_churchVoice(pubk, { _by: e.pubkey })) return;
+          if ((e.created_at || 0) <= best.ts) return;
+          try {
+            const c = JSON.parse(e.content || "{}");
+            best = { ts: e.created_at || 0, doc: { enabled: !!c.enabled, visibility: c.visibility === "team" ? "team" : "all", openedBy: c.openedBy === "member" ? "member" : "steward", adminGroupId: String(c.adminGroupId || "") } };
+            cb({ ...best.doc });
+          } catch {
+          }
+        },
+        oneose() {
+          cb({ ...best.doc });
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // Open care needs. Authored by the church, a steward, or a care-team admin — all relay-enforced, so a
+    // need present on the church's relay was written by an authorised pubkey. cb([{ id, displayLabel, type,
+    // startDate, endDate, recipient, notes, ts }]).
+    subscribeCareNeeds(churchNpub, cb) {
+      const pubk = toPub(churchNpub);
+      if (!pubk) {
+        cb([]);
+        return () => {
+        };
+      }
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => cb([...byId.values()].sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0)));
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], "#t": [NET] }, { kinds: [30078], "#church": [pubk], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (_absorbRoster(pubk, d, e)) {
+            emit();
+            return;
+          }
+          if (!d.startsWith(CARE_D)) return;
+          const tagged = (e.tags.find((t) => t[0] === "church") || [])[1];
+          if (!_churchVoice(pubk, { _by: e.pubkey }) && toPub(tagged) !== pubk) return;
+          const id = d.slice(CARE_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byId.delete(id);
+            emit();
+            return;
+          }
+          try {
+            const c = JSON.parse(e.content);
+            byId.set(id, { id, displayLabel: c.displayLabel || "", type: c.type || "meals", startDate: c.startDate || "", endDate: c.endDate || "", recipient: (c.recipient || "").toLowerCase(), notes: c.notes || "", ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // member offers to help (careslot:) + recipient skip-days (careskip:) — both member-signed, church-tagged.
+    // Keyed needId|iso|pubkey so each member's fill for a (need,date) is one entry. No church-voice filter:
+    // these are members' own events, not church content.
+    _subCareTagged(churchNpub, prefix, map, cb) {
+      const pubk = toPub(churchNpub);
+      if (!pubk) {
+        cb([]);
+        return () => {
+        };
+      }
+      const byKey = /* @__PURE__ */ new Map();
+      const emit = () => cb([...byKey.values()]);
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], "#church": [pubk], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(prefix)) return;
+          const rest = d.slice(prefix.length).split(":");
+          const needId = rest[0] || "", isoDate = rest[1] || "";
+          if (!needId || !isoDate) return;
+          const key = needId + "|" + isoDate + "|" + e.pubkey;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byKey.delete(key);
+            emit();
+            return;
+          }
+          try {
+            byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || "{}")) });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    subscribeCareSlots(churchNpub, cb) {
+      return window.Fellowship._subCareTagged(churchNpub, CARESLOT_D, (o) => ({ note: String(o.note || "").trim() }), cb);
+    },
+    subscribeCareSkips(churchNpub, cb) {
+      return window.Fellowship._subCareTagged(churchNpub, CARESKIP_D, (o) => ({ reason: String(o.reason || "").trim() }), cb);
+    },
+    // sign up to bring a meal / give a ride on one date of a need (idempotent per member+need+date).
+    async fillCareSlot(careId, iso, note) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      if (!sk || !cp || !careId || !iso) return null;
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || "").trim() }) }, sk);
+      try {
+        await Promise.any(pool.publish(churchRelays(), evt));
+      } catch (e) {
+        console.warn("[fellowship] care slot publish failed", e);
+      }
+      return evt;
+    },
+    async clearCareSlot(careId, iso) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      if (!sk || !cp || !careId || !iso) return null;
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
+      try {
+        await Promise.any(pool.publish(churchRelays(), evt));
+      } catch {
+      }
+      return evt;
+    },
+    // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
+    async markCareSkip(careId, iso, reason) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      if (!sk || !cp || !careId || !iso) return null;
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }, sk);
+      try {
+        await Promise.any(pool.publish(churchRelays(), evt));
+      } catch (e) {
+        console.warn("[fellowship] care skip publish failed", e);
+      }
+      return evt;
+    },
+    async clearCareSkip(careId, iso) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      if (!sk || !cp || !careId || !iso) return null;
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
+      try {
+        await Promise.any(pool.publish(churchRelays(), evt));
+      } catch {
+      }
+      return evt;
     },
     // events posted by a GROUP'S leaders (members the church empowered) — authored by the member, scoped to
     // a group. Client-verified (M2): we only show events from the church, a current roster steward, or an

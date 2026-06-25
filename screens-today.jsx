@@ -22,6 +22,107 @@ function ProgressRing({ value, size = 46, stroke = 4, color = 'var(--clay)' }) {
   );
 }
 
+// ── Care / Meal trains: open needs the member can sign up to help with (Today card) ──
+const CARE_TYPE_LABEL = { meals: 'Meals', rides: 'Rides', errands: 'Errands', visits: 'Visits', childcare: 'Childcare' };
+const CARE_TYPE_ICON = { meals: 'heart', rides: 'calCheck', errands: 'check', visits: 'users', childcare: 'child' };
+function careDateRange(start, end) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '')) return [];
+  const s = new Date(start + 'T00:00:00');
+  const e = /^\d{4}-\d{2}-\d{2}$/.test(end || '') ? new Date(end + 'T00:00:00') : s;
+  if (isNaN(s) || isNaN(e) || e < s) return [];
+  const out = [];
+  for (const d = new Date(s); d <= e && out.length < 90; d.setDate(d.getDate() + 1)) out.push(d.toISOString().slice(0, 10));
+  return out;
+}
+function careFmtDate(iso) { try { return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); } catch { return iso; } }
+function careName(pub, myPub) {
+  if (pub && myPub && pub.toLowerCase() === myPub.toLowerCase()) return 'You';
+  try { const d = window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(pub); if (d && (d.name || d.handle)) return d.name || d.handle; } catch {}
+  return 'A member';
+}
+
+function CareNeedRow({ need, slots, skips, care, expanded, onToggle }) {
+  const myPub = care.myPub || '';
+  const dates = careDateRange(need.startDate, need.endDate);
+  const skipSet = new Set(skips.filter(k => k.needId === need.id).map(k => k.isoDate));
+  const fillsFor = (iso) => slots.filter(s => s.needId === need.id && s.isoDate === iso);
+  const isRecipient = !!need.recipient && need.recipient === myPub.toLowerCase();
+  const openDays = dates.filter(d => !skipSet.has(d) && fillsFor(d).length === 0);
+  const filledDays = dates.filter(d => fillsFor(d).length > 0).length;
+  const accent = 'var(--sage)';
+  return (
+    <div style={{ border: '1px solid var(--line)', borderRadius: 14, overflow: 'hidden', background: 'var(--surface)' }}>
+      <button onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '12px 13px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+        <div style={{ width: 40, height: 40, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', color: accent }}><Icon name={CARE_TYPE_ICON[need.type] || 'heart'} size={19} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{CARE_TYPE_LABEL[need.type] || 'Care'} · {openDays.length > 0 ? openDays.length + ' day' + (openDays.length === 1 ? '' : 's') + ' still open' : 'all covered'}</div>
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: openDays.length === 0 ? accent : 'var(--ink-3)' }}>{filledDays}/{dates.length}</div>
+        <Icon name={expanded ? 'chevD' : 'chevR'} size={16} color="var(--ink-3)" />
+      </button>
+      {expanded && (
+        <div style={{ borderTop: '1px solid var(--line)', padding: '6px 13px 12px' }}>
+          {need.notes ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '8px 0 4px', whiteSpace: 'pre-wrap' }}>{need.notes}</div> : null}
+          {dates.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '8px 0' }}>No dates set yet.</div> : dates.map(iso => {
+            const skipped = skipSet.has(iso);
+            const fills = fillsFor(iso);
+            const mineFilled = fills.some(f => f.pubkey && f.pubkey.toLowerCase() === myPub.toLowerCase());
+            return (
+              <div key={iso} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid color-mix(in oklab, var(--line) 60%, transparent)', opacity: skipped ? 0.55 : 1 }}>
+                <div style={{ minWidth: 96, fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{careFmtDate(iso)}</div>
+                <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
+                  {skipped ? <span>Not needed this day</span>
+                    : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}</span>)
+                    : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
+                </div>
+                {!skipped && (mineFilled
+                  ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnGhost}>Cancel</button>
+                  : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
+                {isRecipient && fills.length === 0 && (skipped
+                  ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
+                  : <button onClick={() => care.skip(need.id, iso)} style={careBtnGhost}>Skip</button>)}
+              </div>
+            );
+          })}
+          {isRecipient ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>This is for you. Tap <b>Skip</b> on any day you’re covered — it’ll come off the list.</div> : null}
+        </div>
+      )}
+    </div>
+  );
+}
+const careBtnHelp = { flexShrink: 0, padding: '6px 11px', borderRadius: 9, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
+const careBtnGhost = { flexShrink: 0, padding: '6px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
+
+function CareCard({ ctx }) {
+  const care = ctx.care || {};
+  const s = care.settings || {};
+  const [openId, setOpenId] = React.useState(null);
+  if (!s.enabled) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const myPub = (care.myPub || '').toLowerCase();
+  // visibility 'team' → only the care team (roster of the configured admin group) sees the list;
+  // a recipient always sees their own need so they can mark skip-days.
+  const amCareTeam = s.visibility !== 'team' || (() => {
+    const roster = (ctx.churchRosters || []).find(r => r.team === s.adminGroupId);
+    return !!(roster && (roster.people || []).some(p => p && (p.pub || '').toLowerCase() === myPub));
+  })();
+  let live = (care.needs || []).filter(n => !n.endDate || n.endDate >= today);
+  if (s.visibility === 'team' && !amCareTeam) live = live.filter(n => n.recipient && n.recipient === myPub);
+  if (!live.length) return null;
+  return (
+    <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
+      <SectionLabel>Practical care</SectionLabel>
+      <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+          {live.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TodayScreen({ ctx }) {
   const D = window.TrinityData;
   const Bible = window.Bible;
@@ -181,6 +282,9 @@ function TodayScreen({ ctx }) {
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
       )}
+
+      {/* Practical care / meal trains — only when the church enabled it and has an open need */}
+      <CareCard ctx={ctx} />
 
       {/* Continue reading */}
       <SectionLabel>Continue reading</SectionLabel>
