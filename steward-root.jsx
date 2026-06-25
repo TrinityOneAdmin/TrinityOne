@@ -179,6 +179,17 @@ function useStewardMembers() {
 }
 window.useStewardMembers = useStewardMembers;
 
+// pubkey -> member, for name lookups (e.g. the Care module showing who filled a slot)
+function useStewardDirectory() {
+  const members = useStewardMembers();
+  return React.useMemo(() => {
+    const map = {};
+    (members || []).forEach(m => { if (m && m.pubkey) map[m.pubkey] = m; });
+    return map;
+  }, [members]);
+}
+window.useStewardDirectory = useStewardDirectory;
+
 function useStewardBlocked() {
   const idv = useStewardIdv();
   const [blocked, setBlocked] = useSt([]);
@@ -340,6 +351,40 @@ function useMannaRecords() {
   return r;
 }
 window.useMannaRecords = useMannaRecords;
+
+// ---- optional Meal trains / Care module (church-signed care: docs; window.StewardMeals) ----
+function useMealsSettings() {
+  const idv = useStewardIdv();
+  // seed from the local cache so the "Care" nav item paints on the FIRST render (no relay-round-trip lag)
+  const [s, setS] = useSt(() => ({ enabled: (window.StewardMeals && window.StewardMeals.cachedEnabled) ? window.StewardMeals.cachedEnabled() : false }));
+  useStE(() => (window.StewardMeals ? window.StewardMeals.subscribeSettings(setS) : undefined), [idv]);
+  return s;
+}
+window.useMealsSettings = useMealsSettings;
+
+function useMealsNeeds() {
+  const idv = useStewardIdv();
+  const [n, setN] = useSt([]);
+  useStE(() => (window.StewardMeals ? window.StewardMeals.subscribeNeeds(setN) : undefined), [idv]);
+  return n;
+}
+window.useMealsNeeds = useMealsNeeds;
+
+function useMealsSlots() {
+  const idv = useStewardIdv();
+  const [sl, setSl] = useSt([]);
+  useStE(() => (window.StewardMeals ? window.StewardMeals.subscribeSlots(setSl) : undefined), [idv]);
+  return sl;
+}
+window.useMealsSlots = useMealsSlots;
+
+function useMealsSkips() {
+  const idv = useStewardIdv();
+  const [sk, setSk] = useSt([]);
+  useStE(() => (window.StewardMeals ? window.StewardMeals.subscribeSkips(setSk) : undefined), [idv]);
+  return sk;
+}
+window.useMealsSkips = useMealsSkips;
 
 // live relay status (re-probed every 10s) + the church's footprint count on the relay
 function useStewardRelays() {

@@ -116,6 +116,13 @@ const JOINPOLICY_D = 'trinityone/joinpolicy:'; // church-signed join policy — 
 const ADMITTED_D = 'trinityone/admitted:';   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
 const STEWARDS_D = 'trinityone/stewards:';   // church-signed steward roster — d=stewards:<churchpub>, content {pubkeys:[…]}; delegates day-to-day church powers to those keys (revocable: owner re-signs without them). Owner-only to edit. See STEWARD-ROSTER-DESIGN.md.
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's REQUEST to a church — d=stewardreq:<churchpub>, authored by the requester (openly writable, like a join). The owner reviews + approves it into the roster (owner-only).
+// Meal trains / practical-care module (optional, per-church). care: needs are church/steward/care-team-admin authored;
+// careslot: are member-signed offers to help; careskip: are RECIPIENT-only ("I don't need help that day"). See SPINE.md + src/steward-meals.src.js.
+// NOTE: 'trinityone/care:' is NOT a prefix of careslot:/careskip: — the colon makes them distinct, so startsWith() is unambiguous.
+const MEALS_SETTINGS_D = 'trinityone/meals-settings'; // church-signed config — {enabled, visibility, openedBy, adminGroupId} (single doc, no suffix)
+const NEED_D = 'trinityone/care:';        // a care need — d=care:<id> (church / steward / care-team admin; or any member when openedBy='member')
+const SLOT_D = 'trinityone/careslot:';    // a member's fill for one (need,date) — d=careslot:<careId>:<iso> (member-signed, addressable per author)
+const SKIP_D = 'trinityone/careskip:';    // recipient marks a day they don't need help — d=careskip:<careId>:<iso> (RECIPIENT-only)
 function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch { return null; } }
 // the relay can host MULTIPLE churches — each manages its own data, scoped by author. Configure via
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
@@ -153,8 +160,15 @@ const BROADCAST = new Set();   // group ids the church marked broadcast
 const NETWORKS = new Set();    // network pubkeys this church joined — allowed to publish church-style content here
 const GROUP_LEADERS = new Map(); // groupId -> Set(pubkey) — members a leader empowered to post events for that group
 const STEWARDS_BY = new Map();   // churchpub -> Set(steward pubkeys) from the owner-signed stewards: roster (delegated, revocable authority)
+// Meal trains / care module state (rebuilt from stored events by note()):
+const ROSTER_PEOPLE = new Map();     // teamId(groupId) -> Set(pubkey) — people LINKED on a team roster; the care-team's members live here
+const MEALS_ADMIN_GROUP = new Map(); // churchpub -> care-team groupId (its roster people may open/manage care needs)
+const MEALS_OPEN_MEMBER = new Set(); // churchpubs whose meals-settings allow ANY member to open their own care need (openedBy='member')
+const CARE_RECIPIENT = new Map();    // careId -> recipient pubkey (so a careskip: write can be gated to the recipient alone)
 // is `pub` a current steward of church `cp`? (empty/no roster => false => behaviour identical to pre-roster)
 const stewardOf = (pub, cp) => { const s = STEWARDS_BY.get(cp); return !!(cp && s && s.has(pub)); };
+// is `pub` on the care-team of church `cp`? (a member of the roster of cp's configured care-team group)
+const careAdmin = (pub, cp) => { const g = cp && MEALS_ADMIN_GROUP.get(cp); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub)); };
 // the church a steward-authored CONTENT event acts for: its ["church", <cp>] tag, validated to a configured church.
 const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church'); const h = t && (toHexPub(t[1]) || t[1]); return h && CHURCH_PUBS.has(h) ? h : ''; };
 const BLOCKED_BY = new Map();    // churchpub -> Set(blocked member pubkeys); BLOCKED is the union for fast checks
@@ -355,6 +369,23 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     STEWARDS_BY.set(e.pubkey, set);
   }
+  else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, namedChurch(e)))) {   // a team roster — track its LINKED people so care-team admins can be resolved
+    const id = d.slice(ROSTER_D.length);
+    if (removed) { ROSTER_PEOPLE.delete(id); return; }
+    const set = new Set(); try { (JSON.parse(e.content).people || []).forEach(p => { const h = p && toHexPub(p.pub); if (h) set.add(h); }); } catch {}
+    ROSTER_PEOPLE.set(id, set);
+  }
+  else if (d === MEALS_SETTINGS_D) {   // optional Care module config — only the church key (or one of its stewards) sets it
+    const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardOf(e.pubkey, cp = namedChurch(e)) ? cp : '');
+    if (!owner) return;
+    if (removed) { MEALS_ADMIN_GROUP.delete(owner); MEALS_OPEN_MEMBER.delete(owner); return; }
+    try { const c = JSON.parse(e.content); MEALS_ADMIN_GROUP.set(owner, String(c.adminGroupId || '')); if (c.openedBy === 'member') MEALS_OPEN_MEMBER.add(owner); else MEALS_OPEN_MEMBER.delete(owner); } catch {}
+  }
+  else if (d.startsWith(NEED_D)) {   // a care need (already passed accept(): church/steward/care-admin/allowed-member) — record its recipient for careskip gating
+    const id = d.slice(NEED_D.length);
+    if (removed) { CARE_RECIPIENT.delete(id); return; }
+    try { const r = toHexPub((JSON.parse(e.content) || {}).recipient || ''); if (r) CARE_RECIPIENT.set(id, r); else CARE_RECIPIENT.delete(id); } catch {}
+  }
 }
 // the group id an event-doc is scoped to (its non-NET 't' tag), or '' for a whole-church event
 const eventGroup = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
@@ -402,6 +433,17 @@ function accept(e) {
       if (events.some(x => x.kind === 30078 && x.pubkey === e.pubkey && dtag(x) === d)) return true;   // updating their own pending request
       let pend = 0; for (const x of events) { if (x.kind === 30078 && dtag(x) === d && !MEMBERS.has(x.pubkey)) pend++; }   // else cap strangers' pending requests for this church
       return pend < STEWARDREQ_CAP;
+    }
+    // Meal trains / Care module (optional, per-church) — must precede the generic member fallback:
+    if (d === MEALS_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // enable/configure the module: church or rostered steward
+    if (d.startsWith(NEED_D)) {                                 // open / edit / close a care need
+      const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
+      return isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && isMember);   // church / steward / care-team admin; or any member when the church allows member-opened needs
+    }
+    if (d.startsWith(SLOT_D)) return isMember;                  // fill a slot: any member offers help (the event is keyed by their own pubkey, so they can't forge another member's)
+    if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": RECIPIENT-only (the new shape — relay-enforced)
+      const careId = d.slice(SKIP_D.length).split(':')[0];
+      return !!careId && e.pubkey === CARE_RECIPIENT.get(careId);
     }
     return isMember;                                            // member's own data (MyData)
   }

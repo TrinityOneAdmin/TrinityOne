@@ -197,7 +197,7 @@
       if (!memberPub || !adminGroupId) return false;
       const roster = (groupRosters || {})[adminGroupId];
       if (!roster || !Array.isArray(roster.people)) return false;
-      return roster.people.some((p) => p && p.pubkey && p.pubkey.toLowerCase() === memberPub.toLowerCase());
+      return roster.people.some((p) => p && p.pub && p.pub.toLowerCase() === memberPub.toLowerCase());
     }
     window.StewardMeals = {
       // settings

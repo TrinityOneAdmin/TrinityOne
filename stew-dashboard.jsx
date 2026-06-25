@@ -395,6 +395,7 @@ function StewDashboard({ initial = 'overview' }) {
   // optional Finance module: its nav item appears only when a treasurer has switched it on
   const finOn = window.useFinanceSettings ? !!window.useFinanceSettings().enabled : false;
   const mannaOn = window.useMannaSettings ? !!window.useMannaSettings().enabled : false;   // optional money-out module
+  const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
   const nav = React.useMemo(() => {
     const copy = NAV.slice();
@@ -402,8 +403,9 @@ function StewDashboard({ initial = 'overview' }) {
     if (checkinOn) copy.splice(at(), 0, { key: 'checkin', label: 'Check-in', ic: 'child' });
     if (finOn) copy.splice(at(), 0, { key: 'finance', label: 'Finance', ic: 'gift' });
     if (mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
+    if (mealsOn) copy.splice(at(), 0, { key: 'meals', label: 'Care', ic: 'heart' });
     return copy;
-  }, [finOn, mannaOn, checkinOn]);
+  }, [finOn, mannaOn, mealsOn, checkinOn]);
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
@@ -451,6 +453,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'checkin' && <DashCheckin />}
       {tab === 'finance' && <DashFinance />}
       {tab === 'manna' && <DashManna />}
+      {tab === 'meals' && <DashMeals />}
       {tab === 'settings' && <DashSettings onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
     </React.Fragment>
   );
@@ -3776,6 +3779,8 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
 
       {section === 'features' ? <React.Fragment>
       <DashFeaturesPanel church={church} />
+
+      <DashMealsPanel church={church} />
 
       <DashGivingPanel church={church} />
       </React.Fragment> : null}
