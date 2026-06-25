@@ -111,6 +111,13 @@
       <button class="btn-clay" id="fetchApk">Fetch latest APK</button>
     </div>
   </div>
+
+  <div class="card" id="subsCard" style="display:none">
+    <h2>Email subscribers <span class="muted" id="subsMsg" style="font-weight:600"></span></h2>
+    <div class="row"><span class="k">On the list</span><span class="v" id="subsCount">—</span></div>
+    <div class="muted" style="margin:4px 0 10px; font-size:13px">People who opted in via the website's “Stay updated” form. Export to send your update emails from your own mail tool.</div>
+    <button class="btn-clay" id="dlSubs">Download CSV</button>
+  </div>
 </div>
 
 <script>
@@ -194,7 +201,20 @@
       renderCfg();
       loadServes();
       loadUpdate();
+      loadSubs();
     } catch (e) { /* relay down — the hero card shows it */ }
+  }
+  let subsCache = [];
+  async function loadSubs() {
+    const card = document.getElementById('subsCard');
+    try {
+      const r = await fetch('/subscribe', { headers: authHeaders(), cache: 'no-store' });
+      if (r.status === 401) { card.style.display = 'none'; return; }
+      const s = await r.json();
+      subsCache = s.subscribers || [];
+      document.getElementById('subsCount').textContent = (s.count || 0) + (s.count === 1 ? ' email' : ' emails');
+      card.style.display = (s.count > 0) ? 'block' : 'none';   // only surface once someone has signed up
+    } catch (e) { card.style.display = 'none'; }
   }
 
   async function saveConfig() {
@@ -294,6 +314,12 @@
       m.style.color = bad.length ? 'var(--clay)' : 'var(--sage)';
       m.textContent = '✓ ' + ok.join(', ') + (bad.length ? ' · ✗ ' + bad.join('; ') : '');
     } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
+  });
+  document.getElementById('dlSubs')?.addEventListener('click', () => {
+    const csvCell = (v) => { v = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const rows = [['email', 'signed_up', 'source']].concat(subsCache.map(s => [csvCell(s.email), csvCell(s.at ? new Date(s.at).toISOString() : ''), csvCell(s.src || '')]));
+    const blob = new Blob([rows.map(r => r.join(',')).join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'trinityone-subscribers.csv'; a.click(); URL.revokeObjectURL(a.href);
   });
   document.getElementById('addCh').onclick = () => { cfgChurches.push({ npub: '', name: '' }); renderCfg(); document.querySelector('#cfgList .ch:last-child input')?.focus(); };
   document.getElementById('saveCfg').onclick = saveConfig;

@@ -204,6 +204,12 @@ const GROUP_VIS = new Map();     // groupId -> 'open' | 'invite'
 const GROUP_MEMBERS = new Map(); // groupId -> Set(pubkey) allowed to post in an invite-only group
 const GROUP_NAMES = new Map();   // groupId -> display name (for push titles)
 
+// ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
+const SUBS_FILE = join(ROOT, 'relay', 'subscribers.json');
+let subscribers = []; try { const d = JSON.parse(readFileSync(SUBS_FILE, 'utf8')); if (Array.isArray(d)) subscribers = d; } catch {}
+const subSeen = new Set(subscribers.map(s => String(s.email || '').toLowerCase()));
+const SUB_RL = new Map();   // ip -> [recent signup timestamps] — basic per-IP anti-flood
+
 // ---- web push (VAPID): notify members of serving requests in real time (PWA) ----
 const VAPID_PATH = join(ROOT, 'relay', 'vapid.json');
 const SUBS_PATH = join(ROOT, 'relay', 'push-subs.json');
@@ -924,6 +930,39 @@ function serveStatic(req, res) {
       res.writeHead(anyOk ? 200 : 502, H); res.end(JSON.stringify({ origin: ORIGIN, files }));
     })();
     return;
+  }
+  // marketing email capture: POST is public (opt-in signup, honeypot + per-IP rate limit); GET is the
+  // admin export (token-gated). The list is a plain opt-in marketing list, stored in relay/subscribers.json.
+  if (route === '/subscribe') {
+    const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' };
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS, ...CORS };
+    if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
+    if (req.method === 'GET') {   // admin export
+      if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+      res.writeHead(200, H); res.end(JSON.stringify({ count: subscribers.length, subscribers })); return;
+    }
+    if (req.method === 'POST') {  // public opt-in signup
+      const ip = String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '').split(',')[0].trim();
+      const now = Date.now();
+      const recent = (SUB_RL.get(ip) || []).filter(t => now - t < 3600000);
+      if (recent.length >= 5) { res.writeHead(429, H); res.end('{"error":"too many requests — try again later"}'); return; }
+      let body = ''; req.on('data', c => { body += c; if (body.length > 1e4) req.destroy(); });
+      req.on('end', () => {
+        let email = '', hp = '', src = '';
+        try { const j = JSON.parse(body || '{}'); email = String(j.email || '').trim().toLowerCase(); hp = String(j.website || '').trim(); src = String(j.src || '').slice(0, 24); } catch {}
+        recent.push(now); SUB_RL.set(ip, recent);
+        if (hp) { res.writeHead(200, H); res.end('{"ok":true}'); return; }   // honeypot tripped: feign success, store nothing
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 254) { res.writeHead(400, H); res.end('{"error":"that doesn\'t look like a valid email"}'); return; }
+        if (!subSeen.has(email)) {
+          subSeen.add(email);
+          subscribers.push({ email, at: now, src });
+          try { const tmp = SUBS_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(subscribers)); renameSync(tmp, SUBS_FILE); } catch {}
+        }
+        res.writeHead(200, H); res.end('{"ok":true,"subscribed":true}');
+      });
+      return;
+    }
+    res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
   // audio (podcast) feed proxy
   if (route === '/audiofeed') {

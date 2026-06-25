@@ -796,8 +796,38 @@
       <div class="col"><h5>Contact</h5><a href="mailto:hello@trinityone.church">Email us</a><a href="roadmap.html">Roadmap</a></div>
     </div>
   </div>
+  <div class="wrap" id="updates" style="margin-top:36px;padding-top:24px;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="max-width:440px">
+      <h5 style="color:var(--paper);font-size:15px;margin:0 0 6px">Stay updated</h5>
+      <p style="font-size:13.5px;color:var(--ink-3);margin:0 0 12px;line-height:1.5">An occasional email when the pilot opens up and when big features land. No spam — unsubscribe anytime.</p>
+      <form id="subForm" style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="email" name="email" placeholder="you@example.com" required autocomplete="email" style="flex:1;min-width:200px;padding:11px 14px;border-radius:11px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:var(--paper);font-size:15px;outline:none" />
+        <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0" />
+        <button type="submit" style="padding:11px 18px;border-radius:11px;border:none;background:var(--gold);color:#2b2113;font-weight:700;font-size:14.5px;cursor:pointer;font-family:var(--font-ui)">Notify me</button>
+      </form>
+      <div id="subMsg" style="font-size:13px;color:var(--ink-3);margin-top:9px;min-height:18px" role="status" aria-live="polite"></div>
+    </div>
+  </div>
   <div class="wrap" style="margin-top:40px;padding-top:24px;border-top:1px solid rgba(255,255,255,.08);font-size:12.5px;color:var(--ink-3)">© 2026 TrinityOne · Made for the church, owned by no one.</div>
 </footer>
+<script>
+  (function () {
+    var f = document.getElementById('subForm'); if (!f) return;
+    f.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var msg = document.getElementById('subMsg');
+      var email = (f.email.value || '').trim(), website = (f.website.value || '').trim();
+      msg.style.color = 'var(--ink-3)'; msg.textContent = 'Subscribing…';
+      fetch('/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email, website: website, src: 'welcome' }) })
+        .then(function (r) { return r.json().then(function (s) { return { ok: r.ok, s: s }; }); })
+        .then(function (x) {
+          if (x.ok) { msg.style.color = 'var(--gold-soft)'; msg.textContent = '✓ You’re on the list — thank you!'; f.reset(); }
+          else { msg.style.color = '#e8a0a0'; msg.textContent = '✗ ' + ((x.s && x.s.error) || 'Something went wrong — try again.'); }
+        })
+        .catch(function () { msg.style.color = '#e8a0a0'; msg.textContent = '✗ Network error — please try again.'; });
+    });
+  })();
+</script>
 
 <!-- live app preview is embedded via landing-app-today.html (see .phone-embed iframe above) -->
 
