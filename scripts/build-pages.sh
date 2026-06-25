@@ -47,7 +47,11 @@ done
 # We deliberately set CSP ONLY on those exact routes (no overlap with /*) so Cloudflare doesn't have to
 # merge two CSP headers. The marketing/help/preview pages get no CSP (unchanged) — they still rely on
 # runtime Babel + inline scripts — but do get the other hardening headers via /*.
-STRICT_CSP="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https: wss: ws:; object-src 'none'; base-uri 'self'; frame-src 'self'; frame-ancestors 'self'"
+# SECURITY-AUDIT-2026-06-25: M11 follow-up. The marketing HTML was cleaned (M11 commit 88a88cf) and
+# the gateway's CSP dropped the Google Fonts allowlist (f4ead6a), but the Pages _headers output here
+# still listed fonts.googleapis.com / fonts.gstatic.com — a regression of M11 in the production CDN
+# deploy. Strip them: fonts are vendored under vendor/fonts/ now.
+STRICT_CSP="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https: wss: ws:; object-src 'none'; base-uri 'self'; frame-src 'self'; frame-ancestors 'self'"
 cat > "$OUT/_headers" <<HDR
 /
   Content-Security-Policy: $STRICT_CSP

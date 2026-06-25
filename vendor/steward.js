@@ -9742,6 +9742,17 @@ zoo`.split("\n");
     window.Steward.hasKey = true;
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
+  var needsPin = false;
+  function _setNeedsPin(v) {
+    v = !!v;
+    if (needsPin === v) return;
+    needsPin = v;
+    if (typeof window !== "undefined" && window.Steward) window.Steward.needsPin = v;
+    try {
+      window.dispatchEvent(new CustomEvent("steward-needs-pin", { detail: { needs: v } }));
+    } catch (e) {
+    }
+  }
   var b64e = (u82) => btoa(String.fromCharCode(...u82));
   var b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
   async function deriveAes(pin, salt) {
@@ -9785,11 +9796,23 @@ zoo`.split("\n");
     // ---- key (pilot: self-custodial in localStorage; later: a signer) ----
     locked: false,
     // true when an encrypted key exists and isn't unlocked yet
+    // SECURITY-AUDIT-2026-06-25 Critical-2: true when the seed exists in memory but is NOT persisted
+    // as an encrypted blob — i.e. either freshly created (no setPin yet) or a legacy plaintext seed
+    // was found in localStorage that needs migrating. The UI gates the console behind a forced
+    // PIN-setup modal whenever this is true.
+    needsPin: false,
     init(mnemonicOverride) {
-      const m = mnemonicOverride || lsGet(KEY_LS);
+      if (mnemonicOverride) {
+        lsSet(KEY_LS, mnemonicOverride);
+        setKey(mnemonicOverride);
+        _setNeedsPin(true);
+        window.Steward.locked = false;
+        return true;
+      }
+      const m = lsGet(KEY_LS);
       if (m) {
-        if (mnemonicOverride) lsSet(KEY_LS, m);
         setKey(m);
+        _setNeedsPin(true);
         window.Steward.locked = false;
         return true;
       }
@@ -9813,6 +9836,7 @@ zoo`.split("\n");
         localStorage.removeItem(KEY_LS);
       } catch {
       }
+      _setNeedsPin(false);
       return true;
     },
     async unlock(pin) {
@@ -9851,23 +9875,26 @@ zoo`.split("\n");
         return false;
       }
     },
-    // drop the PIN: restore the plaintext seed. Requires the CURRENT pin, so someone at an unattended
-    // (already-unlocked) console can't strip the lock and expose the key without knowing it.
+    // drop the PIN. SECURITY-AUDIT-2026-06-25 Critical-2: NO LONGER writes the plaintext seed back to
+    // localStorage — instead removes the encrypted form and sets needsPin=true. The seed stays in
+    // memory (currentMnemonic); the UI immediately renders the forced PIN modal, requiring the
+    // steward to set a new PIN before any further action. Net effect: there is NO post-removeLock
+    // state where a plaintext seed exists on disk, even transiently.
     async removeLock(pin) {
       if (!currentMnemonic) return false;
       if (lsGet(ENC_LS) && !await window.Steward.verifyPin(pin)) return false;
-      lsSet(KEY_LS, currentMnemonic);
       try {
         localStorage.removeItem(ENC_LS);
       } catch {
       }
       window.Steward.locked = false;
+      _setNeedsPin(true);
       return true;
     },
     createKey() {
       const m = generateSeedWords();
-      lsSet(KEY_LS, m);
       setKey(m);
+      _setNeedsPin(true);
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
       return { npub: window.Steward.npub };
     },
@@ -9875,8 +9902,8 @@ zoo`.split("\n");
     // identity's "become a steward" code before the caller continues into the console (which fires it then).
     createKeyQuiet() {
       const m = generateSeedWords();
-      lsSet(KEY_LS, m);
       setKey(m);
+      _setNeedsPin(true);
       return { npub: window.Steward.npub, code: window.Steward.becomeStewardPayload() };
     },
     enterConsole() {
@@ -9898,7 +9925,12 @@ zoo`.split("\n");
       const m = (mnemonic || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (m.split(" ").length < 12) throw new Error("Enter the full 12-word recovery phrase.");
       setKey(m);
-      lsSet(KEY_LS, m);
+      try {
+        localStorage.removeItem(KEY_LS);
+        localStorage.removeItem(ENC_LS);
+      } catch (e) {
+      }
+      _setNeedsPin(true);
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
       return { npub: window.Steward.npub };
     },

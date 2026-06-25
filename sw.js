@@ -1,7 +1,14 @@
 // TrinityOne service worker — makes the app boot offline.
 // The app SHELL (html/jsx/libs/fonts) is cached here; Bible MODULES live in IndexedDB (engine.js)
 // and chat goes over the relay WebSocket — neither is touched by this worker.
-const CACHE = 'trinity-shell-v205';   // bump on each app deploy so installed PWAs refresh the shell
+const CACHE = 'trinity-shell-v206';   // bump on each app deploy so installed PWAs refresh the shell
+// SECURITY-AUDIT-2026-06-25 Critical-1: query-string params that MUST NOT enter the SW cache key.
+// The classic case is `?invite=<full 12-word BIP-39 seed>` — even after the React app strips the URL
+// via history.replaceState (app.jsx ~L466), the SW fetch handler has already cached the response
+// keyed by the FULL request URL. Anyone with DevTools / extension access to Cache Storage then sees
+// every cached URL via caches.keys()/match — the seed leaks via cache inspection long after the
+// address-bar scrub. Strip these before c.put(req, copy).
+const SENSITIVE_QS = ['invite', 'follow', 'relay', 'name'];
 
 // Precache the boot-critical core. Everything else same-origin is cached on first fetch, so one
 // online visit (to install / join) makes every screen available offline afterwards.
@@ -41,7 +48,19 @@ self.addEventListener('fetch', (e) => {
   // App shell (navigations + HTML/JSX source) is network-first, so a new deploy is picked up on the
   // next load instead of being pinned to the old cached copy; it falls back to cache when offline.
   const isShell = e.request.mode === 'navigate' || url.pathname === '/' || /\.(html|jsx)$/.test(url.pathname);
-  const fresh = (req) => fetch(req).then((res) => { if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); } return res; });
+  // SECURITY-AUDIT-2026-06-25 Critical-1: build a cache-safe Request that strips sensitive query
+  // params so the seed (in ?invite=) and the follow/relay/name companions don't end up in the
+  // Cache Storage key. The network fetch still uses the original req (so the page logic can read
+  // ?invite=); only the cached entry is rewritten.
+  const cacheSafeReq = (req) => {
+    try {
+      const u = new URL(req.url);
+      let dirty = false;
+      for (const k of SENSITIVE_QS) { if (u.searchParams.has(k)) { u.searchParams.delete(k); dirty = true; } }
+      return dirty ? new Request(u.toString(), { method: req.method, headers: req.headers, mode: 'no-cors', credentials: req.credentials }) : req;
+    } catch (_) { return req; }
+  };
+  const fresh = (req) => fetch(req).then((res) => { if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(cacheSafeReq(req), copy)); } return res; });
   if (isShell) {
     e.respondWith(fresh(e.request).catch(() => caches.match(e.request).then((c) => c || caches.match('./index.html'))));
     return;

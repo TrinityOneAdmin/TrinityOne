@@ -177,8 +177,32 @@ function setKey(mnemonic) {
 }
 
 // ── console PIN lock: encrypt the church seed at rest with a PIN/passphrase (AES-GCM, PBKDF2). A
-// locked console holds NO usable key until unlocked, so a stolen device / copied localStorage is inert. ──
+// locked console holds NO usable key until unlocked, so a stolen device / copied localStorage is inert.
+//
+// SECURITY-AUDIT-2026-06-25 Critical-2: PIN is now MANDATORY, not optional. The pilot model that
+// allowed a plaintext seed in localStorage was a documented tradeoff, but a stolen church key has
+// vastly bigger blast radius than a member key (the attacker impersonates the church to every
+// member). Concretely:
+//   • createKey() / createKeyQuiet() no longer persist plaintext — the seed lives in memory only
+//     until setPin() persists the encrypted form atomically.
+//   • init() detecting a legacy plaintext seed loads it into memory, removes nothing yet, and sets
+//     needsPin=true so the UI gates the console behind a forced PIN-setup modal. The setPin call
+//     then replaces the plaintext with the encrypted form and removes KEY_LS.
+//   • removeLock() no longer writes plaintext back — it removes the encrypted form and sets
+//     needsPin=true, so the user is immediately forced to set a new PIN before doing anything.
+//   • UI side: steward-root.jsx renders <StewardForcedPin /> whenever window.Steward.needsPin
+//     is true, blocking every other surface.
+// Native (Capacitor) SecureStorage migration is queued as a follow-up commit — async-init refactor.
+// ──
 const ENC_LS = 'trinityone.steward.church-key.enc';
+let needsPin = false;
+function _setNeedsPin(v) {
+  v = !!v;
+  if (needsPin === v) return;
+  needsPin = v;
+  if (typeof window !== 'undefined' && window.Steward) window.Steward.needsPin = v;
+  try { window.dispatchEvent(new CustomEvent('steward-needs-pin', { detail: { needs: v } })); } catch (e) {}
+}
 const b64e = (u8) => btoa(String.fromCharCode(...u8));
 const b64d = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 async function deriveAes(pin, salt) {
@@ -210,9 +234,24 @@ window.Steward = {
 
   // ---- key (pilot: self-custodial in localStorage; later: a signer) ----
   locked: false,                                  // true when an encrypted key exists and isn't unlocked yet
+  // SECURITY-AUDIT-2026-06-25 Critical-2: true when the seed exists in memory but is NOT persisted
+  // as an encrypted blob — i.e. either freshly created (no setPin yet) or a legacy plaintext seed
+  // was found in localStorage that needs migrating. The UI gates the console behind a forced
+  // PIN-setup modal whenever this is true.
+  needsPin: false,
   init(mnemonicOverride) {
-    const m = mnemonicOverride || lsGet(KEY_LS);
-    if (m) { if (mnemonicOverride) lsSet(KEY_LS, m); setKey(m); window.Steward.locked = false; return true; }
+    if (mnemonicOverride) {
+      // test hook — keep behaviour but force PIN setup so an injected key never persists plaintext past first boot
+      lsSet(KEY_LS, mnemonicOverride); setKey(mnemonicOverride);
+      _setNeedsPin(true); window.Steward.locked = false; return true;
+    }
+    const m = lsGet(KEY_LS);
+    if (m) {
+      // SECURITY-AUDIT-2026-06-25 Critical-2: legacy plaintext seed on disk. Load into memory, mark
+      // as needing migration. The forced PIN modal will appear on the next render; setPin() will
+      // atomically replace KEY_LS with ENC_LS.
+      setKey(m); _setNeedsPin(true); window.Steward.locked = false; return true;
+    }
     if (lsGet(ENC_LS)) { window.Steward.locked = true; return false; }   // PIN-locked — needs unlock(), no key in memory
     return false;
   },
@@ -225,6 +264,7 @@ window.Steward = {
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt), new TextEncoder().encode(seed)));
     lsSet(ENC_LS, JSON.stringify({ v: 1, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
     try { localStorage.removeItem(KEY_LS); } catch {}
+    _setNeedsPin(false);   // SECURITY-AUDIT-2026-06-25 Critical-2: encrypted form now persisted; clear the force flag
     return true;
   },
   async unlock(pin) {                              // decrypt into memory (does NOT re-write the plaintext)
@@ -252,24 +292,33 @@ window.Steward = {
       return true;
     } catch { return false; }
   },
-  // drop the PIN: restore the plaintext seed. Requires the CURRENT pin, so someone at an unattended
-  // (already-unlocked) console can't strip the lock and expose the key without knowing it.
+  // drop the PIN. SECURITY-AUDIT-2026-06-25 Critical-2: NO LONGER writes the plaintext seed back to
+  // localStorage — instead removes the encrypted form and sets needsPin=true. The seed stays in
+  // memory (currentMnemonic); the UI immediately renders the forced PIN modal, requiring the
+  // steward to set a new PIN before any further action. Net effect: there is NO post-removeLock
+  // state where a plaintext seed exists on disk, even transiently.
   async removeLock(pin) {
     if (!currentMnemonic) return false;
     if (lsGet(ENC_LS) && !(await window.Steward.verifyPin(pin))) return false;   // wrong/empty PIN → refuse
-    lsSet(KEY_LS, currentMnemonic); try { localStorage.removeItem(ENC_LS); } catch {}
+    try { localStorage.removeItem(ENC_LS); } catch {}
     window.Steward.locked = false;
+    _setNeedsPin(true);   // force an immediate re-PIN
     return true;
   },
   createKey() {
-    const m = generateSeedWords(); lsSet(KEY_LS, m); setKey(m);
+    // SECURITY-AUDIT-2026-06-25 Critical-2: NO plaintext write to localStorage. The seed lives in
+    // memory only until setPin() persists the encrypted form. needsPin forces the UI to gate the
+    // console behind a forced PIN-setup modal — there is NO state in which a freshly-created
+    // church key sits as plaintext on disk.
+    const m = generateSeedWords(); setKey(m); _setNeedsPin(true);
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
     return { npub: window.Steward.npub };
   },
   // like createKey but WITHOUT firing steward-key — so the welcome screen can stay up to show the new
   // identity's "become a steward" code before the caller continues into the console (which fires it then).
   createKeyQuiet() {
-    const m = generateSeedWords(); lsSet(KEY_LS, m); setKey(m);
+    // Same posture as createKey: memory only, no plaintext on disk.
+    const m = generateSeedWords(); setKey(m); _setNeedsPin(true);
     return { npub: window.Steward.npub, code: window.Steward.becomeStewardPayload() };
   },
   enterConsole() { window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } })); },
@@ -286,7 +335,11 @@ window.Steward = {
   restoreKey(mnemonic) {
     const m = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (m.split(' ').length < 12) throw new Error('Enter the full 12-word recovery phrase.');
-    setKey(m); lsSet(KEY_LS, m);   // setKey -> privateKeyFromSeedWords throws if the phrase is invalid
+    // SECURITY-AUDIT-2026-06-25 Critical-2: restore does NOT persist plaintext. The seed lives in
+    // memory only; needsPin forces the forced PIN modal before the steward can act. Any existing
+    // PIN-encrypted blob on this device is wiped (it belonged to a different key).
+    setKey(m); try { localStorage.removeItem(KEY_LS); localStorage.removeItem(ENC_LS); } catch (e) {}
+    _setNeedsPin(true);
     // fire steward-key so the first-run welcome advances to the console (createKey does this too)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
     return { npub: window.Steward.npub };

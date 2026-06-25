@@ -291,6 +291,56 @@ function useFinanceClaims() {
 }
 window.useFinanceClaims = useFinanceClaims;
 
+// ---- Manna (optional money-out / disbursement module) — mirrors the Finance hooks above ----
+function useMannaSettings() {
+  const idv = useStewardIdv();
+  // seed from cache so the "Manna" nav item paints on the FIRST render (no relay-round-trip lag)
+  const [s, setS] = useSt(() => ({ enabled: (window.StewardManna && window.StewardManna.cachedEnabled) ? window.StewardManna.cachedEnabled() : false }));
+  useStE(() => (window.StewardManna ? window.StewardManna.subscribeSettings(setS) : undefined), [idv]);
+  return s;
+}
+window.useMannaSettings = useMannaSettings;
+
+function useMannaFunds() {
+  const idv = useStewardIdv();
+  const [f, setF] = useSt([]);
+  useStE(() => (window.StewardManna ? window.StewardManna.subscribeFunds(setF) : undefined), [idv]);
+  return f;
+}
+window.useMannaFunds = useMannaFunds;
+
+function useMannaRequests() {
+  const idv = useStewardIdv();
+  const [r, setR] = useSt([]);
+  useStE(() => (window.StewardManna ? window.StewardManna.subscribeRequests(setR) : undefined), [idv]);
+  return r;
+}
+window.useMannaRequests = useMannaRequests;
+
+function useMannaVouches() {
+  const idv = useStewardIdv();
+  const [v, setV] = useSt([]);
+  useStE(() => (window.StewardManna ? window.StewardManna.subscribeVouches(setV) : undefined), [idv]);
+  return v;
+}
+window.useMannaVouches = useMannaVouches;
+
+function useMannaTestimony() {
+  const idv = useStewardIdv();
+  const [t, setT] = useSt([]);
+  useStE(() => (window.StewardManna ? window.StewardManna.subscribeTestimony(setT) : undefined), [idv]);
+  return t;
+}
+window.useMannaTestimony = useMannaTestimony;
+
+function useMannaRecords() {
+  const idv = useStewardIdv();
+  const [r, setR] = useSt([]);
+  useStE(() => (window.StewardManna ? window.StewardManna.subscribeRecords(setR) : undefined), [idv]);
+  return r;
+}
+window.useMannaRecords = useMannaRecords;
+
 // live relay status (re-probed every 10s) + the church's footprint count on the relay
 function useStewardRelays() {
   const [status, setStatus] = useSt([]);
@@ -435,8 +485,10 @@ function StewardWelcome() {
             <input type="password" inputMode="numeric" value={pinVal} onChange={e => { setPinVal(e.target.value); setErr(''); }} autoFocus placeholder="Choose a PIN (or a longer passphrase)" onKeyDown={e => { if (e.key === 'Enter' && pinVal.length >= 4 && !pinBusy) finishWithPin(); }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{err}</div> : null}
             <button onClick={finishWithPin} disabled={pinVal.length < 4 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 4 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="#fff" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
-            <button onClick={() => window.Steward.enterConsole()} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 12.5, width: '100%', justifyContent: 'center', marginTop: 8 }}>Skip for now</button>
-            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can set or change this later under Settings → Security → Console lock.</div>
+            {/* SECURITY-AUDIT-2026-06-25 Critical-2: Skip is gone — PIN is mandatory. If the user
+                bypasses this screen anyway (back-button, refresh), the StewardForcedPin modal will
+                fire on the next render because window.Steward.needsPin is still true. */}
+            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can change this later under Settings → Security → Console lock.</div>
           </div>
         ) : mode === 'scanning' ? (
           <div>
@@ -488,6 +540,47 @@ function SegBtn({ on, onClick, children, icon }) {
   );
 }
 
+// SECURITY-AUDIT-2026-06-25 Critical-2: Forced PIN-setup modal. Shown the moment a fresh church key
+// is created (no PIN yet → plaintext only in memory) OR an existing plaintext seed is found in
+// localStorage on init (legacy install, needs migration). PIN is now MANDATORY — no Skip. The
+// modal blocks every other surface until the steward sets one, which atomically replaces any
+// plaintext seed in KEY_LS with the AES-GCM/PBKDF2-encrypted form in ENC_LS.
+function StewardForcedPin() {
+  const [pin, setPin] = useSt('');
+  const [busy, setBusy] = useSt(false);
+  const [err, setErr] = useSt('');
+  const submit = async () => {
+    if (pin.length < 4 || busy) return;
+    setBusy(true); setErr('');
+    const ok = await window.Steward.setPin(pin);
+    if (!ok) { setBusy(false); setErr('Setting the PIN failed — try again.'); setPin(''); return; }
+    // success: window.Steward.needsPin becomes false, the steward-needs-pin event fires, StewardRoot re-renders into the console.
+  };
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
+      <div style={{ width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28, textAlign: 'center' }}>
+        <Halo size={40} color="var(--ink)" spark="var(--clay)" />
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Set a console PIN</div>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 18, textAlign: 'left' }}>
+          Your church key signs as the <b>whole church</b> — if it leaks, an attacker can impersonate
+          the church to every member. A PIN encrypts the key on this device so a stolen phone or
+          copied browser storage holds nothing usable. You can change it anytime under{' '}
+          <b>Settings → Security</b>.
+        </div>
+        <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+          placeholder="Choose a PIN (4+ chars; passphrase OK)" inputMode="numeric" autoComplete="new-password"
+          style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
+        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
+        <button onClick={submit} disabled={pin.length < 4 || busy} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (pin.length >= 4 && !busy) ? 1 : .5 }}><Icon name="lock" size={16} color="#fff" /> {busy ? 'Setting…' : 'Set PIN & enter'}</button>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 11, lineHeight: 1.5 }}>
+          Required. If you forget the PIN, recover the church via your 12-word phrase on any device.
+        </div>
+      </div>
+    </div>
+  );
+}
+window.StewardForcedPin = StewardForcedPin;
+
 // PIN unlock gate — shown when the church key is encrypted at rest and not yet unlocked this session
 function StewardUnlock() {
   const [pin, setPin] = useSt('');
@@ -522,6 +615,17 @@ function StewardRoot() {
   // a fresh install has no church key → welcome; an encrypted key → unlock gate; otherwise → console.
   const [ks, setKs] = useSt(() => ({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }));
   useStE(() => { const f = () => setKs({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }); window.addEventListener('steward-key', f); return () => window.removeEventListener('steward-key', f); }, []);
+  // SECURITY-AUDIT-2026-06-25 Critical-2: needsPin gates the entire console behind a forced PIN modal
+  // whenever a freshly-created or legacy-plaintext seed has not been encrypted yet. Tracks both the
+  // dedicated steward-needs-pin event AND steward-key (because createKey() fires steward-key after
+  // marking needsPin).
+  const [needsPin, setNeedsPin] = useSt(() => !!window.Steward.needsPin);
+  useStE(() => {
+    const f = () => setNeedsPin(!!window.Steward.needsPin);
+    window.addEventListener('steward-needs-pin', f);
+    window.addEventListener('steward-key', f);
+    return () => { window.removeEventListener('steward-needs-pin', f); window.removeEventListener('steward-key', f); };
+  }, []);
   // idle auto-lock: when a PIN is set, forget the key after 10 min of no activity (re-prompt on return)
   useStE(() => {
     if (!ks.has || !window.Steward.hasPinLock || !window.Steward.hasPinLock()) return;
@@ -537,6 +641,7 @@ function StewardRoot() {
       <div className="stew-root" style={{ height: '100%' }}>
         {ks.locked ? <StewardUnlock />
           : !ks.has ? <StewardWelcome />
+          : needsPin ? <StewardForcedPin />
           : consoleView === 'wizard' ? <StewWizard onDone={() => setConsoleView('dashboard')} /> : <StewDashboard initial={params.get('tab') || 'overview'} />}
       </div>
     );
