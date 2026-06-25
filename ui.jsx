@@ -215,6 +215,7 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
       }} />
       <div onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
+        maxWidth: 500, marginLeft: 'auto', marginRight: 'auto',   // centered column on a wide screen; full-width on a phone (maxWidth > viewport)
         background: 'var(--surface)', borderRadius: '30px 30px 0 0',
         maxHeight, display: 'flex', flexDirection: 'column',
         boxShadow: '0 -10px 40px rgba(20,14,8,.22)',
