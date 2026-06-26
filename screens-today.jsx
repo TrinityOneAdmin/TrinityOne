@@ -64,6 +64,11 @@ function CareNeedRow({ need, slots, skips, care, expanded, onToggle }) {
       {expanded && (
         <div style={{ borderTop: '1px solid var(--line)', padding: '6px 13px 12px' }}>
           {need.notes ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '8px 0 4px', whiteSpace: 'pre-wrap' }}>{need.notes}</div> : null}
+          {need.dietary && need.dietary.length ? (
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: '6px 0 2px' }}>
+              {need.dietary.map(d => <span key={d} style={{ fontSize: 11, fontWeight: 700, color: 'var(--sage)', background: 'color-mix(in oklab, var(--sage) 13%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 30%, transparent)', borderRadius: 999, padding: '3px 9px' }}>{d}</span>)}
+            </div>
+          ) : null}
           {dates.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '8px 0' }}>No dates set yet.</div> : dates.map(iso => {
             const skipped = skipSet.has(iso);
             const fills = fillsFor(iso);

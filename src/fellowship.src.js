@@ -980,7 +980,7 @@ window.Fellowship = {
         if (!_churchVoice(pubk, { _by: e.pubkey }) && toPub(tagged) !== pubk) return;
         const id = d.slice(CARE_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, displayLabel: c.displayLabel || '', type: c.type || 'meals', startDate: c.startDate || '', endDate: c.endDate || '', recipient: (c.recipient || '').toLowerCase(), notes: c.notes || '', ts: e.created_at }); emit(); } catch {}
+        try { const c = JSON.parse(e.content); byId.set(id, { id, displayLabel: c.displayLabel || '', type: c.type || 'meals', startDate: c.startDate || '', endDate: c.endDate || '', recipient: (c.recipient || '').toLowerCase(), notes: c.notes || '', dietary: Array.isArray(c.dietary) ? c.dietary : [], ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });

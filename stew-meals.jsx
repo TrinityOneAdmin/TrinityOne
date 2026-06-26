@@ -14,6 +14,7 @@ const MEALS_TYPES = [
 ];
 const MEALS_TYPE_LABEL = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[1]]));
 const MEALS_TYPE_ICON  = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[2]]));
+const MEALS_DIET = ['Vegetarian', 'Vegan', 'Carnivore', 'Pescatarian', 'Keto', 'Gluten-free', 'Dairy-free', 'Nut-free'];
 
 const mealsFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
 const mealsLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 6px' };
@@ -261,6 +262,8 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const [end, setEnd]       = React.useState(need ? need.endDate : '');
   const [notes, setNotes]   = React.useState(need ? need.notes : '');
   const [recipient, setRecipient] = React.useState(need ? need.recipient : '');
+  const [diet, setDiet] = React.useState(need && Array.isArray(need.dietary) ? need.dietary : []);
+  const toggleDiet = (d) => setDiet(ds => ds.includes(d) ? ds.filter(x => x !== d) : [...ds, d]);
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const [busy, setBusy]     = React.useState(false);
   const [err, setErr]       = React.useState('');
@@ -274,6 +277,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         id: need ? need.id : undefined,
         displayLabel: label.trim(), type, startDate: start, endDate: end, notes: notes.trim(),
         recipient: (recipient || '').trim(),
+        dietary: type === 'meals' ? diet : [],
       });
       onSaved && onSaved(saved);
     } catch (e) { setErr((e && e.message) || 'Save failed.'); setBusy(false); }
@@ -313,6 +317,18 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
             </button>
           ))}
         </div>
+
+        {type === 'meals' ? (
+          <React.Fragment>
+            <div style={mealsLbl}>DIETARY NEEDS (OPTIONAL)</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+              {MEALS_DIET.map(d => { const onD = diet.includes(d); return (
+                <button key={d} onClick={() => toggleDiet(d)} style={{ padding: '7px 11px', borderRadius: 999, border: '1px solid ' + (onD ? 'var(--sage)' : 'var(--line)'), background: onD ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: onD ? 'var(--sage)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{onD ? '✓ ' : ''}{d}</button>
+              ); })}
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>Helpers see these so they cook right. Add anything else (allergies, etc.) in the notes below.</div>
+          </React.Fragment>
+        ) : null}
 
         <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
           <div style={{ flex: 1 }}>

@@ -90,7 +90,9 @@
         startDate: isoDate(n.startDate),
         endDate: isoDate(n.endDate),
         recipient: typeof n.recipient === "string" && /^[0-9a-f]{64}$/i.test(n.recipient) ? n.recipient.toLowerCase() : "",
-        notes: String(n.notes || "").trim()
+        notes: String(n.notes || "").trim(),
+        // dietary tags (meals only) — capped + length-limited; the UI supplies the chip set
+        dietary: (Array.isArray(n.dietary) ? n.dietary : []).map((d) => String(d).slice(0, 24)).filter(Boolean).slice(0, 12)
       };
     }
     function publishNeed(need) {
