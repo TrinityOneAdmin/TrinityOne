@@ -277,7 +277,6 @@ const MODULES = [
   { id: 'commentaries', name: 'Commentaries', count: '8 sets', icon: 'comment', accent: 'var(--sage)' },
   { id: 'dictionaries', name: 'Dictionaries & Lexicons', count: '6 references', icon: 'lex', accent: 'var(--gold)' },
   { id: 'devotionals', name: 'Devotionals', count: '5 series', icon: 'sun', accent: 'var(--clay)' },
-  { id: 'books', name: 'Books', count: '25 free titles', icon: 'books', accent: 'var(--sage)' },
   { id: 'journals', name: 'Journals & Notes', count: '3 entries', icon: 'pen', accent: 'var(--gold)' },
 ];
 

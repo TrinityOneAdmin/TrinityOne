@@ -48,6 +48,18 @@ function LibraryScreen({ ctx }) {
 
 function LibraryHome({ ctx }) {
   const D = window.TrinityData;
+  // honest module counts from what's actually installed (was hardcoded "12 versions / 8 sets / 3 entries" fakes)
+  const inst = (window.Bible && window.Bible.installedMap && window.Bible.installedMap()) || {};
+  const byCat = {}; for (const v of Object.values(inst)) { const c = (v && v.category) || 'bibles'; byCat[c] = (byCat[c] || 0) + 1; }
+  const nBibles = (window.Bible && window.Bible.versions ? window.Bible.versions().length : 0) || byCat.bibles || 0;
+  const nJournals = (ctx.journalEntries || []).length;
+  const countFor = (id) => {
+    if (id === 'journals') return nJournals === 0 ? 'None yet' : nJournals + (nJournals === 1 ? ' entry' : ' entries');
+    const n = id === 'bibles' ? nBibles : (byCat[id] || 0);
+    if (n === 0) return 'None yet';
+    const noun = id === 'bibles' ? 'version' : id === 'commentaries' ? 'set' : id === 'dictionaries' ? 'reference' : id === 'devotionals' ? 'series' : 'item';
+    return n + ' ' + noun + (n === 1 ? '' : 's');
+  };
   return (
     <React.Fragment>
       {/* collections strip */}
@@ -58,7 +70,7 @@ function LibraryHome({ ctx }) {
           background: 'var(--surface)', cursor: 'pointer', textAlign: 'left', color: 'var(--ink)', boxShadow: 'var(--shadow)'
         }}>
             <Icon name={c.icon} size={20} color="var(--clay)" />
-            <div style={{ fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, marginTop: 7, lineHeight: 1 }}>{c.id === 'crossrefs' ? c.count : window.MyData.count(c.id)}</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, marginTop: 7, lineHeight: 1 }}>{window.MyData.count(c.id)}</div>
             <div style={{ fontSize: 11, color: 'var(--ink-2)', fontWeight: 600, marginTop: 3, lineHeight: 1.15 }}>{c.name}</div>
           </button>
         )}
@@ -66,9 +78,11 @@ function LibraryHome({ ctx }) {
 
       <SectionLabel>Modules</SectionLabel>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 24, animation: 'lumenFade .5s ease .1s both' }}>
-        {D.MODULES.map((m) => <ModuleTile key={m.id} m={m} onClick={() =>
+        {D.MODULES.map((m) => <ModuleTile key={m.id} m={{ ...m, count: countFor(m.id) }} onClick={() =>
           m.id === 'bibles' ? ctx.openStore('language', 'bibles')
           : m.id === 'dictionaries' ? ctx.openStore('featured', 'dictionaries')
+          : m.id === 'commentaries' ? ctx.openStore('featured', 'commentaries')
+          : m.id === 'devotionals' ? ctx.openStore('featured', 'devotionals')
           : ctx.openModule(m)
         } />)}
       </div>
