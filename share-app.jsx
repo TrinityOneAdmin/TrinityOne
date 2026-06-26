@@ -34,9 +34,11 @@ async function shareTrinityOneApp(ctx, onStatus) {
   if (!(P && P.Share && P.Filesystem)) { ctx && ctx.toast && ctx.toast('Sharing isn’t available on this device'); return { ok: false }; }
 
   try {
-    // reuse a cached copy if present → works offline after the first time
+    // reuse a cached copy if present → works offline after the first time. CACHE is the directory the
+    // app's FileProvider already exposes for sharing (same as backup.jsx); it can be evicted under
+    // storage pressure, in which case the stat misses and we just re-fetch.
     let uri = null;
-    try { const st = await P.Filesystem.stat({ path: SHAREAPP_APK_FILE, directory: 'DATA' }); if (st && st.size > 1000000) uri = st.uri; } catch (e) {}
+    try { const st = await P.Filesystem.stat({ path: SHAREAPP_APK_FILE, directory: 'CACHE' }); if (st && st.size > 1000000) uri = st.uri; } catch (e) {}
     if (!uri) {
       say('Preparing… (one-time, needs internet)');
       const res = await fetch(SHAREAPP_APK_URL);                 // CapacitorHttp makes this cross-origin fetch work
@@ -44,11 +46,12 @@ async function shareTrinityOneApp(ctx, onStatus) {
       const u8 = new Uint8Array(await res.arrayBuffer());
       if (u8.length < 1000000) throw new Error('the downloaded file looks wrong');
       say('Almost ready…');
-      const w = await P.Filesystem.writeFile({ path: SHAREAPP_APK_FILE, data: shareAppToBase64(u8), directory: 'DATA' });
+      const w = await P.Filesystem.writeFile({ path: SHAREAPP_APK_FILE, data: shareAppToBase64(u8), directory: 'CACHE' });
       uri = w.uri;
     }
     say('');
-    await P.Share.share({ title: 'TrinityOne', text: 'Here’s the TrinityOne app — install it and read Scripture. No account, no sign-up.', files: [uri], dialogTitle: 'Share the TrinityOne app' });
+    // FILES ONLY — passing `text`/`url` alongside makes Quick Share / Bluetooth send only the text and drop the file.
+    await P.Share.share({ title: 'TrinityOne app', files: [uri], dialogTitle: 'Share the TrinityOne app' });
     return { ok: true, where: 'shared' };
   } catch (e) {
     say('');
