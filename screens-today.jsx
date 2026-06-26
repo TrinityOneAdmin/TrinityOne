@@ -55,8 +55,9 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
   const mealsFor = (iso) => (need.type === 'meals') ? ((need.dayMeals && need.dayMeals[iso] && need.dayMeals[iso].length) ? need.dayMeals[iso] : (Array.isArray(need.meals) ? need.meals : [])) : [];
   // "what I'm bringing" — editable note on the helper's own slot (so two people don't bring the same dish)
   const [noteDraft, setNoteDraft] = React.useState({});
+  const [savedFlash, setSavedFlash] = React.useState({});
   const myNoteFor = (iso) => { const f = fillsFor(iso).find(x => x.pubkey && x.pubkey.toLowerCase() === myPub.toLowerCase()); return f ? (f.note || '') : ''; };
-  const saveNote = (iso) => { const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso); care.fill(need.id, iso, (cur || '').trim()); };
+  const saveNote = (iso) => { const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso); (care.setNote || care.fill)(need.id, iso, (cur || '').trim()); setSavedFlash(f => ({ ...f, [iso]: true })); };
   return (
     <div style={{ border: '1px solid var(--line)', borderRadius: 14, overflow: 'hidden', background: 'var(--surface)' }}>
       <button onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '12px 13px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
@@ -101,7 +102,10 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
                     : <button onClick={() => care.skip(need.id, iso)} style={careBtnGhost}>Skip</button>)}
                 </div>
                 {mineFilled && !skipped && need.type === 'meals' ? (
-                  <input value={noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso)} onChange={e => setNoteDraft(nd => ({ ...nd, [iso]: e.target.value }))} onBlur={() => saveNote(iso)} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} placeholder="What are you bringing? (optional)" style={{ width: '100%', boxSizing: 'border-box', margin: '0 0 7px', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '0 0 7px' }}>
+                    <input value={noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso)} onChange={e => { const v = e.target.value; setNoteDraft(nd => ({ ...nd, [iso]: v })); setSavedFlash(f => ({ ...f, [iso]: false })); }} onBlur={() => saveNote(iso)} onKeyDown={e => { if (e.key === 'Enter') { saveNote(iso); e.currentTarget.blur(); } }} placeholder="What are you bringing?" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                    <button onClick={() => saveNote(iso)} style={{ flexShrink: 0, padding: '7px 13px', borderRadius: 9, border: 'none', background: savedFlash[iso] ? 'color-mix(in oklab, var(--sage) 20%, var(--surface))' : 'var(--clay)', color: savedFlash[iso] ? 'var(--sage)' : '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>{savedFlash[iso] ? '✓ Saved' : 'Save'}</button>
+                  </div>
                 ) : null}
               </div>
             );

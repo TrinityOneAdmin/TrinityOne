@@ -976,6 +976,8 @@ function App() {
       myPub: (window.Fellowship && window.Fellowship.myPubkey) || '',
       fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
       clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
+      // update the "what I'm bringing" note on an already-filled slot — same fillCareSlot doc, no "signed up" toast
+      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note),
       skip: (careId, iso, reason) => window.Fellowship.markCareSkip(careId, iso, reason),
       clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso),
     },

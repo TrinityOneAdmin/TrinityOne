@@ -408,7 +408,7 @@ function ServingScreen({ open, onClose, ctx }) {
     const mp = ((ctx.care && ctx.care.myPub) || '').toLowerCase(); if (!mp) return [];
     const needs = (ctx.care && ctx.care.needs) || [];
     return ((ctx.care && ctx.care.slots) || []).filter(s => (s.pubkey || '').toLowerCase() === mp)
-      .map(s => ({ iso: s.isoDate, need: needs.find(n => n.id === s.needId) })).filter(x => x.need && x.iso)
+      .map(s => ({ iso: s.isoDate, note: s.note || '', need: needs.find(n => n.id === s.needId) })).filter(x => x.need && x.iso)
       .sort((a, b) => (a.iso || '').localeCompare(b.iso || ''));
   })();
   const close = () => setSheet(null);
@@ -463,7 +463,7 @@ function ServingScreen({ open, onClose, ctx }) {
                     <ServDateBlock iso={c.iso} accent="var(--sage)" />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="heart" size={16} color="var(--sage)" /><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{(c.need.type || 'care').replace(/^./, ch => ch.toUpperCase())}</span></div>
-                      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>For {c.need.displayLabel || 'a member'}</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>For {c.need.displayLabel || 'a member'}{c.note ? ' · bringing ' + c.note : ''}</div>
                     </div>
                   </div>
                 ))}
