@@ -7,8 +7,12 @@
 ## Sharing
 - **Multi-verse select** — select several verses and share them together, not one at a time. (2026-06-26)
 
-## Meal trains — next focused pass (awaiting the meal-type granularity call: per-day vs per-need)
+## Meal trains — next focused pass
 - **Steward skip** — mark a day "covered" from the console need view (relay already accepts steward skips).
-- **Meal-type selector** — Breakfast / Lunch / Dinner.
+- **Meal-type selector — both levels:** per-NEED toggles for Breakfast / Lunch / Dinner that set what the
+  whole Care task needs (e.g. turn breakfast off universally), then a per-DAY override so a specific day
+  can differ (Tue = dinner only, Thu = lunch + dinner). Data: `need.meals` (default set) + optional
+  per-day overrides; a day with no override inherits `need.meals`. Show the meal(s) on each day chip +
+  on the member's care card so helpers know what to bring and when.
 - **"What I'm bringing" note** — prompt when a helper taps "I'll help" + show it on the day so two
   people don't bring the same dish (the sign-up slot already carries a `note` field to reuse).
