@@ -249,10 +249,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   // steward rule: this church asks for a real first + last name (two words)
   const twoWords = (s) => (s || '').trim().split(/\s+/).filter(Boolean).length >= 2;
   const needFull = !!(ctx && ctx.requireFullName);
-  // member photos: only when the church has enabled them, this member isn't a minor, AND a steward
-  // hasn't turned photos off for this account (persistent, like the child flag — off until re-allowed).
-  const allowPhoto = !!(ctx && ctx.church && ctx.church.features && ctx.church.features.memberPhotos)
-    && !(ctx && ctx.safeguard && ctx.safeguard.isMinor)
+  // member photos: ON by default — a church opts out via features.memberPhotos === false. Children are
+  // excluded unless the church opts kids in (features.childPhotos). A steward can also reset one account's
+  // photo (photoBlocked, persistent until re-allowed).
+  const _cf = ctx && ctx.church && ctx.church.features;
+  const allowPhoto = !!(ctx && ctx.church)
+    && !(_cf && _cf.memberPhotos === false)
+    && (!(ctx && ctx.safeguard && ctx.safeguard.isMinor) || !!(_cf && _cf.childPhotos))
     && !(ctx && ctx.safeguard && ctx.safeguard.photoBlocked);
 
   // member wallet balance (always the member's, rides on their key) — live for the wallet row
@@ -278,7 +281,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)' }} />
           {needFull ? <div style={{ fontSize: 12.5, color: name.trim() && !twoWords(name) ? 'var(--clay-ink)' : 'var(--ink-3)', margin: '8px 2px 0', lineHeight: 1.45 }}>{(ctx.church && ctx.church.name) || 'Your church'} asks members to use a real <b>first and last name</b> so people can recognise you.</div> : null}
           <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 12px' }}>YOUR MARK</label>
-          {ctx && ctx.safeguard && ctx.safeguard.photoBlocked && ctx.church && ctx.church.features && ctx.church.features.memberPhotos ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 12px', lineHeight: 1.45 }}>A steward has turned off photos for your account. You can still choose a symbol or your initial.</div> : null}
+          {ctx && ctx.safeguard && ctx.safeguard.photoBlocked && ctx.church && !(ctx.church.features && ctx.church.features.memberPhotos === false) ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 12px', lineHeight: 1.45 }}>A steward has turned off photos for your account. You can still choose a symbol or your initial.</div> : null}
           <AvatarPicker value={av} name={name} onChange={setAv} allowPhoto={allowPhoto} />
         </div>
       </Overlay>

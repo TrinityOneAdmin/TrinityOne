@@ -2429,7 +2429,7 @@ window.BulkInviteModal = BulkInviteModal;
 function DashMembers() {
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
-  const photosAllowed = !!(church.features && church.features.memberPhotos);   // member photos enabled for this church
+  const photosAllowed = !(church.features && church.features.memberPhotos === false);   // member photos on by default; church can opt out
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const blockedSet = new Set(blockedList);
   // safeguarding: who's a child, and which adults are cleared to contact youth (mirrors the church's cleared-worker list)
@@ -3207,9 +3207,12 @@ function DashFeaturesPanel({ church }) {
     window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
   };
   const toggleEncryptAll = () => { if (encOn) window.Steward.publishProfile({ features: { ...f, encryptComms: false } }); else setConfirmEnc(true); };
-  // member photos — opt-in; off by default. Children (minors) can never set one (enforced member-side by safeguard.isMinor).
-  const photosOn = f.memberPhotos === true;
+  // member photos — ON by default; a church opts out via memberPhotos:false. Children are excluded unless
+  // the church also turns on childPhotos (off by default — safeguarding). Minors enforced member-side too.
+  const photosOn = f.memberPhotos !== false;
   const togglePhotos = () => window.Steward.publishProfile({ features: { ...f, memberPhotos: !photosOn } });
+  const kidPhotosOn = f.childPhotos === true;
+  const toggleKidPhotos = () => window.Steward.publishProfile({ features: { ...f, childPhotos: !kidPhotosOn } });
   const approval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
   const rules = church.rules || {};
   const fullName = !!rules.fullName;
@@ -3272,13 +3275,26 @@ function DashFeaturesPanel({ church }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow member photos</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{photosOn ? 'On — adult members may set a real photo as their picture. Children never can.' : 'Off — members use a colour, initial or symbol (recommended for privacy). No uploaded photos.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{photosOn ? 'On — adult members may set a real photo as their picture. Children only if you allow it below.' : 'Off — members use a colour, initial or symbol (recommended for privacy). No uploaded photos.'}</div>
         </div>
         <button onClick={togglePhotos} aria-label="Toggle member photos" title="Let adult members use a real photo as their picture (children never can)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: photosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
-      {photosOn ? <div style={{ display: 'flex', gap: 9, padding: '11px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 24%, transparent)', marginTop: 10 }}><Icon name="shield" size={15} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} /><div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45 }}>Photos are visible to your whole church, and anyone you’ve marked as a child can never add one. You can switch this off again any time.</div></div> : null}
+      {photosOn ? (
+        <React.Fragment>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: kidPhotosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow children’s photos</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{kidPhotosOn ? 'On — members marked as a child may also set a photo. Use with care.' : 'Off — children use a colour, initial or symbol. Recommended for safeguarding.'}</div>
+            </div>
+            <button onClick={toggleKidPhotos} aria-label="Toggle children’s photos" title="Let members marked as a child set a real photo (off is recommended)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: kidPhotosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+              <span style={{ position: 'absolute', top: 3, left: kidPhotosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 9, padding: '11px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 24%, transparent)', marginTop: 10 }}><Icon name="shield" size={15} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} /><div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45 }}>Photos are visible to your whole church. {kidPhotosOn ? 'Children’s photos are ON — only keep this on where it’s safe.' : 'Children can’t add one unless you turn on children’s photos above.'} You can switch these off again any time.</div></div>
+        </React.Fragment>
+      ) : null}
 
       <div style={{ height: 1, background: 'var(--line)', margin: '18px 0 14px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Joining</div>
