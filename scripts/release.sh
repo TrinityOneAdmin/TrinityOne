@@ -61,8 +61,11 @@ if [[ $DO_APK == 1 ]]; then
   # build packages the LAST-synced assets, which silently ships stale web code).
   say "member APK"
   run "bash scripts/sync-web.sh"
-  run "( cd android && ./gradlew assembleDebug -q )"
-  run "cp android/app/build/outputs/apk/debug/app-debug.apk trinityone.apk"
+  # assembleRelease → signed with the STABLE release key (android/app/keystore.properties, gitignored) +
+  # non-debuggable, so every update installs cleanly over the last. (Falls back to unsigned on a box
+  # without the keystore — keep release.keystore + keystore.properties backed up.)
+  run "( cd android && ./gradlew assembleRelease -q )"
+  run "cp android/app/build/outputs/apk/release/app-release.apk trinityone.apk"
   # in-app update check: refresh the manifest the member app reads on open (apk-latest.json, served
   # at ASSET_BASE). Old installs compare their versionCode to this and show an "Update available" banner.
   if [[ $DRY == 0 ]]; then
