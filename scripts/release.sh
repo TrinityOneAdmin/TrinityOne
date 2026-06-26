@@ -63,6 +63,12 @@ if [[ $DO_APK == 1 ]]; then
   run "bash scripts/sync-web.sh"
   run "( cd android && ./gradlew assembleDebug -q )"
   run "cp android/app/build/outputs/apk/debug/app-debug.apk trinityone.apk"
+  # in-app update check: refresh the manifest the member app reads on open (apk-latest.json, served
+  # at ASSET_BASE). Old installs compare their versionCode to this and show an "Update available" banner.
+  if [[ $DRY == 0 ]]; then
+    printf '{\n  "versionCode": %s,\n  "versionName": "%s",\n  "url": "trinityone.apk",\n  "date": "%s"\n}\n' "$nvc" "$vn" "$(date +%F)" > apk-latest.json
+    say "update manifest → apk-latest.json (versionCode $nvc)"
+  fi
   # steward APK — own app id + icon; build-steward-apk.sh does its own sync + cap copy and restores
   # the member project on exit.
   say "steward APK"
