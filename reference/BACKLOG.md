@@ -3,6 +3,9 @@
 ## Steward console
 - **Filter Groups / Teams / Rooms** — a type filter/tabs on the "Groups, teams & rooms" list
   (it's one combined list today). (2026-06-26)
+- **Roster: block duplicate people** — adding the same linked member twice to a team roster should be
+  prevented (dedupe by linked pub; the "PEOPLE WHO CAN SERVE" list can currently show the same person
+  twice). (2026-06-26)
 
 ## Sharing
 - **Multi-verse select** — select several verses and share them together, not one at a time. (2026-06-26)

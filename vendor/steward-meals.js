@@ -84,11 +84,19 @@
     }
     function _normNeed(n) {
       const isoDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? String(s) : "";
+      const MEALS_OK = ["breakfast", "lunch", "dinner"];
+      const normMeals = (a) => (Array.isArray(a) ? a : []).filter((m) => MEALS_OK.includes(m));
+      const type = ["meals", "rides", "errands", "visits", "childcare"].includes(n.type) ? n.type : "meals";
       const days = [...new Set((Array.isArray(n.dates) ? n.dates : []).map(isoDate).filter(Boolean))].sort().slice(0, 90);
+      const isMeals = type === "meals";
+      const meals = isMeals ? normMeals(n.meals).length ? normMeals(n.meals) : ["dinner"] : [];
+      const dayMeals = isMeals ? Object.fromEntries(Object.entries(n.dayMeals || {}).filter(([k, v]) => isoDate(k) && days.includes(k) && normMeals(v).join() !== meals.join()).map(([k, v]) => [k, normMeals(v)])) : {};
       return {
         displayLabel: String(n.displayLabel || "").trim(),
-        type: ["meals", "rides", "errands", "visits", "childcare"].includes(n.type) ? n.type : "meals",
+        type,
         dates: days,
+        meals,
+        dayMeals,
         startDate: days[0] || isoDate(n.startDate),
         endDate: days[days.length - 1] || isoDate(n.endDate),
         recipient: typeof n.recipient === "string" && /^[0-9a-f]{64}$/i.test(n.recipient) ? n.recipient.toLowerCase() : "",
@@ -107,6 +115,14 @@
     function removeNeed(id) {
       if (!S() || !S().publishSigned) return Promise.resolve(null);
       return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", NEED_D + id], ["t", NET], ["deleted", "1"]], content: "" });
+    }
+    function skipDay(careId, iso) {
+      if (!S() || !S().publishSigned || !careId || !/^\d{4}-\d{2}-\d{2}$/.test(iso || "")) return Promise.resolve(null);
+      return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", SKIP_D + careId + ":" + iso], ["t", NET]], content: "{}" });
+    }
+    function unskipDay(careId, iso) {
+      if (!S() || !S().publishSigned || !careId || !/^\d{4}-\d{2}-\d{2}$/.test(iso || "")) return Promise.resolve(null);
+      return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", SKIP_D + careId + ":" + iso], ["t", NET], ["deleted", "1"]], content: "" });
     }
     function subscribeNeeds(cb) {
       if (!S() || !S().subscribeMany || !S().churchPub) {
@@ -212,9 +228,11 @@
       publishNeed,
       removeNeed,
       subscribeNeeds,
-      // slots + skips (read-only from the steward; member-side publishes)
+      // slots + skips (read slots; the steward can now WRITE skips to block a day for the recipient)
       subscribeSlots,
       subscribeSkips,
+      skipDay,
+      unskipDay,
       // care-team admin helper (client-side check)
       isCareAdmin,
       // d-tag prefixes — exposed so the relay accept() and member-side modules use the same constants

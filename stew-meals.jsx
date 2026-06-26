@@ -212,6 +212,12 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
   for (const s of slots) { (slotsByDate[s.isoDate] = slotsByDate[s.isoDate] || []).push(s); }
   const directory = window.useStewardDirectory ? window.useStewardDirectory() : {};
   const nameOf = (pub) => (directory && directory[pub] && directory[pub].name) || (pub ? (pub.slice(0, 6) + '…' + pub.slice(-4)) : 'A member');
+  // steward can mark a day "covered" (block it) for a recipient who isn't on the app — optimistic, then publish
+  const [optSkip, setOptSkip] = React.useState({});
+  const isSkipped = (iso) => (iso in optSkip) ? optSkip[iso] : !!skipByDate[iso];
+  const doSkip = (iso, on) => { setOptSkip(o => ({ ...o, [iso]: on })); if (window.StewardMeals) { on ? window.StewardMeals.skipDay(need.id, iso) : window.StewardMeals.unskipDay(need.id, iso); } };
+  const MEAL_SHORT = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner' };
+  const dayMealsOf = (iso) => { const dm = need.dayMeals || {}; const base = Array.isArray(need.meals) ? need.meals : []; return (dm[iso] && dm[iso].length) ? dm[iso] : base; };
   return (
     <div style={{ marginTop: 14 }}>
       <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="chevL" size={14} color="currentColor" /> All needs</button>
@@ -234,16 +240,20 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
         {dates.length === 0 ? (
           <div style={{ padding: 18, borderRadius: 12, border: '1px dashed var(--line)', color: 'var(--ink-2)', textAlign: 'center', fontSize: 13.5 }}>Add a start and end date to lay out the schedule.</div>
         ) : dates.map(iso => {
-          const skipped = !!skipByDate[iso];
+          const skipped = isSkipped(iso);
           const fills = slotsByDate[iso] || [];
           return (
             <div key={iso} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 13px', borderRadius: 11, border: '1px solid var(--line)', background: skipped ? 'var(--surface-2)' : 'var(--surface)', opacity: skipped ? 0.55 : 1 }}>
-              <div style={{ minWidth: 110, fontSize: 13, fontWeight: 700, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{mealsFmtDate(iso)}</div>
+              <div style={{ minWidth: 104, flexShrink: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{mealsFmtDate(iso)}</div>
+                {need.type === 'meals' ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMealsOf(iso).map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
+              </div>
               <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>
-                {skipped ? <span><Icon name="x" size={12} color="var(--ink-3)" /> Recipient skipped{skipByDate[iso].reason ? ' — ' + skipByDate[iso].reason : ''}</span>
+                {skipped ? <span><Icon name="x" size={12} color="var(--ink-3)" /> Covered{skipByDate[iso] && skipByDate[iso].reason ? ' — ' + skipByDate[iso].reason : ''}</span>
                   : fills.length === 0 ? <span style={{ color: 'var(--ink-3)' }}>Open</span>
                   : fills.map((f, i) => <span key={i} style={{ marginRight: 10 }}><Icon name="check" size={12} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>)}
               </div>
+              {fills.length === 0 ? <button onClick={() => doSkip(iso, !skipped)} className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>{skipped ? 'Undo' : 'Skip'}</button> : null}
             </div>
           );
         })}
@@ -267,6 +277,14 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const [recipient, setRecipient] = React.useState(need ? need.recipient : '');
   const [diet, setDiet] = React.useState(need && Array.isArray(need.dietary) ? need.dietary : []);
   const toggleDiet = (d) => setDiet(ds => ds.includes(d) ? ds.filter(x => x !== d) : [...ds, d]);
+  // meals (meals-only): a per-need default set (universal) + per-day overrides. A day with no override
+  // inherits the default; toggling a meal on a day row creates an override. Always keep ≥1 meal selected.
+  const MEAL_KINDS = [['breakfast', 'Breakfast'], ['lunch', 'Lunch'], ['dinner', 'Dinner']];
+  const [meals, setMeals] = React.useState(need && Array.isArray(need.meals) && need.meals.length ? need.meals : ['dinner']);
+  const toggleMeal = (m) => setMeals(ms => ms.includes(m) ? (ms.length > 1 ? ms.filter(x => x !== m) : ms) : MEAL_KINDS.map(k => k[0]).filter(k => ms.includes(k) || k === m));
+  const [dayMeals, setDayMeals] = React.useState(need && need.dayMeals && typeof need.dayMeals === 'object' ? { ...need.dayMeals } : {});
+  const effMeals = (iso) => (dayMeals[iso] && dayMeals[iso].length) ? dayMeals[iso] : meals;
+  const toggleDayMeal = (iso, m) => setDayMeals(dm => { const cur = (dm[iso] && dm[iso].length) ? dm[iso] : meals; const next = cur.includes(m) ? (cur.length > 1 ? cur.filter(x => x !== m) : cur) : MEAL_KINDS.map(k => k[0]).filter(k => cur.includes(k) || k === m); return { ...dm, [iso]: next }; });
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const [busy, setBusy]     = React.useState(false);
   const [err, setErr]       = React.useState('');
@@ -280,6 +298,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         displayLabel: label.trim(), type, dates, notes: notes.trim(),
         recipient: (recipient || '').trim(),
         dietary: type === 'meals' ? diet : [],
+        meals: type === 'meals' ? meals : [], dayMeals: type === 'meals' ? dayMeals : {},
       });
       onSaved && onSaved(saved);
     } catch (e) { setErr((e && e.message) || 'Save failed.'); setBusy(false); }
@@ -322,6 +341,13 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
 
         {type === 'meals' ? (
           <React.Fragment>
+            <div style={mealsLbl}>MEALS NEEDED</div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              {MEAL_KINDS.map(([mk, mlbl]) => { const on = meals.includes(mk); return (
+                <button key={mk} onClick={() => toggleMeal(mk)} style={{ flex: 1, padding: '9px 8px', borderRadius: 10, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{on ? '✓ ' : ''}{mlbl}</button>
+              ); })}
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>Which meals this task needs by default — you can fine-tune individual days below.</div>
             <div style={mealsLbl}>DIETARY NEEDS (OPTIONAL)</div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
               {MEALS_DIET.map(d => { const onD = diet.includes(d); return (
@@ -337,13 +363,27 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
           <input type="date" value={pick} min={today} onChange={e => setPick(e.target.value)} style={{ ...mealsFld, flex: 1 }} />
           <button onClick={addDate} disabled={!pick || dates.includes(pick)} className="sk-btn sk-btn--ghost" style={{ padding: '0 15px', fontSize: 13.5, flexShrink: 0, opacity: (pick && !dates.includes(pick)) ? 1 : 0.5 }}><Icon name="plus" size={14} color="currentColor" /> Add day</button>
         </div>
-        {dates.length ? (
+        {dates.length ? (type === 'meals' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+            {dates.map(d => (
+              <div key={d} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px 7px 11px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)' }}>
+                <span style={{ fontWeight: 700, fontSize: 12.5, width: 86, flexShrink: 0 }}>{mealsFmtDate(d)}</span>
+                <div style={{ display: 'flex', gap: 4, flex: 1 }}>
+                  {MEAL_KINDS.map(([mk, mlbl]) => { const on = effMeals(d).includes(mk); return (
+                    <button key={mk} onClick={() => toggleDayMeal(d, mk)} title={mlbl} style={{ flex: 1, padding: '6px 2px', borderRadius: 8, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage)' : 'var(--ink-3)', fontWeight: 700, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mlbl[0]}</button>
+                  ); })}
+                </div>
+                <button onClick={() => removeDate(d)} title="Remove this day" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 3, flexShrink: 0, display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+              </div>
+            ))}
+          </div>
+        ) : (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
             {dates.map(d => (
               <button key={d} onClick={() => removeDate(d)} title="Remove this day" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mealsFmtDate(d)} <Icon name="x" size={11} color="currentColor" /></button>
             ))}
           </div>
-        ) : null}
+        )) : null}
         <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add as many separate days as you need; tap a day to remove it.` : 'Add each day care is needed — they don’t have to be in a row.'}</div>
 
         <div style={mealsLbl}>NOTES (OPTIONAL)</div>

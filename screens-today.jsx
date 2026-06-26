@@ -50,6 +50,13 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
   const openDays = dates.filter(d => !skipSet.has(d) && fillsFor(d).length === 0);
   const filledDays = dates.filter(d => fillsFor(d).length > 0).length;
   const accent = 'var(--sage)';
+  // per-day meals (meals tasks): the day's override, else the need default
+  const MEAL_SHORT = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner' };
+  const mealsFor = (iso) => (need.type === 'meals') ? ((need.dayMeals && need.dayMeals[iso] && need.dayMeals[iso].length) ? need.dayMeals[iso] : (Array.isArray(need.meals) ? need.meals : [])) : [];
+  // "what I'm bringing" — editable note on the helper's own slot (so two people don't bring the same dish)
+  const [noteDraft, setNoteDraft] = React.useState({});
+  const myNoteFor = (iso) => { const f = fillsFor(iso).find(x => x.pubkey && x.pubkey.toLowerCase() === myPub.toLowerCase()); return f ? (f.note || '') : ''; };
+  const saveNote = (iso) => { const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso); care.fill(need.id, iso, (cur || '').trim()); };
   return (
     <div style={{ border: '1px solid var(--line)', borderRadius: 14, overflow: 'hidden', background: 'var(--surface)' }}>
       <button onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '12px 13px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
@@ -73,20 +80,29 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
             const skipped = skipSet.has(iso);
             const fills = fillsFor(iso);
             const mineFilled = fills.some(f => f.pubkey && f.pubkey.toLowerCase() === myPub.toLowerCase());
+            const dayMeals = mealsFor(iso);
             return (
-              <div key={iso} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid color-mix(in oklab, var(--line) 60%, transparent)', opacity: skipped ? 0.55 : 1 }}>
-                <div style={{ minWidth: 96, fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{careFmtDate(iso)}</div>
-                <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
-                  {skipped ? <span>Not needed this day</span>
-                    : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}</span>)
-                    : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
+              <div key={iso} style={{ borderTop: '1px solid color-mix(in oklab, var(--line) 60%, transparent)', opacity: skipped ? 0.55 : 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
+                  <div style={{ minWidth: 96 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{careFmtDate(iso)}</div>
+                    {dayMeals.length ? <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMeals.map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
+                    {skipped ? <span>Not needed this day</span>
+                      : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
+                      : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
+                  </div>
+                  {!skipped && (mineFilled
+                    ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
+                    : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
+                  {(isRecipient || canManage) && fills.length === 0 && (skipped
+                    ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
+                    : <button onClick={() => care.skip(need.id, iso)} style={careBtnGhost}>Skip</button>)}
                 </div>
-                {!skipped && (mineFilled
-                  ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
-                  : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
-                {(isRecipient || canManage) && fills.length === 0 && (skipped
-                  ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
-                  : <button onClick={() => care.skip(need.id, iso)} style={careBtnGhost}>Skip</button>)}
+                {mineFilled && !skipped && need.type === 'meals' ? (
+                  <input value={noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso)} onChange={e => setNoteDraft(nd => ({ ...nd, [iso]: e.target.value }))} onBlur={() => saveNote(iso)} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} placeholder="What are you bringing? (optional)" style={{ width: '100%', boxSizing: 'border-box', margin: '0 0 7px', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                ) : null}
               </div>
             );
           })}
