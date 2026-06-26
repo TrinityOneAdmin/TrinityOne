@@ -750,12 +750,17 @@ function App() {
   const [dmUnread, setDmUnread] = useA(false);
   const chatNewestTs = useAR(0);
   const dmNewestTs = useAR(0);
+  const dmInboxRef = useAR(false); dmInboxRef.current = dmInbox;
   const chatSeenKey = activeChurch ? 'trinityone.chatTabSeen.' + activeChurch : null;
   const dmSeenKey = () => { const me = window.Fellowship && window.Fellowship.myPubkey; return me ? 'trinityone.dmSeen.' + me : null; };
   const markChatSeen = () => {
     if (chatSeenKey) { try { localStorage.setItem(chatSeenKey, String(chatNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} }
+    setChatUnread(false);
+  };
+  // DMs clear when you open the DM inbox — NOT when you open Community — so the paper-plane dot survives until read
+  const markDmSeen = () => {
     const dk = dmSeenKey(); if (dk) { try { localStorage.setItem(dk, String(dmNewestTs.current || Math.floor(Date.now() / 1000))); } catch {} }
-    setChatUnread(false); setDmUnread(false);
+    setDmUnread(false);
   };
   useAE(() => {
     const F = window.Fellowship;
@@ -794,8 +799,8 @@ function App() {
       }
       if (newest > dmNewestTs.current) {
         dmNewestTs.current = newest;
-        if (tabRef.current === 'chat') markChatSeen();           // already looking → keep it clear
-        else if (newest > getSeen()) setDmUnread(true);          // new since last visit → dot
+        if (dmInboxRef.current) markDmSeen();                    // looking at the DM inbox → already seen
+        else if (newest > getSeen()) setDmUnread(true);          // unread DM → light the paper-plane dot
       }
     });
     return () => { try { off && off(); } catch {} };
@@ -871,7 +876,8 @@ function App() {
     openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
     openGroup: (g) => setGroup(g),
     desktop, openGroupId: group && group.id,
-    openDM: (peer) => setDmPeer(peer), openDMInbox: () => setDmInbox(true), openPeople: () => setPeople(true),
+    openDM: (peer) => setDmPeer(peer), openDMInbox: () => { setDmInbox(true); markDmSeen(); }, openPeople: () => setPeople(true),
+    dmUnread,   // drives the dot on the Community "Direct messages" (paper-plane) button
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
     readView, setReadView,

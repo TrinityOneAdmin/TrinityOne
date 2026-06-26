@@ -369,7 +369,10 @@ function ChatScreen({ ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-          <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
+          <span style={{ position: 'relative', display: 'inline-flex' }}>
+            <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
+            {ctx.dmUnread ? <span style={{ position: 'absolute', top: 4, right: 4, width: 10, height: 10, borderRadius: 999, background: 'var(--clay)', border: '2px solid var(--surface)', pointerEvents: 'none' }} /> : null}
+          </span>
           <button onClick={() => ctx.openProfile()} title="Your anonymous identity" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 999, lineHeight: 0, position: 'relative' }}>
             <UserAvatar av={myAvatar(id)} name={myName(id)} size={38} />
             <span style={{ position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 999, background: 'var(--sage)', border: '2px solid var(--surface)' }} />
