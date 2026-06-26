@@ -508,6 +508,7 @@ function App() {
   const [careNeeds, setCareNeeds] = useA([]);
   const [careSlots, setCareSlots] = useA([]);
   const [careSkips, setCareSkips] = useA([]);
+  const [optCare, setOptCare] = useA({});   // optimistic care fill/clear ('needId|iso' -> 'fill'|'clear') so "I'll help" flips instantly
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
@@ -965,11 +966,16 @@ function App() {
     care: {
       settings: careSettings,
       needs: careNeeds,
-      slots: careSlots,
+      slots: (() => {
+        const mp = (window.Fellowship && window.Fellowship.myPubkey || '').toLowerCase();
+        let m = (careSlots || []).filter(s => !(optCare[(s.needId || '') + '|' + (s.isoDate || '')] === 'clear' && (s.pubkey || '').toLowerCase() === mp));
+        for (const k in optCare) { if (optCare[k] !== 'fill') continue; const p = k.split('|'); if (!m.some(s => s.needId === p[0] && s.isoDate === p[1] && (s.pubkey || '').toLowerCase() === mp)) m.push({ needId: p[0], isoDate: p[1], pubkey: mp }); }
+        return m;
+      })(),
       skips: careSkips,
       myPub: (window.Fellowship && window.Fellowship.myPubkey) || '',
-      fill: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); return r; }),
-      clearFill: (careId, iso) => window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); return r; }),
+      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
+      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
       skip: (careId, iso, reason) => window.Fellowship.markCareSkip(careId, iso, reason),
       clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso),
     },

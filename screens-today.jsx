@@ -77,7 +77,7 @@ function CareNeedRow({ need, slots, skips, care, expanded, onToggle }) {
                     : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
                 </div>
                 {!skipped && (mineFilled
-                  ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnGhost}>Cancel</button>
+                  ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
                   : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
                 {isRecipient && fills.length === 0 && (skipped
                   ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
@@ -93,6 +93,7 @@ function CareNeedRow({ need, slots, skips, care, expanded, onToggle }) {
 }
 const careBtnHelp = { flexShrink: 0, padding: '6px 11px', borderRadius: 9, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
 const careBtnGhost = { flexShrink: 0, padding: '6px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
+const careBtnMine = { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 11px', borderRadius: 9, border: '1px solid var(--sage)', background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', color: 'var(--sage)', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
 
 function CareCard({ ctx }) {
   const care = ctx.care || {};

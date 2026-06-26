@@ -1126,7 +1126,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   const heading = type === 'devotional' ? 'Share devotional' : type === 'note' ? 'Share note' : 'Share verse';
   const myPub = FS && FS.myPubkey;
   // groups I can post to — hide invite-only groups I'm not a member of (the relay enforces posting too)
-  const postable = (groups || []).filter(g => g && g.id && (g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub))));
+  const postable = (groups || []).filter(g => g && g.id && (g.kind || '').toLowerCase() !== 'broadcast' && (g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub))));
   // people I'm allowed to message — ctx.canDMPeer already excludes children unless I'm cleared ("if set that way")
   const people = (members || []).filter(m => m && m.pubkey && m.pubkey !== myPub && (!ctx.canDMPeer || ctx.canDMPeer(m.pubkey)));
   const pql = pq.trim().toLowerCase();

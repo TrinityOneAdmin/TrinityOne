@@ -46,6 +46,18 @@ function DashMealsPanel({ church }) {
     openedBy:     next.openedBy     !== undefined ? next.openedBy     : s.openedBy,
     adminGroupId: next.adminGroupId !== undefined ? next.adminGroupId : s.adminGroupId,
   });
+  // create a Care team group right here, select it, and open member assignment (no trip to Groups first)
+  const [editTeam, setEditTeam] = React.useState(null);
+  const [creating, setCreating] = React.useState(false);
+  const selectedTeam = (teamGroups || []).find(g => g.id === s.adminGroupId);
+  const createCareTeam = async () => {
+    if (creating || !(window.Steward && window.Steward.publishGroup)) return;
+    setCreating(true);
+    try {
+      const g = await Promise.resolve(window.Steward.publishGroup({ name: 'Care team', kind: 'team', visibility: 'invite', members: [] }));
+      if (g && g.id) { setAll({ adminGroupId: g.id }); setEditTeam(g); }
+    } finally { setCreating(false); }
+  };
   const toggleBtn = (active, onClick, label) => (
     <button onClick={onClick} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
       <span style={{ position: 'absolute', top: 3, left: active ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
@@ -85,12 +97,18 @@ function DashMealsPanel({ church }) {
         </div>
         <div style={{ marginTop: 10, padding: '12px 14px', borderRadius: 13, border: '1px solid var(--line)' }}>
           <div style={mealsLbl}>CARE-TEAM GROUP</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Members of this group can also open and manage needs (not just stewards). Make a group called <b>Care team</b> first under Groups, then pick it here.</div>
-          <select value={s.adminGroupId || ''} onChange={e => setAll({ adminGroupId: e.target.value })} style={mealsFld}>
-            <option value="">— None (stewards only) —</option>
-            {teamGroups.map(g => <option key={g.id} value={g.id}>{g.name || g.id}</option>)}
-          </select>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Members of this group can also open and manage needs (not just stewards). Pick an existing group, or create a care team and choose who’s on it.</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <select value={s.adminGroupId || ''} onChange={e => setAll({ adminGroupId: e.target.value })} style={{ ...mealsFld, flex: 1 }}>
+              <option value="">— None (stewards only) —</option>
+              {teamGroups.map(g => <option key={g.id} value={g.id}>{g.name || g.id}</option>)}
+            </select>
+            {selectedTeam ? <button onClick={() => setEditTeam(selectedTeam)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, flexShrink: 0 }}><Icon name="users" size={15} color="currentColor" /> Members</button> : null}
+          </div>
+          <button onClick={createCareTeam} disabled={creating} style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px dashed var(--line)', background: 'var(--surface-2)', color: 'var(--clay-ink)', borderRadius: 11, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: creating ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', opacity: creating ? 0.6 : 1 }}>
+            <Icon name="plus" size={15} color="currentColor" /> {creating ? 'Creating…' : 'Create a care team'}</button>
         </div>
+        {editTeam ? <EditGroupMembersModal group={editTeam} onClose={() => setEditTeam(null)} /> : null}
       </React.Fragment> : null}
     </Panel>
   );
