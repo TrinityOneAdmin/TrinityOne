@@ -53,11 +53,13 @@ function LibraryHome({ ctx }) {
   const byCat = {}; for (const v of Object.values(inst)) { const c = (v && v.category) || 'bibles'; byCat[c] = (byCat[c] || 0) + 1; }
   const nBibles = (window.Bible && window.Bible.versions ? window.Bible.versions().length : 0) || byCat.bibles || 0;
   const nJournals = (ctx.journalEntries || []).length;
+  const nDevos = (ctx.churchDevos || []).length;   // devotionals are steward-published, not installed modules
   const countFor = (id) => {
     if (id === 'journals') return nJournals === 0 ? 'None yet' : nJournals + (nJournals === 1 ? ' entry' : ' entries');
+    if (id === 'devotionals') return nDevos === 0 ? 'From your church' : nDevos + (nDevos === 1 ? ' devotional' : ' devotionals');
     const n = id === 'bibles' ? nBibles : (byCat[id] || 0);
     if (n === 0) return 'None yet';
-    const noun = id === 'bibles' ? 'version' : id === 'commentaries' ? 'set' : id === 'dictionaries' ? 'reference' : id === 'devotionals' ? 'series' : 'item';
+    const noun = id === 'bibles' ? 'version' : id === 'commentaries' ? 'set' : id === 'dictionaries' ? 'reference' : 'item';
     return n + ' ' + noun + (n === 1 ? '' : 's');
   };
   return (
@@ -82,7 +84,7 @@ function LibraryHome({ ctx }) {
           m.id === 'bibles' ? ctx.openStore('language', 'bibles')
           : m.id === 'dictionaries' ? ctx.openStore('featured', 'dictionaries')
           : m.id === 'commentaries' ? ctx.openStore('featured', 'commentaries')
-          : m.id === 'devotionals' ? ctx.openStore('featured', 'devotionals')
+          : m.id === 'devotionals' ? ctx.go('plans')   // devotionals are steward-published — live in Plans/Today, not a download catalog
           : ctx.openModule(m)
         } />)}
       </div>
