@@ -43,7 +43,7 @@ function careName(pub, myPub) {
 
 function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }) {
   const myPub = care.myPub || '';
-  const dates = careDateRange(need.startDate, need.endDate);
+  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : careDateRange(need.startDate, need.endDate);
   const skipSet = new Set(skips.filter(k => k.needId === need.id).map(k => k.isoDate));
   const fillsFor = (iso) => slots.filter(s => s.needId === need.id && s.isoDate === iso);
   const isRecipient = !!need.recipient && need.recipient === myPub.toLowerCase();

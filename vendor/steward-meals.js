@@ -84,11 +84,13 @@
     }
     function _normNeed(n) {
       const isoDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? String(s) : "";
+      const days = [...new Set((Array.isArray(n.dates) ? n.dates : []).map(isoDate).filter(Boolean))].sort().slice(0, 90);
       return {
         displayLabel: String(n.displayLabel || "").trim(),
         type: ["meals", "rides", "errands", "visits", "childcare"].includes(n.type) ? n.type : "meals",
-        startDate: isoDate(n.startDate),
-        endDate: isoDate(n.endDate),
+        dates: days,
+        startDate: days[0] || isoDate(n.startDate),
+        endDate: days[days.length - 1] || isoDate(n.endDate),
         recipient: typeof n.recipient === "string" && /^[0-9a-f]{64}$/i.test(n.recipient) ? n.recipient.toLowerCase() : "",
         notes: String(n.notes || "").trim(),
         // dietary tags (meals only) — capped + length-limited; the UI supplies the chip set

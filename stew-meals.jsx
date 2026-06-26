@@ -181,7 +181,7 @@ function MealsEmpty() {
 
 // ────────────────────────────────────────────────────────────────────────────────
 function MealsNeedCard({ need, slots, skips, onOpen }) {
-  const dates = mealsDateRange(need.startDate, need.endDate);
+  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate);
   const filledDates = new Set(slots.map(s => s.isoDate));
   const skippedDates = new Set(skips.map(s => s.isoDate));
   const open = dates.filter(d => !filledDates.has(d) && !skippedDates.has(d));
@@ -193,7 +193,7 @@ function MealsNeedCard({ need, slots, skips, onOpen }) {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {mealsFmtDate(need.startDate)} → {mealsFmtDate(need.endDate)}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
       </div>
       <div style={{ textAlign: 'right' }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: open.length === 0 ? 'var(--sage)' : 'var(--ink)' }}>{filledCount}/{dates.length}</div>
@@ -206,7 +206,7 @@ function MealsNeedCard({ need, slots, skips, onOpen }) {
 
 // ────────────────────────────────────────────────────────────────────────────────
 function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
-  const dates = mealsDateRange(need.startDate, need.endDate);
+  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate);
   const skipByDate = Object.fromEntries(skips.map(s => [s.isoDate, s]));
   const slotsByDate = {};
   for (const s of slots) { (slotsByDate[s.isoDate] = slotsByDate[s.isoDate] || []).push(s); }
@@ -222,7 +222,7 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21 }}>{need.displayLabel || 'A member in our church'}</div>
-            <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {mealsFmtDate(need.startDate)} → {mealsFmtDate(need.endDate)}</div>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
           </div>
           <button onClick={onEdit} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="edit" size={14} color="currentColor" /> Edit</button>
         </div>
@@ -258,8 +258,11 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const today = new Date().toISOString().slice(0, 10);
   const [label, setLabel]   = React.useState(need ? need.displayLabel : '');
   const [type, setType]     = React.useState(need ? need.type : 'meals');
-  const [start, setStart]   = React.useState(need ? need.startDate : today);
-  const [end, setEnd]       = React.useState(need ? need.endDate : '');
+  // additive day picker — each day is added individually (not a contiguous range), e.g. Tue + Thu + Sun
+  const [dates, setDates] = React.useState(need ? (Array.isArray(need.dates) && need.dates.length ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate)) : []);
+  const [pick, setPick]   = React.useState('');
+  const addDate = () => { if (pick && !dates.includes(pick)) setDates(d => [...d, pick].sort()); setPick(''); };
+  const removeDate = (d) => setDates(ds => ds.filter(x => x !== d));
   const [notes, setNotes]   = React.useState(need ? need.notes : '');
   const [recipient, setRecipient] = React.useState(need ? need.recipient : '');
   const [diet, setDiet] = React.useState(need && Array.isArray(need.dietary) ? need.dietary : []);
@@ -267,7 +270,6 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const [busy, setBusy]     = React.useState(false);
   const [err, setErr]       = React.useState('');
-  const dates = mealsDateRange(start, end);
   const canSave = label.trim().length > 0 && dates.length > 0 && !busy;
   const save = async () => {
     if (!canSave) return;
@@ -275,7 +277,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
     try {
       const saved = await window.StewardMeals.publishNeed({
         id: need ? need.id : undefined,
-        displayLabel: label.trim(), type, startDate: start, endDate: end, notes: notes.trim(),
+        displayLabel: label.trim(), type, dates, notes: notes.trim(),
         recipient: (recipient || '').trim(),
         dietary: type === 'meals' ? diet : [],
       });
@@ -330,17 +332,19 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
           </React.Fragment>
         ) : null}
 
-        <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-          <div style={{ flex: 1 }}>
-            <div style={mealsLbl}>FROM</div>
-            <input type="date" value={start} onChange={e => setStart(e.target.value)} style={mealsFld} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={mealsLbl}>UNTIL</div>
-            <input type="date" value={end} onChange={e => setEnd(e.target.value)} min={start} style={mealsFld} />
-          </div>
+        <div style={mealsLbl}>WHICH DAYS?</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: dates.length ? 8 : 6 }}>
+          <input type="date" value={pick} min={today} onChange={e => setPick(e.target.value)} style={{ ...mealsFld, flex: 1 }} />
+          <button onClick={addDate} disabled={!pick || dates.includes(pick)} className="sk-btn sk-btn--ghost" style={{ padding: '0 15px', fontSize: 13.5, flexShrink: 0, opacity: (pick && !dates.includes(pick)) ? 1 : 0.5 }}><Icon name="plus" size={14} color="currentColor" /> Add day</button>
         </div>
-        {dates.length === 0 ? <div style={{ fontSize: 12, color: 'var(--clay)', marginTop: -8, marginBottom: 14 }}>Pick valid dates — end on or after the start.</div> : <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: -8, marginBottom: 14 }}>{dates.length} day{dates.length === 1 ? '' : 's'} of care.</div>}
+        {dates.length ? (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {dates.map(d => (
+              <button key={d} onClick={() => removeDate(d)} title="Remove this day" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mealsFmtDate(d)} <Icon name="x" size={11} color="currentColor" /></button>
+            ))}
+          </div>
+        ) : null}
+        <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add as many separate days as you need; tap a day to remove it.` : 'Add each day care is needed — they don’t have to be in a row.'}</div>
 
         <div style={mealsLbl}>NOTES (OPTIONAL)</div>
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any context the church needs to help well — allergies, drop-off times, the address, who not to ring after 9pm…" style={{ ...mealsFld, height: 'auto', minHeight: 88, padding: '11px 13px', resize: 'vertical' }} />

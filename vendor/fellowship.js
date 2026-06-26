@@ -7307,7 +7307,7 @@
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, displayLabel: c.displayLabel || "", type: c.type || "meals", startDate: c.startDate || "", endDate: c.endDate || "", recipient: (c.recipient || "").toLowerCase(), notes: c.notes || "", dietary: Array.isArray(c.dietary) ? c.dietary : [], ts: e.created_at });
+            byId.set(id, { id, displayLabel: c.displayLabel || "", type: c.type || "meals", startDate: c.startDate || "", endDate: c.endDate || "", recipient: (c.recipient || "").toLowerCase(), notes: c.notes || "", dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], ts: e.created_at });
             emit();
           } catch {
           }
