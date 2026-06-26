@@ -426,12 +426,29 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <Row icon="globe" label="Relays" sub={`${(window.Fellowship && window.Fellowship.relays || D.RELAYS).length} connected · Nostr`} onClick={() => ctx.openRelays()} />
         </Group>
         {/* "Start a new identity" hidden for the pilot — too easy to wipe a key by accident */}
+        <AppVersion />
       </div>
       {family ? <FamilySheet open={family} onClose={() => setFamily(false)} ctx={ctx} /> : null}
     </Overlay>
   );
 }
 window.ProfileSheet = ProfileSheet;
+
+// small version line at the foot of the You sheet — so test builds are easy to tell apart.
+// Native only (reads the installed APK's versionName + versionCode via @capacitor/app).
+function AppVersion() {
+  const [v, setV] = useId('');
+  useIdE(() => {
+    const P = window.Capacitor && window.Capacitor.Plugins;
+    if (!(P && P.App && P.App.getInfo)) return;
+    let alive = true;
+    P.App.getInfo().then(i => { if (alive && i) setV('v' + i.version + ' (' + i.build + ')'); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (!v) return null;
+  return <div style={{ textAlign: 'center', fontSize: 11.5, fontWeight: 600, color: 'var(--ink-3)', letterSpacing: '.3px', margin: '20px 0 4px' }}>TrinityOne {v}</div>;
+}
+window.AppVersion = AppVersion;
 
 // ── My family (safeguarding v2): a parent creates and oversees a child's account ──
 // Minting the child's key, joining them to the church, and asking the steward to confirm the link all
