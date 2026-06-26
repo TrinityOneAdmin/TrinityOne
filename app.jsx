@@ -1092,6 +1092,7 @@ function App() {
       <PhoneFrame bare={fullscreen}>
         {Bible.loaded ? (
           <React.Fragment>
+            <UpdateBanner ctx={ctx} />
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
                 <DesktopNav active={tab} onChange={setTab} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} />
