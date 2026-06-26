@@ -8,6 +8,7 @@ const UPDATE_APK_URL = 'https://app.trinityone.church/trinityone.apk';
 
 function UpdateBanner({ ctx }) {
   const [upd, setUpd] = React.useState(null);   // { name, code } once a newer build is found
+  const [busy, setBusy] = React.useState(false); // one-shot: a tapped download must not spawn duplicates
   React.useEffect(() => {
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
     const native = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
@@ -30,7 +31,11 @@ function UpdateBanner({ ctx }) {
   }, []);
   if (!upd) return null;
   const later = () => { try { localStorage.setItem('trinityone.updateSnoozed', String(upd.code)); } catch (e) {} setUpd(null); };
-  const get = () => { try { window.open(UPDATE_APK_URL, '_blank'); } catch (e) { try { location.href = UPDATE_APK_URL; } catch (e2) {} } };
+  const get = () => {
+    if (busy) return;                                  // ignore repeat taps — they each kick off a fresh download
+    setBusy(true);
+    try { window.open(UPDATE_APK_URL, '_blank'); } catch (e) { try { location.href = UPDATE_APK_URL; } catch (e2) {} }
+  };
   return (
     <div style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top, 0px) + 10px)', left: 12, right: 12, zIndex: 70, margin: '0 auto', maxWidth: 460,
       background: 'var(--ink)', color: 'var(--paper)', borderRadius: 16, boxShadow: 'var(--shadow-lg)', padding: '12px 14px',
@@ -42,7 +47,7 @@ function UpdateBanner({ ctx }) {
         <div style={{ fontSize: 12, opacity: .8, lineHeight: 1.35 }}>A newer version of TrinityOne is ready to install.</div>
       </div>
       <button onClick={later} style={{ border: 'none', background: 'transparent', color: 'var(--paper)', opacity: .7, fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '6px 4px', fontFamily: 'var(--font-ui)' }}>Later</button>
-      <button onClick={get} style={{ border: 'none', background: 'var(--clay)', color: '#fff', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', padding: '8px 14px', borderRadius: 11, fontFamily: 'var(--font-ui)' }}>Update</button>
+      <button onClick={get} disabled={busy} style={{ border: 'none', background: 'var(--clay)', color: '#fff', fontSize: 13.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', opacity: busy ? .65 : 1, padding: '8px 14px', borderRadius: 11, fontFamily: 'var(--font-ui)' }}>{busy ? 'Downloading…' : 'Update'}</button>
     </div>
   );
 }
