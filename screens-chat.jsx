@@ -1110,6 +1110,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   const churchNpub = ctx.church && ctx.church.npub;
   const [groups, setGroups] = useC([]);
   const [members, setMembers] = useC([]);
+  const [pq, setPq] = useC('');   // people search — the directory can get long
   // live church groups + member directory (the old code listed mock D.GROUPS, so a real church showed nothing)
   useCE(() => {
     setGroups([]); setMembers([]);
@@ -1128,6 +1129,9 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   const postable = (groups || []).filter(g => g && g.id && (g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub))));
   // people I'm allowed to message — ctx.canDMPeer already excludes children unless I'm cleared ("if set that way")
   const people = (members || []).filter(m => m && m.pubkey && m.pubkey !== myPub && (!ctx.canDMPeer || ctx.canDMPeer(m.pubkey)));
+  const pql = pq.trim().toLowerCase();
+  const pName = (m) => (m.name && m.name.trim()) || (m.nip05 ? String(m.nip05).split('@')[0] : '') || ((FS && FS.displayFor) ? FS.displayFor(m.pubkey).handle : 'Member');
+  const peopleShown = pql ? people.filter(m => pName(m).toLowerCase().includes(pql) || (m.nip05 || '').toLowerCase().includes(pql)) : people;
   // a verse/devotional/note sent to a person goes as a readable DM (DMs don't render the card payload)
   const asText = payload.text ? ('“' + payload.text + '” — ' + payload.ref + (payload.version ? ' · ' + payload.version : ''))
     : payload.title ? (payload.title + (payload.ref ? ' — ' + payload.ref : '') + (payload.excerpt ? '\n' + payload.excerpt : '')) : '';
@@ -1184,8 +1188,15 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
       {people.length ? (
         <React.Fragment>
           <div style={lblStyle}>SEND TO SOMEONE</div>
+          {people.length > 6 ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 40, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 10 }}>
+              <Icon name="study" size={15} color="var(--ink-3)" />
+              <input value={pq} onChange={e => setPq(e.target.value)} placeholder="Search people…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
+            </div>
+          ) : null}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-            {people.map(m => {
+            {!peopleShown.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one matches that.</div> : null}
+            {peopleShown.map(m => {
               const d = (FS && FS.displayFor) ? FS.displayFor(m.pubkey) : { handle: m.name || 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
               return (
                 <button key={m.pubkey} onClick={() => sendToPerson(m)} style={rowStyle}>
