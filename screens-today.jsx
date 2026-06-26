@@ -41,7 +41,7 @@ function careName(pub, myPub) {
   return 'A member';
 }
 
-function CareNeedRow({ need, slots, skips, care, expanded, onToggle }) {
+function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }) {
   const myPub = care.myPub || '';
   const dates = careDateRange(need.startDate, need.endDate);
   const skipSet = new Set(skips.filter(k => k.needId === need.id).map(k => k.isoDate));
@@ -84,13 +84,13 @@ function CareNeedRow({ need, slots, skips, care, expanded, onToggle }) {
                 {!skipped && (mineFilled
                   ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
                   : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
-                {isRecipient && fills.length === 0 && (skipped
+                {(isRecipient || canManage) && fills.length === 0 && (skipped
                   ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
                   : <button onClick={() => care.skip(need.id, iso)} style={careBtnGhost}>Skip</button>)}
               </div>
             );
           })}
-          {isRecipient ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>This is for you. Tap <b>Skip</b> on any day you’re covered — it’ll come off the list.</div> : null}
+          {(isRecipient || canManage) ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>{isRecipient ? <React.Fragment>This is for you. Tap <b>Skip</b> on any day you’re covered</React.Fragment> : <React.Fragment>Care team: tap <b>Skip</b> on any day they’re already covered (e.g. if they’re not on the app)</React.Fragment>} — it comes off the list.</div> : null}
         </div>
       )}
     </div>
@@ -109,10 +109,12 @@ function CareCard({ ctx }) {
   const myPub = (care.myPub || '').toLowerCase();
   // visibility 'team' → only the care team (roster of the configured admin group) sees the list;
   // a recipient always sees their own need so they can mark skip-days.
-  const amCareTeam = s.visibility !== 'team' || (() => {
+  // on the care team (roster of the configured admin group) → can block out dates for a recipient who isn't on the app
+  const onCareRoster = (() => {
     const roster = (ctx.churchRosters || []).find(r => r.team === s.adminGroupId);
     return !!(roster && (roster.people || []).some(p => p && (p.pub || '').toLowerCase() === myPub));
   })();
+  const amCareTeam = s.visibility !== 'team' || onCareRoster;
   let live = (care.needs || []).filter(n => !n.endDate || n.endDate >= today);
   if (s.visibility === 'team' && !amCareTeam) live = live.filter(n => n.recipient && n.recipient === myPub);
   if (!live.length) return null;
@@ -122,7 +124,7 @@ function CareCard({ ctx }) {
       <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-          {live.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
+          {live.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} canManage={onCareRoster} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
         </div>
       </div>
     </div>

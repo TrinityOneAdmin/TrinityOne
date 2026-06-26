@@ -403,6 +403,14 @@ function ServingScreen({ open, onClose, ctx }) {
   const rsvps = ctx.myRsvps || {};
   const myTeams = svMyTeams(ctx);
   const nextRoster = next ? svServiceRoster(ctx, next.serviceId) : [];
+  // practical-care commitments: the days I signed up to help, surfaced alongside my serving
+  const careMine = (() => {
+    const mp = ((ctx.care && ctx.care.myPub) || '').toLowerCase(); if (!mp) return [];
+    const needs = (ctx.care && ctx.care.needs) || [];
+    return ((ctx.care && ctx.care.slots) || []).filter(s => (s.pubkey || '').toLowerCase() === mp)
+      .map(s => ({ iso: s.isoDate, need: needs.find(n => n.id === s.needId) })).filter(x => x.need && x.iso)
+      .sort((a, b) => (a.iso || '').localeCompare(b.iso || ''));
+  })();
   const close = () => setSheet(null);
 
   return (
@@ -446,6 +454,21 @@ function ServingScreen({ open, onClose, ctx }) {
                 </div>
               </div>
             ))}
+
+            {careMine.length ? (
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', margin: '2px 0 10px' }}>PRACTICAL CARE — YOU’RE HELPING</div>
+                {careMine.map((c, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '11px 13px', borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
+                    <ServDateBlock iso={c.iso} accent="var(--sage)" />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="heart" size={16} color="var(--sage)" /><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{(c.need.type || 'care').replace(/^./, ch => ch.toUpperCase())}</span></div>
+                      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>For {c.need.displayLabel || 'a member'}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {next ? (
               <div style={{ position: 'relative', borderRadius: 24, overflow: 'hidden', marginBottom: 22, color: '#fff', background: 'linear-gradient(155deg, #6BA17C, #3C6E57)', boxShadow: 'var(--shadow-lg)' }}>

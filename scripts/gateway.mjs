@@ -444,12 +444,14 @@ function accept(e) {
     if (d === MEALS_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // enable/configure the module: church or rostered steward
     if (d.startsWith(NEED_D)) {                                 // open / edit / close a care need
       const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
-      return isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && isMember);   // church / steward / care-team admin; or any member when the church allows member-opened needs
+      // church / steward / care-team admin; or any NON-minor member when the church allows member-opened needs (children never open needs)
+      return isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && isMember && !MINORS.has(e.pubkey));
     }
     if (d.startsWith(SLOT_D)) return isMember;                  // fill a slot: any member offers help (the event is keyed by their own pubkey, so they can't forge another member's)
-    if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": RECIPIENT-only (the new shape — relay-enforced)
+    if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": the RECIPIENT, or a steward/care-team blocking a date on their behalf (recipient may not be on the app)
       const careId = d.slice(SKIP_D.length).split(':')[0];
-      return !!careId && e.pubkey === CARE_RECIPIENT.get(careId);
+      const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
+      return !!careId && (e.pubkey === CARE_RECIPIENT.get(careId) || isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp));
     }
     return isMember;                                            // member's own data (MyData)
   }
