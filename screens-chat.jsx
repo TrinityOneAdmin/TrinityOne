@@ -369,7 +369,10 @@ function ChatScreen({ ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-          <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
+          <span style={{ position: 'relative', display: 'inline-flex' }}>
+            <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
+            {ctx.dmUnread ? <span style={{ position: 'absolute', top: 4, right: 4, width: 10, height: 10, borderRadius: 999, background: 'var(--clay)', border: '2px solid var(--surface)', pointerEvents: 'none' }} /> : null}
+          </span>
           <button onClick={() => ctx.openProfile()} title="Your anonymous identity" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 999, lineHeight: 0, position: 'relative' }}>
             <UserAvatar av={myAvatar(id)} name={myName(id)} size={38} />
             <span style={{ position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 999, background: 'var(--sage)', border: '2px solid var(--surface)' }} />
@@ -1103,16 +1106,43 @@ function SharePreview({ p, type }) {
 }
 
 function VerseShareSheet({ payload, open, onClose, ctx }) {
+  const FS = window.Fellowship;
+  const churchNpub = ctx.church && ctx.church.npub;
+  const [groups, setGroups] = useC([]);
+  const [members, setMembers] = useC([]);
+  // live church groups + member directory (the old code listed mock D.GROUPS, so a real church showed nothing)
+  useCE(() => {
+    setGroups([]); setMembers([]);
+    if (!open || !churchNpub || !FS) return;
+    const offs = [];
+    if (FS.subscribeChurchGroups) offs.push(FS.subscribeChurchGroups(churchNpub, setGroups));
+    if (FS.subscribeChurchMembers) offs.push(FS.subscribeChurchMembers(churchNpub, (list) => setMembers(list || [])));
+    return () => offs.forEach(o => { try { o && o(); } catch {} });
+  }, [open, churchNpub]);
   if (!payload) return null;
-  const D = window.TrinityData;
   const type = payload.type || 'verse';
-  const live = !!(window.Fellowship && window.Fellowship.publishMessage);
+  const live = !!(FS && FS.publishMessage);
   const heading = type === 'devotional' ? 'Share devotional' : type === 'note' ? 'Share note' : 'Share verse';
+  const myPub = FS && FS.myPubkey;
+  // groups I can post to — hide invite-only groups I'm not a member of (the relay enforces posting too)
+  const postable = (groups || []).filter(g => g && g.id && (g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub))));
+  // people I'm allowed to message — ctx.canDMPeer already excludes children unless I'm cleared ("if set that way")
+  const people = (members || []).filter(m => m && m.pubkey && m.pubkey !== myPub && (!ctx.canDMPeer || ctx.canDMPeer(m.pubkey)));
+  // a verse/devotional/note sent to a person goes as a readable DM (DMs don't render the card payload)
+  const asText = payload.text ? ('“' + payload.text + '” — ' + payload.ref + (payload.version ? ' · ' + payload.version : ''))
+    : payload.title ? (payload.title + (payload.ref ? ' — ' + payload.ref : '') + (payload.excerpt ? '\n' + payload.excerpt : '')) : '';
   const sendToGroup = (g) => {
     if (!live) { ctx.toast('Chat isn’t available'); return; }
-    window.Fellowship.publishMessage(g.id, JSON.stringify(payload), [['k', type]]);
+    FS.publishMessage(g.id, JSON.stringify(payload), [['k', type]]);
     ctx.toast('Shared to ' + g.name); onClose();
   };
+  const sendToPerson = (m) => {
+    if (!FS || !FS.sendDM) { ctx.toast('Messaging isn’t available'); return; }
+    FS.sendDM(m.pubkey, asText);
+    ctx.toast('Sent to ' + (m.name || 'them')); onClose();
+  };
+  const lblStyle = { fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 10px' };
+  const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' };
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="86%">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
@@ -1133,21 +1163,49 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
         </button>
       ) : null}
 
-      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 10px' }}>SEND TO A GROUP</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-        {D.GROUPS.filter(g => g.church === ctx.church.id).map(g => (
-          <button key={g.id} onClick={() => sendToGroup(g)} style={{
-            width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 14,
-            border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' }}>
-            <div style={{ width: 38, height: 38, borderRadius: 12, background: `color-mix(in oklab, ${g.accent} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: g.accent, flexShrink: 0 }}>
-              <Icon name={g.prayer ? 'pray' : 'chat'} size={20} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.name}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.kind}</div></div>
-            <Icon name="send" size={17} color="var(--clay)" />
-          </button>
-        ))}
-      </div>
+      {postable.length ? (
+        <React.Fragment>
+          <div style={lblStyle}>SEND TO A GROUP</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: people.length ? 18 : 0 }}>
+            {postable.map(g => (
+              <button key={g.id} onClick={() => sendToGroup(g)} style={rowStyle}>
+                <div style={{ width: 38, height: 38, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || 'var(--clay)'} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: g.accent || 'var(--clay)', flexShrink: 0 }}>
+                  <Icon name={g.prayer ? 'pray' : 'chat'} size={20} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.kind || 'Group'}</div></div>
+                <Icon name="send" size={17} color="var(--clay)" />
+              </button>
+            ))}
+          </div>
+        </React.Fragment>
+      ) : null}
+
+      {people.length ? (
+        <React.Fragment>
+          <div style={lblStyle}>SEND TO SOMEONE</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+            {people.map(m => {
+              const d = (FS && FS.displayFor) ? FS.displayFor(m.pubkey) : { handle: m.name || 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
+              return (
+                <button key={m.pubkey} onClick={() => sendToPerson(m)} style={rowStyle}>
+                  <UserAvatar av={avOf(d)} name={m.name || d.handle} size={38} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || d.handle}</div>
+                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Direct message</div></div>
+                  <Icon name="send" size={17} color="var(--clay)" />
+                </button>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      ) : null}
+
+      {!postable.length && !people.length ? (
+        <div style={{ textAlign: 'center', color: 'var(--ink-3)', fontSize: 14, padding: '20px 10px', lineHeight: 1.55 }}>
+          No groups or people to send to yet — join a group or wait for others to join your church.
+        </div>
+      ) : null}
     </BottomSheet>
   );
 }

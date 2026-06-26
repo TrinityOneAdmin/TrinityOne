@@ -506,7 +506,17 @@ window.sanitizeHtml = function (html) {
       const f = e.target.files[0]; e.target.value = "";
       if(!f) return;
       loadingFlag = true; notify();
-      try{ await loadModuleBytes(new Uint8Array(await f.arrayBuffer()), f.name); }
+      try{
+        const u8 = new Uint8Array(await f.arrayBuffer());
+        const r = await loadModuleBytes(u8, f.name);
+        // persist an imported module so it survives a restart — the shared-Bible / fully-offline case
+        // (a module handed over by Quick Share must stick, not vanish when the app reopens).
+        if(r && r.abbr){
+          const url = "imported/" + f.name;
+          await cachePut(url, u8);
+          recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr, kind: r.kind || "bible", category: r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles" });
+        }
+      }
       catch(err){ console.error(err); window.Bible._error = err.message; }
       finally{ loadingFlag = false; notify(); }
     });
@@ -514,6 +524,12 @@ window.sanitizeHtml = function (html) {
     return fileInput;
   }
   function pickFile(){ ensureInput().click(); }
+  // export an installed module's raw cached bytes for peer-to-peer sharing (Quick Share / Bluetooth).
+  async function exportModule(url){
+    const bytes = await cacheGet(url);
+    if(!bytes || !bytes.length) return null;
+    return { bytes, filename: (String(url).split("/").pop() || "bible.module") };
+  }
 
   // remove an installed module by its version abbr: drop it from memory, forget it, clear its cache.
   // Refuses to remove the active version (you'd have nothing to read) — the UI hides remove for it.
@@ -619,7 +635,7 @@ window.sanitizeHtml = function (html) {
   window.Bible = {
     BOOK_NAMES, bookName, bookAbbr, bookGroup, bookNum, parseRef,
     parseVerse, lex,
-    loadModuleBytes, fetchAndCacheModule, loadAsset, assetCached, pickFile,
+    loadModuleBytes, fetchAndCacheModule, loadAsset, assetCached, pickFile, exportModule,
     cacheKeys, getCatalog, getMirror, getVideos, installModule, removeModule, isInstalled, isInstalling,
     installedMap: getInstalled,
     subscribe(fn){ subs.add(fn); return () => subs.delete(fn); },

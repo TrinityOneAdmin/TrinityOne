@@ -253,9 +253,12 @@ function Overlay({ open, onClose, children, docked }) {
       position: 'absolute', inset: 0, zIndex: 55, background: 'var(--paper)',
       transform: open ? 'translateY(0)' : 'translateY(100%)',
       transition: 'transform .4s cubic-bezier(.32,.72,0,1)',
-      display: 'flex', flexDirection: 'column',
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
     }}>
-      {children}
+      {/* desktop: centre the content at a readable width instead of stretching full-width (no-op on mobile) */}
+      <div style={{ width: '100%', maxWidth: 860, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {children}
+      </div>
     </div>
   );
 }

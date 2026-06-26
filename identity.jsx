@@ -381,6 +381,12 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <Row icon="bolt" label="Currency" sub={(() => { const c = window.TrinityLN && window.TrinityLN.currency && window.TrinityLN.currency(); return c ? `Show giving amounts in ${c.label} (${c.symbol})` : 'Currency for giving amounts'; })()} accent="var(--gold)" onClick={() => { onClose && onClose(); ctx.openCurrency(); }} />
         </Group>
 
+        {/* share the app — pass it on hand to hand (Quick Share / Bluetooth), no internet needed */}
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>SHARE</div>
+        <Group>
+          <Row icon="share" label="Share the app" sub="Pass TrinityOne to someone nearby — Quick Share or Bluetooth, no internet needed" accent="var(--sage)" onClick={() => { onClose && onClose(); ctx.openShareApp(); }} />
+        </Group>
+
         {/* help & guides */}
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>HELP &amp; SETUP</div>
         <Group>
