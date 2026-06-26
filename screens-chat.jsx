@@ -1061,7 +1061,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             <Icon name="pray" size={20} fill={prayerOn} /></button>
           <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={1}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); } }}
-            placeholder={prayerOn ? 'Share a prayer request…' : 'Message anonymously…'} style={{
+            placeholder={prayerOn ? 'Share a prayer request…' : 'Message…'} style={{
               flex: 1, resize: 'none', minHeight: 44, maxHeight: 96, padding: '12px 15px', borderRadius: 16,
               border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14.5,
               fontFamily: 'var(--font-ui)', color: 'var(--ink)', lineHeight: 1.35 }} />
