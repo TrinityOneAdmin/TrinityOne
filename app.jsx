@@ -913,6 +913,7 @@ function App() {
     openMember: (name) => { const m = window.TrinityData.MEMBERS[name]; if (m) setMember(m); else toast('Opening ' + name); },
     openRecovery: () => setIdSheet('recovery'),
     openInvite: () => setIdSheet('invite'),
+    openShareApp: () => setIdSheet('shareapp'),
     openRelays: () => setIdSheet('relays'),
     openWallet: () => setWalletSheet(true),
     openNewIdentity: () => setNewId(true),
@@ -1154,6 +1155,7 @@ function App() {
             <MemberCard member={member} open={!!member} onClose={() => setMember(null)} ctx={ctx} />
             <RecoverySheet open={idSheet === 'recovery'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <InviteSheet open={idSheet === 'invite'} onClose={() => setIdSheet(null)} identity={identity} ctx={ctx} />
+            <ShareAppSheet open={idSheet === 'shareapp'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
             {window.WalletSheet ? <WalletSheet open={walletSheet} onClose={() => setWalletSheet(false)} ctx={ctx} /> : null}
