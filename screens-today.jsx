@@ -120,7 +120,7 @@ const careBtnHelp = { flexShrink: 0, padding: '6px 11px', borderRadius: 9, borde
 const careBtnGhost = { flexShrink: 0, padding: '6px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
 const careBtnMine = { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 11px', borderRadius: 9, border: '1px solid var(--sage)', background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', color: 'var(--sage)', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
 
-function CareCard({ ctx }) {
+function CareCard({ ctx, embedded }) {
   const care = ctx.care || {};
   const s = care.settings || {};
   const [openId, setOpenId] = React.useState(null);
@@ -137,16 +137,30 @@ function CareCard({ ctx }) {
   const amCareTeam = s.visibility !== 'team' || onCareRoster;
   let live = (care.needs || []).filter(n => !n.endDate || n.endDate >= today);
   if (s.visibility === 'team' && !amCareTeam) live = live.filter(n => n.recipient && n.recipient === myPub);
-  if (!live.length) return null;
+  // embedded = rendered as the Serving "Care" tab (own page) → show an empty state instead of hiding.
+  if (!live.length) {
+    if (!embedded) return null;
+    return (
+      <div style={{ textAlign: 'center', padding: '46px 24px', color: 'var(--ink-3)' }}>
+        <div style={{ width: 56, height: 56, borderRadius: 18, margin: '0 auto 14px', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={26} stroke={1.5} color="var(--sage)" /></div>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, color: 'var(--ink)', marginBottom: 6 }}>No open needs right now</div>
+        <div style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>When someone in the church needs a hand — a meal, a ride, an errand — it’ll show up here for you to help.</div>
+      </div>
+    );
+  }
+  const inner = (
+    <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        {live.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} canManage={onCareRoster} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
+      </div>
+    </div>
+  );
+  if (embedded) return inner;
   return (
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
       <SectionLabel>Practical care</SectionLabel>
-      <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-          {live.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} canManage={onCareRoster} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
-        </div>
-      </div>
+      {inner}
     </div>
   );
 }
@@ -311,8 +325,7 @@ function TodayScreen({ ctx }) {
         </div>
       )}
 
-      {/* Practical care / meal trains — only when the church enabled it and has an open need */}
-      <CareCard ctx={ctx} />
+      {/* Practical care / meal trains now lives in its own tab inside Serving & events (not on Today) */}
 
       {/* Continue reading */}
       <SectionLabel>Continue reading</SectionLabel>

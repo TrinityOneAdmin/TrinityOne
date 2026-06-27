@@ -411,6 +411,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
       .map(s => ({ iso: s.isoDate, note: s.note || '', need: needs.find(n => n.id === s.needId) })).filter(x => x.need && x.iso)
       .sort((a, b) => (a.iso || '').localeCompare(b.iso || ''));
   })();
+  const careOn = !!(ctx.care && ctx.care.settings && ctx.care.settings.enabled);   // show the Care tab only when the church runs practical care
   const close = () => setSheet(null);
 
   return (
@@ -424,7 +425,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 4, padding: '0 14px 12px' }}>
-          {[['serving', 'My serving', 'hand'], ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck']].map(([k, lbl, ic]) => {
+          {[['serving', 'Serving', 'hand'], ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])].map(([k, lbl, ic]) => {
             const on = tab === k;
             return (
               <button key={k} onClick={() => setTab(k)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
@@ -654,6 +655,8 @@ function ServingScreen({ open, onClose, ctx, docked }) {
               ))}
             </div>
           </React.Fragment>
+        ) : tab === 'care' ? (
+          <CareCard ctx={ctx} embedded />
         ) : (
           <MyMonth ctx={ctx} onManage={(it) => setSheet({ kind: 'manage', item: it })} />
         )}

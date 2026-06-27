@@ -193,7 +193,7 @@ window.trinityGoBack = function () {
   return false;
 };
 
-function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z = 50, docked }) {
+function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z = 50, docked, passthrough }) {
   // docked = rendered inside a desktop side panel (e.g. reader study panel): fill the pane, no
   // backdrop/slide/handle, no backstack.
   useBackLayer(open && !docked, onClose);
@@ -208,11 +208,13 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
     );
   }
   return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: z, pointerEvents: open ? 'auto' : 'none' }}>
-      <div onClick={onClose} style={{
+    // passthrough = no dimming backdrop + the wrapper ignores pointer events, so the page behind (e.g. the Bible
+    // while selecting verses with the +/− card) stays scrollable + tappable. Only the sheet panel is interactive.
+    <div style={{ position: 'absolute', inset: 0, zIndex: z, pointerEvents: (open && !passthrough) ? 'auto' : 'none' }}>
+      {!passthrough && <div onClick={onClose} style={{
         position: 'absolute', inset: 0, background: 'rgba(20,14,8,.42)',
         opacity: open ? 1 : 0, transition: 'opacity .28s',
-      }} />
+      }} />}
       <div onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
         maxWidth: 500, marginLeft: 'auto', marginRight: 'auto',   // centered column on a wide screen; full-width on a phone (maxWidth > viewport)
@@ -221,7 +223,7 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
         boxShadow: '0 -10px 40px rgba(20,14,8,.22)',
         transform: open ? 'translateY(0)' : 'translateY(102%)',
         transition: 'transform .34s cubic-bezier(.32,.72,0,1)',
-        paddingBottom: 14,
+        paddingBottom: 14, pointerEvents: 'auto',
       }}>
         <div style={{ display: 'flex', justifyContent: 'center', padding: '11px 0 4px', flexShrink: 0 }}>
           <div style={{ width: 38, height: 5, borderRadius: 3, background: 'var(--ink-3)', opacity: .4 }} />

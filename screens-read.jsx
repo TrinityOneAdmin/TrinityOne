@@ -96,7 +96,7 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
     { ic: 'comment', label: 'Commentary', fn: onCommentary },
   ];
   return (
-    <BottomSheet open={open} onClose={onClose}>
+    <BottomSheet open={open} onClose={onClose} passthrough>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>{isMulti ? multi + ' verses selected' : 'Verse selected'}</div>

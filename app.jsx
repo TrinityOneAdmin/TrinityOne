@@ -582,10 +582,16 @@ function App() {
   const wasPendingRef = React.useRef(false);
   const approvedToastedRef = React.useRef(false);   // once per church — the join sub flickers isPending on reconnect, which was re-toasting
   useAE(() => {
-    if (wasPendingRef.current && joinState.approval && joinState.isAdmitted && !joinState.isPending && !approvedToastedRef.current) {
+    // persist the "already welcomed" flag per church — the in-memory ref reset every launch, and the join sub
+    // flickers pending→admitted on each reconnect, which re-fired the toast. localStorage = once, ever.
+    const key = activeChurch ? 'trinityone.approvedToast.' + activeChurch : null;
+    let already = approvedToastedRef.current;
+    if (!already && key) { try { already = localStorage.getItem(key) === '1'; } catch (e) {} }
+    if (wasPendingRef.current && joinState.approval && joinState.isAdmitted && !joinState.isPending && !already) {
       const nm = (churches.find(c => c.id === activeChurch) || {}).name || 'your church';
       toast('You’re approved — welcome to ' + nm + '!');
       approvedToastedRef.current = true;
+      try { if (key) localStorage.setItem(key, '1'); } catch (e) {}
     }
     wasPendingRef.current = !!joinState.isPending;
   }, [joinState.isPending, joinState.isAdmitted, joinState.approval]);
