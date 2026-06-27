@@ -572,11 +572,15 @@ function App() {
   }, [activeChurch, churches, connTick]);
   // joining: whether the active church gates joining behind steward approval, and whether I'm still pending
   const [joinState, setJoinState] = useA({ approval: false, isAdmitted: true, isPending: false });
+  const joinChurchRef = React.useRef(null);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
-    if (!np || !F || !F.subscribeChurchJoin) { setJoinState({ approval: false, isAdmitted: true, isPending: false }); return; }
-    return F.subscribeChurchJoin(np, setJoinState);
+    if (!np || !F || !F.subscribeChurchJoin) { setJoinState({ approval: false, isAdmitted: true, isPending: false, loaded: true }); joinChurchRef.current = null; return; }
+    // show a neutral loading until the sub resolves — stops the community flashing before a pending join resolves.
+    // reset only on an actual church change, not a mere reconnect (connTick), else the tab would blink each reconnect.
+    if (joinChurchRef.current !== activeChurch) { setJoinState({ approval: false, isAdmitted: true, isPending: false, loaded: false }); joinChurchRef.current = activeChurch; }
+    return F.subscribeChurchJoin(np, (s) => setJoinState({ ...s, loaded: true }));
   }, [activeChurch, churches, connTick]);
   // tell the member the moment they're approved (pending → admitted), within the same church session
   const wasPendingRef = React.useRef(false);

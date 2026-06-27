@@ -420,6 +420,10 @@ function ChatScreen({ ctx }) {
           <p style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 320, margin: '0 auto 22px' }}>Community is where your church gathers — groups, prayer requests and notices. Scan the invite your church shares, or paste its code, to join in.</p>
           <button onClick={() => ctx.openChurchSwitcher && ctx.openChurchSwitcher('follow')} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '13px 22px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 15 }}><Icon name="qr" size={18} color="#fff" /> Join a church</button>
         </div>
+      ) : !(ctx.joinState && ctx.joinState.loaded) ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '72px 24px' }}>
+          <div style={{ width: 28, height: 28, borderRadius: 999, border: '3px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+        </div>
       ) : (ctx.joinState && ctx.joinState.isPending) ? (
         <div style={{ textAlign: 'center', padding: '40px 24px', animation: 'trinityFade .4s ease both' }}>
           <div style={{ width: 76, height: 76, borderRadius: 22, margin: '0 auto 18px', background: 'color-mix(in oklab, var(--gold) 16%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a6717' }}><Icon name="shield" size={38} /></div>
