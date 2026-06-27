@@ -260,13 +260,15 @@ function ChatScreen({ ctx }) {
   // read the active church's real group definitions (kind-30078) when it has an npub
   useCE(() => {
     if (!ctx.church || !ctx.church.npub || !(window.Fellowship && window.Fellowship.subscribeChurchGroups)) { setRealGroups([]); return; }
-    return window.Fellowship.subscribeChurchGroups(ctx.church.npub, setRealGroups);
+    setRealGroups(lsGet('trinityone.groups.' + ctx.church.npub, []));   // paint the group list instantly from cache (was a noticeable delay)
+    return window.Fellowship.subscribeChurchGroups(ctx.church.npub, g => { setRealGroups(g); lsSet('trinityone.groups.' + ctx.church.npub, g); });
   }, [ctx.church && ctx.church.npub]);
 
   // read the church's group categories so we can section the list by them
   useCE(() => {
     if (!ctx.church || !ctx.church.npub || !(window.Fellowship && window.Fellowship.subscribeChurchCategories)) { setCats([]); return; }
-    return window.Fellowship.subscribeChurchCategories(ctx.church.npub, setCats);
+    setCats(lsGet('trinityone.cats.' + ctx.church.npub, []));
+    return window.Fellowship.subscribeChurchCategories(ctx.church.npub, c => { setCats(c); lsSet('trinityone.cats.' + ctx.church.npub, c); });
   }, [ctx.church && ctx.church.npub]);
 
   const accentFor = (s) => { const cs = ['var(--clay)', 'var(--sage)', 'var(--gold)', '#5360D6', '#C24B7A']; let h = 0; for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return cs[h % cs.length]; };

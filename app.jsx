@@ -1206,10 +1206,10 @@ function App() {
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
             {window.WalletSheet ? <WalletSheet open={walletSheet} onClose={() => setWalletSheet(false)} ctx={ctx} /> : null}
-            <ChatRoom group={group} open={!!group && !(desktop && tab === 'chat')} onClose={() => setGroup(null)} ctx={ctx} />
-            <DMInbox open={dmInbox && !(desktop && tab === 'chat')} onClose={() => setDmInbox(false)} ctx={ctx} />
-            <DMThread peer={dmPeer} open={!!dmPeer && !(desktop && tab === 'chat')} onClose={() => setDmPeer(null)} ctx={ctx} />
-            <PeopleScreen open={people && !(desktop && tab === 'chat')} onClose={() => setPeople(false)} ctx={ctx} />
+            <ChatRoom group={group} open={!!group && !desktop} onClose={() => setGroup(null)} ctx={ctx} />
+            <DMInbox open={dmInbox && !desktop} onClose={() => setDmInbox(false)} ctx={ctx} />
+            <DMThread peer={dmPeer} open={!!dmPeer && !desktop} onClose={() => setDmPeer(null)} ctx={ctx} />
+            <PeopleScreen open={people && !desktop} onClose={() => setPeople(false)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx} initialMode={churchSwitcherMode}
               churches={churches} activeId={activeChurch}
               onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); }}

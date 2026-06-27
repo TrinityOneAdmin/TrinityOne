@@ -1005,7 +1005,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const narrow = useStewNarrow();
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
   // open a chat by group id (used by both the groups list and the activity feed)
-  const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) setChatGroup(g); else onTab('groups'); };
+  const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
   // people waiting for approval (only when the church requires it) — surfaced big on the dashboard
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
   const admittedSet = new Set(window.useStewardAdmitted ? window.useStewardAdmitted() : []);
@@ -1050,7 +1050,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <div className="no-scrollbar" style={listStyle}>
         {groups.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No groups yet — create your church’s first chat room.</div> : null}
         {groups.map(g => (
-          <button key={g.id} onClick={() => setChatGroup(g)} title="Open chat" style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'none', border: 'none', borderRadius: 11, padding: '6px 8px', margin: '0 -8px', cursor: 'pointer', fontFamily: 'var(--font-ui)', transition: 'background .12s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'} onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+          <button key={g.id} onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g }))} title="Open chat" style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'none', border: 'none', borderRadius: 11, padding: '6px 8px', margin: '0 -8px', cursor: 'pointer', fontFamily: 'var(--font-ui)', transition: 'background .12s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'} onMouseLeave={e => e.currentTarget.style.background = 'none'}>
             <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'var(--surface-2)', color: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={g.kind === 'broadcast' ? 'send' : 'chat'} size={18} color="currentColor" /></div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.sub || (g.kind === 'broadcast' ? 'Broadcast' : 'Group')}</div></div>
             {g.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
@@ -1075,7 +1075,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
           // resolve a group name for chat-linked rows (the gid is the group id, not its name)
           const grp = a.gid ? groups.find(x => x.id === a.gid) : null;
           const text = grp ? a.text.replace('a group', `“${grp.name}”`) : a.text;
-          const act = grp ? () => setChatGroup(grp) : a.to ? () => onTab(a.to) : null;
+          const act = grp ? () => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: grp })) : a.to ? () => onTab(a.to) : null;
           const inner = (
             <React.Fragment>
               <div style={{ width: 30, height: 30, borderRadius: 9, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={a.ic} size={16} color="currentColor" /></div>
@@ -1407,7 +1407,7 @@ function GroupChatModal({ group, onClose }) {
   const isTeam = group.kind === 'team';
   const accent = isTeam ? (group.accent || 'var(--clay)') : group.kind === 'broadcast' ? '#8a6717' : 'var(--sage)';
   return (
-    <div style={{ position: 'absolute', right: 24, bottom: 0, zIndex: 92, width: 344, maxWidth: 'calc(100% - 48px)', height: 480, maxHeight: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '16px 16px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenRise .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+    <div style={{ width: 344, maxWidth: 'calc(100vw - 48px)', height: 480, maxHeight: '82vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '16px 16px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenRise .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
           <div style={{ width: 36, height: 36, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={isTeam ? (group.icon || 'shield') : group.kind === 'broadcast' ? 'send' : 'chat'} size={19} /></div>
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{group.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{isTeam ? 'Team chat' : group.kind === 'broadcast' ? 'Broadcast' : 'Group chat'} · you post as the church</div></div>
@@ -1647,7 +1647,7 @@ function DashGroups() {
             {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} title={it.encrypted ? 'Sealed end-to-end — even the relay can’t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
             {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who's in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
             <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
-            <button onClick={() => setChatGroup(it)} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
+            <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
           </React.Fragment>
         )}
         renderAside={(it) => (
@@ -4040,15 +4040,20 @@ function StewDmWindow({ peer, offset, onClose }) {
 
 function MemberChatDock() {
   const [peers, setPeers] = React.useState([]);
+  const [grps, setGrps] = React.useState([]);   // group chats docked alongside DMs — several windows along the bottom
   React.useEffect(() => {
-    const onOpen = (e) => { const p = e.detail; if (!p || !p.pubkey) return; setPeers(ps => ps.some(x => x.pubkey === p.pubkey) ? ps : [...ps, p].slice(-3)); };
-    window.addEventListener('steward-open-dm', onOpen);
-    return () => window.removeEventListener('steward-open-dm', onOpen);
+    const onDm = (e) => { const p = e.detail; if (!p || !p.pubkey) return; setPeers(ps => ps.some(x => x.pubkey === p.pubkey) ? ps : [...ps, p].slice(-3)); };
+    const onGrp = (e) => { const g = e.detail; if (!g || !g.id) return; setGrps(gs => gs.some(x => x.id === g.id) ? gs : [...gs, g].slice(-3)); };
+    window.addEventListener('steward-open-dm', onDm);
+    window.addEventListener('steward-open-group-chat', onGrp);
+    return () => { window.removeEventListener('steward-open-dm', onDm); window.removeEventListener('steward-open-group-chat', onGrp); };
   }, []);
   const close = (pk) => setPeers(ps => ps.filter(x => x.pubkey !== pk));
-  if (!peers.length) return null;
+  const closeG = (id) => setGrps(gs => gs.filter(x => x.id !== id));
+  if (!peers.length && !grps.length) return null;
   return (
     <div style={{ position: 'absolute', right: 20, bottom: 0, zIndex: 130, display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+      {grps.map(g => <GroupChatModal key={g.id} group={g} onClose={() => closeG(g.id)} />)}
       {peers.map(p => <StewDmWindow key={p.pubkey} peer={p} onClose={() => close(p.pubkey)} />)}
     </div>
   );
