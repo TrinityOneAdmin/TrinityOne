@@ -123,7 +123,7 @@ const careBtnMine = { flexShrink: 0, display: 'inline-flex', alignItems: 'center
 function CareCard({ ctx, embedded }) {
   const care = ctx.care || {};
   const s = care.settings || {};
-  const [openId, setOpenId] = React.useState(null);
+  const [openId, setOpenId] = React.useState(() => (embedded && ctx.careFocus) || null);   // deep-link: auto-open the focused need
   if (!s.enabled) return null;
   const today = new Date().toISOString().slice(0, 10);
   const myPub = (care.myPub || '').toLowerCase();
@@ -215,7 +215,8 @@ function TodayScreen({ ctx }) {
   const _care = ctx.care || {};
   const _myPub = (_care.myPub || '').toLowerCase();
   const _careToday = new Date().toISOString().slice(0, 10);
-  const beingCaredFor = !!(_care.settings && _care.settings.enabled) && (_care.needs || []).some(n => n.recipient && n.recipient.toLowerCase() === _myPub && (!n.endDate || n.endDate >= _careToday));
+  const myCareNeed = (_care.settings && _care.settings.enabled) ? (_care.needs || []).find(n => n.recipient && n.recipient.toLowerCase() === _myPub && (!n.endDate || n.endDate >= _careToday)) : null;
+  const beingCaredFor = !!myCareNeed;
   const pNext = plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1];
 
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
@@ -266,7 +267,7 @@ function TodayScreen({ ctx }) {
 
       {/* cared-for: someone in the church has a care need open for me — surface it warmly, link to the Care tab */}
       {beingCaredFor ? (
-        <div onClick={() => ctx.openServing('care')} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 18, marginBottom: 22, cursor: 'pointer', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both' }}>
+        <div onClick={() => ctx.openServing('care', myCareNeed && myCareNeed.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 18, marginBottom: 22, cursor: 'pointer', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both' }}>
           <div style={{ width: 40, height: 40, borderRadius: 13, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 18%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={20} color="var(--sage)" /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Your church is caring for you</div>

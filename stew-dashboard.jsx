@@ -1371,6 +1371,8 @@ function EditGroupMembersModal({ group, onClose }) {
 // Console chat view for one group/team — read the scrollback + post as the church.
 function GroupChatModal({ group, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];   // resolve a sender's display name
+  const nameFor = (pub) => { const mm = members.find(x => x.pubkey === pub); return (mm && (mm.name || '').trim()) || ('member …' + (pub || '').slice(-8)); };
   const [text, setText] = React.useState('');
   const [rxFor, setRxFor] = React.useState('');
   const [pin, setPin] = React.useState(null);     // the group's pinned message { msgId, text, by, ts } or null
@@ -1452,7 +1454,7 @@ function GroupChatModal({ group, onClose }) {
           {msgs.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto' }}>No messages yet. Say hello to your church.</div> : null}
           {msgs.map(m => (
             <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
-              {!m.mine ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontFamily: 'var(--mono)', marginBottom: 2, paddingLeft: 4 }}>{'member …' + (m.by || '').slice(-8)}</div> : null}
+              {!m.mine ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginBottom: 2, paddingLeft: 4, fontWeight: 600 }}>{nameFor(m.by)}</div> : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
                 <div style={{ position: 'relative', flexShrink: 0 }}>
