@@ -118,7 +118,7 @@
   <div class="wrap">
     <span class="to-pill"><svg width="15" height="15" viewBox="0 0 100 100"><circle cx="50" cy="50" r="36" fill="none" stroke="var(--clay-ink)" stroke-width="8" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)"/><circle cx="50" cy="50" r="7" fill="var(--clay-ink)"/></svg> Help &amp; Getting started</span>
     <h1>Simple guides to<br/>getting set up safely</h1>
-    <p>Short, friendly steps for keeping your account and your giving safe — written in plain language, with larger text and read-aloud. Take your time, and ask anyone at church if you’d like a hand.</p>
+    <p>Short, friendly steps for getting set up, keeping your account safe, and finding your way around — written in plain language, with larger text and read-aloud. Take your time, and ask anyone at church if you’d like a hand.</p>
 
     <div class="ts" style="margin-top:24px">
       <span class="lab">Text size</span>
@@ -176,6 +176,10 @@
       wallet: `<rect x="24" y="38" width="60" height="44" rx="9" ${fs}/><rect x="24" y="38" width="60" height="44" rx="9" ${s}/><path d="M24 50c10-12 26-18 40-14l14 4" ${s}/><circle cx="74" cy="60" r="6" ${s}/>`,
       qr: `<rect x="28" y="28" width="64" height="64" rx="8" ${fs}/><rect x="28" y="28" width="64" height="64" rx="8" ${s}/><rect x="40" y="40" width="14" height="14" rx="3" ${s} stroke-width="3.4"/><rect x="66" y="40" width="14" height="14" rx="3" ${s} stroke-width="3.4"/><rect x="40" y="66" width="14" height="14" rx="3" ${s} stroke-width="3.4"/><path d="M66 66h6v6m8 0v.04M72 80h.04M80 80v-6" ${s} stroke-width="3.4"/>`,
       safe: `<rect x="24" y="30" width="62" height="56" rx="8" ${fs}/><rect x="24" y="30" width="62" height="56" rx="8" ${s}/><circle cx="58" cy="58" r="13" ${s}/><path d="M58 58v-6M58 58l5 3" ${s} stroke-width="3.4"/><path d="M34 86v6M76 86v6" ${s}/>`,
+      book: `<path d="M60 34c-7-6-17-8-28-7-3 0-5 2-5 5v36c0 3 2 5 5 5 11-1 21 1 28 7" ${fs}/><path d="M60 34c-7-6-17-8-28-7-3 0-5 2-5 5v36c0 3 2 5 5 5 11-1 21 1 28 7 7-6 17-8 28-7 3 0 5-2 5-5V32c0-3-2-5-5-5-11-1-21 1-28 7Z" ${s}/><path d="M60 34v46" ${s} stroke-width="3.4"/>`,
+      people: `<circle cx="60" cy="56" r="30" ${fs}/><circle cx="48" cy="48" r="9" ${s}/><circle cx="73" cy="51" r="7" ${s}/><path d="M33 76c2-8 8-13 15-13s13 5 15 13" ${s}/><path d="M66 70c2-5 6-8 11-8 5 0 9 3 11 8" ${s} stroke-width="3.4"/>`,
+      bell: `<circle cx="60" cy="54" r="30" ${fs}/><path d="M44 68c-3 0-4-3-2-5 3-3 5-6 5-12a13 13 0 0 1 26 0c0 6 2 9 5 12 2 2 1 5-2 5Z" ${s}/><path d="M54 74a6 6 0 0 0 12 0" ${s} stroke-width="3.4"/><path d="M60 33v-5" ${s} stroke-width="3.4"/><circle cx="80" cy="40" r="6" fill="${tone}" stroke="none"/>`,
+      heart: `<circle cx="60" cy="56" r="30" ${fs}/><path d="M60 74c-12-7-20-14-20-23a10 10 0 0 1 20-3 10 10 0 0 1 20 3c0 9-8 16-20 23Z" ${s}/>`,
     };
     return `<svg width="${size}" height="${size}" viewBox="0 0 120 116">${art[name] || art.shield}</svg>`;
   }
