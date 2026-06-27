@@ -12,12 +12,10 @@
   `adb logcat | grep CareCard-DEBUG` to read vis / needs / live / onTeam.
 
 ## Steward console
-- **Filter Groups / Teams / Rooms.** The "Groups, teams & rooms" screen shows all three types in one combined
-  list. As a church accrues groups, give it a filter or tab bar (All / Groups / Teams / Rooms). Low effort —
-  each item already carries a `kind`, so it's a client-side filter on the existing list.
-- **Roster: block duplicate people.** A team roster ("PEOPLE WHO CAN SERVE") currently lets you add the same
-  linked member twice (seen: Luke Lexar ×2). Dedupe by linked pubkey — skip/disable adding someone already on
-  the roster, and de-dupe on save. Low effort.
+- ✅ DONE (2026-06-27): **Filter Groups / Teams / Rooms** — type-filter chips on the list (appear once there's
+  more than one type), reorder disabled while filtering.
+- ✅ DONE (2026-06-27): **Roster: block duplicate people** — dedupe a linked member by pubkey + an unlinked one
+  by name, and hide already-added members from the link dropdown.
 
 ## Meal trains
 - ✅ DONE (2026-06-27): **care-team membership now flows through the roster** (root of the visibility saga).
@@ -30,16 +28,17 @@
   if the care team should also chat together, sync group.members ← roster.people when editing a care team.
 
 ## Relay
-- **Per-church ephemeral fairness.** Smart eviction (shipped) protects ALL structured data globally, but the
-  ephemeral (chat/DM) budget is SHARED. On a shared relay, a chatty church can age out a quiet church's older
-  chat sooner. Fix: track + cap ephemeral PER church so one can't evict another's. Best done on top of the DB
-  move below. Moderate–high effort.
-- **Shared/network relay scaling → real DB.** Events live in one in-memory JSON array (capped, persisted to a
-  JSON file). Fine for one church or a handful; doesn't scale to many (memory + whole-file load/save + no
-  per-church queries). For a genuine public/multi-church relay: move to an embedded DB (SQLite or LMDB) with
-  per-church partitioning, indexed queries, and retention-by-kind. Unlocks per-church fairness above + real
-  scale. Higher effort (a migration). NOTE: the relay is GATED (accept() only takes registered churches'
-  member/church content — not an open public Nostr relay), so this is about scale, not spam.
+- ✅ DONE on branch `claude/relay-sqlite` (2026-06-27) — **pending your review + deploy**: **DB migration →
+  node:sqlite.** Events now in SQLite (indexed reads, durable, per-church `church` column), auto-migration
+  from relay-db.json, no native dependency. Needs Node 22+. Tested (correctness vs old, boot, WS round-trip).
+- **Per-church ephemeral fairness.** The retention cull is still GLOBAL (oldest ephemeral across all churches),
+  so on a shared relay a chatty church can age out a quiet one's older chat. The new `church` column makes a
+  per-church cull straightforward — give each church its own ephemeral budget. Follow-up on the SQLite base.
+- **Tag-index table for extreme single-pool scale.** Arbitrary `#tags` (e.g. `#p` DMs, `#e`) are matched in JS
+  on the SQL-narrowed result — correct + cheap while queries narrow by kind/author/church (they do today). A
+  `tags(event_id, tag, value)` index would make tag-only queries scale on one giant shared pool. Not needed
+  until a single relay serves very many churches. NOTE: the relay is GATED (accept() only takes registered
+  churches' content — not an open public Nostr relay), so this is about scale, never spam.
 
 ## Sharing
 - ✅ DONE (2026-06-27): **multi-verse select.** Reader selection is now a set; the verse action sheet has a
