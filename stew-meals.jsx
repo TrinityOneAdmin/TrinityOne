@@ -41,6 +41,12 @@ function DashMealsPanel({ church }) {
   const s = window.useMealsSettings ? window.useMealsSettings() : { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' };
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const teamGroups = (groups || []).filter(g => g && (g.kind === 'team' || g.kind === 'group'));
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
+  // care-team membership lives on the ROSTER (publishRoster people) — that's what the relay (careAdmin) and the
+  // member CareCard (onCareRoster) both read. So manage it with the same RosterModal the Rota page uses.
+  const careRoster = rosters.find(r => r.team === s.adminGroupId);
+  const teamPeople = (careRoster && careRoster.people) || [];
   const on = !!s.enabled;
   const setAll = (next) => window.StewardMeals.setEnabled(next.enabled !== undefined ? next.enabled : on, {
     visibility:   next.visibility   !== undefined ? next.visibility   : s.visibility,
@@ -86,7 +92,7 @@ function DashMealsPanel({ church }) {
             ))}
           </div>
           <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>{s.visibility === 'team' ? 'Open needs are visible only to members of the care-team group below — kinder for congregations where guilt-pressure to help is the bigger concern.' : 'Open needs are visible to every member — best for turnout when the church has the bandwidth to carry it.'}</div>
-          {s.visibility === 'team' && !s.adminGroupId ? <div style={{ marginTop: 8, padding: '9px 11px', borderRadius: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45 }}>⚠ No care team is selected below — with this setting <b>no one will see open needs</b>. Pick or create a care team, or switch to “The whole church.”</div> : null}
+          {s.visibility === 'team' && (!s.adminGroupId || teamPeople.length === 0) ? <div style={{ marginTop: 8, padding: '9px 11px', borderRadius: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45 }}>⚠ {s.adminGroupId ? 'Your care team has no members yet' : 'No care team is selected below'} — with this setting <b>no one will see open needs</b>. {s.adminGroupId ? 'Tap “Members” to add people' : 'Pick or create a care team'}, or switch to “The whole church.”</div> : null}
         </div>
         <div style={{ marginTop: 10, padding: '12px 14px', borderRadius: 13, border: '1px solid var(--line)' }}>
           <div style={mealsLbl}>WHO CAN OPEN A NEED?</div>
@@ -110,7 +116,7 @@ function DashMealsPanel({ church }) {
           <button onClick={createCareTeam} disabled={creating} style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px dashed var(--line)', background: 'var(--surface-2)', color: 'var(--clay-ink)', borderRadius: 11, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: creating ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', opacity: creating ? 0.6 : 1 }}>
             <Icon name="plus" size={15} color="currentColor" /> {creating ? 'Creating…' : 'Create a care team'}</button>
         </div>
-        {editTeam ? <EditGroupMembersModal group={editTeam} onClose={() => setEditTeam(null)} /> : null}
+        {editTeam ? <RosterModal team={editTeam} roster={rosters.find(r => r.team === editTeam.id)} members={members} onClose={() => setEditTeam(null)} /> : null}
       </React.Fragment> : null}
     </Panel>
   );

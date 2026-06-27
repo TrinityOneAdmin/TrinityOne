@@ -20,17 +20,14 @@
   the roster, and de-dupe on save. Low effort.
 
 ## Meal trains
-- **BUG — care-team membership has two out-of-sync sources (likely root of the whole visibility saga).**
-  The care-team "Members" button (`EditGroupMembersModal`) writes the GROUP's `members` via `publishGroup`.
-  But "on the care team" for BOTH the relay (`careAdmin` → `ROSTER_PEOPLE`) AND the member CareCard
-  (`onCareRoster` → `ctx.churchRosters`) is the ROSTER (`publishRoster` people), NOT the group members. So
-  anyone added via that "Members" button never counts for "Only the care team" visibility or who-can-open-a-
-  need → team-visibility silently hides needs from everyone. FIX: pick ONE source and make all three agree.
-  The ROSTER is the only member-readable one (an invite-only group's members aren't served to non-members),
-  so route care-team membership through the roster — when editing the care-admin group's members, also
-  `publishRoster` those people (or have the care-team "Members" flow edit the roster directly). Then
-  onCareRoster + careAdmin + the steward UI all read roster.people. (diagnosed 2026-06-27)
-- ✅ DONE (2026-06-27): safe warning when visibility = "Only the care team" but NO care team is selected.
+- ✅ DONE (2026-06-27): **care-team membership now flows through the roster** (root of the visibility saga).
+  The meals "Members" button opens the same `RosterModal` the Rota page uses (`publishRoster` → roster.people),
+  so the steward UI, the relay (`careAdmin`/`ROSTER_PEOPLE`) and the member CareCard (`onCareRoster`) all read
+  ONE source. "Only the care team" visibility works now. Settings warn when no team is selected OR the selected
+  team's roster is empty.
+- **Follow-up (low priority): care-team chat membership.** RosterModal writes roster.people, not the team's
+  group.members, so care-team members aren't auto-added to the team's CHAT group. Fine for needs (roster-driven);
+  if the care team should also chat together, sync group.members ← roster.people when editing a care team.
 
 ## Relay
 - **Per-church ephemeral fairness.** Smart eviction (shipped) protects ALL structured data globally, but the
