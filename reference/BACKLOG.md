@@ -32,6 +32,12 @@ every (future-dated) need unconditionally.
   chat+DMs exceed 20k newer events → member names/rosters/settings silently vanish. Fix: never evict
   addressable/replaceable kinds (0, 10000-19999, 30000-39999); only cull oldest ephemeral (kind-1 chat, kind-4
   DMs, reactions). Also scale/per-church the 20k cap for a multi-church network. Not urgent at pilot scale. (2026-06-27)
+- **Shared/network relay scaling.** The relay is GATED (accept() only takes registered churches' member/church
+  content — not an open public Nostr relay, so no internet spam). One-church self-hosted (mini-PC) is naturally
+  bounded → 20k fine, preferred default (cheap, private, resilient, no culling). BUT a single relay serving MANY
+  churches stacks up: the store is a 20k-entry JSON array in memory — doesn't scale past a handful. Before going
+  multi-church on one box: real embedded DB (SQLite/LMDB), per-church partitioning + caps (one busy church can't
+  evict another's data), retention by kind. (2026-06-27)
 
 ## Sharing
 - **Multi-verse select** — select several verses and share them together, not one at a time. (2026-06-26)
