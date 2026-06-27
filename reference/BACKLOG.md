@@ -1,55 +1,49 @@
 # Backlog — noted for later
 
-## OPEN BUG — Practical care card hidden on member APK when visibility = "whole church"
-On the member APK, the Today **Practical care** card shows when visibility = **"Only the care team"**
-(and the member is on the team) but NOT when visibility = **"The whole church"** ('all'). This is
-backwards vs the code: CareCard only *narrows* `live` on `visibility==='team'`; `'all'` should show
-every (future-dated) need unconditionally.
-- Confirmed NOT a relay/subscription bug: the **Serving** page on the same APK shows the member's care
-  commitments, so `ctx.care.slots` + `ctx.care.needs` ARE populated. Data is reaching the member.
-- Web app shows the card fine (likely the steward / on-team identity).
-- Leading theory: the member's *received* `s.visibility` isn't actually `'all'` (settings update not
-  reaching the member, or stale), OR `live` collapses for another reason with 'all'.
-- NEXT STEP: re-cut the debuggable diagnostic build (re-add the `[CareCard-DEBUG]` console.log before
-  `if (!live.length) return null` in screens-today.jsx CareCard; set `debuggable true` on the release
-  buildType in android/app/build.gradle — both reverted now), connect the phone via `adb` on the dev box
-  (USB debugging must be ON + the "Allow USB debugging?" prompt approved — MTP-only descriptor = not
-  authorized), then `adb logcat | grep CareCard-DEBUG` to read visibility / needs / live / amCareTeam.
-- Footgun also noted: team-visibility + empty care team silently hides all needs — warn the steward +
-  auto-add the creating steward to the roster.
-
+## Watch (likely already resolved)
+- **Care card hiding / blinking out on the member APK.** Earlier the Today "Practical care" card seemed to
+  hide under visibility = "whole church" and vanish/reappear on reload. Both trace to the same root —
+  the card was empty until the relay round-tripped (plus general relay lag, same as the team-removal lag).
+  The **0.9.9 (97)** cache hydration paints the card from a per-church `lsGet` cache instantly, which should
+  fix both. ONLY if it recurs (card empty while needs genuinely exist): re-add the `[CareCard-DEBUG]`
+  console.log in `screens-today.jsx` CareCard (just before `if (!live.length) return null`) + set
+  `debuggable true` on the release buildType, install, plug phone into the dev box (USB debugging ON +
+  "Allow USB debugging?" approved — an MTP-only USB descriptor means it's NOT authorised), then
+  `adb logcat | grep CareCard-DEBUG` to read vis / needs / live / onTeam.
 
 ## Steward console
-- **Filter Groups / Teams / Rooms** — a type filter/tabs on the "Groups, teams & rooms" list
-  (it's one combined list today). (2026-06-26)
-- **Roster: block duplicate people** — adding the same linked member twice to a team roster should be
-  prevented (dedupe by linked pub; the "PEOPLE WHO CAN SERVE" list can currently show the same person
-  twice). (2026-06-26)
+- **Filter Groups / Teams / Rooms.** The "Groups, teams & rooms" screen shows all three types in one combined
+  list. As a church accrues groups, give it a filter or tab bar (All / Groups / Teams / Rooms). Low effort —
+  each item already carries a `kind`, so it's a client-side filter on the existing list.
+- **Roster: block duplicate people.** A team roster ("PEOPLE WHO CAN SERVE") currently lets you add the same
+  linked member twice (seen: Luke Lexar ×2). Dedupe by linked pubkey — skip/disable adding someone already on
+  the roster, and de-dupe on save. Low effort.
+
+## Meal trains
+- **Footgun: team-visibility + empty care team hides every need silently.** When care visibility is "Care team
+  only" but the care team roster is empty (or the steward isn't on it), NO member sees open needs and nothing
+  explains why. Fix: (a) auto-add the steward who creates a care team to its roster, and (b) warn in the
+  settings ("Care team is empty — no one will see open needs") when team-visibility is on with an empty team.
+  Low–moderate effort.
 
 ## Relay
-- ✅ DONE (2026-06-27): **Smart event eviction.** `cullEvents()` now keeps ALL replaceable/addressable docs
-  (kind 0/3/10000-19999/30000-39999 — profiles, rosters, needs, settings, fills) and only culls the oldest
-  ephemeral (chat/DMs/reactions) down to the budget; load + add-path both use it; a fully-structured store is
-  never truncated. `MAX_EVENTS` is now env-tunable (`RELAY_MAX_EVENTS`). Tested. STILL OPEN below ↓
-- **Per-church ephemeral fairness** — eviction protects structure globally, but the ephemeral budget is shared,
-  so on a public/shared relay one busy church's chat can still age out another church's old chat. Needs
-  per-church partitioning + caps (depends on the DB move below). (2026-06-27)
-- **Shared/network relay scaling.** The relay is GATED (accept() only takes registered churches' member/church
-  content — not an open public Nostr relay, so no internet spam). One-church self-hosted (mini-PC) is naturally
-  bounded → 20k fine, preferred default (cheap, private, resilient, no culling). BUT a single relay serving MANY
-  churches stacks up: the store is a 20k-entry JSON array in memory — doesn't scale past a handful. Before going
-  multi-church on one box: real embedded DB (SQLite/LMDB), per-church partitioning + caps (one busy church can't
-  evict another's data), retention by kind. (2026-06-27)
+- **Per-church ephemeral fairness.** Smart eviction (shipped) protects ALL structured data globally, but the
+  ephemeral (chat/DM) budget is SHARED. On a shared relay, a chatty church can age out a quiet church's older
+  chat sooner. Fix: track + cap ephemeral PER church so one can't evict another's. Best done on top of the DB
+  move below. Moderate–high effort.
+- **Shared/network relay scaling → real DB.** Events live in one in-memory JSON array (capped, persisted to a
+  JSON file). Fine for one church or a handful; doesn't scale to many (memory + whole-file load/save + no
+  per-church queries). For a genuine public/multi-church relay: move to an embedded DB (SQLite or LMDB) with
+  per-church partitioning, indexed queries, and retention-by-kind. Unlocks per-church fairness above + real
+  scale. Higher effort (a migration). NOTE: the relay is GATED (accept() only takes registered churches'
+  member/church content — not an open public Nostr relay), so this is about scale, not spam.
 
 ## Sharing
-- **Multi-verse select** — select several verses and share them together, not one at a time. (2026-06-26)
+- **Multi-verse select.** Share is one verse at a time; let a member select several (a range or multi-pick) and
+  share them together as one message/image. Moderate effort (verse-share UI + composing the multi-verse payload).
 
-## Meal trains — next focused pass
-- **Steward skip** — mark a day "covered" from the console need view (relay already accepts steward skips).
-- **Meal-type selector — both levels:** per-NEED toggles for Breakfast / Lunch / Dinner that set what the
-  whole Care task needs (e.g. turn breakfast off universally), then a per-DAY override so a specific day
-  can differ (Tue = dinner only, Thu = lunch + dinner). Data: `need.meals` (default set) + optional
-  per-day overrides; a day with no override inherits `need.meals`. Show the meal(s) on each day chip +
-  on the member's care card so helpers know what to bring and when.
-- **"What I'm bringing" note** — prompt when a helper taps "I'll help" + show it on the day so two
-  people don't bring the same dish (the sign-up slot already carries a `note` field to reuse).
+## Shipped this session (for the record)
+- Off-grid APK + Bible share; full care/meals flow (additive day picker, dietary, both-level meal types
+  B/L/D + per-day override, steward skip, "what I'm bringing" note); relay care-read fix (members see each
+  other's help + notes); release signing (stable key); auto-update banner one-shot fix; approval-toast loop
+  fix; smart relay eviction; care-card cache hydration. (through 0.9.9 / 97)
