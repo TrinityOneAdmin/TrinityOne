@@ -1143,7 +1143,8 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     : payload.title ? (payload.title + (payload.ref ? ' — ' + payload.ref : '') + (payload.excerpt ? '\n' + payload.excerpt : '')) : '';
   const sendToGroup = (g) => {
     if (!live) { ctx.toast('Chat isn’t available'); return; }
-    FS.publishMessage(g.id, JSON.stringify(comment.trim() ? { ...payload, comment: comment.trim() } : payload), [['k', type]]);
+    // share as clean plain text (not a JSON card) so it reads naturally in the group, thoughts included
+    FS.publishMessage(g.id, asText + (comment.trim() ? '\n\n' + comment.trim() : ''));
     ctx.toast('Shared to ' + g.name); onClose();
   };
   const sendToPerson = (m) => {
