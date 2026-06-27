@@ -47,7 +47,7 @@ function SchModal({ title, children, onClose, width = 480 }) {
 }
 
 // ── manage a team's roster: the roles it needs + the people who can serve ──
-function RosterModal({ team, roster, members, onClose }) {
+function RosterModal({ team, roster, members, onClose, onCreate }) {
   const [roles, setRoles] = useSch(() => (roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []));
   const [people, setPeople] = useSch(() => (roster && roster.people ? roster.people.map(p => ({ ...p })) : []));
   const [pods, setPods] = useSch(() => (roster && roster.pods ? roster.pods.map(p => ({ ...p, fills: { ...(p.fills || {}) } })) : []));
@@ -70,7 +70,11 @@ function RosterModal({ team, roster, members, onClose }) {
   const setPodName = (id, name) => setPods(ps => ps.map(p => p.id === id ? { ...p, name } : p));
   const setPodFill = (id, roleId, pid) => setPods(ps => ps.map(p => p.id === id ? { ...p, fills: { ...p.fills, [roleId]: pid } } : p));
   const delPod = (id) => setPods(ps => ps.filter(p => p.id !== id));
-  const save = () => { window.Steward.publishRoster(team.id, { roles, people, pods }); onClose(); };
+  const save = async () => {
+    let t = team;
+    if (!t.id && onCreate) { t = await onCreate(); if (!t || !t.id) { onClose(); return; } }   // new team: create it only now, on Save
+    window.Steward.publishRoster(t.id, { roles, people, pods }); onClose();
+  };
   const m = teamMeta(team);
   return (
     <SchModal title={`${team.name} · roster`} onClose={onClose} width={520}>

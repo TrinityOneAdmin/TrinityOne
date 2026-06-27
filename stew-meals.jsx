@@ -57,13 +57,14 @@ function DashMealsPanel({ church }) {
   const [editTeam, setEditTeam] = React.useState(null);
   const [creating, setCreating] = React.useState(false);
   const selectedTeam = (teamGroups || []).find(g => g.id === s.adminGroupId);
-  const createCareTeam = async () => {
-    if (creating || !(window.Steward && window.Steward.publishGroup)) return;
-    setCreating(true);
-    try {
-      const g = await Promise.resolve(window.Steward.publishGroup({ name: 'Care team', kind: 'team', visibility: 'invite', members: [] }));
-      if (g && g.id) { setAll({ adminGroupId: g.id }); setEditTeam(g); }
-    } finally { setCreating(false); }
+  // open the roster editor for a NOT-YET-published team; the group is created only when the steward Saves
+  // (RosterModal calls publishCareTeam below), so Cancel leaves nothing behind.
+  const createCareTeam = () => setEditTeam({ id: null, _new: true, name: 'Care team', kind: 'team' });
+  const publishCareTeam = async () => {   // called by RosterModal on Save — publish the group only now, then select it
+    if (!(window.Steward && window.Steward.publishGroup)) return null;
+    const g = await Promise.resolve(window.Steward.publishGroup({ name: 'Care team', kind: 'team', visibility: 'invite', members: [] }));
+    if (g && g.id) setAll({ adminGroupId: g.id });
+    return g;
   };
   const toggleBtn = (active, onClick, label) => (
     <button onClick={onClick} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
@@ -116,7 +117,7 @@ function DashMealsPanel({ church }) {
           <button onClick={createCareTeam} disabled={creating} style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px dashed var(--line)', background: 'var(--surface-2)', color: 'var(--clay-ink)', borderRadius: 11, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: creating ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', opacity: creating ? 0.6 : 1 }}>
             <Icon name="plus" size={15} color="currentColor" /> {creating ? 'Creating…' : 'Create a care team'}</button>
         </div>
-        {editTeam ? <RosterModal team={editTeam} roster={rosters.find(r => r.team === editTeam.id)} members={members} onClose={() => setEditTeam(null)} /> : null}
+        {editTeam ? <RosterModal team={editTeam} roster={rosters.find(r => r.team === editTeam.id)} members={members} onCreate={publishCareTeam} onClose={() => setEditTeam(null)} /> : null}
       </React.Fragment> : null}
     </Panel>
   );

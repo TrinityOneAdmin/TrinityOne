@@ -90,16 +90,16 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
                     {dayMeals.length ? <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMeals.map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
                   </div>
                   <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
-                    {skipped ? <span>Not needed this day</span>
+                    {skipped ? <span>{mineFilled ? 'They’re sorted — no need, thanks 🙏' : 'Not needed this day'}</span>
                       : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
                       : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
                   </div>
                   {!skipped && !isRecipient && (mineFilled
                     ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
                     : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
-                  {(isRecipient || canManage) && fills.length === 0 && (skipped
+                  {(isRecipient || (canManage && fills.length === 0)) && (skipped
                     ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
-                    : <button onClick={() => care.skip(need.id, iso)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? 'I’m sorted' : 'Skip'}</button>)}
+                    : <button onClick={() => care.skip(need.id, iso)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? (fills.length ? 'Thanks — I’m sorted' : 'I’m sorted') : 'Skip'}</button>)}
                 </div>
                 {mineFilled && !skipped && need.type === 'meals' ? (
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '0 0 7px' }}>
