@@ -94,12 +94,12 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
                       : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
                       : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
                   </div>
-                  {!skipped && (mineFilled
+                  {!skipped && !isRecipient && (mineFilled
                     ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
                     : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
                   {(isRecipient || canManage) && fills.length === 0 && (skipped
                     ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
-                    : <button onClick={() => care.skip(need.id, iso)} style={careBtnGhost}>Skip</button>)}
+                    : <button onClick={() => care.skip(need.id, iso)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? 'I’m sorted' : 'Skip'}</button>)}
                 </div>
                 {mineFilled && !skipped && need.type === 'meals' ? (
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '0 0 7px' }}>
@@ -110,7 +110,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
               </div>
             );
           })}
-          {(isRecipient || canManage) ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>{isRecipient ? <React.Fragment>This is for you. Tap <b>Skip</b> on any day you’re covered</React.Fragment> : <React.Fragment>Care team: tap <b>Skip</b> on any day they’re already covered (e.g. if they’re not on the app)</React.Fragment>} — it comes off the list.</div> : null}
+          {(isRecipient || canManage) ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>{isRecipient ? <React.Fragment>This is for you. Tap <b>I’m sorted</b> on any day you don’t need help</React.Fragment> : <React.Fragment>Care team: tap <b>Skip</b> on any day they’re already covered (e.g. if they’re not on the app)</React.Fragment>} — it comes off the list.</div> : null}
         </div>
       )}
     </div>
