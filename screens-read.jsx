@@ -81,8 +81,12 @@ function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSetting
 }
 
 // ── verse action sheet ──
-function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onCross, onCommentary, bookmarked, hasNote }) {
-  const acts = [
+function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onCross, onCommentary, bookmarked, hasNote, multi }) {
+  const isMulti = (multi || 1) > 1;   // several verses selected → only Copy + Share apply (the rest are per-verse)
+  const acts = isMulti ? [
+    { ic: 'copy', label: 'Copy', fn: ctx._copy },
+    { ic: 'share', label: 'Share', fn: ctx._share },
+  ] : [
     { ic: 'pen', label: 'Note', fn: onNote },
     { ic: 'bookmark', label: bookmarked ? 'Saved' : 'Bookmark', fn: ctx._bm, active: bookmarked },
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
@@ -95,11 +99,17 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
     <BottomSheet open={open} onClose={onClose}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Verse selected</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>{isMulti ? multi + ' verses selected' : 'Verse selected'}</div>
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div>
         </div>
         <IconBtn name="x" onClick={onClose} />
       </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 16 }}>
+        <button onClick={ctx._shrink} disabled={!isMulti} style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-2)', minWidth: 110, textAlign: 'center' }}>{isMulti ? multi + ' verses · tap +' : 'Add verses (+)'}</span>
+        <button onClick={ctx._extend} style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
+      </div>
+      {!isMulti ? <React.Fragment>
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>Highlight</div>
       <div style={{ display: 'flex', gap: 11, marginBottom: 20 }}>
         {HL_COLORS.map(c => (
@@ -114,6 +124,7 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
           border: '2px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)',
         }}><Icon name="x" size={18} /></button>
       </div>
+      </React.Fragment> : null}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
         {acts.map(a => (
           <button key={a.label} onClick={a.fn} style={{
@@ -681,7 +692,7 @@ function ReadScreen({ ctx }) {
   const [scale, setScale] = useS(() => lsGet('trinityone.readerScale', 1.08));
   const [serif, setSerif] = useS(() => lsGet('trinityone.readerSerif', true));
   const [showStrongs, setShowStrongs] = useS(false);
-  const [sel, setSel] = useS(null);
+  const [sel, setSel] = useS([]);   // selected verse numbers — multi-select to copy/share a passage together
   const [sheet, setSheet] = useS(new URLSearchParams(location.search).get('sheet') || null);
   // word-study history: a stack of Strong's ids so following a cross-reference can be walked back
   const _initWord = new URLSearchParams(location.search).get('word') || null;
@@ -701,7 +712,7 @@ function ReadScreen({ ctx }) {
   useE(() => { lsSet('trinityone.readerSerif', serif); }, [serif]);
   // arriving on a specific verse (from Today / Search / Book picker): select it + scroll it into view
   useE(() => {
-    setSel(loc.verse || null);
+    setSel(loc.verse ? [loc.verse] : []);
     const sc = scrollRef.current; if (!sc) return;
     if (loc.verse) {
       setTimeout(() => { const el = sc.querySelector('#rv-' + loc.verse); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' }); else sc.scrollTop = 0; }, 60);
@@ -723,18 +734,32 @@ function ReadScreen({ ctx }) {
 
   const close = () => setSheet(null);
   // tap a verse to select (opens the action sheet); tap the same verse again to deselect.
-  const selectVerse = (n) => { if (String(sel) === String(n)) { setSel(null); setSheet(null); } else { setSel(n); setSheet('action'); } };
+  // tap a verse to toggle it in/out of the selection — pick several to copy/share as one passage
+  const selectVerse = (n) => {
+    const has = sel.some(x => String(x) === String(n));
+    const next = has ? sel.filter(x => String(x) !== String(n)) : [...sel, n];
+    setSel(next); setSheet(next.length ? 'action' : null);
+  };
   const openWord = (id) => { setWordStack([id]); setSheet('word'); };            // fresh lookup (tapping a verse's Strong's number)
   const pushWord = (id) => { setWordStack(s => [...s, id]); };                    // follow a cross-reference, keeping history
   const backWord = () => setWordStack(s => s.length > 1 ? s.slice(0, -1) : s);    // return to the previous definition
 
-  const selRow = verses.find(x => String(x.v) === String(sel));
+  const selSorted = [...new Set((sel || []).map(Number))].filter(Boolean).sort((a, b) => a - b);
+  const sel0 = selSorted[0];                       // anchor verse for per-verse actions (note / bookmark / highlight)
+  const multi = selSorted.length;
+  const selRow = verses.find(x => String(x.v) === String(sel0));
+  // compact reference for the whole selection, e.g. "John 3:16-18,20"
+  const rangeRef = selSorted.length ? bname + ' ' + loc.chap + ':' + (() => { const r = []; let i = 0; while (i < selSorted.length) { let j = i; while (j + 1 < selSorted.length && selSorted[j + 1] === selSorted[j] + 1) j++; r.push(i === j ? '' + selSorted[i] : selSorted[i] + '-' + selSorted[j]); i = j + 1; } return r.join(','); })() : '';
+  const selText = selSorted.map(v => { const r = verses.find(x => String(x.v) === String(v)); return r ? r.text : ''; }).filter(Boolean).join(' ');
   const sheetCtx = {
     toast: ctx.toast,
-    _bm: () => { const k = keyOf(sel); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
-    _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(labelOf(sel) + ' — ' + (selRow ? selRow.text : '')); } catch (e) {} close(); ctx.toast('Copied to clipboard'); },
-    _share: () => { close(); ctx.openShareSheet({ ref: labelOf(sel), text: selRow ? selRow.text : '', version }); },
-    _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel), text: selRow ? selRow.text : '', version, note: ctx.notes[keyOf(sel)] || '' }); },
+    _bm: () => { const k = keyOf(sel0); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
+    _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + selText); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
+    _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: selText, version }); },
+    _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: ctx.notes[keyOf(sel0)] || '' }); },
+    // extend/shrink the selection into a contiguous passage from inside the sheet (the backdrop blocks tapping more verses)
+    _extend: () => { const nx = (selSorted[selSorted.length - 1] || 0) + 1; if (verses.some(x => Number(x.v) === nx)) setSel([...sel, nx]); },
+    _shrink: () => { const mx = selSorted[selSorted.length - 1]; if (selSorted.length > 1 && mx != null) setSel(sel.filter(x => Number(x) !== mx)); },
   };
 
   // speak the whole chapter, verse by verse — highlights + scrolls to each verse as it's read
@@ -793,7 +818,7 @@ function ReadScreen({ ctx }) {
                 return (
                   <VerseRow key={row.v} n={row.v} html={row.html}
                     hl={ctx.highlights[k]} note={ctx.notes[k]} bookmarked={ctx.bookmarks.includes(k)}
-                    selected={String(sel) === String(row.v)} reading={narrateState !== 'idle' && String(narrateV) === String(row.v)} onSelect={selectVerse} onWord={openWord} />
+                    selected={selSorted.some(v => String(v) === String(row.v))} reading={narrateState !== 'idle' && String(narrateV) === String(row.v)} onSelect={selectVerse} onWord={openWord} />
                 );
               })}
             </p>
@@ -827,16 +852,16 @@ function ReadScreen({ ctx }) {
         </div>
       </div>
 
-      <ActionSheet label={labelOf(sel)} ctx={sheetCtx} open={sheet === 'action'} onClose={close}
-        curColor={ctx.highlights[keyOf(sel)]} onColor={(c) => { ctx.setHighlight(keyOf(sel), c); }}
-        bookmarked={ctx.bookmarks.includes(keyOf(sel))} hasNote={!!ctx.notes[keyOf(sel)]}
+      <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={close}
+        curColor={ctx.highlights[keyOf(sel0)]} onColor={(c) => { ctx.setHighlight(keyOf(sel0), c); }}
+        bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!ctx.notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
-      <CrossRefSheet loc={loc} v={sel} label={labelOf(sel)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
+      <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
       {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />}
-      <NoteEditor label={labelOf(sel)} open={sheet === 'note'} value={ctx.notes[keyOf(sel)]} onClose={() => setSheet('action')}
-        onSave={(t) => { ctx.setNote(keyOf(sel), t); setSheet('action'); ctx.toast('Note saved'); }} />
+      <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={ctx.notes[keyOf(sel0)]} onClose={() => setSheet('action')}
+        onSave={(t) => { ctx.setNote(keyOf(sel0), t); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
       <SettingsSheet open={sheet === 'settings'} onClose={close} scale={scale} setScale={setScale}
         serif={serif} setSerif={setSerif} showStrongs={showStrongs} setShowStrongs={setShowStrongs} ctx={ctx} />

@@ -42,8 +42,10 @@
   member/church content — not an open public Nostr relay), so this is about scale, not spam.
 
 ## Sharing
-- **Multi-verse select.** Share is one verse at a time; let a member select several (a range or multi-pick) and
-  share them together as one message/image. Moderate effort (verse-share UI + composing the multi-verse payload).
+- ✅ DONE (2026-06-27): **multi-verse select.** Reader selection is now a set; the verse action sheet has a
+  − / + passage stepper (the modal backdrop blocks tapping more verses) that extends a contiguous selection.
+  Copy/Share compose the verses into one passage with a compact range ref ("John 3:16-18,20"). Per-verse
+  actions (note/bookmark/highlight) hide once more than one is selected.
 
 ## Shipped this session (for the record)
 - Off-grid APK + Bible share; full care/meals flow (additive day picker, dietary, both-level meal types
