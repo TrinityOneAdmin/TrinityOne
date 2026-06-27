@@ -30,16 +30,20 @@
   if the care team should also chat together, sync group.members ← roster.people when editing a care team.
 
 ## Relay
-- **Per-church ephemeral fairness.** Smart eviction (shipped) protects ALL structured data globally, but the
-  ephemeral (chat/DM) budget is SHARED. On a shared relay, a chatty church can age out a quiet church's older
-  chat sooner. Fix: track + cap ephemeral PER church so one can't evict another's. Best done on top of the DB
-  move below. Moderate–high effort.
-- **Shared/network relay scaling → real DB.** Events live in one in-memory JSON array (capped, persisted to a
-  JSON file). Fine for one church or a handful; doesn't scale to many (memory + whole-file load/save + no
-  per-church queries). For a genuine public/multi-church relay: move to an embedded DB (SQLite or LMDB) with
-  per-church partitioning, indexed queries, and retention-by-kind. Unlocks per-church fairness above + real
-  scale. Higher effort (a migration). NOTE: the relay is GATED (accept() only takes registered churches'
-  member/church content — not an open public Nostr relay), so this is about scale, not spam.
+- ✅ DONE (2026-06-27, branch `claude/relay-sqlite`): **DB migration → node:sqlite.** Events now live in
+  SQLite (`event-store.mjs`), not an in-memory JSON array: REQ reads are indexed SQL queries narrowed by
+  kind/author/created_at/church/d-tag with the canonical `matchFilter` applied for exactness; writes go
+  through the store (replaceable dedup + smart retention in SQL); a `church` column partitions per-church;
+  one-time auto-migration from `relay-db.json`. No native dependency (built-in node:sqlite, Node 22+).
+  Tested: 20/20 correctness vs the old full-scan, boot+migrate, and a WS round-trip smoke. NOT yet merged
+  — review + deploy when ready (see the branch handoff).
+- **Per-church ephemeral fairness (now easy).** The retention cull is still GLOBAL (oldest ephemeral across
+  all churches). The new `church` column makes a per-church cull straightforward — give each church its own
+  ephemeral budget so a chatty church can't age out a quiet one's chat. Follow-up on the SQLite base.
+- **Tag-index table for extreme single-pool scale.** Arbitrary `#tags` (e.g. `#p` DMs, `#e`) are matched in
+  JS on the SQL-narrowed result — correct + cheap when queries narrow by kind/author/church (they do today).
+  A `tags(event_id, tag, value)` index would make tag-only queries scale on one giant shared pool. Not needed
+  until a single relay serves very many churches.
 
 ## Sharing
 - ✅ DONE (2026-06-27): **multi-verse select.** Reader selection is now a set; the verse action sheet has a

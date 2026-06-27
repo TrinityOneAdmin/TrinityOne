@@ -21,6 +21,10 @@ dist/
 relay/relay-db.json
 relay/relay-db.json.tmp
 relay/relay-db.json.bak-*
+relay/relay-db.json.migrated
+relay/relay.sqlite
+relay/relay.sqlite-wal
+relay/relay.sqlite-shm
 relay/tunnel-url.txt
 relay/church.json
 relay/church.json.tmp
