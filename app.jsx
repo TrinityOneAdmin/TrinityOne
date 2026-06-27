@@ -501,7 +501,8 @@ function App() {
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchDevotionals)) { setChurchDevos([]); return; }
-    return window.Fellowship.subscribeChurchDevotionals(np, setChurchDevos);
+    setChurchDevos(lsGet('trinityone.devos.' + np, []));   // paint instantly from cache so the devotional card doesn't pop in mid-load
+    return window.Fellowship.subscribeChurchDevotionals(np, d => { setChurchDevos(d); lsSet('trinityone.devos.' + np, d); });
   }, [activeChurch, churches, connTick]);
   // ── Care / Meal trains: open needs the church shared that a member can sign up to help with ──
   const [careSettings, setCareSettings] = useA({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' });
