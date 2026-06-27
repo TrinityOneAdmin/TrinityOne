@@ -26,6 +26,13 @@ every (future-dated) need unconditionally.
   prevented (dedupe by linked pub; the "PEOPLE WHO CAN SERVE" list can currently show the same person
   twice). (2026-06-26)
 
+## Relay
+- **Smarter event eviction (not space — correctness).** Relay keeps newest 20k events (`dedupEvents().slice(-MAX_EVENTS)`).
+  Risk: an old-but-current addressable doc (profile/roster/care-settings, old `created_at`) gets sliced off once
+  chat+DMs exceed 20k newer events → member names/rosters/settings silently vanish. Fix: never evict
+  addressable/replaceable kinds (0, 10000-19999, 30000-39999); only cull oldest ephemeral (kind-1 chat, kind-4
+  DMs, reactions). Also scale/per-church the 20k cap for a multi-church network. Not urgent at pilot scale. (2026-06-27)
+
 ## Sharing
 - **Multi-verse select** — select several verses and share them together, not one at a time. (2026-06-26)
 
