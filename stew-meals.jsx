@@ -18,6 +18,35 @@ const MEALS_DIET = ['Vegetarian', 'Vegan', 'Carnivore', 'Pescatarian', 'Keto', '
 
 const mealsFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
 const mealsLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 6px' };
+const recipRow = { display: 'block', width: '100%', textAlign: 'left', padding: '11px 14px', border: 'none', borderBottom: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14.5, color: 'var(--ink)' };
+// searchable recipient picker — the church directory can grow large, so don't render a giant <select>
+function RecipientPicker({ members, value, onChange }) {
+  const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState('');
+  const list = (members || []).filter(m => m && m.pubkey);
+  const sel = list.find(m => m.pubkey === value);
+  const ql = q.trim().toLowerCase();
+  const shown = ql ? list.filter(m => (m.name || '').toLowerCase().includes(ql) || m.pubkey.toLowerCase().includes(ql)) : list;
+  if (!open) return (
+    <button onClick={() => { setOpen(true); setQ(''); }} style={{ ...mealsFld, marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', textAlign: 'left' }}>
+      <span style={{ color: value ? 'var(--ink)' : 'var(--ink-3)' }}>{value ? (sel ? (sel.name || (sel.pubkey.slice(0, 8) + '…')) : 'Linked member') : 'Not linked — tap to link someone'}</span>
+      <Icon name="chevR" size={15} color="var(--ink-3)" />
+    </button>
+  );
+  return (
+    <div style={{ marginBottom: 6, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface)', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 42, borderBottom: '1px solid var(--line)' }}>
+        <Icon name="study" size={15} color="var(--ink-3)" />
+        <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search the church…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
+      </div>
+      <div className="no-scrollbar" style={{ maxHeight: 220, overflowY: 'auto' }}>
+        <button onClick={() => { onChange(''); setOpen(false); }} style={recipRow}>Not linked — just a label above</button>
+        {shown.map(m => <button key={m.pubkey} onClick={() => { onChange(m.pubkey); setOpen(false); }} style={{ ...recipRow, fontWeight: m.pubkey === value ? 700 : 600, color: m.pubkey === value ? 'var(--clay)' : 'var(--ink)' }}>{m.name || (m.pubkey.slice(0, 12) + '…')}</button>)}
+        {!shown.length ? <div style={{ padding: '12px 14px', fontSize: 13, color: 'var(--ink-3)' }}>No one matches “{q}”.</div> : null}
+      </div>
+    </div>
+  );
+}
 
 // enumerate ISO dates start..end (inclusive); guards against bad input
 function mealsDateRange(startISO, endISO) {
@@ -332,10 +361,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>You decide what reads right. A real name brings the church closer; a discreet label protects dignity. Up to you.</div>
 
         <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
-        <select value={recipient} onChange={e => setRecipient(e.target.value)} style={{ ...mealsFld, marginBottom: 6 }}>
-          <option value="">Not linked — just a label above</option>
-          {(members || []).filter(m => m && m.pubkey).map(m => <option key={m.pubkey} value={m.pubkey}>{m.name || (m.pubkey.slice(0, 8) + '…')}</option>)}
-        </select>
+        <RecipientPicker members={members} value={recipient} onChange={setRecipient} />
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>If the person uses the app, link them — then <b>they alone</b> can tick off days they’re already covered, so the church doesn’t double up. Leave unlinked if they’re not on the app.</div>
 
         <div style={mealsLbl}>WHAT KIND OF CARE?</div>

@@ -394,7 +394,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   const [sheet, setSheet] = useSv(null);   // { kind, item }
   const [rosterOpen, setRosterOpen] = useSv(false);
   const [svcExpanded, setSvcExpanded] = useSv(false);   // show all upcoming services vs the first 3
-  useSvE(() => { if (open) { setTab('serving'); setSheet(null); setRosterOpen(false); } }, [open]);
+  useSvE(() => { if (open) { setTab(ctx.servingTab || 'serving'); setSheet(null); setRosterOpen(false); } }, [open]);
   const pending = ctx.servPending || [];
   const upcoming = ctx.servConfirmed || [];
   const declined = ctx.servDeclined || [];

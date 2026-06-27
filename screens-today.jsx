@@ -210,6 +210,12 @@ function TodayScreen({ ctx }) {
   const plan = started.sort((a, b) => (ctx.planProgress[b.id] || []).length - (ctx.planProgress[a.id] || []).length)[0] || D.PLANS[0];
   const pDone = (ctx.planProgress[plan.id] || []).length;
   const pDoneSet = new Set(ctx.planProgress[plan.id] || []);
+
+  // am I being cared for right now? (a live care need names me as the recipient) → gentle banner near the top
+  const _care = ctx.care || {};
+  const _myPub = (_care.myPub || '').toLowerCase();
+  const _careToday = new Date().toISOString().slice(0, 10);
+  const beingCaredFor = !!(_care.settings && _care.settings.enabled) && (_care.needs || []).some(n => n.recipient && n.recipient.toLowerCase() === _myPub && (!n.endDate || n.endDate >= _careToday));
   const pNext = plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1];
 
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
@@ -257,6 +263,18 @@ function TodayScreen({ ctx }) {
           }}><Icon name="flame" size={18} stroke={2} />{streak}</button>
         </div>
       </div>
+
+      {/* cared-for: someone in the church has a care need open for me — surface it warmly, link to the Care tab */}
+      {beingCaredFor ? (
+        <div onClick={() => ctx.openServing('care')} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 18, marginBottom: 22, cursor: 'pointer', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both' }}>
+          <div style={{ width: 40, height: 40, borderRadius: 13, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 18%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={20} color="var(--sage)" /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Your church is caring for you</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>Tap to see what’s arranged — and tick off any day you’re sorted.</div>
+          </div>
+          <Icon name="chevR" size={18} color="var(--ink-3)" />
+        </div>
+      ) : null}
 
       {/* Verse of the day — hero */}
       <div onClick={() => ctx.openShareSheet(votd)} style={{

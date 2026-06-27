@@ -533,6 +533,7 @@ function App() {
   const [churchEvents, setChurchEvents] = useA([]);
   const [myRsvps, setMyRsvps] = useA({});       // { eventId: 'going'|'maybe'|'no' }
   const [openServing, setOpenServing] = useA(servingParam === '1');
+  const [servingTab, setServingTab] = useA('serving');   // which Serving tab to land on (e.g. 'care' from the cared-for banner)
   const [eventOv, setEventOv] = useA(null);   // focused event-detail sheet
   useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyServingRequests) return window.Fellowship.subscribeMyServingRequests(setServReqs); }, [activeChurch, idTick, connTick]);
   useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyReqReplies) return window.Fellowship.subscribeMyReqReplies(setServReplies); }, [activeChurch, idTick, connTick]);
@@ -1024,7 +1025,8 @@ function App() {
     myLeaderGroups: churchGroups.filter(g => (g.leaders || []).includes((window.Fellowship && window.Fellowship.myPubkey) || '')),
     publishGroupEvent: (groupId, ev) => { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return window.Fellowship.publishGroupEvent(np, groupId, ev); },
     churchNetworks: churchNetworks.map(n => ({ ...n, name: networkNames[n.networkPub] || '', following: !!churches.find(c => c.id === n.npub) })),
-    openServing: () => setOpenServing(true),
+    openServing: (tab) => { setServingTab(typeof tab === 'string' ? tab : 'serving'); setOpenServing(true); },
+    servingTab,
     openEvent: (e) => setEventOv(e),
     respondServing: (item, verdict, swapTo) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;

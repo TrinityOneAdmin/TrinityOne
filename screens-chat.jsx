@@ -597,6 +597,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
               <Icon name="sparkle" size={13} stroke={2} color="#fff" /> SHARED A VERSE</div>
             <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.42, margin: '0 0 9px', fontWeight: 500, textWrap: 'pretty' }}>“{m.verse.text}”</p>
             <div style={{ fontWeight: 700, fontSize: 12.5 }}>{m.verse.ref} · {m.verse.version}</div>
+            {m.verse.comment ? <div style={{ fontSize: 13.5, lineHeight: 1.4, marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,.22)', textWrap: 'pretty' }}>{m.verse.comment}</div> : null}
           </div>
         </div>
         {react}
@@ -1115,9 +1116,10 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   const [groups, setGroups] = useC([]);
   const [members, setMembers] = useC([]);
   const [pq, setPq] = useC('');   // people search — the directory can get long
+  const [comment, setComment] = useC('');   // optional "add thoughts" that rides with the shared verse
   // live church groups + member directory (the old code listed mock D.GROUPS, so a real church showed nothing)
   useCE(() => {
-    setGroups([]); setMembers([]);
+    setGroups([]); setMembers([]); setComment('');
     if (!open || !churchNpub || !FS) return;
     const offs = [];
     if (FS.subscribeChurchGroups) offs.push(FS.subscribeChurchGroups(churchNpub, setGroups));
@@ -1141,12 +1143,12 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     : payload.title ? (payload.title + (payload.ref ? ' — ' + payload.ref : '') + (payload.excerpt ? '\n' + payload.excerpt : '')) : '';
   const sendToGroup = (g) => {
     if (!live) { ctx.toast('Chat isn’t available'); return; }
-    FS.publishMessage(g.id, JSON.stringify(payload), [['k', type]]);
+    FS.publishMessage(g.id, JSON.stringify(comment.trim() ? { ...payload, comment: comment.trim() } : payload), [['k', type]]);
     ctx.toast('Shared to ' + g.name); onClose();
   };
   const sendToPerson = (m) => {
     if (!FS || !FS.sendDM) { ctx.toast('Messaging isn’t available'); return; }
-    FS.sendDM(m.pubkey, asText);
+    FS.sendDM(m.pubkey, asText + (comment.trim() ? '\n\n' + comment.trim() : ''));
     ctx.toast('Sent to ' + (m.name || 'them')); onClose();
   };
   const lblStyle = { fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 10px' };
@@ -1159,6 +1161,8 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
       </div>
 
       <SharePreview p={payload} type={type} />
+
+      <textarea value={comment} onChange={e => setComment(e.target.value)} placeholder="Add thoughts… (optional)" rows={2} style={{ width: '100%', boxSizing: 'border-box', resize: 'none', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', lineHeight: 1.4, marginBottom: 18 }} />
 
       {type === 'verse' ? (
         <button onClick={() => { onClose(); ctx.openShare(payload); }} style={{
