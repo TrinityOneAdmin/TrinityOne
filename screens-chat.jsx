@@ -1231,7 +1231,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
 }
 
 // ── direct message thread (1:1, encrypted) ──
-function DMThread({ peer, open, onClose, ctx }) {
+function DMThread({ peer, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
   const [rxFor, setRxFor] = useC('');
@@ -1255,8 +1255,8 @@ function DMThread({ peer, open, onClose, ctx }) {
   const send = () => { if (!draft.trim() || !FS || !allowDM) return; FS.sendDM(peer, draft.trim()); setDraft(''); };
   const react = (m, emoji) => { if (FS && FS.reactDM) FS.reactDM(peer, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   return (
-    <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+    <Overlay open={open} onClose={onClose} docked={docked}>
+      <div style={{ paddingTop: docked ? 12 : 50, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
           <UserAvatar av={avOf(d)} name={d.handle} size={38} />
@@ -1319,14 +1319,14 @@ function DMThread({ peer, open, onClose, ctx }) {
 }
 
 // ── direct-message inbox (conversation list) ──
-function DMInbox({ open, onClose, ctx }) {
+function DMInbox({ open, onClose, ctx, docked }) {
   const [convos, setConvos] = useC([]);
   const FS = window.Fellowship;
   useCE(() => { if (!open || !FS || !FS.subscribeDMs) return; return FS.subscribeDMs(setConvos); }, [open]);
   useCE(() => { if (convos.length && FS && FS.requestProfiles) FS.requestProfiles(convos.map(c => c.peer)); }, [convos]);
   return (
-    <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50 }}>
+    <Overlay open={open} onClose={onClose} docked={docked}>
+      <div style={{ paddingTop: docked ? 12 : 50 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 18px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700 }}>Messages</h1>
@@ -1359,7 +1359,7 @@ function DMInbox({ open, onClose, ctx }) {
 }
 
 // ── People: the church directory — find a member and message them ──
-function PeopleScreen({ open, onClose, ctx }) {
+function PeopleScreen({ open, onClose, ctx, docked }) {
   const FS = window.Fellowship;
   const [q, setQ] = React.useState('');
   // the roster is prefetched at app load (ctx.churchPeople), so it's already warm when this opens
@@ -1374,8 +1374,8 @@ function PeopleScreen({ open, onClose, ctx }) {
   const nameCounts = {}; people.forEach(m => { const n = nameOf(m).trim().toLowerCase(); if (n) nameCounts[n] = (nameCounts[n] || 0) + 1; });
   const list = people.filter(m => !ql || nameOf(m).toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql));
   return (
-    <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+    <Overlay open={open} onClose={onClose} docked={docked}>
+      <div style={{ paddingTop: docked ? 12 : 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>

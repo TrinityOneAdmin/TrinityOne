@@ -900,9 +900,9 @@ function App() {
     addModule: () => Bible.pickFile(),
     removeTranslation: (abbr) => Bible.removeModule(abbr),
     openStore: (view, category) => { setStoreView(view || null); setStoreCat(category || null); setStore(true); }, closeStore: () => setStore(false),
-    openGroup: (g) => setGroup(g),
+    openGroup: (g) => { setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(null); setGroup(g); },
     desktop, openGroupId: group && group.id,
-    openDM: (peer) => setDmPeer(peer), openDMInbox: () => { setDmInbox(true); markDmSeen(); }, openPeople: () => setPeople(true),
+    openDM: (peer) => { setGroup(null); setOpenServing(false); setPeople(false); setDmInbox(false); setDmPeer(peer); }, openDMInbox: () => { setGroup(null); setOpenServing(false); setPeople(false); setDmPeer(null); setDmInbox(true); markDmSeen(); }, openPeople: () => { setGroup(null); setOpenServing(false); setDmInbox(false); setDmPeer(null); setPeople(true); },
     dmUnread,   // drives the dot on the Community "Direct messages" (paper-plane) button
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
@@ -1026,7 +1026,7 @@ function App() {
     myLeaderGroups: churchGroups.filter(g => (g.leaders || []).includes((window.Fellowship && window.Fellowship.myPubkey) || '')),
     publishGroupEvent: (groupId, ev) => { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return window.Fellowship.publishGroupEvent(np, groupId, ev); },
     churchNetworks: churchNetworks.map(n => ({ ...n, name: networkNames[n.networkPub] || '', following: !!churches.find(c => c.id === n.npub) })),
-    openServing: (tab, focus) => { setServingTab(typeof tab === 'string' ? tab : 'serving'); setCareFocus(focus || null); setOpenServing(true); },
+    openServing: (tab, focus) => { setGroup(null); setPeople(false); setDmInbox(false); setDmPeer(null); setServingTab(typeof tab === 'string' ? tab : 'serving'); setCareFocus(focus || null); setOpenServing(true); if (desktop) setTab('chat'); },
     servingTab, careFocus,
     openEvent: (e) => setEventOv(e),
     respondServing: (item, verdict, swapTo) => {
@@ -1130,21 +1130,20 @@ function App() {
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', overflow: 'hidden' }}>
                 <DesktopNav active={tab} onChange={(t) => { setOpenServing(false); setTab(t); }} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} />
-                {openServing ? (
-                  <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-start', minWidth: 0, background: 'var(--paper)' }}>
-                    <div style={{ position: 'relative', width: '100%', maxWidth: 920, borderRight: '1px solid var(--line)' }}>
-                      <ServingScreen open={true} docked onClose={() => setOpenServing(false)} ctx={ctx} />
-                    </div>
-                  </div>
-                ) : tab === 'chat' && ctx.church && ctx.church.npub ? (
+                {tab === 'chat' && ctx.church && ctx.church.npub ? (
                   <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
                     <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
-                      {group ? <ChatRoom group={group} open={true} onClose={() => setGroup(null)} ctx={ctx} docked /> : (
+                      {group ? <ChatRoom group={group} open={true} onClose={() => setGroup(null)} ctx={ctx} docked />
+                       : openServing ? <ServingScreen open={true} docked onClose={() => setOpenServing(false)} ctx={ctx} />
+                       : people ? <PeopleScreen open={true} docked onClose={() => setPeople(false)} ctx={ctx} />
+                       : dmPeer ? <DMThread peer={dmPeer} open={true} docked onClose={() => setDmPeer(null)} ctx={ctx} />
+                       : dmInbox ? <DMInbox open={true} docked onClose={() => setDmInbox(false)} ctx={ctx} />
+                       : (
                         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>
                           <Icon name="chat" size={46} stroke={1.4} color="var(--ink-3)" />
                           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, color: 'var(--ink-2)' }}>Pick a conversation</div>
-                          <div style={{ fontSize: 13.5, maxWidth: 260, lineHeight: 1.5 }}>Choose a group or prayer room on the left to open it here.</div>
+                          <div style={{ fontSize: 13.5, maxWidth: 260, lineHeight: 1.5 }}>Choose a group, room, Serving, People or messages on the left to open it here.</div>
                         </div>
                       )}
                     </div>
@@ -1207,9 +1206,9 @@ function App() {
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
             {window.WalletSheet ? <WalletSheet open={walletSheet} onClose={() => setWalletSheet(false)} ctx={ctx} /> : null}
             <ChatRoom group={group} open={!!group && !(desktop && tab === 'chat')} onClose={() => setGroup(null)} ctx={ctx} />
-            <DMInbox open={dmInbox} onClose={() => setDmInbox(false)} ctx={ctx} />
-            <DMThread peer={dmPeer} open={!!dmPeer} onClose={() => setDmPeer(null)} ctx={ctx} />
-            <PeopleScreen open={people} onClose={() => setPeople(false)} ctx={ctx} />
+            <DMInbox open={dmInbox && !(desktop && tab === 'chat')} onClose={() => setDmInbox(false)} ctx={ctx} />
+            <DMThread peer={dmPeer} open={!!dmPeer && !(desktop && tab === 'chat')} onClose={() => setDmPeer(null)} ctx={ctx} />
+            <PeopleScreen open={people && !(desktop && tab === 'chat')} onClose={() => setPeople(false)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx} initialMode={churchSwitcherMode}
               churches={churches} activeId={activeChurch}
               onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); }}
