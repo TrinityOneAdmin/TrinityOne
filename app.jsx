@@ -513,7 +513,18 @@ function App() {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
     if (!np || !F || !F.subscribeMealsSettings) { setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); return; }
-    const subs = [F.subscribeMealsSettings(np, setCareSettings), F.subscribeCareNeeds(np, setCareNeeds), F.subscribeCareSlots(np, setCareSlots), F.subscribeCareSkips(np, setCareSkips)];
+    // paint instantly from the last-known cache so the card doesn't blink out on reload while the relay
+    // round-trips; each subscription then refreshes the state AND re-caches it for next time.
+    setCareSettings(lsGet('trinityone.care.s.' + np, { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }));
+    setCareNeeds(lsGet('trinityone.care.n.' + np, []));
+    setCareSlots(lsGet('trinityone.care.sl.' + np, []));
+    setCareSkips(lsGet('trinityone.care.sk.' + np, []));
+    const subs = [
+      F.subscribeMealsSettings(np, s => { setCareSettings(s); lsSet('trinityone.care.s.' + np, s); }),
+      F.subscribeCareNeeds(np, n => { setCareNeeds(n); lsSet('trinityone.care.n.' + np, n); }),
+      F.subscribeCareSlots(np, x => { setCareSlots(x); lsSet('trinityone.care.sl.' + np, x); }),
+      F.subscribeCareSkips(np, x => { setCareSkips(x); lsSet('trinityone.care.sk.' + np, x); }),
+    ];
     return () => subs.forEach(u => { try { u && u(); } catch {} });
   }, [activeChurch, churches, connTick]);
   // ── serving & events: the member is driven by the requests the church p-tags to them ──
