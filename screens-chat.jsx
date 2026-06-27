@@ -255,6 +255,13 @@ function ChatScreen({ ctx }) {
   const [q, setQ] = useC('');                  // chat search query
   const [realGroups, setRealGroups] = useC([]); // the active church's REAL groups (steward console)
   const [cats, setCats] = useC([]);             // the church's group categories (named containers)
+  const [collapsed, setCollapsed] = useC({});   // folded group categories — the member can collapse sections
+  const CatLabel = ({ label, ck }) => (
+    <button onClick={() => setCollapsed(c => ({ ...c, [ck]: !c[ck] }))} style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+      <SectionLabel>{label}</SectionLabel>
+      <span style={{ marginLeft: 'auto', marginBottom: 9, display: 'inline-flex', transition: 'transform .15s', transform: collapsed[ck] ? 'none' : 'rotate(90deg)' }}><Icon name="chevR" size={14} color="var(--ink-3)" /></span>
+    </button>
+  );
   const msgBuf = useCR([]);                     // recent messages buffer (for search)
 
   // read the active church's real group definitions (kind-30078) when it has an npub
@@ -498,10 +505,10 @@ function ChatScreen({ ctx }) {
 
       {teamGroups.length ? (
         <React.Fragment>
-          <SectionLabel>Teams</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .08s both' }}>
+          <CatLabel label="Teams" ck="teams" />
+          {!collapsed.teams ? <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .08s both' }}>
             {teamGroups.map(groupCard)}
-          </div>
+          </div> : null}
         </React.Fragment>
       ) : null}
 
@@ -525,14 +532,14 @@ function ChatScreen({ ctx }) {
           <React.Fragment>
             {known.map(c => (
               <React.Fragment key={c.id}>
-                <SectionLabel>{c.name}</SectionLabel>
-                <div style={listStyle}>{plainGroups.filter(g => g.category === c.id).map(groupCard)}</div>
+                <CatLabel label={c.name} ck={c.id} />
+                {!collapsed[c.id] ? <div style={listStyle}>{plainGroups.filter(g => g.category === c.id).map(groupCard)}</div> : null}
               </React.Fragment>
             ))}
             {uncategorised.length ? (
               <React.Fragment>
-                <SectionLabel>{known.length ? 'Other groups' : 'Your groups'}</SectionLabel>
-                <div style={listStyle}>{uncategorised.map(groupCard)}</div>
+                <CatLabel label={known.length ? 'Other groups' : 'Your groups'} ck="other" />
+                {!collapsed.other ? <div style={listStyle}>{uncategorised.map(groupCard)}</div> : null}
               </React.Fragment>
             ) : null}
           </React.Fragment>
