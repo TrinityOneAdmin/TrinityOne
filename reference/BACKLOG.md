@@ -27,11 +27,13 @@ every (future-dated) need unconditionally.
   twice). (2026-06-26)
 
 ## Relay
-- **Smarter event eviction (not space — correctness).** Relay keeps newest 20k events (`dedupEvents().slice(-MAX_EVENTS)`).
-  Risk: an old-but-current addressable doc (profile/roster/care-settings, old `created_at`) gets sliced off once
-  chat+DMs exceed 20k newer events → member names/rosters/settings silently vanish. Fix: never evict
-  addressable/replaceable kinds (0, 10000-19999, 30000-39999); only cull oldest ephemeral (kind-1 chat, kind-4
-  DMs, reactions). Also scale/per-church the 20k cap for a multi-church network. Not urgent at pilot scale. (2026-06-27)
+- ✅ DONE (2026-06-27): **Smart event eviction.** `cullEvents()` now keeps ALL replaceable/addressable docs
+  (kind 0/3/10000-19999/30000-39999 — profiles, rosters, needs, settings, fills) and only culls the oldest
+  ephemeral (chat/DMs/reactions) down to the budget; load + add-path both use it; a fully-structured store is
+  never truncated. `MAX_EVENTS` is now env-tunable (`RELAY_MAX_EVENTS`). Tested. STILL OPEN below ↓
+- **Per-church ephemeral fairness** — eviction protects structure globally, but the ephemeral budget is shared,
+  so on a public/shared relay one busy church's chat can still age out another church's old chat. Needs
+  per-church partitioning + caps (depends on the DB move below). (2026-06-27)
 - **Shared/network relay scaling.** The relay is GATED (accept() only takes registered churches' member/church
   content — not an open public Nostr relay, so no internet spam). One-church self-hosted (mini-PC) is naturally
   bounded → 20k fine, preferred default (cheap, private, resilient, no culling). BUT a single relay serving MANY

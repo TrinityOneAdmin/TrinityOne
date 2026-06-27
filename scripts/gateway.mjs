@@ -18,7 +18,7 @@ import { spawn, spawnSync } from 'child_process';
 const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
 const DB = process.env.RELAY_DB || join(ROOT, 'relay', 'relay-db.json');
-const MAX_EVENTS = 20000;
+const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 20000;   // ephemeral budget; raise on a shared/public relay
 const NONMEMBER_KIND0_CAP = 1000;   // cap stored profiles from non-members (L2: prevent unbounded growth)
 const STEWARDREQ_CAP = 50;          // cap pending steward-requests per church from strangers (audit L1: anti-flood)
 // relay feature toggles — what this box serves besides the Nostr relay itself (owner request). Defaults
@@ -320,6 +320,19 @@ function dedupEvents(arr) {
   const latest = new Map(); const plain = [];
   for (const e of arr) { const rk = replKey(e); if (!rk) { plain.push(e); continue; } const cur = latest.get(rk); if (!cur || (e.created_at || 0) >= (cur.created_at || 0)) latest.set(rk, e); }
   return [...plain, ...latest.values()].sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+}
+// Smart cull (the load-time pass): NEVER drop replaceable/addressable docs — profiles, rosters, care needs,
+// settings, fills. An old-but-current one (old created_at) would otherwise be sliced off once chat/DMs pile up,
+// silently vanishing members/structure. Only the OLDEST ephemeral events (chat kind-1, DMs kind-4, reactions…)
+// are culled, down to the budget left after keeping every structured doc. If structured docs alone exceed the
+// cap (a large network), keep them all and store nothing ephemeral — that's the signal to move to a real DB.
+function cullEvents(arr) {
+  const deduped = dedupEvents(arr);                       // latest per structured key + all ephemeral, oldest→newest
+  if (deduped.length <= MAX_EVENTS) return deduped;
+  const keep = [], ephemeral = [];
+  for (const e of deduped) (replKey(e) ? keep : ephemeral).push(e);
+  const budget = Math.max(0, MAX_EVENTS - keep.length);
+  return [...keep, ...ephemeral.slice(-budget)].sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
 }
 const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
@@ -1124,7 +1137,7 @@ function serveStatic(req, res) {
 
 // ---- relay (NIP-01, persisted) ----
 let events = [];
-try { const d = JSON.parse(readFileSync(DB, 'utf8')); if (Array.isArray(d)) events = dedupEvents(d).slice(-MAX_EVENTS); } catch {}
+try { const d = JSON.parse(readFileSync(DB, 'utf8')); if (Array.isArray(d)) events = cullEvents(d); } catch {}
 if (CHURCH_PUBS.size) events.forEach(note);   // rebuild member/broadcast state from stored events
 let saveTimer = null;
 function scheduleSave() {
@@ -1192,7 +1205,13 @@ wss.on('connection', ws => {
         for (let i = events.length - 1; i >= 0; i--) { if (replKey(events[i]) !== rk) continue; if ((events[i].created_at || 0) > (evt.created_at || 0)) { ws.send(JSON.stringify(['OK', evt.id, true, 'have newer'])); return; } older.push(i); }
         for (const i of older) events.splice(i, 1);   // descending indices — safe to splice in order
       }
-      events.push(evt); if (events.length > MAX_EVENTS) events.shift();
+      events.push(evt);
+      if (events.length > MAX_EVENTS) {
+        // evict the OLDEST ephemeral event (chat/DM/reaction) — never a structured doc, or members/rosters/
+        // needs/settings would silently vanish. Array is ~oldest→newest, so the first non-replaceable is oldest.
+        const idx = events.findIndex(e => !replKey(e));
+        if (idx >= 0) events.splice(idx, 1);   // idx<0 = everything is structured → keep it all (don't drop truth)
+      }
       scheduleSave();
       maybePush(evt);   // notify the targeted member if this is a serving request
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
