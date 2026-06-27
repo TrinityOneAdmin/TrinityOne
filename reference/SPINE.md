@@ -143,6 +143,22 @@ Lightning giving: NIP-57 zaps + NIP-47 wallet connect via ndk-wallet. Scoped, re
   endorse a linked charity (steward? network?), how members discover it, trust/verification so it can't be
   spoofed, whether gifts route through the church or straight to the charity's own key, and how it shows in
   giving history. Have this once the pilot's own giving is proven.
+- **Care partners — a charity's NEEDS flow into the church's care module** *(scoped + feasibility-checked 2026-06-27; build later)*:
+  the complement to the donations thread above — instead of money OUT to a charity, the charity's practical
+  NEEDS come IN to the church's volunteers. Example: **Contact 88** (Chichester, reg. 1072066) — minibus/driver
+  + outings/befriending for elderly + disabled; its needs (drivers, outing helpers, befrienders, transport) map
+  straight onto existing care types (rides / visits / errands).
+  - **Tier 1 (works today, no code):** a steward opens needs on behalf of the partner (labelled "Contact 88 · …"),
+    members fill — the existing care module IS the church↔charity coordination layer. Pilot-friendly; proves demand.
+  - **Tier 2 (the real feature):** the partner is a first-class entity with its own key — like the `network`
+    concept — publishing care needs that affiliated churches' members see alongside their own (badged), with fills
+    flowing back so the charity sees who's covering what. Rides on the SQLite relay base (per-church/network
+    buckets + federation) built 2026-06-27.
+  - **The real design (not plumbing):** (1) **safeguarding/vetting** — vulnerable adults need DBS-style clearance;
+    a partner-specific gate beyond the church's approved-adults list; (2) **consent + dignity** — discreet labels +
+    team-visibility, and the charity's clients must consent to being surfaced; (3) **clear ownership** of each need
+    (church vs charity) so nothing's double-booked or dropped.
+  A partner charity could be BOTH a giving recipient (thread above) and a care-need source — one entity, two surfaces.
 
 ### Phase 3 — Rota & Calendar  *(future release — proposed, not yet committed)*
 ChurchSuite-style scheduling on the same Nostr infrastructure.

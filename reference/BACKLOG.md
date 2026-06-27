@@ -1,19 +1,6 @@
 # Backlog — noted for later
 
-## Roadmap idea — care partners (church ↔ care charities)
-Link an external care-based org (e.g. **Contact 88**, Chichester — minibus/driver + outings/befriending for
-elderly + disabled; reg. charity 1072066) so its needs flow into churches' care modules and volunteers work in
-tandem. Its needs (drivers, outing helpers, befrienders, transport) map onto existing care types (rides /
-visits / errands).
-- **Tier 1 (today, no code):** steward opens needs on behalf of the partner (labelled "Contact 88 · …"),
-  members fill. Use the existing care module as the church↔charity coordination layer. Pilot-friendly.
-- **Tier 2 (roadmap):** the partner is a first-class entity with its own key (like the `network` concept) —
-  publishes care needs that affiliated churches' members see alongside their own (badged), fills flow back.
-  Rides on the per-church/network relay base (federation + per-church fairness).
-- **Must handle:** (1) safeguarding/vetting — vulnerable adults need DBS-style clearance, a partner-specific
-  gate beyond the church's approved-adults; (2) consent + dignity — discreet labels + team-visibility, and the
-  charity's clients must consent to being surfaced; (3) clear ownership of each need (church vs charity) so
-  no double-booking/drops. (idea 2026-06-27)
+(Care-partners roadmap idea moved to `reference/SPINE.md` → Phase 2, beside "Church-adjacent charities".)
 
 
 ## Watch (likely already resolved)
