@@ -86,6 +86,7 @@ function DashMealsPanel({ church }) {
             ))}
           </div>
           <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>{s.visibility === 'team' ? 'Open needs are visible only to members of the care-team group below — kinder for congregations where guilt-pressure to help is the bigger concern.' : 'Open needs are visible to every member — best for turnout when the church has the bandwidth to carry it.'}</div>
+          {s.visibility === 'team' && !s.adminGroupId ? <div style={{ marginTop: 8, padding: '9px 11px', borderRadius: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45 }}>⚠ No care team is selected below — with this setting <b>no one will see open needs</b>. Pick or create a care team, or switch to “The whole church.”</div> : null}
         </div>
         <div style={{ marginTop: 10, padding: '12px 14px', borderRadius: 13, border: '1px solid var(--line)' }}>
           <div style={mealsLbl}>WHO CAN OPEN A NEED?</div>

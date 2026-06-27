@@ -1149,16 +1149,19 @@ function DashGiving() {
   );
 }
 
-function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, empty, reorderable, onReorder, headerExtra }) {
+function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, empty, reorderable, onReorder, headerExtra, filters }) {
   const [order, setOrder] = React.useState(null);   // working copy while dragging
   const [dragId, setDragId] = React.useState(null);
   const [overId, setOverId] = React.useState(null);
   const [q, setQ] = React.useState('');   // filter — keeps a long list manageable
+  const [kindF, setKindF] = React.useState('all');   // type filter (e.g. Groups/Teams/Rooms) when `filters` is supplied
   const searchable = items.length > 7;    // only show the search box once the list gets long
   const query = q.trim().toLowerCase();
-  // filter by name/description; reordering is disabled while filtering (you can only reorder the full list)
-  const filtered = query ? items.filter(it => ((it.name || '') + ' ' + (it.sub || '')).toLowerCase().includes(query)) : items;
-  const canDrag = reorderable && !query;
+  const activeTest = (filters && kindF !== 'all') ? (filters.find(f => f.key === kindF) || {}).test : null;
+  const base = activeTest ? items.filter(activeTest) : items;
+  // filter by name/description; reordering is disabled while filtering or type-filtering (only reorder the full list)
+  const filtered = query ? base.filter(it => ((it.name || '') + ' ' + (it.sub || '')).toLowerCase().includes(query)) : base;
+  const canDrag = reorderable && !query && kindF === 'all';
   const list = order || filtered;
   const idOf = (it, i) => it.id != null ? it.id : i;
   const onDragOver = (e, id) => {
@@ -1182,8 +1185,15 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, em
           {q ? <button onClick={() => setQ('')} title="Clear" style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 4 }}><Icon name="x" size={15} /></button> : null}
         </div>
       ) : null}
+      {filters && filters.length && items.length ? (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12, flexShrink: 0 }}>
+          {[{ key: 'all', label: 'All' }, ...filters].map(f => { const on = kindF === f.key; return (
+            <button key={f.key} onClick={() => setKindF(f.key)} style={{ padding: '6px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{f.label}</button>
+          ); })}
+        </div>
+      ) : null}
       {items.length === 0 ? <div style={{ textAlign: 'center', padding: '34px 10px', color: 'var(--ink-3)', fontSize: 13.5 }}>{empty || 'Nothing here yet.'}</div> : null}
-      {items.length > 0 && filtered.length === 0 ? <div style={{ textAlign: 'center', padding: '28px 10px', color: 'var(--ink-3)', fontSize: 13.5 }}>Nothing matches “{q}”.</div> : null}
+      {items.length > 0 && filtered.length === 0 ? <div style={{ textAlign: 'center', padding: '28px 10px', color: 'var(--ink-3)', fontSize: 13.5 }}>{q ? 'Nothing matches “' + q + '”.' : 'Nothing in this filter yet.'}</div> : null}
       {canDrag && items.length > 1 ? <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 2px 10px', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="dots" size={13} color="var(--ink-3)" /> Drag to reorder — this is the order your members see.</div> : null}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {list.map((it, i) => {
@@ -1577,6 +1587,14 @@ function DashGroups() {
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
   const items = all.map(g => ({ ...g, ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
+  // type filter for the list — only surfaces when there's more than one type to choose between
+  const groupFilters = (() => {
+    const f = [];
+    if (items.some(g => g.kind !== 'team' && g.kind !== 'broadcast')) f.push({ key: 'group', label: 'Groups', test: g => g.kind !== 'team' && g.kind !== 'broadcast' });
+    if (items.some(g => g.kind === 'team')) f.push({ key: 'team', label: 'Teams', test: g => g.kind === 'team' });
+    if (items.some(g => g.kind === 'broadcast')) f.push({ key: 'broadcast', label: 'Broadcasts', test: g => g.kind === 'broadcast' });
+    return f.length > 1 ? f : null;
+  })();
   const confirmDelete = () => {
     const g = pendingDelete; if (!g) return;
     window.Steward.removeGroup(g.id);
@@ -1608,7 +1626,7 @@ function DashGroups() {
           <button onClick={doUndo} style={{ border: 'none', background: 'rgba(255,255,255,.16)', color: '#fff', borderRadius: 9, padding: '6px 13px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>Undo</button>
         </div>
       ) : null}
-      <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items}
+      <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items} filters={groupFilters}
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...g, order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}

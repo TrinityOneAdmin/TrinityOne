@@ -20,11 +20,17 @@
   the roster, and de-dupe on save. Low effort.
 
 ## Meal trains
-- **Footgun: team-visibility + empty care team hides every need silently.** When care visibility is "Care team
-  only" but the care team roster is empty (or the steward isn't on it), NO member sees open needs and nothing
-  explains why. Fix: (a) auto-add the steward who creates a care team to its roster, and (b) warn in the
-  settings ("Care team is empty — no one will see open needs") when team-visibility is on with an empty team.
-  Low–moderate effort.
+- **BUG — care-team membership has two out-of-sync sources (likely root of the whole visibility saga).**
+  The care-team "Members" button (`EditGroupMembersModal`) writes the GROUP's `members` via `publishGroup`.
+  But "on the care team" for BOTH the relay (`careAdmin` → `ROSTER_PEOPLE`) AND the member CareCard
+  (`onCareRoster` → `ctx.churchRosters`) is the ROSTER (`publishRoster` people), NOT the group members. So
+  anyone added via that "Members" button never counts for "Only the care team" visibility or who-can-open-a-
+  need → team-visibility silently hides needs from everyone. FIX: pick ONE source and make all three agree.
+  The ROSTER is the only member-readable one (an invite-only group's members aren't served to non-members),
+  so route care-team membership through the roster — when editing the care-admin group's members, also
+  `publishRoster` those people (or have the care-team "Members" flow edit the roster directly). Then
+  onCareRoster + careAdmin + the steward UI all read roster.people. (diagnosed 2026-06-27)
+- ✅ DONE (2026-06-27): safe warning when visibility = "Only the care team" but NO care team is selected.
 
 ## Relay
 - **Per-church ephemeral fairness.** Smart eviction (shipped) protects ALL structured data globally, but the

@@ -61,6 +61,9 @@ function RosterModal({ team, roster, members, onClose }) {
     let name = newPerson.trim(), pub = '';
     if (linkPub) { const m = (members || []).find(x => x.pubkey === linkPub); if (m) { name = memDisplay(m); pub = m.pubkey; } }
     if (!name) return;
+    // don't add the same person twice — dedupe a linked member by pubkey, an unlinked one by name
+    const dup = pub ? people.some(p => p.pub && p.pub === pub) : people.some(p => !p.pub && (p.name || '').trim().toLowerCase() === name.toLowerCase());
+    if (dup) { setNewPerson(''); setLinkPub(''); return; }
     setPeople(p => [...p, { id: pid(), name, pub }]); setNewPerson(''); setLinkPub('');
   };
   const addPod = () => setPods(ps => [...ps, { id: 'pod' + Math.random().toString(36).slice(2, 7), name: 'Pod ' + String.fromCharCode(65 + ps.length), fills: {} }]);
@@ -99,7 +102,7 @@ function RosterModal({ team, roster, members, onClose }) {
         <input value={newPerson} onChange={e => setNewPerson(e.target.value)} placeholder="Name" style={schFld} disabled={!!linkPub} />
         <select value={linkPub} onChange={e => setLinkPub(e.target.value)} style={schFld}>
           <option value="">…or link a member</option>
-          {(members || []).map(mm => <option key={mm.pubkey} value={mm.pubkey}>{memDisplay(mm)}</option>)}
+          {(members || []).filter(mm => !people.some(p => p.pub && p.pub === mm.pubkey)).map(mm => <option key={mm.pubkey} value={mm.pubkey}>{memDisplay(mm)}</option>)}
         </select>
         <button onClick={addPerson} title="Add this person to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px' }}><Icon name="plus" size={15} color="currentColor" /></button>
       </div>
