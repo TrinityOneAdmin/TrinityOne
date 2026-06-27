@@ -1103,7 +1103,7 @@ function SharePreview({ p, type }) {
   }
   return (
     <div style={{ borderRadius: 18, padding: '16px 18px', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
-      <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.45, margin: '0 0 8px', fontWeight: 500, textWrap: 'pretty' }}>“{p.text}”</p>
+      <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.45, margin: '0 0 8px', fontWeight: 500, textWrap: 'pretty', display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>“{p.text}”</p>
       <div style={{ fontWeight: 700, fontSize: 13 }}>{p.ref}{p.version ? ' · ' + p.version : ''}</div>
     </div>
   );

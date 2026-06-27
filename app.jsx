@@ -1125,7 +1125,7 @@ function App() {
           <React.Fragment>
             <UpdateBanner ctx={ctx} />
             {desktop ? (
-              <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', overflow: 'hidden' }}>
                 <DesktopNav active={tab} onChange={(t) => { setOpenServing(false); setTab(t); }} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} />
                 {openServing ? (
                   <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-start', minWidth: 0, background: 'var(--paper)' }}>
