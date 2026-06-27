@@ -569,14 +569,16 @@ function App() {
   }, [activeChurch, churches, connTick]);
   // tell the member the moment they're approved (pending → admitted), within the same church session
   const wasPendingRef = React.useRef(false);
+  const approvedToastedRef = React.useRef(false);   // once per church — the join sub flickers isPending on reconnect, which was re-toasting
   useAE(() => {
-    if (wasPendingRef.current && joinState.approval && joinState.isAdmitted && !joinState.isPending) {
+    if (wasPendingRef.current && joinState.approval && joinState.isAdmitted && !joinState.isPending && !approvedToastedRef.current) {
       const nm = (churches.find(c => c.id === activeChurch) || {}).name || 'your church';
       toast('You’re approved — welcome to ' + nm + '!');
+      approvedToastedRef.current = true;
     }
     wasPendingRef.current = !!joinState.isPending;
   }, [joinState.isPending, joinState.isAdmitted, joinState.approval]);
-  React.useEffect(() => { wasPendingRef.current = false; }, [activeChurch]);   // reset on church switch so no false toast
+  React.useEffect(() => { wasPendingRef.current = false; approvedToastedRef.current = false; }, [activeChurch]);   // reset on church switch
   // events posted by group leaders (members the church empowered) — merged into the church's events
   const [groupEvents, setGroupEvents] = useA([]);
   // depend on STABLE string keys (npub + sorted group-ids), not the array refs — else this re-subscribes on

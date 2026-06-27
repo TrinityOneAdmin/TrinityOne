@@ -1,5 +1,24 @@
 # Backlog — noted for later
 
+## OPEN BUG — Practical care card hidden on member APK when visibility = "whole church"
+On the member APK, the Today **Practical care** card shows when visibility = **"Only the care team"**
+(and the member is on the team) but NOT when visibility = **"The whole church"** ('all'). This is
+backwards vs the code: CareCard only *narrows* `live` on `visibility==='team'`; `'all'` should show
+every (future-dated) need unconditionally.
+- Confirmed NOT a relay/subscription bug: the **Serving** page on the same APK shows the member's care
+  commitments, so `ctx.care.slots` + `ctx.care.needs` ARE populated. Data is reaching the member.
+- Web app shows the card fine (likely the steward / on-team identity).
+- Leading theory: the member's *received* `s.visibility` isn't actually `'all'` (settings update not
+  reaching the member, or stale), OR `live` collapses for another reason with 'all'.
+- NEXT STEP: re-cut the debuggable diagnostic build (re-add the `[CareCard-DEBUG]` console.log before
+  `if (!live.length) return null` in screens-today.jsx CareCard; set `debuggable true` on the release
+  buildType in android/app/build.gradle — both reverted now), connect the phone via `adb` on the dev box
+  (USB debugging must be ON + the "Allow USB debugging?" prompt approved — MTP-only descriptor = not
+  authorized), then `adb logcat | grep CareCard-DEBUG` to read visibility / needs / live / amCareTeam.
+- Footgun also noted: team-visibility + empty care team silently hides all needs — warn the steward +
+  auto-add the creating steward to the roster.
+
+
 ## Steward console
 - **Filter Groups / Teams / Rooms** — a type filter/tabs on the "Groups, teams & rooms" list
   (it's one combined list today). (2026-06-26)
