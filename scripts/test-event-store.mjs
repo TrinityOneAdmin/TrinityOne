@@ -49,14 +49,24 @@ ok(store.count() === before, 'count unchanged (older addressable replaced)');
 ok(store.put(ev({ id: 'd3', kind: 30078, pubkey: 'church1', created_at: 100, tags: [['d', 'trinityone/meals-settings'], ['church', 'church1']] })) === 'have-newer', 'older addressable → have-newer');
 ok(store.put(corpus[0]) === 'duplicate', 'same id → duplicate');
 
-// retention: structured kept, oldest ephemeral culled
-const s2 = openStore(freshDb(), { maxEvents: 5 });
-const struct = Array.from({ length: 3 }, (_, i) => ev({ id: 's' + i, kind: 30078, pubkey: 'p' + i, created_at: i, tags: [['d', 'x']] }));
-const chat = Array.from({ length: 10 }, (_, i) => ev({ id: 'm' + i, kind: 1, created_at: 100 + i }));
-s2.importAll([...struct, ...chat]); s2.cull();
-ok(s2.count() === 5, 'cull: total at cap (5)');
-ok(struct.every(s => s2.query({ ids: [s.id] }).length === 1), 'cull: ALL structured kept');
-ok(s2.query({ kinds: [1] }).map(e => e.id).sort().join() === 'm8,m9', 'cull: only the 2 newest chat kept');
+// retention: PER-CHURCH ephemeral budget; structured always kept; a chatty church can't evict a quiet one
+const s2 = openStore(freshDb(), { maxEvents: 3 });   // each church keeps its 3 newest ephemeral
+const struct = Array.from({ length: 3 }, (_, i) => ev({ id: 's' + i, kind: 30078, pubkey: 'p' + i, created_at: i, tags: [['d', 'x'], ['church', 'cA']] }));
+s2.importAll(struct);
+for (let i = 0; i < 10; i++) s2.put(ev({ id: 'a' + i, kind: 1, created_at: 100 + i }), 'cA');   // chatty church A floods
+for (let i = 0; i < 2; i++) s2.put(ev({ id: 'b' + i, kind: 1, created_at: 200 + i }), 'cB');     // quiet church B
+s2.cull();
+ok(s2.query({ kinds: [1] }).filter(e => e.id[0] === 'a').length === 3, 'per-church: chatty church A capped to its 3 newest');
+ok(s2.query({ kinds: [1] }).filter(e => e.id[0] === 'b').length === 2, "per-church: quiet church B's chat ALL survived A's flood");
+ok(struct.every(s => s2.query({ ids: [s.id] }).length === 1), 'per-church: ALL structured kept');
+
+// reattribute: fill the church column for events stored without one (migrated chat / pre-map writes)
+const s3 = openStore(freshDb(), { maxEvents: 100 });
+s3.put(ev({ id: 'u1', kind: 1, created_at: 1, tags: [['t', 'grp1']] }));   // no church passed → column ''
+const churchCol = (id) => s3.db.prepare('SELECT church FROM events WHERE id = ?').get(id).church;
+ok(churchCol('u1') === '', 'reattribute: church column empty before');
+const rn = s3.reattribute(e => e.tags.some(t => t[0] === 't' && t[1] === 'grp1') ? 'cX' : '');
+ok(rn === 1 && churchCol('u1') === 'cX', 'reattribute: church column filled in (retention bucket; tags/serving unchanged)');
 
 // real data, if present
 const realPath = 'relay/relay-db.json';

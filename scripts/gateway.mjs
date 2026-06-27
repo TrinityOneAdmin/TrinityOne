@@ -155,6 +155,8 @@ function adminOK(req) { const t = reqToken(req); if (!t || !ADMIN_TOKEN) return 
 const STARTED_AT = Date.now();
 const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined, minus blocked, minus unapproved (when a church gates joining). Rebuilt by rebuildMembers().
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
+const GROUP_CHURCH = new Map();  // groupId -> owning church/network pubkey — per-church retention attribution for chat
+const MEMBER_CHURCH = new Map(); // member pubkey -> a church they belong to — attributes their DMs/reactions to a church
 const REQUIRE_APPROVAL = new Set(); // churchpubs whose joins need steward approval (default: open join)
 const ADMITTED_BY = new Map();      // churchpub -> Set(approved member pubkeys) (only used when that church requires approval)
 const JOIN_NOTIFIED = new Set();    // "pubkey:churchpub" we've already alerted the steward about (join or request) — dedupe push spam
@@ -308,13 +310,21 @@ function maybePushMessage(evt) {
 const dtag = (e) => { const t = (e.tags || []).find(t => t[0] === 'd'); return t ? t[1] : ''; };
 // (replaceable/addressable dedup + smart retention now live in event-store.mjs — the durable store owns them.)
 const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
+// which church an event counts against for per-church retention: its explicit 'church' tag, else (for chat)
+// its group's owning church, else (a member's DMs/reactions) that member's church, else '' (shared bucket).
+function resolveChurch(e) {
+  const ct = (e.tags || []).find(t => t[0] === 'church'); if (ct && ct[1]) return ct[1];
+  if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
+  const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
+  return MEMBER_CHURCH.get(e.pubkey) || '';
+}
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (!CHURCH_PUBS.size || e.kind !== 30078) return;
   const d = dtag(e), removed = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
   let cp;   // the church a <cp>-keyed admin doc is for — author is the church itself OR one of its rostered stewards
   if (d.startsWith(MEMBER_D) && CHURCH_PUBS.has(d.slice(MEMBER_D.length))) {   // asked to join / joined one of our churches
     const cp = d.slice(MEMBER_D.length); let s = MEMBER_DOCS.get(cp); if (!s) { s = new Set(); MEMBER_DOCS.set(cp, s); }
-    if (removed) s.delete(e.pubkey); else s.add(e.pubkey);
+    if (removed) { s.delete(e.pubkey); if (MEMBER_CHURCH.get(e.pubkey) === cp) MEMBER_CHURCH.delete(e.pubkey); } else { s.add(e.pubkey); MEMBER_CHURCH.set(e.pubkey, cp); }
     rebuildMembers();   // effective membership respects the join policy + admitted list + blocklist
   }
   else if (d.startsWith(NETWORK_D) && CHURCH_PUBS.has(e.pubkey)) {   // a church joined/left a network
@@ -322,7 +332,8 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, namedChurch(e)))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
-    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); return; }
+    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); return; }
+    GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
     if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60));
     if (c.kind === 'broadcast') BROADCAST.add(id); else BROADCAST.delete(id);
     // a group def may name member leaders who can post events for that group
@@ -1120,6 +1131,9 @@ if (store.count() === 0 && existsSync(DB)) {
 store.cull();
 // rebuild member/broadcast/care state from the structured (kind-30078) docs, oldest-first as before
 if (CHURCH_PUBS.size) for (const e of store.query({ kinds: [30078], limit: 1000000 }).sort((a, b) => (a.created_at || 0) - (b.created_at || 0))) note(e);
+// now that group→church / member→church maps are built, attribute any events stored without a church
+// (migrated chat, or pre-map writes) so per-church retention buckets them correctly
+if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) console.log(`[relay] attributed ${r} events to a church (per-church retention)`); }
 function scheduleSave() {}   // no-op: SQLite persists synchronously (WAL); kept so existing call sites are harmless
 // matchFilter is imported from event-store.mjs (single source of truth, also used by the SQL read path)
 const matchAny = (evt, filters) => filters.some(f => matchFilter(evt, f));
@@ -1162,7 +1176,7 @@ wss.on('connection', ws => {
       note(evt);   // a membership/broadcast change takes effect for subsequent events
       // durable store handles replaceable dedup + smart retention (structure kept, oldest ephemeral culled).
       // 'have-newer' / 'duplicate' → acknowledge but don't re-broadcast.
-      const putRes = store.put(evt);
+      const putRes = store.put(evt, resolveChurch(evt));
       if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, true, 'have newer'])); return; }
       if (putRes === 'duplicate') { ws.send(JSON.stringify(['OK', evt.id, true, 'duplicate'])); return; }
       store.cull();

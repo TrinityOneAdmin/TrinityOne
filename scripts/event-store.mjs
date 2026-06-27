@@ -55,19 +55,22 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
            CREATE INDEX IF NOT EXISTS idx_church  ON events(church);
            CREATE INDEX IF NOT EXISTS idx_dtag    ON events(dtag);
            CREATE INDEX IF NOT EXISTS idx_repl    ON events(repl);
-           CREATE INDEX IF NOT EXISTS idx_evict   ON events(structured, created_at);`);
+           CREATE INDEX IF NOT EXISTS idx_cull    ON events(structured, church, created_at);`);
 
   const qByRepl = db.prepare('SELECT id, created_at FROM events WHERE repl = ?');
   const qById   = db.prepare('SELECT 1 FROM events WHERE id = ?');
   const delById = db.prepare('DELETE FROM events WHERE id = ?');
   const ins     = db.prepare('INSERT OR REPLACE INTO events (id,pubkey,kind,created_at,dtag,church,repl,structured,raw) VALUES (?,?,?,?,?,?,?,?,?)');
   const qCount  = db.prepare('SELECT COUNT(*) AS n FROM events');
-  const qEph    = db.prepare("SELECT COUNT(*) AS n FROM events WHERE structured = 0");
-  const cullOld = db.prepare('DELETE FROM events WHERE id IN (SELECT id FROM events WHERE structured = 0 ORDER BY created_at ASC LIMIT ?)');
+  const qOverBudget      = db.prepare('SELECT church, COUNT(*) AS n FROM events WHERE structured = 0 GROUP BY church HAVING n > ?');
+  const cullOldForChurch = db.prepare('DELETE FROM events WHERE id IN (SELECT id FROM events WHERE structured = 0 AND church = ? ORDER BY created_at ASC LIMIT ?)');
+  const updChurch        = db.prepare('UPDATE events SET church = ? WHERE id = ?');
+  const qUnattributed    = db.prepare("SELECT id, raw FROM events WHERE church = ''");
 
   // store an event. Returns 'stored' | 'have-newer' (a newer version of a replaceable doc already held) |
   // 'duplicate' (same id already stored). Replaceable docs replace older versions of the same key.
-  function put(e) {
+  // `church` is the gateway-RESOLVED owning church (for per-church retention); falls back to the event's tag.
+  function put(e, church) {
     if (!e || !e.id) return 'duplicate';
     if (qById.get(e.id)) return 'duplicate';   // already hold this exact event — no-op (no re-store/re-broadcast)
     const rk = replKey(e);
@@ -76,7 +79,8 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
       for (const r of rows) if ((r.created_at || 0) > (e.created_at || 0)) return 'have-newer';
       for (const r of rows) delById.run(r.id);
     }
-    ins.run(e.id, e.pubkey, e.kind, e.created_at || 0, dtagOf(e), churchOf(e), rk, rk ? 1 : 0, JSON.stringify(e));
+    const ch = (church != null) ? church : churchOf(e);   // gateway passes the RESOLVED owning church; else the tag
+    ins.run(e.id, e.pubkey, e.kind, e.created_at || 0, dtagOf(e), ch, rk, rk ? 1 : 0, JSON.stringify(e));
     return 'stored';
   }
 
@@ -103,18 +107,26 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
 
   function count() { return qCount.get().n; }
 
-  // retention: keep every structured (replaceable/addressable) doc; cull only the oldest ephemeral
-  // (chat/DMs/reactions) down to the budget left after structure. Never drops the church's truth.
+  // retention (per-church fairness): every structured (replaceable/addressable) doc is kept forever; each
+  // church — including the '' shared bucket for unattributed DMs/reactions — keeps only its newest
+  // `maxEvents` EPHEMERAL events (chat/DMs/reactions). So a chatty church can't age out a quiet church's
+  // chat; each church gets its own guaranteed budget. (maxEvents is now the PER-CHURCH ephemeral budget.)
   function cull() {
-    const total = count();
-    if (total <= maxEvents) return 0;
-    const eph = qEph.get().n;
-    const structured = total - eph;
-    const budget = Math.max(0, maxEvents - structured);
-    const toCull = eph - budget;
-    if (toCull <= 0) return 0;
-    cullOld.run(toCull);
-    return toCull;
+    let culled = 0;
+    for (const row of qOverBudget.all(maxEvents)) { const over = row.n - maxEvents; cullOldForChurch.run(row.church, over); culled += over; }
+    return culled;
+  }
+
+  // re-resolve the church column for events stored without one (migrated chat, or events stored before the
+  // gateway's group→church / member→church maps existed). Idempotent — only touches church='' rows.
+  function reattribute(resolveFn) {
+    const rows = qUnattributed.all();
+    if (!rows.length) return 0;
+    let n = 0;
+    db.exec('BEGIN');
+    try { for (const r of rows) { let e; try { e = JSON.parse(r.raw); } catch { continue; } const ch = resolveFn(e); if (ch) { updChurch.run(ch, r.id); n++; } } db.exec('COMMIT'); }
+    catch (err) { db.exec('ROLLBACK'); throw err; }
+    return n;
   }
 
   // bulk import (one-time migration from the old JSON array). Wrapped in a transaction for speed.
@@ -127,5 +139,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
-  return { db, put, query, count, cull, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, count, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }

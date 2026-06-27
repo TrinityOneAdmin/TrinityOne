@@ -37,9 +37,13 @@
   one-time auto-migration from `relay-db.json`. No native dependency (built-in node:sqlite, Node 22+).
   Tested: 20/20 correctness vs the old full-scan, boot+migrate, and a WS round-trip smoke. NOT yet merged
   — review + deploy when ready (see the branch handoff).
-- **Per-church ephemeral fairness (now easy).** The retention cull is still GLOBAL (oldest ephemeral across
-  all churches). The new `church` column makes a per-church cull straightforward — give each church its own
-  ephemeral budget so a chatty church can't age out a quiet one's chat. Follow-up on the SQLite base.
+- ✅ DONE (2026-06-27, branch `claude/relay-sqlite`): **Per-church ephemeral fairness.** Retention is now
+  per-church: each church (incl. a `''` shared bucket) keeps only its newest `maxEvents` EPHEMERAL events;
+  structured docs never culled — so a chatty church can't age out a quiet one's chat. `maxEvents`
+  (`RELAY_MAX_EVENTS`) is now the PER-CHURCH ephemeral budget. The gateway resolves each event's church
+  (church tag → group's owning church via `GROUP_CHURCH` → member's church via `MEMBER_CHURCH` → `''`),
+  with a startup `reattribute()` pass that buckets migrated/unattributed events. Tested (church A flood
+  doesn't evict church B; reattribute backfill).
 - **Tag-index table for extreme single-pool scale.** Arbitrary `#tags` (e.g. `#p` DMs, `#e`) are matched in
   JS on the SQL-narrowed result — correct + cheap when queries narrow by kind/author/church (they do today).
   A `tags(event_id, tag, value)` index would make tag-only queries scale on one giant shared pool. Not needed
