@@ -34,7 +34,9 @@ function UpdateBanner({ ctx }) {
   const get = () => {
     if (busy) return;                                  // ignore repeat taps — they each kick off a fresh download
     setBusy(true);
-    try { window.open(UPDATE_APK_URL, '_blank'); } catch (e) { try { location.href = UPDATE_APK_URL; } catch (e2) {} }
+    // cache-bust by version so a CDN (Cloudflare) can't hand back a stale APK → downgrade → "App not installed"
+    const url = UPDATE_APK_URL + '?v=' + ((upd && upd.code) || Date.now());
+    try { window.open(url, '_blank'); } catch (e) { try { location.href = url; } catch (e2) {} }
   };
   return (
     <div style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top, 0px) + 10px)', left: 12, right: 12, zIndex: 70, margin: '0 auto', maxWidth: 460,

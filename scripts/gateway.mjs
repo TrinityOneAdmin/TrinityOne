@@ -1112,7 +1112,7 @@ function serveStatic(req, res) {
     const relApk = join(ROOT, 'relay', 'apks', p.slice(1));
     let st2 = null; try { st2 = statSync(relApk); } catch {}
     if (st2 && st2.isFile()) {
-      res.writeHead(200, { 'Content-Type': MIME['.apk'] || 'application/octet-stream', 'Content-Length': st2.size, 'Access-Control-Allow-Origin': '*', 'Content-Disposition': 'attachment; filename="' + p.slice(1) + '"', ...SEC_HEADERS });
+      res.writeHead(200, { 'Content-Type': MIME['.apk'] || 'application/octet-stream', 'Content-Length': st2.size, 'Cache-Control': 'no-store, must-revalidate', 'Access-Control-Allow-Origin': '*', 'Content-Disposition': 'attachment; filename="' + p.slice(1) + '"', ...SEC_HEADERS });
       createReadStream(relApk).pipe(res); return;
     }
   }

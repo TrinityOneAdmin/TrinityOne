@@ -389,7 +389,7 @@ function MyMonth({ ctx, onManage }) {
 }
 
 // ════════════════════════ MAIN OVERLAY ════════════════════════
-function ServingScreen({ open, onClose, ctx }) {
+function ServingScreen({ open, onClose, ctx, docked }) {
   const [tab, setTab] = useSv('serving');
   const [sheet, setSheet] = useSv(null);   // { kind, item }
   const [rosterOpen, setRosterOpen] = useSv(false);
@@ -414,7 +414,7 @@ function ServingScreen({ open, onClose, ctx }) {
   const close = () => setSheet(null);
 
   return (
-    <Overlay open={open} onClose={onClose}>
+    <Overlay open={open} onClose={onClose} docked={docked}>
       <div style={{ paddingTop: 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 12px' }}>
           <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>

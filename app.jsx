@@ -1116,8 +1116,14 @@ function App() {
             <UpdateBanner ctx={ctx} />
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
-                <DesktopNav active={tab} onChange={setTab} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} />
-                {tab === 'chat' && ctx.church && ctx.church.npub ? (
+                <DesktopNav active={tab} onChange={(t) => { setOpenServing(false); setTab(t); }} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} />
+                {openServing ? (
+                  <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-start', minWidth: 0, background: 'var(--paper)' }}>
+                    <div style={{ position: 'relative', width: '100%', maxWidth: 920, borderRight: '1px solid var(--line)' }}>
+                      <ServingScreen open={true} docked onClose={() => setOpenServing(false)} ctx={ctx} />
+                    </div>
+                  </div>
+                ) : tab === 'chat' && ctx.church && ctx.church.npub ? (
                   <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
                     <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
@@ -1161,7 +1167,7 @@ function App() {
             <DevotionalView open={devo} onClose={() => setDevo(false)} ctx={ctx} />
             <PlanDetail plan={plan} open={!!plan} onClose={() => setPlan(null)} ctx={ctx} />
             <ChurchDevoView devo={openDevo} open={!!openDevo} onClose={() => setOpenDevo(null)} ctx={ctx} />
-            <ServingScreen open={openServing} onClose={() => setOpenServing(false)} ctx={ctx} />
+            <ServingScreen open={openServing && !desktop} onClose={() => setOpenServing(false)} ctx={ctx} />
             <EventDetail event={eventOv} open={!!eventOv} onClose={() => setEventOv(null)} ctx={ctx} />
             <JournalView entry={journal} open={!!journal} onClose={() => setJournal(null)} ctx={ctx} />
             <JournalEditor entry={journalEditor} open={!!journalEditor} onClose={() => setJournalEditor(null)} ctx={ctx} />
