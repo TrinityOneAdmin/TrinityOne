@@ -48,6 +48,15 @@ tar -czf "$BACKUP" -C "$DIR" --exclude='./relay' --exclude='./node_modules' . 2>
 
 # swap in the new code; --exclude keeps this box's relay/ secrets + data untouched
 tar -xzf "$TARBALL" -C "$DIR" --exclude='relay/*' || { log "unpack failed"; exit 1; }
+# also pull the latest APK(s) so the in-app auto-update DOWNLOAD stays in lockstep with the new web + manifest.
+# (Previously a separate, easily-forgotten "Fetch latest APK" dashboard step → manifest said vN but the APK file
+#  lagged at vN-1, so members got no update or a stale one. One .update-request now deploys everything.)
+APKDIR="$DIR/relay/apks"; mkdir -p "$APKDIR"
+for f in trinityone.apk trinityone-steward.apk; do
+  if curl -fsSL "$ORIGIN/$f" -o "$APKDIR/$f.part" 2>/dev/null && [ "$(stat -c%s "$APKDIR/$f.part" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+    mv "$APKDIR/$f.part" "$APKDIR/$f"; log "fetched APK $f ($(stat -c%s "$APKDIR/$f") bytes)"
+  else rm -f "$APKDIR/$f.part"; log "APK fetch skipped for $f (not on origin or <1MB)"; fi
+done
 ( cd "$DIR" && npm install --no-audit --no-fund --no-save ws web-push nostr-tools >/dev/null 2>&1 ) || log "npm install warned (continuing)"
 chown -R "$SVC_USER:$SVC_USER" "$DIR"
 
