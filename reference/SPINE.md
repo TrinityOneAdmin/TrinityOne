@@ -135,7 +135,7 @@ Bible reading (Open.Bible) and NIP-29 community chat over NDK. Self-custodial id
 ### Phase 2 — Provision  *(post-pilot — Lightning giving + Manna; not in the pilot)*
 Lightning giving: NIP-57 zaps + NIP-47 wallet connect via ndk-wallet. Scoped, reviewed separately because it's money. **Post-pilot by decision 2026-06-25**: the pilot validates the chat/groups/rota/safeguarding stack, not money flows. Giving + Manna land together after pilot wraps so the financial-care surfaces (money-in *and* money-out) ship as one coherent story.
 
-**Manna (money-out / disbursements)** is the counterpart, design captured in `MANNA-MODULE.md` + `reference/manna-design/`. Optional steward-console module governing how the church gives FROM its own treasury to people in need — grant-request → Barnabas-chain vouch/nomination → Keykeeper approval → NWC pay → record. Off by default; a steward turns it on in Settings → Finance. The "coming alongside" relational shape Manna encodes is also where mentorship pairing lands (see [[Mentorship / discipleship pairing]] below). Post-pilot, parallel to Lightning giving above.
+**Manna (money-out / disbursements)** is the counterpart, design captured in `MANNA-MODULE.md` + `reference/manna-design/`. Optional steward-console module governing how the church gives FROM its own treasury to people in need — grant-request → Barnabas-chain vouch/nomination → Keykeeper approval → NWC pay → record. Off by default; a steward turns it on in Settings → Finance. The "coming alongside" relational shape Manna encodes is also where mentorship pairing (see [[Mentorship / discipleship pairing]] below) **and care partners** — linking external care charities like Contact 88 so their needs reach the church's volunteers (the care complement to "Church-adjacent charities" below; scoped under this Manna toolset, not a care-module bolt-on) — land. Post-pilot, parallel to Lightning giving above.
 
 - **Church-adjacent charities** *(post-pilot design conversation — not yet scoped)*: a way for a charity
   linked to a church (or a whole network) to receive donations from that church/network's members — e.g.
@@ -143,11 +143,14 @@ Lightning giving: NIP-57 zaps + NIP-47 wallet connect via ndk-wallet. Scoped, re
   endorse a linked charity (steward? network?), how members discover it, trust/verification so it can't be
   spoofed, whether gifts route through the church or straight to the charity's own key, and how it shows in
   giving history. Have this once the pilot's own giving is proven.
-- **Care partners — a charity's NEEDS flow into the church's care module** *(scoped + feasibility-checked 2026-06-27; build later)*:
-  the complement to the donations thread above — instead of money OUT to a charity, the charity's practical
-  NEEDS come IN to the church's volunteers. Example: **Contact 88** (Chichester, reg. 1072066) — minibus/driver
-  + outings/befriending for elderly + disabled; its needs (drivers, outing helpers, befrienders, transport) map
-  straight onto existing care types (rides / visits / errands).
+- **Care partners — link external care charities into the church's care** *(scoped 2026-06-27; build later — a **Manna** toolset, not a care-module bolt-on)*:
+  the care complement to the donations thread above — instead of money OUT, the charity's practical NEEDS come
+  IN to the church's volunteers. **Scope under Manna:** it's the same vetting + "coming alongside the vulnerable"
+  DNA Manna encodes (clearance + relational governance + provision), and a bigger toolset than meal-trains — the
+  care-*needs* coordination reuses the care/meals module's needs↔fills, but the vetting, consent, partner
+  relationship (and any money flow) are Manna-governed. Example: **Contact 88** (Chichester, reg. 1072066) —
+  minibus/driver + outings/befriending for elderly + disabled; its needs (drivers, outing helpers, befrienders,
+  transport) map straight onto existing care types (rides / visits / errands).
   - **Tier 1 (works today, no code):** a steward opens needs on behalf of the partner (labelled "Contact 88 · …"),
     members fill — the existing care module IS the church↔charity coordination layer. Pilot-friendly; proves demand.
   - **Tier 2 (the real feature):** the partner is a first-class entity with its own key — like the `network`
