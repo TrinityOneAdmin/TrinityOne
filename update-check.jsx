@@ -36,9 +36,14 @@ function UpdateBanner({ ctx }) {
     if (busyRef.current) return;                       // ref blocks rapid double/triple taps instantly (state lags a render → multiple downloads)
     busyRef.current = true;
     setBusy(true);
+    const code = (upd && upd.code) || 0;
+    // mark this version handled BEFORE launching the download. Without this, every reopen re-shows the banner
+    // and another tap fires another download — the real cause of the "trinityone-x.y.z (1)(2)(3).apk" pile-up.
+    try { localStorage.setItem('trinityone.updateSnoozed', String(code)); } catch (e) {}
     // cache-bust by version so a CDN (Cloudflare) can't hand back a stale APK → downgrade → "App not installed"
-    const url = UPDATE_APK_URL + '?v=' + ((upd && upd.code) || Date.now());
+    const url = UPDATE_APK_URL + '?v=' + (code || Date.now());
     try { window.open(url, '_blank'); } catch (e) { try { location.href = url; } catch (e2) {} }
+    setTimeout(() => setUpd(null), 700);               // dismiss once the download has launched — one download per version, banner returns only for a newer build
   };
   return (
     <div style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top, 0px) + 10px)', left: 12, right: 12, zIndex: 70, margin: '0 auto', maxWidth: 460,
