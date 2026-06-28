@@ -9,6 +9,7 @@ const UPDATE_APK_URL = 'https://app.trinityone.church/trinityone.apk';
 function UpdateBanner({ ctx }) {
   const [upd, setUpd] = React.useState(null);   // { name, code } once a newer build is found
   const [busy, setBusy] = React.useState(false); // one-shot: a tapped download must not spawn duplicates
+  const busyRef = React.useRef(false);           // SYNCHRONOUS guard — state lags a render, so rapid taps fired several downloads at once
   React.useEffect(() => {
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
     const native = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
@@ -32,7 +33,8 @@ function UpdateBanner({ ctx }) {
   if (!upd) return null;
   const later = () => { try { localStorage.setItem('trinityone.updateSnoozed', String(upd.code)); } catch (e) {} setUpd(null); };
   const get = () => {
-    if (busy) return;                                  // ignore repeat taps — they each kick off a fresh download
+    if (busyRef.current) return;                       // ref blocks rapid double/triple taps instantly (state lags a render → multiple downloads)
+    busyRef.current = true;
     setBusy(true);
     // cache-bust by version so a CDN (Cloudflare) can't hand back a stale APK → downgrade → "App not installed"
     const url = UPDATE_APK_URL + '?v=' + ((upd && upd.code) || Date.now());

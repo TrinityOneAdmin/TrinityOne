@@ -1112,7 +1112,9 @@ function serveStatic(req, res) {
     const relApk = join(ROOT, 'relay', 'apks', p.slice(1));
     let st2 = null; try { st2 = statSync(relApk); } catch {}
     if (st2 && st2.isFile()) {
-      res.writeHead(200, { 'Content-Type': MIME['.apk'] || 'application/octet-stream', 'Content-Length': st2.size, 'Cache-Control': 'no-store, must-revalidate', 'Access-Control-Allow-Origin': '*', 'Content-Disposition': 'attachment; filename="' + p.slice(1) + '"', ...SEC_HEADERS });
+      let ver = ''; try { ver = (JSON.parse(readFileSync(join(ROOT, 'apk-latest.json'), 'utf8')).versionName || '').trim(); } catch {}
+      const apkName = p.slice(1).replace('.apk', '') + (ver ? '-' + ver : '') + '.apk';   // versioned save name (e.g. trinityone-0.9.26.apk) so downloads self-label — no ambiguous trinityone(1).apk
+      res.writeHead(200, { 'Content-Type': MIME['.apk'] || 'application/octet-stream', 'Content-Length': st2.size, 'Cache-Control': 'no-store, must-revalidate', 'Access-Control-Allow-Origin': '*', 'Content-Disposition': 'attachment; filename="' + apkName + '"', ...SEC_HEADERS });
       createReadStream(relApk).pipe(res); return;
     }
   }
