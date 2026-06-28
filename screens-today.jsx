@@ -265,6 +265,11 @@ function TodayScreen({ ctx }) {
         </div>
       </div>
 
+      {/* TEMP DEBUG — remove after diagnosing the care issue */}
+      <div style={{ padding: '7px 11px', margin: '0 0 12px', background: '#fdecea', color: '#9b1c1c', fontSize: 11, fontFamily: 'monospace', borderRadius: 8, lineHeight: 1.5, wordBreak: 'break-all' }}>
+        DBG care · enabled={String(_care.settings && _care.settings.enabled)} · vis={(_care.settings && _care.settings.visibility) || '?'} · needs={(_care.needs || []).length} · slots={(_care.slots || []).length} · me={_myPub.slice(0, 10) || '(none)'} · church={(ctx.church && ctx.church.npub || '').slice(0, 12)}
+      </div>
+
       {/* cared-for: someone in the church has a care need open for me — surface it warmly, link to the Care tab */}
       {beingCaredFor ? (
         <div onClick={() => ctx.openServing('care', myCareNeed && myCareNeed.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 18, marginBottom: 22, cursor: 'pointer', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both' }}>
