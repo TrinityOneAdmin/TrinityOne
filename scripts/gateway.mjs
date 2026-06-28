@@ -504,11 +504,12 @@ function canRead(e, authed) {
   }
   if (e.kind === 30078) {
     const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-    // care coordination (needs / member fills / skips) is readable by the whole church — members MUST see
-    // who's already helping + each other's "what I'm bringing" notes, not just stewards. These are
-    // member-authored but church-tagged, so they'd otherwise fail the steward-roster gate below. Write
-    // access stays gated in accept(); the UI still applies the per-need visibility setting.
-    if (d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) return true;
+    // the Care module — its CONFIG doc plus the needs / member fills / skips — is readable by the whole
+    // church. Members MUST see that care is enabled (else the Care tab + banner never appear), who's
+    // already helping, and each other's "what I'm bringing" notes — not just stewards. The settings doc
+    // is steward/church-authored and the rest member-authored, so they'd otherwise fail the roster gate
+    // below. Write access stays gated in accept(); the UI still applies the per-need visibility setting.
+    if (d === MEALS_SETTINGS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) return true;
     // roster-verify steward-authored church content: a doc carrying ['church',<cp>] is only served while
     // its author is on <cp>'s CURRENT signed roster — so a revoked steward's content stops being delivered.
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];

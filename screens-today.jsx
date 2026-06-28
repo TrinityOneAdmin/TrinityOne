@@ -136,7 +136,7 @@ function CareCard({ ctx, embedded }) {
   })();
   const amCareTeam = s.visibility !== 'team' || onCareRoster;
   let live = (care.needs || []).filter(n => !n.endDate || n.endDate >= today);
-  if (s.visibility === 'team' && !amCareTeam) live = live.filter(n => n.recipient && n.recipient === myPub);
+  if (s.visibility === 'team' && !amCareTeam) live = live.filter(n => n.recipient && (n.recipient || '').toLowerCase() === myPub);
   // embedded = rendered as the Serving "Care" tab (own page) → show an empty state instead of hiding.
   if (!live.length) {
     if (!embedded) return null;
