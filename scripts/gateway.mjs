@@ -10,6 +10,7 @@ import { readFileSync, writeFileSync, renameSync, statSync, createReadStream, ex
 import { extname, normalize, join, sep } from 'path';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
+import { openStore, matchFilter } from './event-store.mjs';   // durable event storage (node:sqlite) + the canonical read predicate
 import { verifyEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
 import { randomBytes, timingSafeEqual } from 'crypto';
@@ -17,7 +18,8 @@ import { spawn, spawnSync } from 'child_process';
 
 const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
-const DB = process.env.RELAY_DB || join(ROOT, 'relay', 'relay-db.json');
+const DB = process.env.RELAY_DB || join(ROOT, 'relay', 'relay-db.json');                 // legacy JSON store (migrated from, once)
+const SQLITE_DB = process.env.RELAY_SQLITE || join(ROOT, 'relay', 'relay.sqlite');       // durable event store
 const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 20000;   // ephemeral budget; raise on a shared/public relay
 const NONMEMBER_KIND0_CAP = 1000;   // cap stored profiles from non-members (L2: prevent unbounded growth)
 const STEWARDREQ_CAP = 50;          // cap pending steward-requests per church from strangers (audit L1: anti-flood)
@@ -153,6 +155,8 @@ function adminOK(req) { const t = reqToken(req); if (!t || !ADMIN_TOKEN) return 
 const STARTED_AT = Date.now();
 const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined, minus blocked, minus unapproved (when a church gates joining). Rebuilt by rebuildMembers().
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
+const GROUP_CHURCH = new Map();  // groupId -> owning church/network pubkey — per-church retention attribution for chat
+const MEMBER_CHURCH = new Map(); // member pubkey -> a church they belong to — attributes their DMs/reactions to a church
 const REQUIRE_APPROVAL = new Set(); // churchpubs whose joins need steward approval (default: open join)
 const ADMITTED_BY = new Map();      // churchpub -> Set(approved member pubkeys) (only used when that church requires approval)
 const JOIN_NOTIFIED = new Set();    // "pubkey:churchpub" we've already alerted the steward about (join or request) — dedupe push spam
@@ -252,8 +256,7 @@ function maybePushJoin(evt, wasMember) {
     const key = evt.pubkey + ':' + churchPub;
     if (JOIN_NOTIFIED.has(key)) return;   // already told the steward (dedupe re-announce heartbeats)
     JOIN_NOTIFIED.add(key);
-    let name = '';   // best-effort: the joiner's latest kind-0 display name
-    for (let i = events.length - 1; i >= 0; i--) { const e = events[i]; if (e.pubkey === evt.pubkey && e.kind === 0) { try { const m = JSON.parse(e.content); name = m.name || m.display_name || ''; } catch {} break; } }
+    const name = displayName(evt.pubkey);   // best-effort: the joiner's latest kind-0 display name
     // a church that requires approval gets a "wants to join" request; otherwise it's a fresh join
     const pending = REQUIRE_APPROVAL.has(churchPub) && !((ADMITTED_BY.get(churchPub) || new Set()).has(evt.pubkey));
     if (pending) pushTo(churchPub, { title: 'Join request', body: (name || 'Someone') + ' is asking to join your church', url: '/steward', tag: 'joinreq-' + evt.pubkey.slice(0, 8) });
@@ -273,10 +276,8 @@ function maybePush(evt) {
 }
 // best-effort latest display name from a pubkey's most recent kind-0 profile
 function displayName(pubkey) {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i];
-    if (e.kind === 0 && e.pubkey === pubkey) { try { const m = JSON.parse(e.content); return m.name || m.display_name || ''; } catch { return ''; } }
-  }
+  const k0 = store.query({ kinds: [0], authors: [pubkey], limit: 1 });   // kind-0 is replaceable → the one row is newest
+  if (k0[0]) { try { const m = JSON.parse(k0[0].content); return m.name || m.display_name || ''; } catch { return ''; } }
   return '';
 }
 // fire a closed-app push for a new chat message: 1:1 DMs (to the recipient) and broadcast/announcement
@@ -307,41 +308,23 @@ function maybePushMessage(evt) {
   } catch {}
 }
 const dtag = (e) => { const t = (e.tags || []).find(t => t[0] === 'd'); return t ? t[1] : ''; };
-// NIP-01 replaceable (0/3/10000-19999) + addressable (30000-39999 by d-tag): keep only the newest
-// per (pubkey, kind[, d]). Without this, e.g. a member's swap then decline reqreply both linger and
-// clients guess by arrival order — the source of stale/wrong rota verdicts.
-function replKey(e) {
-  const k = e.kind;
-  if (k === 0 || k === 3 || (k >= 10000 && k < 20000)) return e.pubkey + ':' + k;
-  if (k >= 30000 && k < 40000) return e.pubkey + ':' + k + ':' + dtag(e);
-  return null;
-}
-function dedupEvents(arr) {
-  const latest = new Map(); const plain = [];
-  for (const e of arr) { const rk = replKey(e); if (!rk) { plain.push(e); continue; } const cur = latest.get(rk); if (!cur || (e.created_at || 0) >= (cur.created_at || 0)) latest.set(rk, e); }
-  return [...plain, ...latest.values()].sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
-}
-// Smart cull (the load-time pass): NEVER drop replaceable/addressable docs — profiles, rosters, care needs,
-// settings, fills. An old-but-current one (old created_at) would otherwise be sliced off once chat/DMs pile up,
-// silently vanishing members/structure. Only the OLDEST ephemeral events (chat kind-1, DMs kind-4, reactions…)
-// are culled, down to the budget left after keeping every structured doc. If structured docs alone exceed the
-// cap (a large network), keep them all and store nothing ephemeral — that's the signal to move to a real DB.
-function cullEvents(arr) {
-  const deduped = dedupEvents(arr);                       // latest per structured key + all ephemeral, oldest→newest
-  if (deduped.length <= MAX_EVENTS) return deduped;
-  const keep = [], ephemeral = [];
-  for (const e of deduped) (replKey(e) ? keep : ephemeral).push(e);
-  const budget = Math.max(0, MAX_EVENTS - keep.length);
-  return [...keep, ...ephemeral.slice(-budget)].sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
-}
+// (replaceable/addressable dedup + smart retention now live in event-store.mjs — the durable store owns them.)
 const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
+// which church an event counts against for per-church retention: its explicit 'church' tag, else (for chat)
+// its group's owning church, else (a member's DMs/reactions) that member's church, else '' (shared bucket).
+function resolveChurch(e) {
+  const ct = (e.tags || []).find(t => t[0] === 'church'); if (ct && ct[1]) return ct[1];
+  if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
+  const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
+  return MEMBER_CHURCH.get(e.pubkey) || '';
+}
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (!CHURCH_PUBS.size || e.kind !== 30078) return;
   const d = dtag(e), removed = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
   let cp;   // the church a <cp>-keyed admin doc is for — author is the church itself OR one of its rostered stewards
   if (d.startsWith(MEMBER_D) && CHURCH_PUBS.has(d.slice(MEMBER_D.length))) {   // asked to join / joined one of our churches
     const cp = d.slice(MEMBER_D.length); let s = MEMBER_DOCS.get(cp); if (!s) { s = new Set(); MEMBER_DOCS.set(cp, s); }
-    if (removed) s.delete(e.pubkey); else s.add(e.pubkey);
+    if (removed) { s.delete(e.pubkey); if (MEMBER_CHURCH.get(e.pubkey) === cp) MEMBER_CHURCH.delete(e.pubkey); } else { s.add(e.pubkey); MEMBER_CHURCH.set(e.pubkey, cp); }
     rebuildMembers();   // effective membership respects the join policy + admitted list + blocklist
   }
   else if (d.startsWith(NETWORK_D) && CHURCH_PUBS.has(e.pubkey)) {   // a church joined/left a network
@@ -349,7 +332,8 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, namedChurch(e)))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
-    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); return; }
+    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); return; }
+    GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
     if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60));
     if (c.kind === 'broadcast') BROADCAST.add(id); else BROADCAST.delete(id);
     // a group def may name member leaders who can post events for that group
@@ -416,9 +400,9 @@ function accept(e) {
   const k = e.kind;
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
     if (isMember) return true;                                   // members/leaders: always
-    if (events.some(x => x.kind === 0 && x.pubkey === e.pubkey)) return true;  // a stranger updating their own
+    if (store.query({ kinds: [0], authors: [e.pubkey], limit: 1 }).length) return true;  // a stranger updating their own
     let strangers = 0;                                           // else cap how many non-member profiles we store
-    for (const x of events) { if (x.kind === 0 && !(CHURCH_PUBS.has(x.pubkey) || NETWORKS.has(x.pubkey) || MEMBERS.has(x.pubkey))) strangers++; }
+    for (const x of store.query({ kinds: [0], limit: 1000000 })) { if (!(CHURCH_PUBS.has(x.pubkey) || NETWORKS.has(x.pubkey) || MEMBERS.has(x.pubkey))) strangers++; }
     return strangers < NONMEMBER_KIND0_CAP;
   }
   if (k === 30078) {
@@ -449,8 +433,8 @@ function accept(e) {
     if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
       if (isMember) return true;                               // a known member asking to help: always
-      if (events.some(x => x.kind === 30078 && x.pubkey === e.pubkey && dtag(x) === d)) return true;   // updating their own pending request
-      let pend = 0; for (const x of events) { if (x.kind === 30078 && dtag(x) === d && !MEMBERS.has(x.pubkey)) pend++; }   // else cap strangers' pending requests for this church
+      if (store.query({ kinds: [30078], authors: [e.pubkey], '#d': [d], limit: 1 }).length) return true;   // updating their own pending request
+      let pend = 0; for (const x of store.query({ kinds: [30078], '#d': [d], limit: 1000000 })) { if (!MEMBERS.has(x.pubkey)) pend++; }   // else cap strangers' pending requests for this church
       return pend < STEWARDREQ_CAP;
     }
     // Meal trains / Care module (optional, per-church) — must precede the generic member fallback:
@@ -741,7 +725,7 @@ function serveStatic(req, res) {
       writePolicy: CHURCH_PUBS.size > 0,
       // church npubs/names are intentionally NOT exposed here (unauthenticated) — the dashboard reads
       // the list from the token-gated /config; /status carries only non-sensitive counts.
-      counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: events.length, connections: wss ? wss.clients.size : 0 },
+      counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: store.count(), connections: wss ? wss.clients.size : 0 },
       serves: { app: SETTINGS.serveApp, modules: SETTINGS.serveModules, audio: SETTINGS.serveAudio },   // what this relay also hosts (toggleable in the control dashboard)
     }));
     return;
@@ -1087,7 +1071,7 @@ function serveStatic(req, res) {
     const slug = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
     // Resolve only the one requested slug. Churches outrank members on a contested slug; earliest
     // profile wins among the same tier. Same precedence as before, just no bulk dump.
-    const k0 = events.filter(e => e.kind === 0).sort((a, b) => (CHURCH_PUBS.has(b.pubkey) - CHURCH_PUBS.has(a.pubkey)) || ((a.created_at || 0) - (b.created_at || 0)));
+    const k0 = store.query({ kinds: [0], limit: 1000000 }).sort((a, b) => (CHURCH_PUBS.has(b.pubkey) - CHURCH_PUBS.has(a.pubkey)) || ((a.created_at || 0) - (b.created_at || 0)));
     for (const e of k0) {
       if (BLOCKED.has(e.pubkey)) continue;
       let meta = {}; try { meta = JSON.parse(e.content); } catch {}
@@ -1138,31 +1122,23 @@ function serveStatic(req, res) {
   createReadStream(file).pipe(res);
 }
 
-// ---- relay (NIP-01, persisted) ----
-let events = [];
-try { const d = JSON.parse(readFileSync(DB, 'utf8')); if (Array.isArray(d)) events = cullEvents(d); } catch {}
-if (CHURCH_PUBS.size) events.forEach(note);   // rebuild member/broadcast state from stored events
-let saveTimer = null;
-function scheduleSave() {
-  if (saveTimer) return;
-  saveTimer = setTimeout(() => { saveTimer = null;
-    try { const tmp = DB + '.tmp'; writeFileSync(tmp, JSON.stringify(events)); renameSync(tmp, DB); }
-    catch (e) { console.warn('[relay] save failed:', e.message); }
-  }, 1500);
+// ---- relay (NIP-01) — events live in SQLite (node:sqlite); REQ reads are indexed queries ----
+const store = openStore(SQLITE_DB, { maxEvents: MAX_EVENTS });
+// one-time migration from the legacy JSON array store (then retire the file so it can't re-import)
+if (store.count() === 0 && existsSync(DB)) {
+  try {
+    const arr = JSON.parse(readFileSync(DB, 'utf8'));
+    if (Array.isArray(arr) && arr.length) { const n = store.importAll(arr); renameSync(DB, DB + '.migrated'); console.log(`[relay] migrated ${n} events from ${DB} → sqlite`); }
+  } catch (e) { console.warn('[relay] JSON→sqlite migration failed:', e.message); }
 }
-function matchFilter(evt, f) {
-  if (!f || typeof f !== 'object' || Array.isArray(f)) return false;
-  if (f.ids && !f.ids.includes(evt.id)) return false;
-  if (f.authors && !f.authors.includes(evt.pubkey)) return false;
-  if (f.kinds && !f.kinds.includes(evt.kind)) return false;
-  if (f.since && evt.created_at < f.since) return false;
-  if (f.until && evt.created_at > f.until) return false;
-  for (const k in f) if (k[0] === '#') {
-    const tag = k.slice(1), vals = f[k];
-    if (!evt.tags.some(t => t[0] === tag && vals.includes(t[1]))) return false;
-  }
-  return true;
-}
+store.cull();
+// rebuild member/broadcast/care state from the structured (kind-30078) docs, oldest-first as before
+if (CHURCH_PUBS.size) for (const e of store.query({ kinds: [30078], limit: 1000000 }).sort((a, b) => (a.created_at || 0) - (b.created_at || 0))) note(e);
+// now that group→church / member→church maps are built, attribute any events stored without a church
+// (migrated chat, or pre-map writes) so per-church retention buckets them correctly
+if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) console.log(`[relay] attributed ${r} events to a church (per-church retention)`); }
+function scheduleSave() {}   // no-op: SQLite persists synchronously (WAL); kept so existing call sites are harmless
+// matchFilter is imported from event-store.mjs (single source of truth, also used by the SQL read path)
 const matchAny = (evt, filters) => filters.some(f => matchFilter(evt, f));
 const subs = new Map();   // ws -> Map(subId -> filters[])
 
@@ -1201,21 +1177,12 @@ wss.on('connection', ws => {
       if (!accept(evt)) { ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: not a member or not permitted for this group'])); return; }
       const wasMember = MEMBERS.has(evt.pubkey);   // capture before note() flips it, to detect a genuinely new join
       note(evt);   // a membership/broadcast change takes effect for subsequent events
-      // replaceable/addressable: drop older versions; ignore if we already hold a newer one
-      const rk = replKey(evt);
-      if (rk) {
-        const older = [];
-        for (let i = events.length - 1; i >= 0; i--) { if (replKey(events[i]) !== rk) continue; if ((events[i].created_at || 0) > (evt.created_at || 0)) { ws.send(JSON.stringify(['OK', evt.id, true, 'have newer'])); return; } older.push(i); }
-        for (const i of older) events.splice(i, 1);   // descending indices — safe to splice in order
-      }
-      events.push(evt);
-      if (events.length > MAX_EVENTS) {
-        // evict the OLDEST ephemeral event (chat/DM/reaction) — never a structured doc, or members/rosters/
-        // needs/settings would silently vanish. Array is ~oldest→newest, so the first non-replaceable is oldest.
-        const idx = events.findIndex(e => !replKey(e));
-        if (idx >= 0) events.splice(idx, 1);   // idx<0 = everything is structured → keep it all (don't drop truth)
-      }
-      scheduleSave();
+      // durable store handles replaceable dedup + smart retention (structure kept, oldest ephemeral culled).
+      // 'have-newer' / 'duplicate' → acknowledge but don't re-broadcast.
+      const putRes = store.put(evt, resolveChurch(evt));
+      if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, true, 'have newer'])); return; }
+      if (putRes === 'duplicate') { ws.send(JSON.stringify(['OK', evt.id, true, 'duplicate'])); return; }
+      store.cull();
       maybePush(evt);   // notify the targeted member if this is a serving request
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
       maybePushMessage(evt);   // notify on a new DM (recipient) or church announcement (members)
@@ -1231,7 +1198,9 @@ wss.on('connection', ws => {
       mysubs.set(subId, filters);
       // serve everything this connection may read now (blocked members withheld; invite-only group
       // messages withheld from non-members per NIP-42)
-      let matched = events.filter(e => matchAny(e, filters) && !BLOCKED.has(e.pubkey) && canRead(e, ws._auth));
+      let matched = []; const _seen = new Set();
+      for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey) || !canRead(e, ws._auth)) continue; matched.push(e); }
+      matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
       // is NOT challenged — those messages are just silently withheld — so ordinary reads pay no auth cost.
@@ -1253,8 +1222,10 @@ wss.on('connection', ws => {
           // were already delivered at REQ time, so only re-send invite-group ones to avoid duplicates)
           const mine = subs.get(ws);
           if (mine) for (const [subId, filters] of mine) {
-            for (const e of events) {
-              if (BLOCKED.has(e.pubkey) || !matchAny(e, filters) || !canRead(e, ws._auth)) continue;
+            const seen = new Set();
+            for (const f of filters) for (const e of store.query(f)) {
+              if (seen.has(e.id)) continue; seen.add(e.id);
+              if (BLOCKED.has(e.pubkey) || !canRead(e, ws._auth)) continue;
               const g = gidOf(e); if (g && GROUP_VIS.get(g) === 'invite') ws.send(JSON.stringify(['EVENT', subId, e]));
             }
           }
@@ -1274,7 +1245,7 @@ const wsHeartbeat = setInterval(() => {
 }, 25000);
 wss.on('close', () => clearInterval(wsHeartbeat));
 server.listen(PORT, '0.0.0.0', () =>
-  console.log(`TrinityOne gateway on http://0.0.0.0:${PORT}  (app + relay at /relay, ${events.length} events loaded)` +
+  console.log(`TrinityOne gateway on http://0.0.0.0:${PORT}  (app + relay at /relay, ${store.count()} events loaded)` +
     (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set up a church in the control dashboard)`) +
     `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
     `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}`));
