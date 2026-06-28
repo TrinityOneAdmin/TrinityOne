@@ -7267,8 +7267,9 @@
           }
         },
         oneose() {
-          cb({ ...best.doc });
+          if (best.ts) cb({ ...best.doc });
         }
+        // sticky: only emit on EOSE if we actually received settings — don't flip the card off on a reconnect's empty
       });
       return () => {
         try {
@@ -7288,7 +7289,12 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => cb([...byId.values()].sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0)));
+      let eosed = false;
+      const emit = () => {
+        const v = [...byId.values()].sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
+        if (!eosed && !v.length) return;
+        cb(v);
+      };
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], "#t": [NET] }, { kinds: [30078], "#church": [pubk], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -7313,6 +7319,7 @@
           }
         },
         oneose() {
+          eosed = true;
           emit();
         }
       });
@@ -7334,7 +7341,12 @@
         };
       }
       const byKey = /* @__PURE__ */ new Map();
-      const emit = () => cb([...byKey.values()]);
+      let eosed = false;
+      const emit = () => {
+        const v = [...byKey.values()];
+        if (!eosed && !v.length) return;
+        cb(v);
+      };
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], "#church": [pubk], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -7355,6 +7367,7 @@
           }
         },
         oneose() {
+          eosed = true;
           emit();
         }
       });

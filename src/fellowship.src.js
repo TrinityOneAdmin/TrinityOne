@@ -958,7 +958,7 @@ window.Fellowship = {
         if ((e.created_at || 0) <= best.ts) return;
         try { const c = JSON.parse(e.content || '{}'); best = { ts: e.created_at || 0, doc: { enabled: !!c.enabled, visibility: c.visibility === 'team' ? 'team' : 'all', openedBy: c.openedBy === 'member' ? 'member' : 'steward', adminGroupId: String(c.adminGroupId || '') } }; cb({ ...best.doc }); } catch {}
       },
-      oneose() { cb({ ...best.doc }); },
+      oneose() { if (best.ts) cb({ ...best.doc }); },   // sticky: only emit on EOSE if we actually received settings — don't flip the card off on a reconnect's empty
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -969,7 +969,8 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { cb([]); return () => {}; }
     const byId = new Map();
-    const emit = () => cb([...byId.values()].sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)));
+    let eosed = false;   // sticky: don't blank the card with an empty emit before the relay confirms it's really empty (EOSE)
+    const emit = () => { const v = [...byId.values()].sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); if (!eosed && !v.length) return; cb(v); };
     const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -982,7 +983,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
         try { const c = JSON.parse(e.content); byId.set(id, { id, displayLabel: c.displayLabel || '', type: c.type || 'meals', startDate: c.startDate || '', endDate: c.endDate || '', recipient: (c.recipient || '').toLowerCase(), notes: c.notes || '', dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: (c.dayMeals && typeof c.dayMeals === 'object') ? c.dayMeals : {}, ts: e.created_at }); emit(); } catch {}
       },
-      oneose() { emit(); },
+      oneose() { eosed = true; emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -993,7 +994,8 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { cb([]); return () => {}; }
     const byKey = new Map();
-    const emit = () => cb([...byKey.values()]);
+    let eosed = false;   // sticky: same as needs — don't blank on a transient empty before EOSE
+    const emit = () => { const v = [...byKey.values()]; if (!eosed && !v.length) return; cb(v); };
     const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#church': [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -1005,7 +1007,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byKey.delete(key); emit(); return; }
         try { byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || '{}')) }); emit(); } catch {}
       },
-      oneose() { emit(); },
+      oneose() { eosed = true; emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
