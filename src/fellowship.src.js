@@ -954,7 +954,7 @@ window.Fellowship = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_absorbRoster(pubk, d, e)) return;
-        if (d !== MEALS_SETTINGS_D || !_churchVoice(pubk, { _by: e.pubkey })) return;   // church / rostered steward only
+        if (d !== MEALS_SETTINGS_D) return;   // the relay write-gates settings to the church/stewards (accept policy), so trust what it serves here — don't drop it on a not-yet-loaded roster, which hid the whole Care module from members
         if ((e.created_at || 0) <= best.ts) return;
         try { const c = JSON.parse(e.content || '{}'); best = { ts: e.created_at || 0, doc: { enabled: !!c.enabled, visibility: c.visibility === 'team' ? 'team' : 'all', openedBy: c.openedBy === 'member' ? 'member' : 'steward', adminGroupId: String(c.adminGroupId || '') } }; cb({ ...best.doc }); } catch {}
       },

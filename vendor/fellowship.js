@@ -7257,7 +7257,7 @@
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (_absorbRoster(pubk, d, e)) return;
-          if (d !== MEALS_SETTINGS_D || !_churchVoice(pubk, { _by: e.pubkey })) return;
+          if (d !== MEALS_SETTINGS_D) return;
           if ((e.created_at || 0) <= best.ts) return;
           try {
             const c = JSON.parse(e.content || "{}");
