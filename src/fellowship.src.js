@@ -376,8 +376,10 @@ window.Fellowship = {
     // seed from the persisted roster so the list paints instantly on load (then live events refresh it)
     for (const m of loadMembersCache(cp)) { if (m && m.pubkey) byPub.set(m.pubkey, m); }
     // a member who opted out (kind-0 `hidden`) is withheld from the directory the others see
+    let eosed = false;   // sticky: hold last-known until EOSE
     const emit = (done) => {
       const visible = [...byPub.values()].filter(m => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+      if (!eosed && !done && !visible.length) return;
       saveMembersCache(cp, [...byPub.values()]);   // keep the cache warm for next launch
       onMembers(visible, !!done);
     };
@@ -416,7 +418,7 @@ window.Fellowship = {
           } else { m.msgs++; if (e.created_at > m.lastTs) m.lastTs = e.created_at; }
           byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit();
         },
-        oneose() { emit(true); },   // initial load complete
+        oneose() { eosed = true; emit(true); },   // initial load complete
       });
       return () => { try { sub.close(); } catch {} };
     };
@@ -719,7 +721,8 @@ window.Fellowship = {
     const byId = new Map();
     for (const g of loadDocCache('groups', pubk)) { if (g && g.id) byId.set(g.id, g); }   // paint cached instantly
     // honour the steward's chosen order; client-roster-trust filters out forged/revoked authors (M2)
-    const emit = () => { const v = [...byId.values()].filter(g => _churchVoice(pubk, g)); saveDocCache('groups', pubk, v); onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
+    let eosed = false;   // sticky: hold last-known until the relay's EOSE — don't blank on a transient/roster-lagged empty
+    const emit = () => { const v = [...byId.values()].filter(g => _churchVoice(pubk, g)); if (!eosed && !v.length) return; saveDocCache('groups', pubk, v); onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
     const makeSub = () => {
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
         onevent(e) {
@@ -731,7 +734,7 @@ window.Fellowship = {
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
           try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); _noteGroupLeaders(pubk, id, c, e.pubkey); emit(); } catch {}
         },
-        oneose() { emit(); },
+        oneose() { eosed = true; emit(); },
       });
       return () => { try { sub.close(); } catch {} };
     };
@@ -746,7 +749,8 @@ window.Fellowship = {
     if (!pubk) { onCats([]); return () => {}; }
     const byId = new Map();
     for (const c of loadDocCache('categories', pubk)) { if (c && c.id) byId.set(c.id, c); }   // paint cached instantly
-    const emit = () => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
+    let eosed = false;   // sticky: hold last-known until EOSE
+    const emit = () => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); if (!eosed && !v.length) return; saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
     const makeSub = () => {
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
         onevent(e) {
@@ -756,7 +760,7 @@ window.Fellowship = {
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
           try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
         },
-        oneose() { emit(); },
+        oneose() { eosed = true; emit(); },
       });
       return () => { try { sub.close(); } catch {} };
     };
@@ -856,8 +860,10 @@ window.Fellowship = {
     const byId = new Map();
     for (const p of loadDocCache('plans', pubk)) { if (p && p.id) byId.set(p.id, p); }   // paint cached instantly
     let timer = null;   // re-emit when the next scheduled item is due (drip release)
+    let eosed = false;   // sticky: hold last-known until EOSE
     const emit = () => {
       const all = [...byId.values()].filter(x => _churchVoice(pubk, x));   // roster-trust (M2)
+      if (!eosed && !all.length) return;
       saveDocCache('plans', pubk, all);
       onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
       timer = scheduleNextReveal(all, timer, emit);
@@ -872,7 +878,7 @@ window.Fellowship = {
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
           try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
         },
-        oneose() { emit(); },
+        oneose() { eosed = true; emit(); },
       });
       return () => { try { sub.close(); } catch {} };
     };
@@ -891,8 +897,10 @@ window.Fellowship = {
     // honour the steward's explicit order (lower = first); unordered devotionals fall back to newest-first
     const ord = d => (typeof d.order === 'number' ? d.order : Infinity);
     let timer = null;   // re-emit when the next scheduled devotional is due (drip release)
+    let eosed = false;   // sticky: hold last-known until EOSE
     const emit = () => {
       const all = [...byId.values()].filter(x => _churchVoice(pubk, x));   // roster-trust (M2)
+      if (!eosed && !all.length) return;
       saveDocCache('devos', pubk, all);
       onDevos(scheduleVisible(all).sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
       timer = scheduleNextReveal(all, timer, emit);
@@ -907,7 +915,7 @@ window.Fellowship = {
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
           try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
         },
-        oneose() { emit(); },
+        oneose() { eosed = true; emit(); },
       });
       return () => { try { sub.close(); } catch {} };
     };
@@ -921,7 +929,8 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onItems([]); return () => {}; }
     const byId = new Map();
-    const emit = () => onItems([...byId.values()].filter(x => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0)));   // roster-trust (M2)
+    let eosed = false;   // sticky: hold last-known until EOSE
+    const emit = () => { const v = [...byId.values()].filter(x => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0)); if (!eosed && !v.length) return; onItems(v); };   // roster-trust (M2)
     const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -931,7 +940,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
         try { byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
-      oneose() { emit(); },
+      oneose() { eosed = true; emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -1054,7 +1063,8 @@ window.Fellowship = {
     const cp = toPub(churchNpub); const groups = (groupIds || []).filter(Boolean);
     if (!cp || !groups.length) { onEvents([]); return () => {}; }
     const byId = new Map();
-    const emit = () => onEvents([...byId.values()].filter(x => _groupEventTrusted(cp, x._gid, x._by)).sort((a, b) => (a.date || '').localeCompare(b.date || '')));
+    let eosed = false;   // sticky: hold last-known until EOSE
+    const emit = () => { const v = [...byId.values()].filter(x => _groupEventTrusted(cp, x._gid, x._by)).sort((a, b) => (a.date || '').localeCompare(b.date || '')); if (!eosed && !v.length) return; onEvents(v); };
     const onTrust = () => emit();   // re-evaluate when the roster / group-leader lists load or change
     window.addEventListener('trinity-church-trust', onTrust);
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], '#t': groups }], {
@@ -1066,7 +1076,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
         try { const c = JSON.parse(e.content); byId.set(id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }); emit(); } catch {}
       },
-      oneose() { emit(); },
+      oneose() { eosed = true; emit(); },
     });
     return () => { window.removeEventListener('trinity-church-trust', onTrust); try { sub.close(); } catch {} };
   },

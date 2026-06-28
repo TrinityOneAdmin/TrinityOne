@@ -6223,8 +6223,10 @@
       for (const m of loadMembersCache(cp)) {
         if (m && m.pubkey) byPub.set(m.pubkey, m);
       }
+      let eosed = false;
       const emit = (done) => {
         const visible = [...byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+        if (!eosed && !done && !visible.length) return;
         saveMembersCache(cp, [...byPub.values()]);
         onMembers(visible, !!done);
       };
@@ -6290,6 +6292,7 @@
             emit();
           },
           oneose() {
+            eosed = true;
             emit(true);
           }
           // initial load complete
@@ -6807,8 +6810,10 @@
       for (const g of loadDocCache("groups", pubk)) {
         if (g && g.id) byId.set(g.id, g);
       }
+      let eosed = false;
       const emit = () => {
         const v = [...byId.values()].filter((g) => _churchVoice(pubk, g));
+        if (!eosed && !v.length) return;
         saveDocCache("groups", pubk, v);
         onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
       };
@@ -6840,6 +6845,7 @@
             }
           },
           oneose() {
+            eosed = true;
             emit();
           }
         });
@@ -6866,8 +6872,10 @@
       for (const c of loadDocCache("categories", pubk)) {
         if (c && c.id) byId.set(c.id, c);
       }
+      let eosed = false;
       const emit = () => {
         const v = [...byId.values()].filter((c) => _churchVoice(pubk, c));
+        if (!eosed && !v.length) return;
         saveDocCache("categories", pubk, v);
         onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
       };
@@ -6890,6 +6898,7 @@
             }
           },
           oneose() {
+            eosed = true;
             emit();
           }
         });
@@ -7079,8 +7088,10 @@
         if (p && p.id) byId.set(p.id, p);
       }
       let timer = null;
+      let eosed = false;
       const emit = () => {
         const all = [...byId.values()].filter((x) => _churchVoice(pubk, x));
+        if (!eosed && !all.length) return;
         saveDocCache("plans", pubk, all);
         onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
         timer = scheduleNextReveal(all, timer, emit);
@@ -7107,6 +7118,7 @@
             }
           },
           oneose() {
+            eosed = true;
             emit();
           }
         });
@@ -7139,8 +7151,10 @@
       }
       const ord = (d) => typeof d.order === "number" ? d.order : Infinity;
       let timer = null;
+      let eosed = false;
       const emit = () => {
         const all = [...byId.values()].filter((x) => _churchVoice(pubk, x));
+        if (!eosed && !all.length) return;
         saveDocCache("devos", pubk, all);
         onDevos(scheduleVisible(all).sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
         timer = scheduleNextReveal(all, timer, emit);
@@ -7167,6 +7181,7 @@
             }
           },
           oneose() {
+            eosed = true;
             emit();
           }
         });
@@ -7193,7 +7208,12 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => onItems([...byId.values()].filter((x) => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      let eosed = false;
+      const emit = () => {
+        const v = [...byId.values()].filter((x) => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+        if (!eosed && !v.length) return;
+        onItems(v);
+      };
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], "#t": [NET] }, { kinds: [30078], "#church": [pubk], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -7215,6 +7235,7 @@
           }
         },
         oneose() {
+          eosed = true;
           emit();
         }
       });
@@ -7464,7 +7485,12 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => onEvents([...byId.values()].filter((x) => _groupEventTrusted(cp, x._gid, x._by)).sort((a, b) => (a.date || "").localeCompare(b.date || "")));
+      let eosed = false;
+      const emit = () => {
+        const v = [...byId.values()].filter((x) => _groupEventTrusted(cp, x._gid, x._by)).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+        if (!eosed && !v.length) return;
+        onEvents(v);
+      };
       const onTrust = () => emit();
       window.addEventListener("trinity-church-trust", onTrust);
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": groups }], {
@@ -7486,6 +7512,7 @@
           }
         },
         oneose() {
+          eosed = true;
           emit();
         }
       });
