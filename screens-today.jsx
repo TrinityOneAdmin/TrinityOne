@@ -267,7 +267,7 @@ function TodayScreen({ ctx }) {
 
       {/* TEMP DEBUG — remove after diagnosing the care issue */}
       <div style={{ padding: '7px 11px', margin: '0 0 12px', background: '#fdecea', color: '#9b1c1c', fontSize: 11, fontFamily: 'monospace', borderRadius: 8, lineHeight: 1.5, wordBreak: 'break-all' }}>
-        DBG care · enabled={String(_care.settings && _care.settings.enabled)} · vis={(_care.settings && _care.settings.visibility) || '?'} · needs={(_care.needs || []).length} · slots={(_care.slots || []).length} · me={_myPub.slice(0, 10) || '(none)'} · church={(ctx.church && ctx.church.npub || '').slice(0, 12)}
+        DBG care · enabled={String(_care.settings && _care.settings.enabled)} · vis={(_care.settings && _care.settings.visibility) || '?'} · needs={(_care.needs || []).length} · slots={(_care.slots || []).length} · me={_myPub.slice(0, 10) || '(none)'} · church={(ctx.church && ctx.church.npub || '').slice(0, 12)} · fx=[{ctx.careDbg}]
       </div>
 
       {/* cared-for: someone in the church has a care need open for me — surface it warmly, link to the Care tab */}

@@ -510,22 +510,25 @@ function App() {
   const [careSlots, setCareSlots] = useA([]);
   const [careSkips, setCareSkips] = useA([]);
   const [optCare, setOptCare] = useA({});   // optimistic care fill/clear ('needId|iso' -> 'fill'|'clear') so "I'll help" flips instantly
+  const [careDbg, setCareDbg] = useA('init');   // TEMP: care-effect status, surfaced in the Today debug line
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
-    if (!np || !F || !F.subscribeMealsSettings) { setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); return; }
-    // paint instantly from the last-known cache so the card doesn't blink out on reload while the relay
-    // round-trips; each subscription then refreshes the state AND re-caches it for next time.
+    if (!np || !F || !F.subscribeMealsSettings) { setCareDbg('EARLY np=' + (np ? np.slice(0, 12) : 'NULL') + ' F=' + !!F + ' fn=' + !!(F && F.subscribeMealsSettings)); setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); return; }
     setCareSettings(lsGet('trinityone.care.s.' + np, { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }));
     setCareNeeds(lsGet('trinityone.care.n.' + np, []));
     setCareSlots(lsGet('trinityone.care.sl.' + np, []));
     setCareSkips(lsGet('trinityone.care.sk.' + np, []));
-    const subs = [
-      F.subscribeMealsSettings(np, s => { setCareSettings(s); lsSet('trinityone.care.s.' + np, s); }),
-      F.subscribeCareNeeds(np, n => { setCareNeeds(n); lsSet('trinityone.care.n.' + np, n); }),
-      F.subscribeCareSlots(np, x => { setCareSlots(x); lsSet('trinityone.care.sl.' + np, x); }),
-      F.subscribeCareSkips(np, x => { setCareSkips(x); lsSet('trinityone.care.sk.' + np, x); }),
-    ];
+    let subs = [];
+    try {
+      subs = [
+        F.subscribeMealsSettings(np, s => { setCareSettings(s); setCareDbg('GOT-settings en=' + !!s.enabled); lsSet('trinityone.care.s.' + np, s); }),
+        F.subscribeCareNeeds(np, n => { setCareNeeds(n); setCareDbg('GOT-needs n=' + (n || []).length); lsSet('trinityone.care.n.' + np, n); }),
+        F.subscribeCareSlots(np, x => { setCareSlots(x); lsSet('trinityone.care.sl.' + np, x); }),
+        F.subscribeCareSkips(np, x => { setCareSkips(x); lsSet('trinityone.care.sk.' + np, x); }),
+      ];
+      setCareDbg('SUBBED np=' + np.slice(0, 12));
+    } catch (e) { setCareDbg('THREW ' + (e && e.message || e)); }
     return () => subs.forEach(u => { try { u && u(); } catch {} });
   }, [activeChurch, churches, connTick]);
   // ── serving & events: the member is driven by the requests the church p-tags to them ──
@@ -985,7 +988,7 @@ function App() {
     servPending, servConfirmed, servDeclined, servNext, myRosterTeams,
     churchEvents: (() => { const seen = new Set(churchEvents.map(e => e.id).filter(Boolean)); return [...churchEvents, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; })(),
     myRsvps,
-    netAnnouncements, netUnread, markNetSeen, notifications,
+    netAnnouncements, netUnread, markNetSeen, notifications, careDbg,
     churchRotas, churchRosters, churchServices, churchRunsheets, churchGroups,
     // Care / Meal trains: settings + open needs + everyone's fills/skips, plus this member's sign-up actions.
     // Only meaningful when care.settings.enabled; the Today card and Care screen render off this.
