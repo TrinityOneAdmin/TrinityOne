@@ -45,10 +45,10 @@ rm -rf "$WWW"; mkdir -p "$WWW/vendor"
 cp steward.html "$WWW/index.html"
 cp brand.css "$WWW/"
 cp icons.jsx stew-data.jsx stew-console.jsx stew-schedule.jsx stew-templates.jsx \
-   stew-dashboard.jsx stew-finance.jsx stew-relay.jsx stew-extension.jsx stew-phone.jsx stew-custody.jsx \
+   stew-dashboard.jsx stew-finance.jsx stew-manna.jsx stew-meals.jsx stew-relay.jsx stew-extension.jsx stew-phone.jsx stew-custody.jsx \
    backup.jsx steward-root.jsx "$WWW/"
 cp -r vendor/fonts "$WWW/vendor/"
-cp vendor/react.development.js vendor/react-dom.development.js vendor/steward.js vendor/steward-finance.js vendor/jsqr.js vendor/jspdf.umd.min.js "$WWW/vendor/"
+cp vendor/react.development.js vendor/react-dom.development.js vendor/steward.js vendor/steward-finance.js vendor/steward-manna.js vendor/steward-meals.js vendor/jsqr.js vendor/jspdf.umd.min.js "$WWW/vendor/"
 
 # pre-transpile JSX -> JS (runtime Babel is unreliable in the Capacitor webview)
 echo "transpiling steward JSX -> JS…"
