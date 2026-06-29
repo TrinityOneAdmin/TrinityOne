@@ -94,6 +94,9 @@
   nav.top .wrap { display: flex; align-items: center; gap: 24px; height: 74px; }
   .wm-sm { display: inline-flex; align-items: center; gap: 11px; font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: -.3px; text-decoration: none; }
   .wm-sm .one { color: var(--clay); }
+  nav .links { display: flex; gap: 28px; margin-left: 20px; }
+  nav .links a { font-weight: 600; font-size: 14.5px; color: var(--ink-2); text-decoration: none; transition: color .15s; }
+  nav .links a:hover { color: var(--ink); }
   nav .spacer { flex: 1; }
 
   /* ── Hero ── */
@@ -173,6 +176,7 @@
     .steps { grid-template-columns: 1fr; max-width: 460px; }
     .benefits { grid-template-columns: 1fr; max-width: 460px; }
     .mission-two { grid-template-columns: 1fr; max-width: 460px; }
+    nav .links { display: none; }
   }
   @media (max-width: 760px) {
     .flow .flow-wide { display: none; }
@@ -207,7 +211,10 @@
 
 <nav class="top">
   <div class="wrap">
-    <a href="#" class="wm-sm"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span>Trinity<span class="one">One</span></span></a>
+    <a href="#" class="wm-sm"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span class="wm-txt">Trinity<span class="one">One</span></span></a>
+    <div class="links">
+      <a href="#how">How it works</a><a href="#mission">For every church</a><a href="features.html">Features</a><a href="welcome-churches.html">For churches</a><a href="TrinityOne Help.html">Help</a>
+    </div>
     <div class="spacer"></div>
     <a href="#start" class="to-btn to-btn--clay" style="padding:12px 22px;font-size:15px">Start your church</a>
   </div>
