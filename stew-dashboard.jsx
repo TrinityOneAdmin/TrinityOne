@@ -394,7 +394,7 @@ function StewDashboard({ initial = 'overview' }) {
   const church = window.useStewardChurch();   // real church profile + npub from the relay
   // optional Finance module: its nav item appears only when a treasurer has switched it on
   const finOn = window.useFinanceSettings ? !!window.useFinanceSettings().enabled : false;
-  const mannaOn = window.useMannaSettings ? !!window.useMannaSettings().enabled : false;   // optional money-out module
+  const mannaOn = false;   // Manna LOCKED for the pilot — not ready to surface yet (was: window.useMannaSettings ? !!window.useMannaSettings().enabled : false)
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
   const nav = React.useMemo(() => {
@@ -3372,6 +3372,10 @@ function DashGivingPanel({ church }) {
 
   return (
     <Panel title="Giving">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', marginBottom: 14 }}>
+        <Icon name="lock" size={16} color="var(--clay-ink)" style={{ flexShrink: 0 }} />
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><b>Locked during the pilot.</b> This opens up once testing is finished.</div>
+      </div>
       {/* steward owns the switch: giving only appears for members when this church turns it on */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)',
         background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', marginBottom: showConfig ? 16 : 0 }}>
@@ -3379,7 +3383,7 @@ function DashGivingPanel({ church }) {
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show the Giving tab to members</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{church.giving ? 'On — members can give to this church.' : 'Off — members won’t see giving.'}</div>
         </div>
-        <button onClick={toggleGiving} aria-label="Toggle giving" title="Show or hide the Giving tab for your members" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0,
+        <button onClick={toggleGiving} disabled aria-label="Toggle giving" title="Giving is locked during the pilot" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'not-allowed', opacity: .4, flexShrink: 0,
           background: church.giving ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: church.giving ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>

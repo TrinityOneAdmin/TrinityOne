@@ -74,13 +74,17 @@ function MnLabel({ children, action, onAction }) {
 function DashMannaPanel({ church }) {
   const s = window.useMannaSettings ? window.useMannaSettings() : { enabled: false };
   const on = !!s.enabled;
-  const toggleBtn = (active, onClick, label) => (
-    <button onClick={onClick} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+  const toggleBtn = (active, onClick, label, disabled) => (
+    <button onClick={disabled ? undefined : onClick} disabled={!!disabled} aria-label={label} title={label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? .4 : 1, flexShrink: 0, background: active ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
       <span style={{ position: 'absolute', top: 3, left: active ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
     </button>
   );
   return (
     <Panel title="Manna — looking after our own">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', marginBottom: 14 }}>
+        <Icon name="lock" size={16} color="var(--clay-ink)" style={{ flexShrink: 0 }} />
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><b>Locked during the pilot.</b> This opens up once testing is finished.</div>
+      </div>
       <div style={{ display: 'flex', gap: 10, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', marginBottom: 14 }}>
         <Icon name="lock" size={17} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Manna is the <b>money-out</b> counterpart to Finance: how your church gives to its own in need. Like Finance, it keeps <b>named, identified</b> records (it names the people you help) — so every record is <b>encrypted to your church key</b>, minimised, and never a watch-list. Payments themselves stay <b>off</b> until you wire a wallet. Use it only under your church’s safeguarding &amp; privacy policy.</div>
@@ -90,7 +94,7 @@ function DashMannaPanel({ church }) {
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Disbursements (Manna)</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{on ? 'On — a “Manna” tab is in your sidebar: open a need, vouch, approve, and keep the trustee’s record. Two tiers — mercy (open draw) and covenant (walked-alongside).' : 'Off — turn on to disburse from your church’s purse to people in need, with dignity and a trustee-ready record.'}</div>
         </div>
-        {toggleBtn(on, () => window.StewardManna.setEnabled(!on, s), 'Toggle Manna module')}
+        {toggleBtn(on, () => window.StewardManna.setEnabled(!on, s), 'Manna is locked during the pilot', true)}
       </div>
     </Panel>
   );
