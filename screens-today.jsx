@@ -2,10 +2,11 @@
 const { useState: useStateT, useEffect: useEffectT } = React;
 
 function ScreenScroll({ children, top = 56, bottom = 96, style = {} }) {
+  const tp = typeof top === 'number' ? top + 'px' : top;   // allow a CSS string (e.g. a safe-area calc)
   return (
     <div className="no-scrollbar" style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-      padding: `${top}px 18px ${bottom}px`, ...style,
+      padding: `${tp} 18px ${bottom}px`, ...style,
     }}>{children}</div>
   );
 }

@@ -364,7 +364,7 @@ function ChatScreen({ ctx }) {
   };
 
   return (
-    <ScreenScroll>
+    <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 5px)">
       <div style={{ marginBottom: 14, animation: 'trinityFade .5s ease both' }}>
         <ChurchPill ctx={ctx} />
       </div>
