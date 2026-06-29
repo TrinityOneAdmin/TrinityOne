@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TrinityOne — Get the app</title>
+<meta name="description" content="Download TrinityOne — the member app and the Steward console — for Android, or open them in any browser. Free to use." />
+<link rel="stylesheet" href="vendor/fonts/fonts.css" />
+<link rel="icon" href="icons/halo.svg" type="image/svg+xml" />
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<style>
+  /* ── Brand tokens (from brand.css, inlined so this page renders standalone) ── */
+  :root {
+    --paper:      #F4EEE2;
+    --paper-soft: #FBF6EC;
+    --surface:    #FFFDF8;
+    --ink:        #221C16;
+    --ink-2:      #6B6052;
+    --ink-3:      #A89E8E;
+    --line:       rgba(34,28,22,0.10);
+    --line-2:     rgba(34,28,22,0.05);
+
+    --clay:       #C25A38;
+    --clay-deep:  #9C4327;
+    --clay-ink:   #A8462A;
+    --clay-soft:  #F3DECF;
+
+    --gold:       #C8962E;
+    --gold-soft:  #E0B860;
+    --gold-tint:  #F3E4C4;
+
+    --sage:       #5E8C6A;
+    --sage-soft:  #D8E6DC;
+
+    --midnight:   #17120B;
+    --midnight-2: #241C12;
+
+    --font-display: 'Sora', system-ui, sans-serif;
+    --font-serif:   'Newsreader', Georgia, serif;
+    --font-ui:      'Sora', system-ui, sans-serif;
+
+    --r-sm: 10px;  --r-md: 16px;  --r-lg: 24px;  --r-xl: 32px;
+    --shadow-sm: 0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);
+    --shadow-md: 0 4px 12px rgba(34,28,16,.10), 0 20px 44px rgba(34,28,16,.12);
+    --shadow-lg: 0 10px 30px rgba(34,28,16,.14), 0 40px 80px rgba(34,28,16,.18);
+    --ease: cubic-bezier(.32,.72,0,1);
+    --spark: var(--gold);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  html, body { overflow-x: clip; max-width: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--font-ui);
+    color: var(--ink);
+    background: var(--paper);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: inherit; }
+  ::selection { background: var(--gold-soft); color: var(--ink); }
+
+  .halo { display: inline-block; width: 1em; height: 1em; color: var(--ink); --spark: var(--clay); }
+
+  /* ── Buttons (from brand.css) ── */
+  .to-btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--font-ui); font-weight: 700; font-size: 17px;
+    padding: 16px 28px; border-radius: 999px; border: none; cursor: pointer;
+    background: var(--ink); color: var(--paper);
+    transition: transform .2s var(--ease), box-shadow .2s, background .2s;
+    text-decoration: none; line-height: 1;
+  }
+  .to-btn:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .to-btn--clay { background: var(--clay); color: #fff; }
+  .to-btn--ghost { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--line); }
+  .to-btn--ghost:hover { box-shadow: inset 0 0 0 1.5px var(--ink); }
+
+  /* ── Pill / eyebrow (from brand.css) ── */
+  .to-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--font-ui); font-weight: 700; font-size: 13px;
+    letter-spacing: 1.4px; text-transform: uppercase;
+    padding: 8px 15px; border-radius: 999px;
+    background: var(--clay-soft); color: var(--clay-ink);
+  }
+
+  /* ── Layout ── */
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 28px; }
+
+  /* nav (shared with welcome-simple.html) */
+  nav.top { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--paper) 86%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--line-2); }
+  nav.top .wrap { display: flex; align-items: center; gap: 24px; height: 74px; max-width: 1280px; }
+  .wm-sm { display: inline-flex; align-items: center; gap: 11px; font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: -.3px; text-decoration: none; }
+  .wm-sm .one { color: var(--clay); }
+  nav .links { display: flex; gap: 26px; margin-left: 20px; }
+  nav .links a { font-weight: 600; font-size: 14.5px; color: var(--ink-2); text-decoration: none; transition: color .15s; }
+  nav .links a:hover { color: var(--ink); }
+  nav .links a.is-here { color: var(--clay-ink); }
+  nav .spacer { flex: 1; }
+  .nav-cta { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .nav-btn { padding: 12px 22px; font-size: 15px; white-space: nowrap; }
+  .nav-btn .nb-short { display: none; }
+
+  /* ── Hero ── */
+  .hero { position: relative; overflow: hidden; background: radial-gradient(110% 80% at 78% -8%, var(--gold-tint), transparent 46%), var(--paper); }
+  .hero .wrap { padding: 72px 28px 40px; text-align: center; }
+  .hero h1 { font-family: var(--font-display); font-weight: 800; font-size: clamp(40px, 7vw, 68px); line-height: 1.0; letter-spacing: -2px; margin: 22px auto 0; max-width: 720px; }
+  .hero h1 .one { color: var(--clay); }
+  .hero .sub { font-family: var(--font-serif); font-size: clamp(19px, 2.5vw, 24px); line-height: 1.5; color: var(--ink-2); max-width: 600px; margin: 22px auto 0; text-wrap: pretty; }
+  .eyebrow { display: flex; justify-content: center; }
+
+  /* ── Download cards ── */
+  .dl { padding: 40px 0 80px; }
+  .dl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 880px; margin: 0 auto; }
+  .dl-card { display: flex; flex-direction: column; padding: 36px 34px; border-radius: var(--r-xl); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-md); }
+  .dl-icon { width: 64px; height: 64px; border-radius: 18px; display: flex; align-items: center; justify-content: center; margin-bottom: 22px; }
+  .dl-tag { font-family: var(--font-ui); font-weight: 800; font-size: 11.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-3); }
+  .dl-card h2 { font-family: var(--font-display); font-weight: 800; font-size: 28px; letter-spacing: -.6px; margin: 6px 0 0; }
+  .dl-card .blurb { font-size: 16.5px; line-height: 1.6; color: var(--ink-2); margin: 12px 0 0; }
+  .dl-actions { display: flex; flex-direction: column; gap: 12px; margin-top: 26px; }
+  .dl-btn { display: inline-flex; align-items: center; justify-content: center; gap: 11px; padding: 16px 22px; border-radius: 14px; font-family: var(--font-ui); font-weight: 700; font-size: 16px; text-decoration: none; transition: transform .15s, box-shadow .15s; }
+  .dl-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+  .dl-btn--primary { background: var(--clay); color: #fff; }
+  .dl-btn--ghost { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--line); }
+  .dl-btn--ghost:hover { box-shadow: inset 0 0 0 1.5px var(--ink); }
+  .dl-btn small { display: block; font-size: 11.5px; font-weight: 600; opacity: .8; letter-spacing: .3px; margin-top: 2px; }
+  .dl-extra { margin-top: 18px; font-size: 14.5px; color: var(--ink-2); line-height: 1.55; }
+  .dl-extra a { color: var(--clay-ink); font-weight: 700; text-decoration: none; }
+  .spacer-grow { flex: 1; }
+
+  /* ── Notes band ── */
+  .notes { background: var(--paper-soft); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .notes .wrap { padding: 64px 28px; }
+  .notes h2 { font-family: var(--font-display); font-weight: 700; font-size: clamp(26px,4vw,38px); letter-spacing: -.8px; text-align: center; margin: 16px auto 0; max-width: 640px; line-height: 1.08; }
+  .note-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 880px; margin: 44px auto 0; }
+  .note { padding: 28px; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-sm); }
+  .note .pic { width: 50px; height: 50px; border-radius: 14px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
+  .note h3 { font-family: var(--font-display); font-weight: 700; font-size: 18px; margin: 0 0 8px; }
+  .note p { margin: 0; color: var(--ink-2); font-size: 15px; line-height: 1.6; }
+
+  /* ── Footer (shared with welcome-simple.html) ── */
+  footer { background: var(--midnight); color: var(--ink-3); padding: 48px 0 40px; text-align: center; }
+  footer .wm { display: inline-flex; align-items: center; gap: 11px; font-family: var(--font-display); font-weight: 800; font-size: 21px; color: var(--paper); letter-spacing: -.3px; text-decoration: none; }
+  footer .wm .one { color: var(--gold-soft); }
+  footer p { font-family: var(--font-serif); font-size: 15px; color: var(--ink-3); max-width: 360px; margin: 18px auto 0; line-height: 1.5; }
+  footer .copy { margin-top: 28px; font-size: 12.5px; color: var(--ink-3); }
+
+  @media (max-width: 820px) {
+    .dl-grid { grid-template-columns: 1fr; max-width: 480px; }
+    .note-cards { grid-template-columns: 1fr; max-width: 460px; }
+    nav .links { display: none; }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 0 20px; }
+    .hero .wrap { padding: 48px 20px 32px; }
+    .dl-card { padding: 30px 24px; }
+    /* keep the wordmark + both CTAs on one line without overflow */
+    nav.top .wrap { gap: 12px; }
+    .nav-cta { gap: 8px; }
+    .nav-btn { padding: 10px 16px; font-size: 14px; }
+  }
+  @media (max-width: 440px) {
+    nav.top .wrap { gap: 10px; }
+    .wm-sm { font-size: 18px; gap: 8px; }
+    .nav-cta { gap: 7px; }
+    .nav-btn { padding: 9px 14px; font-size: 13.5px; }
+    .nav-btn .nb-full { display: none; }
+    .nav-btn .nb-short { display: inline; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Brand mark used across the page -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="to-halo" viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="36" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)" />
+    <circle cx="50" cy="50" r="6.5" fill="var(--spark)" />
+  </symbol>
+  <symbol id="to-mark" viewBox="0 0 512 512">
+    <rect width="512" height="512" rx="112" fill="#C25A38" />
+    <g transform="scale(5.12)" fill="none" stroke="#F4EEE2" stroke-width="7" stroke-linecap="round">
+      <path d="M81.2 67.9 A36 36 0 0 1 31.3 80.7" />
+      <path d="M18.8 68.0 A36 36 0 0 1 32.7 18.4" />
+      <path d="M49.9 14.0 A36 36 0 0 1 86.0 50.8" />
+    </g>
+    <circle cx="256" cy="256" r="33.3" fill="#E0B860" />
+  </symbol>
+</svg>
+
+<nav class="top">
+  <div class="wrap">
+    <a href="welcome-simple.html" class="wm-sm"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span class="wm-txt">Trinity<span class="one">One</span></span></a>
+    <div class="links">
+      <a href="welcome-simple.html#how">How it works</a><a href="welcome-simple.html#mission">For every church</a><a href="why.html">Why</a><a href="downloads.html" class="is-here">Downloads</a><a href="features.html">Features</a><a href="TrinityOne Help.html">Help</a>
+    </div>
+    <div class="spacer"></div>
+    <div class="nav-cta">
+      <a href="https://app.trinityone.church/steward.html?setup=1" class="to-btn to-btn--clay nav-btn"><span class="nb-full">Start your church</span><span class="nb-short">Start</span></a>
+      <a href="#get" class="to-btn to-btn--ghost nav-btn"><span class="nb-full">Get the app</span><span class="nb-short">Get</span></a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <span class="to-pill"><svg class="halo" style="font-size:15px;color:var(--clay-ink);--spark:var(--clay-ink)"><use href="#to-halo" /></svg> Get the app</span>
+    <h1>Get TrinityOne</h1>
+    <p class="sub">One simple place to get the app. Install it on an Android phone, or just open it in your browser on any device — there's nothing to set up.</p>
+  </div>
+</header>
+
+<!-- DOWNLOAD CARDS -->
+<section class="dl" id="get">
+  <div class="wrap">
+    <div class="dl-grid">
+
+      <!-- MEMBER APP -->
+      <div class="dl-card">
+        <div class="dl-icon" style="background:var(--clay-soft);color:var(--clay)">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10 18.5h4"/></svg>
+        </div>
+        <div class="dl-tag">For everyone in the church</div>
+        <h2>TrinityOne</h2>
+        <p class="blurb">The app for every member — read the Bible, join your groups, pray together, and keep up with your church through the week.</p>
+        <div class="spacer-grow"></div>
+        <div class="dl-actions">
+          <a href="https://app.trinityone.church/trinityone.apk" class="dl-btn dl-btn--primary" download>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+            <span>Download for Android</span>
+          </a>
+          <a href="https://app.trinityone.church/" class="dl-btn dl-btn--ghost">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 12h17M12 3.5c2.3 2.3 3.6 5.3 3.6 8.5s-1.3 6.2-3.6 8.5c-2.3-2.3-3.6-5.3-3.6-8.5S9.7 5.8 12 3.5Z"/></svg>
+            <span>Open in your browser<small>iPhone, computer, any device — no install</small></span>
+          </a>
+        </div>
+      </div>
+
+      <!-- STEWARD CONSOLE -->
+      <div class="dl-card">
+        <div class="dl-icon" style="background:var(--sage-soft);color:#345c41">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        </div>
+        <div class="dl-tag">For church leaders</div>
+        <h2>TrinityOne Steward</h2>
+        <p class="blurb">The console to set up and run your church — create groups, plan rotas, look after the church's life. You only need this once per church.</p>
+        <div class="spacer-grow"></div>
+        <div class="dl-actions">
+          <a href="https://app.trinityone.church/trinityone-steward.apk" class="dl-btn dl-btn--primary" download>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+            <span>Download for Android</span>
+          </a>
+          <a href="https://app.trinityone.church/steward.html" class="dl-btn dl-btn--ghost">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 12h17M12 3.5c2.3 2.3 3.6 5.3 3.6 8.5s-1.3 6.2-3.6 8.5c-2.3-2.3-3.6-5.3-3.6-8.5S9.7 5.8 12 3.5Z"/></svg>
+            <span>Open in your browser<small>Run the console on any computer</small></span>
+          </a>
+        </div>
+        <p class="dl-extra">New here? <a href="https://app.trinityone.church/steward.html?setup=1">Start a church &rarr;</a></p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- NOTES -->
+<section class="notes">
+  <div class="wrap">
+    <div class="eyebrow"><span class="to-pill">Good to know</span></div>
+    <h2>Whichever way suits you</h2>
+    <div class="note-cards">
+      <div class="note">
+        <div class="pic" style="background:var(--gold-tint);color:#8a6717"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 12h17M12 3.5c2.3 2.3 3.6 5.3 3.6 8.5s-1.3 6.2-3.6 8.5c-2.3-2.3-3.6-5.3-3.6-8.5S9.7 5.8 12 3.5Z"/></svg></div>
+        <h3>Works on any device</h3>
+        <p>On an iPhone, a computer, or anything with a web browser, just open it online — there is nothing to install.</p>
+      </div>
+      <div class="note">
+        <div class="pic" style="background:var(--clay-soft);color:var(--clay)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10 18.5h4"/></svg></div>
+        <h3>Android gets the full app</h3>
+        <p>On an Android phone you can install the app itself for the smoothest experience, and to keep using it even when you are offline.</p>
+      </div>
+      <div class="note">
+        <div class="pic" style="background:var(--sage-soft);color:#345c41"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 19 6v5.2c0 4.2-2.9 7-7 8.3-4.1-1.3-7-4.1-7-8.3V6Z"/><path d="m9.2 11.8 1.9 1.9 3.7-3.9"/></svg></div>
+        <h3>A note when installing</h3>
+        <p>Because you are installing the app directly, Android may show a warning — that is normal. Just tap through to allow it, and you are set.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <a href="welcome-simple.html" class="wm"><svg class="halo" style="font-size:30px;color:var(--paper);--spark:var(--gold)"><use href="#to-halo" /></svg> Trinity<span class="one">One</span></a>
+    <p>A church home of your own — Bible, prayer, chat, and care, all in one place.</p>
+    <nav style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px 20px;margin-top:26px;font-family:var(--font-ui);font-size:14.5px"><a href="welcome-simple.html#how" style="color:var(--paper);text-decoration:none;opacity:.85">How it works</a><a href="welcome-simple.html#mission" style="color:var(--paper);text-decoration:none;opacity:.85">For every church</a><a href="why.html" style="color:var(--paper);text-decoration:none;opacity:.85">Why</a><a href="downloads.html" style="color:var(--gold-soft);text-decoration:none;font-weight:700">Downloads</a><a href="features.html" style="color:var(--paper);text-decoration:none;opacity:.85">Features</a><a href="welcome-churches.html" style="color:var(--paper);text-decoration:none;opacity:.85">For churches</a><a href="TrinityOne Help.html" style="color:var(--paper);text-decoration:none;opacity:.85">Help</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">GitHub</a><a href="https://github.com/TrinityOneAdmin/TrinityOne/issues" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">Report an issue</a></nav>
+    <div class="copy">© 2026 TrinityOne · Made for the church.</div>
+  </div>
+</footer>
+
+</body>
+</html>

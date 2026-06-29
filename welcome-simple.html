@@ -91,7 +91,7 @@
 
   /* nav */
   nav.top { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--paper) 86%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--line-2); }
-  nav.top .wrap { display: flex; align-items: center; gap: 24px; height: 74px; }
+  nav.top .wrap { display: flex; align-items: center; gap: 24px; height: 74px; max-width: 1280px; }
   .wm-sm { display: inline-flex; align-items: center; gap: 11px; font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: -.3px; text-decoration: none; }
   .wm-sm .one { color: var(--clay); }
   nav .links { display: flex; gap: 28px; margin-left: 20px; }
@@ -228,12 +228,12 @@
   <div class="wrap">
     <a href="#" class="wm-sm"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span class="wm-txt">Trinity<span class="one">One</span></span></a>
     <div class="links">
-      <a href="#how">How it works</a><a href="#mission">For every church</a><a href="features.html">Features</a><a href="welcome-churches.html">For churches</a><a href="TrinityOne Help.html">Help</a>
+      <a href="#how">How it works</a><a href="#mission">For every church</a><a href="why.html">Why</a><a href="downloads.html">Downloads</a><a href="features.html">Features</a><a href="TrinityOne Help.html">Help</a>
     </div>
     <div class="spacer"></div>
     <div class="nav-cta">
       <a href="#start" class="to-btn to-btn--clay nav-btn"><span class="nb-full">Start your church</span><span class="nb-short">Start</span></a>
-      <a href="#join" class="to-btn to-btn--ghost nav-btn"><span class="nb-full">Join your church</span><span class="nb-short">Join</span></a>
+      <a href="downloads.html" class="to-btn to-btn--ghost nav-btn"><span class="nb-full">Join your church</span><span class="nb-short">Join</span></a>
     </div>
   </div>
 </nav>
@@ -246,7 +246,7 @@
     <p class="sub">One simple app that keeps your whole church close all week — reading the Bible, praying, chatting, and looking after one another.</p>
     <div class="cta">
       <a href="#start" class="to-btn to-btn--clay">Start your church</a>
-      <a href="#join" class="to-btn to-btn--ghost">Join your church</a>
+      <a href="downloads.html" class="to-btn to-btn--ghost">Join your church</a>
     </div>
     <p class="free">Free to start, and always free to use.</p>
   </div>
@@ -265,7 +265,7 @@
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.4"/></svg>
         </div>
         <h3>A leader sets it up</h3>
-        <p>A church leader gets the church started. It's free, and it takes about an afternoon.</p>
+        <p>A church leader gets the church started. It's free, and it takes about an hour.</p>
       </li>
       <li class="step">
         <div class="step-n">2</div>
@@ -273,8 +273,8 @@
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12.5 12 4l8.5 8.5"/><path d="M5.5 10.5V19a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-8.5"/><path d="M10 20v-5h4v5"/></svg>
         </div>
         <h3>Choose where it lives</h3>
-        <p>Let us host it for you, or host your own — whichever suits.</p>
-        <p class="gloss">A relay is just the private server that holds your church's messages. Most churches let us host it.</p>
+        <p>Host your own — or let us host it to get started.</p>
+        <p class="gloss">A relay is just the private server that holds your church's messages. Host your own for full independence — or let us host it to get started.</p>
       </li>
       <li class="step">
         <div class="step-n">3</div>
@@ -349,7 +349,7 @@
       <div class="m-card">
         <div class="pic" style="background:rgba(224,184,96,.16);color:var(--gold-soft)"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 19 6v5.2c0 4.2-2.9 7-7 8.3-4.1-1.3-7-4.1-7-8.3V6Z"/><path d="M12 9v3.5M12 15.5h.01"/></svg></div>
         <h3>Where it isn't safe</h3>
-        <p>For the church under pressure, this is a quiet, private place to gather. Nothing is held by a big company that could be forced to hand it over or switch it off. It works over the thinnest connection, and a church can hold it on its own server if it has to.</p>
+        <p>For the persecuted church, this is a quiet, private place to gather. Nothing is held by a big company that could be forced to hand it over or switch it off. It works over the thinnest connection, and a church can hold it on its own server if it has to.</p>
       </div>
       <div class="m-card">
         <div class="pic" style="background:rgba(94,140,106,.22);color:#9ecbab"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12.5 12 4l8.5 8.5"/><path d="M5.5 10.5V19a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-8.5"/><path d="M10 20v-5h4v5"/></svg></div>
@@ -357,7 +357,7 @@
         <p>For the well-resourced church, it's the whole week in one place: the Bible, groups, prayer, this week's teaching, serving rotas, watching over the children — and giving, for churches set up to receive it.</p>
       </div>
     </div>
-    <p class="purpose">Keeping things private to your church is how we keep churches under pressure safe — and it protects everyone else along the way.</p>
+    <p class="purpose">Keeping things private to your church is how we keep persecuted churches safe — and it protects everyone else along the way.</p>
   </div>
 </section>
 
@@ -368,84 +368,85 @@
   <p class="intro" style="text-align:center;font-family:var(--font-serif);font-size:clamp(18px,2.3vw,21px);color:var(--ink-2);max-width:600px;margin:18px auto 0;line-height:1.55">A church leader sets things up, your messages live in one private home, and members join from their phones.</p>
   <div class="diagram">
     <!-- Wide layout (>=760px): leader → relay (centre) ← members -->
-    <svg viewBox="0 0 900 240" role="img" aria-label="A church leader sets things up through the Steward console, which feeds into your church's private home (the relay). Members connect to that same private home from the app on their phones." class="flow-wide">
+    <svg viewBox="0 0 920 260" role="img" aria-label="A church leader sets things up through the Steward console, which feeds into your church's private home (the relay). Members connect to that same private home from the app on their phones." class="flow-wide">
       <defs>
         <marker id="arrowR" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 Z" fill="var(--clay)"/></marker>
         <marker id="arrowL" markerWidth="9" markerHeight="9" refX="3" refY="4.5" orient="auto-start-reverse"><path d="M0 0 L9 4.5 L0 9 Z" fill="var(--sage)"/></marker>
       </defs>
-      <!-- connectors -->
-      <line x1="232" y1="120" x2="322" y2="120" stroke="var(--clay)" stroke-width="2.5" stroke-linecap="round"/><path d="M321 113 L321 127 L332 120 Z" fill="var(--clay)"/>
-      <line x1="668" y1="120" x2="578" y2="120" stroke="var(--sage)" stroke-width="2.5" stroke-linecap="round"/><path d="M579 113 L579 127 L568 120 Z" fill="var(--sage)"/>
+      <!-- connectors (leader → relay, members → relay) -->
+      <line x1="228" y1="130" x2="312" y2="130" stroke="var(--clay)" stroke-width="2.5" stroke-linecap="round"/><path d="M311 123 L311 137 L322 130 Z" fill="var(--clay)"/>
+      <line x1="692" y1="130" x2="608" y2="130" stroke="var(--sage)" stroke-width="2.5" stroke-linecap="round"/><path d="M609 123 L609 137 L598 130 Z" fill="var(--sage)"/>
 
       <!-- LEFT: leader / console -->
       <g>
-        <rect x="20" y="68" width="212" height="104" rx="20" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
-        <circle cx="64" cy="106" r="20" fill="var(--clay-soft)"/>
-        <g transform="translate(52,94)" stroke="var(--clay)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="1" width="18" height="13" rx="2"/><path d="M5 19h8M9 14v5"/></g>
-        <text class="dlabel" x="96" y="100" font-size="17" fill="var(--ink)">Church leader</text>
-        <text class="dsub" x="96" y="122" font-size="13.5" fill="var(--ink-2)">sets it up</text>
-        <text class="dsub" x="96" y="140" font-size="13.5" fill="var(--ink-2)">(groups, rotas)</text>
+        <rect x="20" y="74" width="208" height="112" rx="20" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <circle cx="66" cy="116" r="20" fill="var(--clay-soft)"/>
+        <g transform="translate(54,104)" stroke="var(--clay)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="1" width="18" height="13" rx="2"/><path d="M5 19h8M9 14v5"/></g>
+        <text class="dlabel" x="100" y="110" font-size="16.5" fill="var(--ink)">Church leader</text>
+        <text class="dsub" x="100" y="131" font-size="13" fill="var(--ink-2)">sets it up</text>
+        <text class="dsub" x="100" y="149" font-size="13" fill="var(--ink-2)">(groups, rotas)</text>
       </g>
 
-      <!-- CENTRE: relay -->
+      <!-- CENTRE: relay (widened so the title clears the edges) -->
       <g>
-        <rect x="330" y="40" width="240" height="160" rx="22" fill="var(--midnight)"/>
-        <circle cx="450" cy="92" r="26" fill="rgba(224,184,96,.16)"/>
-        <g transform="translate(437,79)" stroke="var(--gold-soft)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11.5 13 2l11 9.5"/><path d="M5 9v11h16V9"/><path d="M11 20v-6h4v6"/></g>
-        <text class="dlabel" x="450" y="138" font-size="17" fill="var(--paper)" text-anchor="middle">Your church's private home</text>
-        <text class="dsub" x="450" y="157" font-size="12.5" fill="var(--gold-soft)" text-anchor="middle">this is a relay</text>
-        <text class="dsub" x="450" y="176" font-size="13.5" fill="#cfc7b6" text-anchor="middle">holds all your messages</text>
-        <text class="dsub" x="450" y="194" font-size="13.5" fill="#cfc7b6" text-anchor="middle">(we host it, or you do)</text>
+        <rect x="322" y="34" width="276" height="192" rx="22" fill="var(--midnight)"/>
+        <circle cx="460" cy="82" r="25" fill="rgba(224,184,96,.16)"/>
+        <g transform="translate(448,70)" stroke="var(--gold-soft)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11.5 13 2l11 9.5"/><path d="M5 9v11h16V9"/><path d="M11 20v-6h4v6"/></g>
+        <text class="dlabel" x="460" y="134" font-size="16.5" fill="var(--paper)" text-anchor="middle">Your church's private home</text>
+        <text class="dsub" x="460" y="155" font-size="12.5" fill="var(--gold-soft)" text-anchor="middle">this is a relay</text>
+        <text class="dsub" x="460" y="178" font-size="13" fill="#cfc7b6" text-anchor="middle">holds all your messages</text>
+        <text class="dsub" x="460" y="198" font-size="13" fill="#cfc7b6" text-anchor="middle">(host your own, or we host it)</text>
       </g>
 
       <!-- RIGHT: members -->
       <g>
-        <rect x="668" y="68" width="212" height="104" rx="20" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
-        <circle cx="712" cy="106" r="20" fill="var(--sage-soft)"/>
-        <g transform="translate(704,94)" stroke="#345c41" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="0" width="16" height="24" rx="3"/><path d="M6 20h4"/></g>
-        <text class="dlabel" x="744" y="100" font-size="17" fill="var(--ink)">Members</text>
-        <text class="dsub" x="744" y="122" font-size="13.5" fill="var(--ink-2)">the app on</text>
-        <text class="dsub" x="744" y="140" font-size="13.5" fill="var(--ink-2)">their phone</text>
+        <rect x="692" y="74" width="208" height="112" rx="20" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <circle cx="738" cy="116" r="20" fill="var(--sage-soft)"/>
+        <g transform="translate(730,104)" stroke="#345c41" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="0" width="16" height="24" rx="3"/><path d="M6 20h4"/></g>
+        <text class="dlabel" x="772" y="110" font-size="16.5" fill="var(--ink)">Members</text>
+        <text class="dsub" x="772" y="131" font-size="13" fill="var(--ink-2)">the app on</text>
+        <text class="dsub" x="772" y="149" font-size="13" fill="var(--ink-2)">their phone</text>
       </g>
     </svg>
 
     <!-- Narrow layout (<760px): stacked vertically, top to bottom. All three boxes same
-         width (x=30, w=260) and same icon-left + text-beside layout. -->
-    <svg viewBox="0 0 320 432" role="img" aria-label="A church leader sets things up through the Steward console, which feeds into your church's private home — a relay that holds all your messages. Members connect to that same private home from the app on their phones." class="flow-narrow">
+         width (x=20, w=300) and same icon-left + text-beside layout, with even inset padding. -->
+    <svg viewBox="0 0 340 470" role="img" aria-label="A church leader sets things up through the Steward console, which feeds into your church's private home — a relay that holds all your messages. Members connect to that same private home from the app on their phones." class="flow-narrow">
       <defs>
         <marker id="arrowD1" markerWidth="9" markerHeight="9" refX="4.5" refY="6" orient="auto"><path d="M0 0 L9 0 L4.5 9 Z" fill="var(--clay)"/></marker>
         <marker id="arrowD2" markerWidth="9" markerHeight="9" refX="4.5" refY="6" orient="auto"><path d="M0 0 L9 0 L4.5 9 Z" fill="var(--sage)"/></marker>
       </defs>
       <!-- LEADER -->
       <g>
-        <rect x="30" y="8" width="260" height="96" rx="18" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
-        <circle cx="72" cy="56" r="20" fill="var(--clay-soft)"/>
-        <g transform="translate(61,45)" stroke="var(--clay)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="1" width="18" height="13" rx="2"/><path d="M5 19h8M9 14v5"/></g>
-        <text class="dlabel" x="106" y="51" font-size="16" fill="var(--ink)">Church leader</text>
-        <text class="dsub" x="106" y="71" font-size="13" fill="var(--ink-2)">sets it up (groups, rotas)</text>
+        <rect x="20" y="10" width="300" height="98" rx="18" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <circle cx="68" cy="59" r="20" fill="var(--clay-soft)"/>
+        <g transform="translate(57,48)" stroke="var(--clay)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="1" width="18" height="13" rx="2"/><path d="M5 19h8M9 14v5"/></g>
+        <text class="dlabel" x="104" y="54" font-size="16" fill="var(--ink)">Church leader</text>
+        <text class="dsub" x="104" y="74" font-size="13" fill="var(--ink-2)">sets it up (groups, rotas)</text>
       </g>
-      <line x1="160" y1="108" x2="160" y2="134" stroke="var(--clay)" stroke-width="2.5" stroke-linecap="round"/><path d="M153 133 L167 133 L160 144 Z" fill="var(--clay)"/>
-      <!-- RELAY (dark for prominence, same width + icon-left layout) -->
+      <line x1="170" y1="112" x2="170" y2="140" stroke="var(--clay)" stroke-width="2.5" stroke-linecap="round"/><path d="M163 139 L177 139 L170 150 Z" fill="var(--clay)"/>
+      <!-- RELAY (dark for prominence, same width + icon-left layout, generous padding) -->
       <g>
-        <rect x="30" y="152" width="260" height="118" rx="18" fill="var(--midnight)"/>
-        <circle cx="72" cy="200" r="20" fill="rgba(224,184,96,.16)"/>
-        <g transform="translate(60,188)" stroke="var(--gold-soft)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11.5 13 2l11 9.5"/><path d="M5 9v11h16V9"/><path d="M11 20v-6h4v6"/></g>
-        <text class="dlabel" x="106" y="187" font-size="13" fill="var(--paper)">Your church's private home</text>
-        <text class="dsub" x="106" y="206" font-size="12.5" fill="var(--gold-soft)">this is a relay</text>
-        <text class="dsub" x="106" y="226" font-size="13" fill="#cfc7b6">holds all your messages</text>
-        <text class="dsub" x="106" y="245" font-size="13" fill="#cfc7b6">(we host it, or you do)</text>
+        <rect x="20" y="158" width="300" height="130" rx="18" fill="var(--midnight)"/>
+        <circle cx="68" cy="210" r="20" fill="rgba(224,184,96,.16)"/>
+        <g transform="translate(56,198)" stroke="var(--gold-soft)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11.5 13 2l11 9.5"/><path d="M5 9v11h16V9"/><path d="M11 20v-6h4v6"/></g>
+        <text class="dlabel" x="104" y="194" font-size="14.5" fill="var(--paper)">Your church's private home</text>
+        <text class="dsub" x="104" y="214" font-size="12.5" fill="var(--gold-soft)">this is a relay</text>
+        <text class="dsub" x="104" y="236" font-size="13" fill="#cfc7b6">holds all your messages</text>
+        <text class="dsub" x="104" y="256" font-size="13" fill="#cfc7b6">(host your own, or we host it)</text>
       </g>
-      <line x1="160" y1="274" x2="160" y2="300" stroke="var(--sage)" stroke-width="2.5" stroke-linecap="round"/><path d="M153 299 L167 299 L160 310 Z" fill="var(--sage)"/>
+      <line x1="170" y1="292" x2="170" y2="320" stroke="var(--sage)" stroke-width="2.5" stroke-linecap="round"/><path d="M163 319 L177 319 L170 330 Z" fill="var(--sage)"/>
       <!-- MEMBERS -->
       <g>
-        <rect x="30" y="318" width="260" height="96" rx="18" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
-        <circle cx="72" cy="366" r="20" fill="var(--sage-soft)"/>
-        <g transform="translate(64,354)" stroke="#345c41" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="0" width="16" height="24" rx="3"/><path d="M6 20h4"/></g>
-        <text class="dlabel" x="106" y="361" font-size="16" fill="var(--ink)">Members</text>
-        <text class="dsub" x="106" y="381" font-size="13" fill="var(--ink-2)">the app on their phone</text>
+        <rect x="20" y="338" width="300" height="98" rx="18" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <circle cx="68" cy="387" r="20" fill="var(--sage-soft)"/>
+        <g transform="translate(60,375)" stroke="#345c41" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="0" width="16" height="24" rx="3"/><path d="M6 20h4"/></g>
+        <text class="dlabel" x="104" y="382" font-size="16" fill="var(--ink)">Members</text>
+        <text class="dsub" x="104" y="402" font-size="13" fill="var(--ink-2)">the app on their phone</text>
       </g>
     </svg>
   </div>
+  <p style="text-align:center;margin:16px auto 0"><a href="why.html#open" style="font-family:var(--font-ui);font-weight:700;font-size:14.5px;color:var(--clay-ink);text-decoration:none;border-bottom:1px solid color-mix(in oklab, var(--clay) 35%, transparent);padding-bottom:1px">Why a relay? →</a></p>
   <p class="dcaption">The leader sets the church up and it flows into your private home. Members connect to that same home to read along and take part.</p>
 </section>
 
@@ -476,7 +477,7 @@
   <div class="wrap">
     <a href="#" class="wm"><svg class="halo" style="font-size:30px;color:var(--paper);--spark:var(--gold)"><use href="#to-halo" /></svg> Trinity<span class="one">One</span></a>
     <p>A church home of your own — Bible, prayer, chat, and care, all in one place.</p>
-    <nav style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px 20px;margin-top:26px;font-family:var(--font-ui);font-size:14.5px"><a href="#how" style="color:var(--paper);text-decoration:none;opacity:.85">How it works</a><a href="#mission" style="color:var(--paper);text-decoration:none;opacity:.85">For every church</a><a href="features.html" style="color:var(--paper);text-decoration:none;opacity:.85">Features</a><a href="welcome-churches.html" style="color:var(--paper);text-decoration:none;opacity:.85">For churches</a><a href="TrinityOne Help.html" style="color:var(--gold-soft);text-decoration:none;font-weight:700">Help</a></nav>
+    <nav style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px 20px;margin-top:26px;font-family:var(--font-ui);font-size:14.5px"><a href="#how" style="color:var(--paper);text-decoration:none;opacity:.85">How it works</a><a href="#mission" style="color:var(--paper);text-decoration:none;opacity:.85">For every church</a><a href="why.html" style="color:var(--paper);text-decoration:none;opacity:.85">Why</a><a href="downloads.html" style="color:var(--paper);text-decoration:none;opacity:.85">Downloads</a><a href="features.html" style="color:var(--paper);text-decoration:none;opacity:.85">Features</a><a href="welcome-churches.html" style="color:var(--paper);text-decoration:none;opacity:.85">For churches</a><a href="TrinityOne Help.html" style="color:var(--gold-soft);text-decoration:none;font-weight:700">Help</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">GitHub</a><a href="https://github.com/TrinityOneAdmin/TrinityOne/issues" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">Report an issue</a></nav>
     <div class="copy">© 2026 TrinityOne · Made for the church.</div>
   </div>
 </footer>
