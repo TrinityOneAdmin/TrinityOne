@@ -5,6 +5,7 @@
 
 const UPDATE_MANIFEST = 'https://app.trinityone.church/apk-latest.json';   // { versionCode, versionName, url }
 const UPDATE_APK_URL = 'https://app.trinityone.church/trinityone.apk';
+const _updLaunched = new Set();   // module-level one-shot: version codes we've already launched a download for. Survives component remounts (a per-component ref does NOT), so the download fires AT MOST once per version per app session — the real fix for repeated downloads from one Update tap.
 
 function UpdateBanner({ ctx }) {
   const [upd, setUpd] = React.useState(null);   // { name, code } once a newer build is found
@@ -33,17 +34,18 @@ function UpdateBanner({ ctx }) {
   if (!upd) return null;
   const later = () => { try { localStorage.setItem('trinityone.updateSnoozed', String(upd.code)); } catch (e) {} setUpd(null); };
   const get = () => {
-    if (busyRef.current) return;                       // ref blocks rapid double/triple taps instantly (state lags a render → multiple downloads)
+    const code = (upd && upd.code) || 0;
+    // HARD one-shot: the module-level set survives remounts AND any number of taps, so the download launches
+    // at most ONCE per version per session. This is what finally stops the repeated downloads.
+    if (_updLaunched.has(code)) { setUpd(null); return; }
+    _updLaunched.add(code);
     busyRef.current = true;
     setBusy(true);
-    const code = (upd && upd.code) || 0;
-    // mark this version handled BEFORE launching the download. Without this, every reopen re-shows the banner
-    // and another tap fires another download — the real cause of the "trinityone-x.y.z (1)(2)(3).apk" pile-up.
-    try { localStorage.setItem('trinityone.updateSnoozed', String(code)); } catch (e) {}
+    try { localStorage.setItem('trinityone.updateSnoozed', String(code)); } catch (e) {}   // persist too: a reopen never re-shows/re-downloads this version
+    setUpd(null);                                       // dismiss the banner immediately — no second tap is even possible
     // cache-bust by version so a CDN (Cloudflare) can't hand back a stale APK → downgrade → "App not installed"
     const url = UPDATE_APK_URL + '?v=' + (code || Date.now());
-    try { window.open(url, '_blank'); } catch (e) { try { location.href = url; } catch (e2) {} }
-    setTimeout(() => setUpd(null), 700);               // dismiss once the download has launched — one download per version, banner returns only for a newer build
+    try { window.open(url, '_blank'); } catch (e) {}   // single launch; the location.href fallback was a second download path — removed
   };
   return (
     <div style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top, 0px) + 10px)', left: 12, right: 12, zIndex: 70, margin: '0 auto', maxWidth: 460,

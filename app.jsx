@@ -510,16 +510,27 @@ function App() {
   const [careSlots, setCareSlots] = useA([]);
   const [careSkips, setCareSkips] = useA([]);
   const [optCare, setOptCare] = useA({});   // optimistic care fill/clear ('needId|iso' -> 'fill'|'clear') so "I'll help" flips instantly
+  const careNpRef = React.useRef(null);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
-    if (!np || !F || !F.subscribeMealsSettings) { setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); return; }
-    // paint instantly from the last-known cache so the card doesn't blink out on reload while the relay
-    // round-trips; each subscription then refreshes the state AND re-caches it for next time.
-    setCareSettings(lsGet('trinityone.care.s.' + np, { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }));
-    setCareNeeds(lsGet('trinityone.care.n.' + np, []));
-    setCareSlots(lsGet('trinityone.care.sl.' + np, []));
-    setCareSkips(lsGet('trinityone.care.sk.' + np, []));
+    if (!np || !F || !F.subscribeMealsSettings) { setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); careNpRef.current = null; return; }
+    const churchChanged = careNpRef.current !== np;
+    careNpRef.current = np;
+    // On a CHURCH CHANGE, paint from this church's cache (or empty). On a mere RECONNECT (same church), do NOT
+    // reset to empty defaults — that reset, on a cold cache, is what made the care banner/card flash off-then-on.
+    // On reconnect, refresh from cache only when it actually holds data; otherwise leave the sticky-sub state be.
+    if (churchChanged) {
+      setCareSettings(lsGet('trinityone.care.s.' + np, { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }));
+      setCareNeeds(lsGet('trinityone.care.n.' + np, []));
+      setCareSlots(lsGet('trinityone.care.sl.' + np, []));
+      setCareSkips(lsGet('trinityone.care.sk.' + np, []));
+    } else {
+      const cs = lsGet('trinityone.care.s.' + np, null); if (cs) setCareSettings(cs);
+      const cn = lsGet('trinityone.care.n.' + np, null); if (cn) setCareNeeds(cn);
+      const csl = lsGet('trinityone.care.sl.' + np, null); if (csl) setCareSlots(csl);
+      const csk = lsGet('trinityone.care.sk.' + np, null); if (csk) setCareSkips(csk);
+    }
     const subs = [
       F.subscribeMealsSettings(np, s => { setCareSettings(s); lsSet('trinityone.care.s.' + np, s); }),
       F.subscribeCareNeeds(np, n => { setCareNeeds(n); lsSet('trinityone.care.n.' + np, n); }),
