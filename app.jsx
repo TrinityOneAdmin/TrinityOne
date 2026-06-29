@@ -472,29 +472,37 @@ function App() {
   }, [activeChurch, churches, connTick]);
   // reading plans the active church shares (steward console publishes them) -> shown in Plans
   const [churchPlans, setChurchPlans] = useA([]);
+  // ── lazy load: paint Today + community essentials first, then fire heavier non-essential subscriptions
+  // (member directory, plans, events, safeguarding, networks) ~1.2s later so they don't contend with first
+  // paint for the single relay connection — the measured first-load cost is the connect + initial fetch.
+  const [lazyReady, setLazyReady] = useA(false);
+  useAE(() => { const t = setTimeout(() => setLazyReady(true), 1200); return () => clearTimeout(t); }, []);
   useAE(() => {
+    if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchPlans)) { setChurchPlans([]); return; }
     return window.Fellowship.subscribeChurchPlans(np, setChurchPlans);
-  }, [activeChurch, churches, connTick]);
+  }, [activeChurch, churches, connTick, lazyReady]);
   // live member count for the active church (so the switcher doesn't read "0 members")
   useAE(() => {
+    if (!lazyReady) return;
     const c = churches.find(x => x.id === activeChurch);
     if (!c || !c.npub || !(window.Fellowship && window.Fellowship.subscribeChurchMemberCount)) return;
     return window.Fellowship.subscribeChurchMemberCount(c.npub, (n) => setChurches(cs => cs.map(x => x.id === activeChurch ? { ...x, members: n } : x)));
-  }, [activeChurch, connTick]);
+  }, [activeChurch, connTick, lazyReady]);
   // prefetch the People directory at app load (not when the screen opens) so it's ready before the
   // member taps "People" — the roster streams in the background while they read elsewhere.
   const [churchPeople, setChurchPeople] = useA([]);
   const [churchPeopleLoading, setChurchPeopleLoading] = useA(false);
   useAE(() => {
+    if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchMembers)) { setChurchPeople([]); setChurchPeopleLoading(false); return; }
     setChurchPeopleLoading(true);
     const t = setTimeout(() => setChurchPeopleLoading(false), 9000);   // safety: stop "loading" even on a slow relay
     const off = window.Fellowship.subscribeChurchMembers(np, (m, done) => { setChurchPeople(m); if (done) { setChurchPeopleLoading(false); clearTimeout(t); } });
     return () => { clearTimeout(t); if (off) off(); };
-  }, [activeChurch, connTick]);
+  }, [activeChurch, connTick, lazyReady]);
   // devotionals the active church shares (text/Markdown reflections)
   const [churchDevos, setChurchDevos] = useA([]);
   const [openDevo, setOpenDevo] = useA(null);   // a church devotional opened for reading
@@ -552,10 +560,11 @@ function App() {
   useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyReqReplies) return window.Fellowship.subscribeMyReqReplies(setServReplies); }, [activeChurch, idTick, connTick]);
   useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyRsvps) return window.Fellowship.subscribeMyRsvps(setMyRsvps); }, [activeChurch, idTick, connTick]);
   useAE(() => {
+    if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchEvents)) { setChurchEvents([]); return; }
     return window.Fellowship.subscribeChurchEvents(np, setChurchEvents);
-  }, [activeChurch, churches, connTick]);
+  }, [activeChurch, churches, connTick, lazyReady]);
   // the church's published rota/rosters/services — lets a member see who else is on the team that
   // day, who they can ask to swap, and a month view of services + events.
   const [churchRotas, setChurchRotas] = useA([]);
@@ -579,11 +588,12 @@ function App() {
   // Used to show a child only child-safe groups and to gate DMs (the relay enforces both regardless).
   const [safeguard, setSafeguard] = useA({ minors: [], approved: [], guardians: {}, isMinor: false });
   useAE(() => {
+    if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
     if (!np || !F || !F.subscribeChurchSafeguard) { setSafeguard({ minors: [], approved: [], guardians: {}, isMinor: false }); return; }
     return F.subscribeChurchSafeguard(np, setSafeguard);
-  }, [activeChurch, churches, connTick]);
+  }, [activeChurch, churches, connTick, lazyReady]);
   // joining: whether the active church gates joining behind steward approval, and whether I'm still pending
   const [joinState, setJoinState] = useA({ approval: false, isAdmitted: true, isPending: false });
   const joinChurchRef = React.useRef(null);
@@ -621,18 +631,20 @@ function App() {
   const _geNp = (churches.find(c => c.id === activeChurch) || {}).npub;
   const _geGidsKey = churchGroups.map(g => g.id).filter(Boolean).sort().join(',');
   useAE(() => {
+    if (!lazyReady) return;
     const F = window.Fellowship; const gids = _geGidsKey ? _geGidsKey.split(',') : [];
     if (!_geNp || !F || !F.subscribeGroupEvents || !gids.length) { setGroupEvents([]); return; }
     return F.subscribeGroupEvents(_geNp, gids, setGroupEvents);
-  }, [_geNp, _geGidsKey, connTick]);
+  }, [_geNp, _geGidsKey, connTick, lazyReady]);
   // the wider networks the active church belongs to (+ resolve their names) — members can follow them
   const [churchNetworks, setChurchNetworks] = useA([]);
   const [networkNames, setNetworkNames] = useA({});
   useAE(() => {
+    if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { setChurchNetworks([]); return; }
     return window.Fellowship.subscribeChurchNetworks(np, setChurchNetworks);
-  }, [activeChurch, churches, connTick]);
+  }, [activeChurch, churches, connTick, lazyReady]);
   useAE(() => {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
     const offs = churchNetworks.map(n => window.Fellowship.subscribeChurchProfile(n.npub, (p) => { if (p && p.name) setNetworkNames(m => ({ ...m, [n.networkPub]: p.name })); }));
