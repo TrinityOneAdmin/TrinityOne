@@ -128,6 +128,29 @@
   .benefit h3 { font-family: var(--font-display); font-weight: 700; font-size: 20px; margin: 2px 0 7px; }
   .benefit p { margin: 0; color: var(--ink-2); font-size: 16px; line-height: 1.55; }
 
+  /* ── Mission (both ends of the church) ── */
+  .mission { background: var(--midnight); color: var(--paper); position: relative; overflow: hidden; }
+  .mission::after { content:''; position:absolute; right:-90px; top:-90px; width:340px; height:340px; border-radius:999px; pointer-events:none; background: radial-gradient(circle, color-mix(in oklab, var(--gold) 26%, transparent), transparent 60%); mix-blend-mode: screen; }
+  .mission .wrap { position: relative; z-index: 1; }
+  .mission h2 { color: var(--paper); }
+  .mission .intro { color: color-mix(in oklab, var(--paper) 78%, transparent); }
+  .mission-two { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 50px; max-width: 880px; margin-left: auto; margin-right: auto; }
+  .m-card { padding: 32px; border-radius: var(--r-lg); background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.12); }
+  .m-card .pic { width: 56px; height: 56px; border-radius: 16px; display: flex; align-items: center; justify-content: center; margin-bottom: 20px; }
+  .m-card h3 { font-family: var(--font-display); font-weight: 700; font-size: 22px; margin: 0 0 10px; color: var(--paper); }
+  .m-card p { margin: 0; color: color-mix(in oklab, var(--paper) 76%, transparent); font-size: 16.5px; line-height: 1.6; }
+  .mission .purpose { font-family: var(--font-serif); font-size: clamp(19px,2.5vw,23px); line-height: 1.5; color: var(--gold-soft); max-width: 640px; margin: 44px auto 0; text-align: center; text-wrap: pretty; }
+
+  /* ── Flow diagram ── */
+  .flow { padding: 84px 0; }
+  .flow .diagram { max-width: 900px; margin: 48px auto 0; }
+  .flow svg { width: 100%; height: auto; display: block; }
+  .flow .dlabel { font-family: var(--font-ui); font-weight: 700; }
+  .flow .dsub { font-family: var(--font-ui); font-weight: 500; }
+  .flow .dcaption { text-align: center; font-size: 14.5px; color: var(--ink-3); max-width: 540px; margin: 22px auto 0; line-height: 1.55; }
+  .flow .flow-narrow { display: none; }
+  .flow .diagram .flow-narrow { max-width: 340px; margin: 0 auto; }
+
   /* ── Yours line ── */
   .yours { text-align: center; padding: 70px 28px; }
   .yours .line { font-family: var(--font-serif); font-size: clamp(24px,3.4vw,34px); line-height: 1.4; color: var(--ink); max-width: 700px; margin: 18px auto 0; text-wrap: pretty; }
@@ -149,6 +172,11 @@
   @media (max-width: 820px) {
     .steps { grid-template-columns: 1fr; max-width: 460px; }
     .benefits { grid-template-columns: 1fr; max-width: 460px; }
+    .mission-two { grid-template-columns: 1fr; max-width: 460px; }
+  }
+  @media (max-width: 760px) {
+    .flow .flow-wide { display: none; }
+    .flow .flow-narrow { display: block; }
   }
   @media (max-width: 560px) {
     .wrap { padding: 0 20px; }
@@ -269,21 +297,135 @@
         <p>Young people are kept safe, with parents and trusted leaders looking out for them.</p>
       </div>
     </div>
-    <div class="benefit" style="grid-column: 1 / -1;">
+    <div class="benefit">
       <div class="pic" style="background:var(--clay-soft);color:var(--clay)"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5s-7-4.4-9.2-9A4.7 4.7 0 0 1 12 7a4.7 4.7 0 0 1 9.2 4.5c-2.2 4.6-9.2 9-9.2 9Z"/></svg></div>
       <div>
         <h3>Practical care</h3>
         <p>When someone is unwell or going through a hard time, it's easy to rally round — like organising meals so no one is forgotten.</p>
       </div>
     </div>
+    <div class="benefit">
+      <div class="pic" style="background:var(--sage-soft);color:#345c41"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5h14a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z"/><path d="M3 10.5h18"/><circle cx="12" cy="14" r="1.6"/></svg></div>
+      <div>
+        <h3>Serving rotas &amp; giving</h3>
+        <p>Plan who's serving each Sunday, and — for churches set up to take it — receive tithes and offerings right in the app.</p>
+      </div>
+    </div>
   </div>
+</section>
+
+<!-- MISSION — both ends of the church -->
+<section class="mission band" id="mission">
+  <div class="wrap">
+    <div class="eyebrow"><span class="to-pill" style="background:rgba(255,255,255,.12);color:var(--gold-soft)">Made for every church</span></div>
+    <h2>One app, for the whole family of God</h2>
+    <p class="intro">From believers gathering quietly where it isn't safe to be online, to a church with a full Sunday rota and online giving. The same app, kept private to your church.</p>
+    <div class="mission-two">
+      <div class="m-card">
+        <div class="pic" style="background:rgba(224,184,96,.16);color:var(--gold-soft)"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 19 6v5.2c0 4.2-2.9 7-7 8.3-4.1-1.3-7-4.1-7-8.3V6Z"/><path d="M12 9v3.5M12 15.5h.01"/></svg></div>
+        <h3>Where it isn't safe</h3>
+        <p>For the church under pressure, this is a quiet, private place to gather. Nothing is held by a big company that could be forced to hand it over or switch it off. It works over the thinnest connection, and a church can hold it on its own server if it has to.</p>
+      </div>
+      <div class="m-card">
+        <div class="pic" style="background:rgba(94,140,106,.22);color:#9ecbab"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12.5 12 4l8.5 8.5"/><path d="M5.5 10.5V19a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-8.5"/><path d="M10 20v-5h4v5"/></svg></div>
+        <h3>A full week's life</h3>
+        <p>For the well-resourced church, it's the whole week in one place: the Bible, groups, prayer, this week's teaching, serving rotas, watching over the children — and giving, for churches set up to receive it.</p>
+      </div>
+    </div>
+    <p class="purpose">Keeping things private to your church is how we keep churches under pressure safe — and it protects everyone else along the way.</p>
+  </div>
+</section>
+
+<!-- FLOW DIAGRAM — the three pieces -->
+<section class="flow wrap" id="pieces">
+  <div class="eyebrow"><span class="to-pill">The three pieces</span></div>
+  <h2 style="font-family:var(--font-display);font-weight:700;font-size:clamp(30px,4.6vw,46px);letter-spacing:-1px;text-align:center;margin:16px auto 0;max-width:720px;line-height:1.06">How it all fits together</h2>
+  <p class="intro" style="text-align:center;font-family:var(--font-serif);font-size:clamp(18px,2.3vw,21px);color:var(--ink-2);max-width:600px;margin:18px auto 0;line-height:1.55">A church leader sets things up, your messages live in one private home, and members join from their phones.</p>
+  <div class="diagram">
+    <!-- Wide layout (>=760px): leader → relay (centre) ← members -->
+    <svg viewBox="0 0 900 240" role="img" aria-label="A church leader sets things up through the Steward console, which feeds into your church's private home (the relay). Members connect to that same private home from the app on their phones." class="flow-wide">
+      <defs>
+        <marker id="arrowR" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 Z" fill="var(--clay)"/></marker>
+        <marker id="arrowL" markerWidth="9" markerHeight="9" refX="3" refY="4.5" orient="auto-start-reverse"><path d="M0 0 L9 4.5 L0 9 Z" fill="var(--sage)"/></marker>
+      </defs>
+      <!-- connectors -->
+      <line x1="232" y1="120" x2="330" y2="120" stroke="var(--clay)" stroke-width="3" stroke-linecap="round" marker-end="url(#arrowR)"/>
+      <line x1="668" y1="120" x2="570" y2="120" stroke="var(--sage)" stroke-width="3" stroke-linecap="round" marker-end="url(#arrowL)"/>
+
+      <!-- LEFT: leader / console -->
+      <g>
+        <rect x="20" y="68" width="212" height="104" rx="20" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <circle cx="64" cy="106" r="20" fill="var(--clay-soft)"/>
+        <g transform="translate(52,94)" stroke="var(--clay)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="1" width="18" height="13" rx="2"/><path d="M5 19h8M9 14v5"/></g>
+        <text class="dlabel" x="96" y="100" font-size="17" fill="var(--ink)">Church leader</text>
+        <text class="dsub" x="96" y="122" font-size="13.5" fill="var(--ink-2)">sets it up</text>
+        <text class="dsub" x="96" y="140" font-size="13.5" fill="var(--ink-2)">(groups, rotas)</text>
+      </g>
+
+      <!-- CENTRE: relay -->
+      <g>
+        <rect x="330" y="40" width="240" height="160" rx="22" fill="var(--midnight)"/>
+        <circle cx="450" cy="92" r="26" fill="rgba(224,184,96,.16)"/>
+        <g transform="translate(437,79)" stroke="var(--gold-soft)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11.5 13 2l11 9.5"/><path d="M5 9v11h16V9"/><path d="M11 20v-6h4v6"/></g>
+        <text class="dlabel" x="450" y="142" font-size="17" fill="var(--paper)" text-anchor="middle">Your church's private home</text>
+        <text class="dsub" x="450" y="164" font-size="13.5" fill="#cfc7b6" text-anchor="middle">holds all your messages</text>
+        <text class="dsub" x="450" y="182" font-size="13.5" fill="#cfc7b6" text-anchor="middle">(we host it, or you do)</text>
+      </g>
+
+      <!-- RIGHT: members -->
+      <g>
+        <rect x="668" y="68" width="212" height="104" rx="20" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <circle cx="712" cy="106" r="20" fill="var(--sage-soft)"/>
+        <g transform="translate(704,94)" stroke="#345c41" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="0" width="16" height="24" rx="3"/><path d="M6 20h4"/></g>
+        <text class="dlabel" x="744" y="100" font-size="17" fill="var(--ink)">Members</text>
+        <text class="dsub" x="744" y="122" font-size="13.5" fill="var(--ink-2)">the app on</text>
+        <text class="dsub" x="744" y="140" font-size="13.5" fill="var(--ink-2)">their phone</text>
+      </g>
+    </svg>
+
+    <!-- Narrow layout (<760px): stacked vertically, top to bottom -->
+    <svg viewBox="0 0 320 470" role="img" aria-label="A church leader sets things up through the Steward console, which feeds into your church's private home (the relay). Members connect to that same private home from the app on their phones." class="flow-narrow">
+      <defs>
+        <marker id="arrowD1" markerWidth="9" markerHeight="9" refX="4.5" refY="6" orient="auto"><path d="M0 0 L9 0 L4.5 9 Z" fill="var(--clay)"/></marker>
+        <marker id="arrowD2" markerWidth="9" markerHeight="9" refX="4.5" refY="6" orient="auto"><path d="M0 0 L9 0 L4.5 9 Z" fill="var(--sage)"/></marker>
+      </defs>
+      <!-- LEADER -->
+      <g>
+        <rect x="40" y="10" width="240" height="92" rx="18" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <circle cx="80" cy="56" r="19" fill="var(--clay-soft)"/>
+        <g transform="translate(69,45)" stroke="var(--clay)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="1" width="18" height="13" rx="2"/><path d="M5 19h8M9 14v5"/></g>
+        <text class="dlabel" x="112" y="52" font-size="16" fill="var(--ink)">Church leader</text>
+        <text class="dsub" x="112" y="72" font-size="13" fill="var(--ink-2)">sets it up (groups, rotas)</text>
+      </g>
+      <line x1="160" y1="106" x2="160" y2="150" stroke="var(--clay)" stroke-width="3" stroke-linecap="round" marker-end="url(#arrowD1)"/>
+      <!-- RELAY -->
+      <g>
+        <rect x="20" y="160" width="280" height="130" rx="20" fill="var(--midnight)"/>
+        <circle cx="160" cy="200" r="24" fill="rgba(224,184,96,.16)"/>
+        <g transform="translate(148,188)" stroke="var(--gold-soft)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11.5 13 2l11 9.5"/><path d="M5 9v11h16V9"/><path d="M11 20v-6h4v6"/></g>
+        <text class="dlabel" x="160" y="248" font-size="16" fill="var(--paper)" text-anchor="middle">Your church's private home</text>
+        <text class="dsub" x="160" y="268" font-size="13" fill="#cfc7b6" text-anchor="middle">holds all your messages</text>
+        <text class="dsub" x="160" y="285" font-size="13" fill="#cfc7b6" text-anchor="middle">(we host it, or you do)</text>
+      </g>
+      <line x1="160" y1="294" x2="160" y2="338" stroke="var(--sage)" stroke-width="3" stroke-linecap="round" marker-end="url(#arrowD2)"/>
+      <!-- MEMBERS -->
+      <g>
+        <rect x="40" y="348" width="240" height="100" rx="18" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <circle cx="80" cy="398" r="19" fill="var(--sage-soft)"/>
+        <g transform="translate(72,386)" stroke="#345c41" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="0" y="0" width="16" height="24" rx="3"/><path d="M6 20h4"/></g>
+        <text class="dlabel" x="112" y="392" font-size="16" fill="var(--ink)">Members</text>
+        <text class="dsub" x="112" y="412" font-size="13" fill="var(--ink-2)">the app on their phone</text>
+      </g>
+    </svg>
+  </div>
+  <p class="dcaption">The leader sets the church up and it flows into your private home. Members connect to that same home to read along and take part.</p>
 </section>
 
 <!-- IT'S YOURS -->
 <section class="yours">
   <div class="wrap">
     <svg class="halo" style="font-size:54px;color:var(--ink);--spark:var(--gold)"><use href="#to-halo" /></svg>
-    <p class="line">Every church gets its own private space — it stays private to your church. It's yours, not a tech company's.</p>
+    <p class="line">Every church gets its own private space — warm, quiet, and entirely your own.</p>
   </div>
 </section>
 
