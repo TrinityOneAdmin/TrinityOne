@@ -278,7 +278,18 @@ function RunsheetSheet({ open, item, onClose, ctx }) {
   );
 }
 
-function MyMonth({ ctx, onManage }) {
+// compact "Order of service" link shown under a serving slot when its run sheet exists (upcoming list + calendar)
+function RunsheetLink({ ctx, it, onOpen }) {
+  const has = (ctx.churchRunsheets || []).some(r => r.service === it.serviceId && (r.items || []).length);
+  if (!has) return null;
+  return (
+    <button onClick={() => onOpen(it)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, width: '100%', padding: '9px 12px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--clay)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+      <Icon name="note" size={14} color="var(--clay)" /> Order of service
+    </button>
+  );
+}
+
+function MyMonth({ ctx, onManage, onRunsheet }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const todayIso = svIsoLocal(today);
   const [view, setView] = useSv(() => ({ y: today.getFullYear(), m: today.getMonth() }));
@@ -357,7 +368,8 @@ function MyMonth({ ctx, onManage }) {
             </div>
           ))}
           {selServ.map(it => (
-            <button key={it.id} onClick={() => onManage(it)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+            <div key={it.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <button onClick={() => onManage(it)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', width: '100%' }}>
               <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${it.accent || 'var(--sage)'} 15%, var(--surface))`, color: it.accent || 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={it.icon || 'hand'} size={20} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>Serving · {it.teamName}</div>
@@ -365,6 +377,8 @@ function MyMonth({ ctx, onManage }) {
               </div>
               <span style={{ fontSize: 11.5, fontWeight: 700, color: '#345c41', background: 'var(--sage-soft)', borderRadius: 999, padding: '4px 10px' }}>Confirmed</span>
             </button>
+            <RunsheetLink ctx={ctx} it={it} onOpen={onRunsheet} />
+            </div>
           ))}
           {selEv.map(e => (
             <div key={(e._networkPub || '') + e.id} style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', padding: 14 }}>
@@ -542,7 +556,8 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             {upcoming.length > (next ? 1 : 0) ? <SectionLabel>Your upcoming</SectionLabel> : null}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22 }}>
               {upcoming.filter(it => !next || it.id !== next.id).map(it => (
-                <button key={it.id} onClick={() => setSheet({ kind: 'manage', item: it })} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+                <div key={it.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <button onClick={() => setSheet({ kind: 'manage', item: it })} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', width: '100%' }}>
                   <ServDateBlock iso={it.date} accent={it.accent || 'var(--clay)'} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Icon name={it.icon || 'hand'} size={16} color={it.accent || 'var(--clay)'} /><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{it.teamName}</span></div>
@@ -550,6 +565,8 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   </div>
                   <span style={{ fontSize: 11.5, fontWeight: 700, color: '#345c41', background: 'var(--sage-soft)', borderRadius: 999, padding: '4px 10px' }}>Confirmed</span>
                 </button>
+                <RunsheetLink ctx={ctx} it={it} onOpen={(x) => setSheet({ kind: 'runsheet', item: x })} />
+                </div>
               ))}
             </div>
 
@@ -658,7 +675,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
         ) : tab === 'care' ? (
           <CareCard ctx={ctx} embedded />
         ) : (
-          <MyMonth ctx={ctx} onManage={(it) => setSheet({ kind: 'manage', item: it })} />
+          <MyMonth ctx={ctx} onManage={(it) => setSheet({ kind: 'manage', item: it })} onRunsheet={(it) => setSheet({ kind: 'runsheet', item: it })} />
         )}
       </div>
 
