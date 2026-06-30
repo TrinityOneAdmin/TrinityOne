@@ -104,12 +104,23 @@
 
   /* ── Hero ── */
   .hero { position: relative; overflow: hidden; background: radial-gradient(110% 80% at 78% -8%, var(--gold-tint), transparent 46%), var(--paper); }
-  .hero .wrap { padding: 78px 28px 66px; text-align: center; }
-  .hero h1 { font-family: var(--font-display); font-weight: 800; font-size: clamp(44px, 8vw, 78px); line-height: .98; letter-spacing: -2px; margin: 22px auto 0; max-width: 760px; }
+  .hero .wrap { padding: 76px 28px 70px; display: grid; grid-template-columns: 1.05fr .95fr; gap: 40px; align-items: center; }
+  .hero h1 { font-family: var(--font-display); font-weight: 800; font-size: clamp(42px, 6vw, 70px); line-height: .98; letter-spacing: -2px; margin: 22px 0 0; }
   .hero h1 .one { color: var(--clay); }
-  .hero .sub { font-family: var(--font-serif); font-size: clamp(20px, 2.6vw, 25px); line-height: 1.5; color: var(--ink-2); max-width: 620px; margin: 24px auto 0; text-wrap: pretty; }
-  .hero .cta { display: flex; gap: 14px; margin-top: 34px; flex-wrap: wrap; justify-content: center; }
-  .hero .free { font-family: var(--font-serif); font-size: 17px; color: var(--ink-2); font-weight: 600; margin: 20px 0 0; }
+  .hero .sub { font-family: var(--font-serif); font-size: clamp(19px, 2.4vw, 23px); line-height: 1.5; color: var(--ink-2); max-width: 520px; margin: 22px 0 0; text-wrap: pretty; }
+  .hero .cta { display: flex; gap: 14px; margin-top: 30px; flex-wrap: wrap; }
+  .hero .free { font-family: var(--font-serif); font-size: 16px; color: var(--ink-2); font-weight: 600; margin: 18px 0 0; }
+
+  /* feature pills — the breadth at a glance */
+  .feat-pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 0; }
+  .feat-pills span { font-family: var(--font-ui); font-weight: 600; font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); padding: 7px 13px; border-radius: 999px; box-shadow: var(--shadow-sm); }
+  .feat-pills span.is-heart { color: var(--clay-ink); font-weight: 700; background: var(--clay-soft); border-color: color-mix(in oklab, var(--clay) 24%, var(--line)); }
+
+  /* phone mockup (ported from welcome.html) */
+  .phone-stage { display: flex; justify-content: center; align-items: center; position: relative; }
+  .phone-stage::before { content:''; position:absolute; width:340px; height:340px; border-radius:999px; background: radial-gradient(circle, color-mix(in oklab, var(--clay) 18%, transparent), transparent 62%); }
+  .phone-embed { width: 280px; height: 604px; position: relative; overflow: hidden; border-radius: 39px; background: linear-gradient(150deg,#2b2b2e,#0d0d0f 60%); box-shadow: 0 40px 70px rgba(40,30,20,.34), 0 0 0 1px rgba(0,0,0,.4); }
+  .phone-embed img { display: block; border-radius: 39px; }
 
   /* ── Generic band ── */
   .band { padding: 84px 0; }
@@ -180,6 +191,12 @@
     .benefits { grid-template-columns: 1fr; max-width: 460px; }
     .mission-two { grid-template-columns: 1fr; max-width: 460px; }
     nav .links { display: none; }
+    /* hero stacks: text first, phone below */
+    .hero .wrap { grid-template-columns: 1fr; text-align: center; justify-items: center; gap: 36px; }
+    .hero h1, .hero .sub { margin-left: auto; margin-right: auto; }
+    .hero .sub { max-width: 560px; }
+    .hero .cta, .feat-pills { justify-content: center; }
+    .phone-stage { order: 1; }
   }
   @media (max-width: 760px) {
     .flow .flow-wide { display: none; }
@@ -241,14 +258,22 @@
 <!-- HERO -->
 <header class="hero">
   <div class="wrap">
-    <span class="to-pill"><svg class="halo" style="font-size:15px;color:var(--clay-ink);--spark:var(--clay-ink)"><use href="#to-halo" /></svg> For your church</span>
-    <h1>A church home<br/>of your own.</h1>
-    <p class="sub">One simple app that keeps your whole church close all week — reading the Bible, praying, chatting, and looking after one another.</p>
-    <div class="cta">
-      <a href="#start" class="to-btn to-btn--clay">Start your church</a>
-      <a href="downloads.html" class="to-btn to-btn--ghost">Join your church</a>
+    <div>
+      <span class="to-pill"><svg class="halo" style="font-size:15px;color:var(--clay-ink);--spark:var(--clay-ink)"><use href="#to-halo" /></svg> For your church</span>
+      <h1>A church home<br/>of your own.</h1>
+      <p class="sub">God's Word at the heart of it all — and around it, everything your church needs to live it out together: sermons, reading plans, devotionals, prayer, serving rotas, and caring for one another, in one app.</p>
+      <div class="feat-pills" aria-label="What's inside">
+        <span class="is-heart">The Bible</span><span>Sermons</span><span>Reading plans</span><span>Devotionals</span><span>Prayer</span><span>Serving rotas</span><span>Care</span>
+      </div>
+      <div class="cta">
+        <a href="#start" class="to-btn to-btn--clay">Start your church</a>
+        <a href="downloads.html" class="to-btn to-btn--ghost">Join your church</a>
+      </div>
+      <p class="free">Free to start, and always free to use.</p>
     </div>
-    <p class="free">Free to start, and always free to use.</p>
+    <div class="phone-stage">
+      <div class="phone-embed"><img src="welcome-app-today.png" alt="The TrinityOne app — the Today screen" width="280" height="604" style="width:280px;height:604px;object-fit:cover" loading="eager" decoding="async" /></div>
+    </div>
   </div>
 </header>
 
@@ -292,27 +317,48 @@
 <section class="wrap band" id="what">
   <div class="eyebrow"><span class="to-pill">All in one place</span></div>
   <h2>Your church's life, together all week</h2>
-  <p class="intro">A warm, private space for the things you already do as a church — gathered into one friendly app.</p>
+  <p class="intro">Scripture is the heart of it. Everything else here — the way you gather, pray, serve, and care — simply draws you back to time in God's Word together.</p>
   <div class="benefits">
     <div class="benefit">
       <div class="pic" style="background:var(--clay-soft);color:var(--clay)"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5.6C10.4 4.5 8.2 4 5.8 4 4.8 4 4 4.8 4 5.8v11.4c0 1 .8 1.6 1.8 1.6 2.4 0 4.6.5 6.2 1.6 1.6-1.1 3.8-1.6 6.2-1.6 1 0 1.8-.6 1.8-1.6V5.8C20 4.8 19.2 4 18.2 4c-2.4 0-4.6.5-6.2 1.6Z"/><path d="M12 5.6v13.4"/></svg></div>
       <div>
-        <h3>Read the Bible</h3>
-        <p>A clear, beautiful Bible to read each day, with large, easy-to-read text.</p>
-      </div>
-    </div>
-    <div class="benefit">
-      <div class="pic" style="background:var(--sage-soft);color:#345c41"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.2a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2H10l-4.2 3.2v-3.2a2 2 0 0 1-1.3-1.9Z"/><path d="M8.5 9h7M8.5 12h4.5"/></svg></div>
-      <div>
-        <h3>Chat and pray together</h3>
-        <p>Stay in touch through the week — share news, send a prayer, and keep one another close.</p>
+        <h3>God's Word, at the centre</h3>
+        <p>A clear, beautiful Bible to read each day, with large, easy-to-read text — the heart everything else is gathered around.</p>
       </div>
     </div>
     <div class="benefit">
       <div class="pic" style="background:var(--gold-tint);color:#8a6717"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6L18 8v10.5A1.5 1.5 0 0 1 16.5 20h-9A1.5 1.5 0 0 1 6 18.5v-13A1.5 1.5 0 0 1 7.5 3.5Z"/><path d="M13.5 3.5V8H18M9 12.5h6M9 16h4"/></svg></div>
       <div>
-        <h3>This week's teaching</h3>
-        <p>Listen back to the sermon and read along with a thought for each day.</p>
+        <h3>Sermons &amp; teaching</h3>
+        <p>Listen back to this week's sermon whenever it suits, with notes that send you back into the passage.</p>
+      </div>
+    </div>
+    <div class="benefit">
+      <div class="pic" style="background:var(--clay-soft);color:var(--clay)"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10a1 1 0 0 1 1 1v14l-6-3-6 3V5a1 1 0 0 1 1-1Z"/><path d="M9 8h6M9 11h4"/></svg></div>
+      <div>
+        <h3>Reading plans &amp; devotionals</h3>
+        <p>A little to read each day — gentle plans and devotionals to keep you in the Word.</p>
+      </div>
+    </div>
+    <div class="benefit">
+      <div class="pic" style="background:var(--sage-soft);color:#345c41"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.2a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2H10l-4.2 3.2v-3.2a2 2 0 0 1-1.3-1.9Z"/><path d="M8.5 9h7M8.5 12h4.5"/></svg></div>
+      <div>
+        <h3>Prayer &amp; group chat</h3>
+        <p>Live it out together through the week — share news, send a prayer, and carry one another.</p>
+      </div>
+    </div>
+    <div class="benefit">
+      <div class="pic" style="background:var(--gold-tint);color:#8a6717"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5h14a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z"/><path d="M3 10.5h18"/><circle cx="12" cy="14" r="1.6"/></svg></div>
+      <div>
+        <h3>Serving rotas</h3>
+        <p>See who's serving each Sunday at a glance, so everyone knows when it's their turn.</p>
+      </div>
+    </div>
+    <div class="benefit">
+      <div class="pic" style="background:var(--clay-soft);color:var(--clay)"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5s-7-4.4-9.2-9A4.7 4.7 0 0 1 12 7a4.7 4.7 0 0 1 9.2 4.5c-2.2 4.6-9.2 9-9.2 9Z"/></svg></div>
+      <div>
+        <h3>Caring for one another</h3>
+        <p>When someone is unwell or going through a hard time, it's easy to rally round — like organising meals so no one is forgotten.</p>
       </div>
     </div>
     <div class="benefit">
@@ -323,17 +369,10 @@
       </div>
     </div>
     <div class="benefit">
-      <div class="pic" style="background:var(--clay-soft);color:var(--clay)"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5s-7-4.4-9.2-9A4.7 4.7 0 0 1 12 7a4.7 4.7 0 0 1 9.2 4.5c-2.2 4.6-9.2 9-9.2 9Z"/></svg></div>
+      <div class="pic" style="background:var(--gold-tint);color:#8a6717"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5s-7-4.4-9.2-9A4.7 4.7 0 0 1 12 7a4.7 4.7 0 0 1 9.2 4.5c-2.2 4.6-9.2 9-9.2 9Z"/><path d="M9.5 11.5h5M12 9v5" stroke-width="1.6"/></svg></div>
       <div>
-        <h3>Practical care</h3>
-        <p>When someone is unwell or going through a hard time, it's easy to rally round — like organising meals so no one is forgotten.</p>
-      </div>
-    </div>
-    <div class="benefit">
-      <div class="pic" style="background:var(--sage-soft);color:#345c41"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5h14a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z"/><path d="M3 10.5h18"/><circle cx="12" cy="14" r="1.6"/></svg></div>
-      <div>
-        <h3>Serving rotas &amp; giving</h3>
-        <p>Plan who's serving each Sunday, and — for churches set up to take it — receive tithes and offerings right in the app.</p>
+        <h3>Giving</h3>
+        <p>For churches set up to receive it, members can give tithes and offerings right in the app.</p>
       </div>
     </div>
   </div>
