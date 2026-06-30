@@ -242,7 +242,7 @@ function miniBtn() {
 // ── group list (the Chat tab body) ──
 function ChatScreen({ ctx }) {
   const D = window.TrinityData;
-  const givingOn = !!(ctx.church && ctx.church.giving) && !(ctx.safeguard && ctx.safeguard.isMinor);   // steward toggle, published on the church profile; always off for a child account (safeguarding)
+  const givingOn = false;   // Giving HIDDEN for the pilot — not surfaced yet (restore: !!(ctx.church && ctx.church.giving) && !(ctx.safeguard && ctx.safeguard.isMinor))
   const idParam = new URLSearchParams(location.search).get('identity'); // main|recovery|restore|invite
   const [nostr, setNostr] = useC(!!idParam);
   const chatParam = new URLSearchParams(location.search).get('chat'); // 'groups' | 'giving'
