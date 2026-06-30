@@ -1089,7 +1089,7 @@ function serveStatic(req, res) {
     // their Host never equals the marketing apex, so they always get index.html.
     const host = (req.headers.host || '').split(':')[0].toLowerCase();
     const marketingHost = (process.env.MARKETING_HOST || 'trinityone.church').toLowerCase();
-    p += (p === '/' && host === marketingHost) ? 'welcome.html' : 'index.html';
+    p += (p === '/' && host === marketingHost) ? 'welcome-simple.html' : 'index.html';
   }
   // APKs deployed via the dashboard "Fetch latest APK" button live under relay/apks/ (writable, survives
   // self-updates). Serve from there if present; a root-level copy (manual scp) still works as a fallback.
