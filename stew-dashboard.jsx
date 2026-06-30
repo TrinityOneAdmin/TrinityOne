@@ -337,6 +337,8 @@ function StewQRScanner({ onResult, onCancel }) {
     const hasJsQR = (typeof window.jsQR === 'function');
     (async () => {
       try {
+        const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        if (!isNative) { setStatus('unsupported'); return; }   // camera scanning is app-only; in a browser there's no good camera, so paste the code/phrase instead
         if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || (!hasBD && !hasJsQR)) { setStatus('unsupported'); return; }
         if (hasBD) { try { detector = new window.BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; } }
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });

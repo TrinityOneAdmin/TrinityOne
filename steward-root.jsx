@@ -491,6 +491,7 @@ function StewardWelcome() {
     setPinBusy(false);
     window.Steward.enterConsole();
   };
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());   // camera scan is app-only; the webapp uses the paste/code paths
   const card = { width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28 };
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
@@ -522,6 +523,7 @@ function StewardWelcome() {
             </div>
             {showQR && window.Steward.qrSVG ? <div style={{ width: 184, height: 184, margin: '12px auto 0', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(code) }} /> : null}
             <button onClick={() => { setErr(''); setMode('steward-pin'); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 16 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
+            <button onClick={() => { try { location.reload(); } catch (e) {} }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 8 }}>Start over</button>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can find this code again anytime under Settings → Security → Become a steward.</div>
           </div>
         ) : mode === 'steward-pin' ? (
@@ -530,6 +532,7 @@ function StewardWelcome() {
             <input type="password" inputMode="numeric" value={pinVal} onChange={e => { setPinVal(e.target.value); setErr(''); }} autoFocus placeholder="Choose a PIN (or a longer passphrase)" onKeyDown={e => { if (e.key === 'Enter' && pinVal.length >= 4 && !pinBusy) finishWithPin(); }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{err}</div> : null}
             <button onClick={finishWithPin} disabled={pinVal.length < 4 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 4 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="#fff" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
+            <button onClick={() => { setErr(''); setMode('steward'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 8 }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
             {/* SECURITY-AUDIT-2026-06-25 Critical-2: Skip is gone — PIN is mandatory. If the user
                 bypasses this screen anyway (back-button, refresh), the StewardForcedPin modal will
                 fire on the next render because window.Steward.needsPin is still true. */}
@@ -542,8 +545,8 @@ function StewardWelcome() {
           </div>
         ) : (
           <div>
-            <button onClick={() => { setErr(''); setMode('scanning'); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 14 }}><Icon name="qr" size={16} color="#fff" /> Scan the handoff QR</button>
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>OR PASTE THE 12-WORD PHRASE</div>
+            {isNative ? <button onClick={() => { setErr(''); setMode('scanning'); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 14 }}><Icon name="qr" size={16} color="#fff" /> Scan the handoff QR</button> : null}
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>{isNative ? 'OR PASTE THE 12-WORD PHRASE' : 'PASTE THE 12-WORD PHRASE'}</div>
             <textarea value={phrase} onChange={e => setPhrase(e.target.value)} rows={3} placeholder="word one  word two  word three …" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>{err}</div> : null}
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
