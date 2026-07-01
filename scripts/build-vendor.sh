@@ -9,8 +9,8 @@ mkdir -p "$V/sqljs" "$V/fonts"
 dl() { echo "  $2"; curl -sSfL "$1" -o "$2"; }
 
 echo "JS libraries:"
-dl "https://unpkg.com/react@18.3.1/umd/react.development.js"            "$V/react.development.js"
-dl "https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"    "$V/react-dom.development.js"
+dl "https://unpkg.com/react@18.3.1/umd/react.production.min.js"         "$V/react.production.min.js"
+dl "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" "$V/react-dom.production.min.js"
 dl "https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"           "$V/babel.min.js"
 dl "https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"            "$V/fflate.js"
 

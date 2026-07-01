@@ -473,7 +473,8 @@ function accept(e) {
     if (targetHex && MINORS.has(targetHex) && !APPROVED.has(e.pubkey)) return false;
     return true;
   }
-  if (k === 7 || k === 1059 || k === 1060) return isMember;    // reactions + sealed/gift-wrapped DMs
+  if (k === 7) return isMember;                                // reactions
+  if (k === 1059 || k === 1060) return false;                 // sealed/gift-wrapped DMs (NIP-17) are unused by this app; block them so they can't route around the kind-4 minor↔adult safeguarding gate. Re-enable with the same gate applied if NIP-17 is ever adopted.
   return isMember;                                               // anything else: members only
 }
 // read-gate (NIP-42): an invite-only group's messages are served only to a connection that has proven

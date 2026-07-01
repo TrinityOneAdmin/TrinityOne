@@ -14,6 +14,7 @@ const READ_FONTS = {
 
 // ── persisted settings (replaces the design-tool tweaks panel) ──
 const SETTINGS_DEFAULTS = { dark: false, accent: 'clay', readScale: 1 };
+const WALLET_ENABLED = false;   // pilot: the in-app self-custodial wallet (balance/add/withdraw) is parked — members give from their own external wallet. Flip to true when the wallet is intentionally in scope.
 function lsGet(key, fallback){ try{ const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }catch(e){ return fallback; } }
 function lsSet(key, val){ try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
 function useSettings(){
@@ -319,7 +320,7 @@ function App() {
   }, []);
   // the in-app wallet is the member's, always-on (rides on their key) — boot it once so the balance is
   // ready everywhere (profile hub, Giving tab), independent of any church's giving switch.
-  useAE(() => { if (window.TrinityWallet) window.TrinityWallet.init().catch(() => {}); }, []);
+  useAE(() => { if (WALLET_ENABLED && window.TrinityWallet) window.TrinityWallet.init().catch(() => {}); }, []);
   // connTick bumps when the app returns to the foreground or the network reconnects. Relay WebSockets
   // drop while a phone is backgrounded, and a dropped socket silently misses live pushes — so we tear
   // down and re-establish the church subscriptions on resume, which re-queries and catches up anything
@@ -551,6 +552,7 @@ function App() {
       const csk = lsGet('trinityone.care.sk.' + np, null); if (csk) setCareSkips(csk);
       const cav = lsGet('trinityone.care.av.' + np, null); if (cav) setCareAvail(cav);
     }
+    setBootReady(true);   // reveal the app off the cache paint — don't gate first paint on the relay round-trip (cards still refresh when the subs deliver)
     const subs = [
       F.subscribeMealsSettings(np, s => { setCareSettings(s); lsSet('trinityone.care.s.' + np, s); setBootReady(true); }),
       F.subscribeCareNeeds(np, n => { setCareNeeds(n); lsSet('trinityone.care.n.' + np, n); }),
@@ -1007,7 +1009,7 @@ function App() {
     openInvite: () => setIdSheet('invite'),
     openShareApp: () => setIdSheet('shareapp'),
     openRelays: () => setIdSheet('relays'),
-    openWallet: () => setWalletSheet(true),
+    openWallet: () => { if (WALLET_ENABLED) setWalletSheet(true); },
     openNewIdentity: () => setNewId(true),
     // library drill-ins
     openModule: (m) => setModule(m),
@@ -1268,7 +1270,7 @@ function App() {
             <ShareAppSheet open={idSheet === 'shareapp'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
-            {window.WalletSheet ? <WalletSheet open={walletSheet} onClose={() => setWalletSheet(false)} ctx={ctx} /> : null}
+            {WALLET_ENABLED && window.WalletSheet ? <WalletSheet open={walletSheet} onClose={() => setWalletSheet(false)} ctx={ctx} /> : null}
             <ChatRoom group={group} open={!!group && !desktop} onClose={() => setGroup(null)} ctx={ctx} />
             <DMInbox open={dmInbox && !desktop} onClose={() => setDmInbox(false)} ctx={ctx} />
             <DMThread peer={dmPeer} open={!!dmPeer && !desktop} onClose={() => setDmPeer(null)} ctx={ctx} />

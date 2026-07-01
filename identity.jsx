@@ -367,8 +367,8 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           </React.Fragment>
         ) : null}
 
-        {/* Your wallet — the member's own (add / give / withdraw). Hidden for child accounts (safeguarding). */}
-        {!(ctx.safeguard && ctx.safeguard.isMinor) ? (
+        {/* Your wallet — the member's own (add / give / withdraw). Parked for the pilot (WALLET_ENABLED); hidden for child accounts (safeguarding). */}
+        {WALLET_ENABLED && !(ctx.safeguard && ctx.safeguard.isMinor) ? (
           <React.Fragment>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>YOUR WALLET</div>
             <Group>
