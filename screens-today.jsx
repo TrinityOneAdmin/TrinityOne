@@ -123,7 +123,7 @@ const careBtnMine = { flexShrink: 0, display: 'inline-flex', alignItems: 'center
 
 // ── "I'm here to help" availability — a member signals they're glad to help, so anyone who needs
 // something is encouraged to ask. Shown only inside the Care tab (embedded).
-const CARE_OFFER_TAGS = [['meals', 'Meals'], ['lifts', 'Lifts'], ['visits', 'Visits'], ['prayer', 'Prayer'], ['childcare', 'Childcare'], ['errands', 'Errands']];
+const CARE_OFFER_TAGS = [['meals', 'Meals'], ['lifts', 'Lifts'], ['moving', 'Moving'], ['childcare', 'Childcare'], ['diy', 'DIY'], ['visits', 'Visits'], ['prayer', 'Prayer'], ['errands', 'Errands']];
 function careOfferLabel(id) { const t = CARE_OFFER_TAGS.find(x => x[0] === id); return t ? t[1] : id; }
 
 function CareAvailRow({ a, ctx, myPub }) {
@@ -158,6 +158,8 @@ function CareAvailability({ ctx }) {
   // keep the draft in step with my published availability when I'm not editing; drop the optimistic override once the relay agrees
   React.useEffect(() => { if (!editing) { setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); } if (opt !== null && !!mine === opt) setOpt(null); }, [mine ? mine.ts : 0, editing]);
   const toggleTag = (id) => setTags(t => t.includes(id) ? t.filter(x => x !== id) : [...t, id]);
+  const [custom, setCustom] = React.useState('');
+  const addCustom = () => { const v = custom.trim().slice(0, 24); if (v && !tags.includes(v)) setTags(t => [...t, v]); setCustom(''); };
   const save = () => { if (care.setAvail) care.setAvail(tags, note); setOpt(true); setEditing(false); };
   const turnOff = () => { if (care.clearAvail) care.clearAvail(); setOpt(false); setEditing(false); setTags([]); setNote(''); };
   const showTags = (mine && mine.tags && mine.tags.length) ? mine.tags : tags;
@@ -188,6 +190,13 @@ function CareAvailability({ ctx }) {
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>What can you help with?</div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>{CARE_OFFER_TAGS.map(([id, label]) => <button key={id} onClick={() => toggleTag(id)} style={chipStyle(tags.includes(id))}>{label}</button>)}</div>
+              {tags.filter(t => !CARE_OFFER_TAGS.some(([id]) => id === t)).length ? (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>{tags.filter(t => !CARE_OFFER_TAGS.some(([id]) => id === t)).map(t => <button key={t} onClick={() => toggleTag(t)} style={chipStyle(true)} title="Remove">{t} ✕</button>)}</div>
+              ) : null}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                <input value={custom} onChange={e => setCustom(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }} placeholder="Add your own…" maxLength={24} style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '7px 12px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                <button onClick={addCustom} disabled={!custom.trim()} style={{ ...chipStyle(false), opacity: custom.trim() ? 1 : 0.5 }}>Add</button>
+              </div>
               <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Anything to add? e.g. “Weekday evenings are easiest for me”" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical' }} />
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button onClick={save} style={{ ...careBtnHelp, padding: '9px 16px', fontSize: 13 }}>{listed ? 'Save' : 'I’m available'}</button>
@@ -309,11 +318,12 @@ function TodayScreen({ ctx }) {
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
   const servNext = ctx.servNext;
+  // (top bar sits just below the status bar; care + serving cards, then the verse — see the ScreenScroll top below)
   const servPendingN = (ctx.servPending || []).length;
   const fmtServe = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' }); } catch { return d; } };
 
   return (
-    <ScreenScroll>
+    <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
       {/* greeting */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
         <div>
@@ -364,39 +374,6 @@ function TodayScreen({ ctx }) {
         </div>
       ) : null}
 
-      {/* Verse of the day — hero */}
-      <div onClick={() => ctx.openShareSheet(votd)} style={{
-        position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
-        background: 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
-        padding: '22px 22px 18px', color: '#fff', marginBottom: 22, boxShadow: 'var(--shadow-lg)',
-        animation: 'trinityFade .5s ease .05s both',
-      }}>
-        <div style={{ position: 'absolute', inset: 0, opacity: .5,
-          background: 'radial-gradient(circle at 85% 12%, rgba(255,255,255,.28), transparent 42%)' }} />
-        <div style={{ position: 'absolute', right: -28, bottom: -34, opacity: .14 }}>
-          <Icon name="sun" size={180} stroke={1.2} color="#fff" />
-        </div>
-        <div style={{ position: 'relative' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .92 }}>
-            <Icon name="sparkle" size={15} stroke={2} /> Verse of the day
-          </div>
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
-            “{votd.text}”
-          </p>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{votd.ref} · {votd.version}</span>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {['heart', 'share'].map(n => (
-                <div key={n} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-                  <Icon name={n} size={17} stroke={2} color="#fff" />
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* Serving (next slot / pending ask) -> opens the Serving overlay */}
       {(servNext || servPendingN) ? (
         <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 22, cursor: 'pointer', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both',
@@ -430,6 +407,39 @@ function TodayScreen({ ctx }) {
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
       )}
+
+      {/* Verse of the day — hero (below the care + serving cards) */}
+      <div onClick={() => ctx.openShareSheet(votd)} style={{
+        position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
+        background: 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
+        padding: '22px 22px 18px', color: '#fff', marginBottom: 22, boxShadow: 'var(--shadow-lg)',
+        animation: 'trinityFade .5s ease .05s both',
+      }}>
+        <div style={{ position: 'absolute', inset: 0, opacity: .5,
+          background: 'radial-gradient(circle at 85% 12%, rgba(255,255,255,.28), transparent 42%)' }} />
+        <div style={{ position: 'absolute', right: -28, bottom: -34, opacity: .14 }}>
+          <Icon name="sun" size={180} stroke={1.2} color="#fff" />
+        </div>
+        <div style={{ position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .92 }}>
+            <Icon name="sparkle" size={15} stroke={2} /> Verse of the day
+          </div>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
+            “{votd.text}”
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{votd.ref} · {votd.version}</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {['heart', 'share'].map(n => (
+                <div key={n} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+                  <Icon name={n} size={17} stroke={2} color="#fff" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Practical care / meal trains now lives in its own tab inside Serving & events (not on Today) */}
 
