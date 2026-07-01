@@ -20,9 +20,12 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
           else { onSelect(n); }
         }}
         style={{
-          cursor: 'pointer', borderRadius: 6,
-          outline: selected ? '2px solid var(--clay)' : 'none', outlineOffset: 3,
-          background: reading ? 'color-mix(in oklab, var(--clay) 16%, transparent)' : (selected ? 'color-mix(in oklab, var(--clay) 8%, transparent)' : 'transparent'),
+          cursor: 'pointer', borderRadius: 4,
+          // selection/reading is a highlight, NOT an outline — an inline verse wraps across lines, and an
+          // outline fragments into a separate oval per line. box-decoration-break: clone keeps the tint
+          // continuous across the wrap so it reads as one highlighted verse.
+          background: reading ? 'color-mix(in oklab, var(--clay) 16%, transparent)' : (selected ? 'color-mix(in oklab, var(--clay) 20%, transparent)' : 'transparent'),
+          WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
           transition: 'background .2s',
         }}>
         <sup style={{

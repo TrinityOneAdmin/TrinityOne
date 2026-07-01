@@ -8,7 +8,9 @@
 const MEALS_TYPES = [
   ['meals',     'Meals',     'gift'],
   ['rides',     'Rides',     'globe'],
+  ['moving',    'Moving',    'users'],
   ['errands',   'Errands',   'check'],
+  ['diy',       'DIY',       'hand'],
   ['visits',    'Visits',    'heart'],
   ['childcare', 'Childcare', 'shield'],
 ];

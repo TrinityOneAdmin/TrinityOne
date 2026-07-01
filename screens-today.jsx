@@ -24,8 +24,8 @@ function ProgressRing({ value, size = 46, stroke = 4, color = 'var(--clay)' }) {
 }
 
 // ── Care / Meal trains: open needs the member can sign up to help with (Today card) ──
-const CARE_TYPE_LABEL = { meals: 'Meals', rides: 'Rides', errands: 'Errands', visits: 'Visits', childcare: 'Childcare' };
-const CARE_TYPE_ICON = { meals: 'heart', rides: 'calCheck', errands: 'check', visits: 'users', childcare: 'child' };
+const CARE_TYPE_LABEL = { meals: 'Meals', rides: 'Rides', moving: 'Moving', errands: 'Errands', diy: 'DIY', visits: 'Visits', childcare: 'Childcare' };
+const CARE_TYPE_ICON = { meals: 'heart', rides: 'calCheck', moving: 'users', errands: 'check', diy: 'hand', visits: 'users', childcare: 'child' };
 function careDateRange(start, end) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '')) return [];
   const s = new Date(start + 'T00:00:00');
