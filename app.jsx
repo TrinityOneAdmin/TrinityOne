@@ -362,7 +362,7 @@ function App() {
     const offs = followed.map(c =>
       window.Fellowship.subscribeChurchProfile(c.npub || c.id, (p) => {
         if (!p) return;
-        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : x.lnaddr, giving: p.giving != null ? p.giving : x.giving, picture: p.picture != null ? p.picture : x.picture, banner: p.banner != null ? p.banner : x.banner, accent: p.accent != null ? p.accent : x.accent, features: p.features != null ? p.features : x.features, rules: p.rules != null ? p.rules : x.rules, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
+        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : x.lnaddr, giving: p.giving != null ? p.giving : x.giving, picture: p.picture != null ? p.picture : x.picture, banner: p.banner != null ? p.banner : x.banner, bannerFade: p.bannerFade != null ? p.bannerFade : x.bannerFade, accent: p.accent != null ? p.accent : x.accent, features: p.features != null ? p.features : x.features, rules: p.rules != null ? p.rules : x.rules, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
       }));
     return () => offs.forEach(o => { try { o && o(); } catch (e) {} });
   }, []);
@@ -399,7 +399,7 @@ function App() {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     return window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (!p) return;
-      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : c.lnaddr, giving: p.giving != null ? p.giving : c.giving, picture: p.picture != null ? p.picture : c.picture, banner: p.banner != null ? p.banner : c.banner, accent: p.accent != null ? p.accent : c.accent, features: p.features != null ? p.features : c.features, rules: p.rules != null ? p.rules : c.rules, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
+      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : c.lnaddr, giving: p.giving != null ? p.giving : c.giving, picture: p.picture != null ? p.picture : c.picture, banner: p.banner != null ? p.banner : c.banner, bannerFade: p.bannerFade != null ? p.bannerFade : c.bannerFade, accent: p.accent != null ? p.accent : c.accent, features: p.features != null ? p.features : c.features, rules: p.rules != null ? p.rules : c.rules, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
     });
   };
   // leave a church: tombstone the membership (steward sees them drop) + stop following locally

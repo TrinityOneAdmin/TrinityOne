@@ -3609,6 +3609,10 @@ function DashBrandingPanel({ church }) {
   const saveTimer = React.useRef(null);
   React.useEffect(() => { setAccentState(church.accent || ''); }, [church.accent]);
   const [cropFile, setCropFile] = React.useState(null);
+  const [fade, setFadeState] = React.useState(typeof church.bannerFade === 'number' ? church.bannerFade : 16);
+  const fadeTimer = React.useRef(null);
+  React.useEffect(() => { setFadeState(typeof church.bannerFade === 'number' ? church.bannerFade : 16); }, [church.bannerFade]);
+  const onFade = (v) => { setFadeState(v); if (fadeTimer.current) clearTimeout(fadeTimer.current); fadeTimer.current = setTimeout(() => window.Steward.publishProfile({ bannerFade: v }), 400); };
   const onPickBanner = (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) setCropFile(f); };
   const saveBanner = async (uri) => { setCropFile(null); setBusy(true); try { await Promise.resolve(window.Steward.publishProfile({ banner: uri })); } catch (e) {} setBusy(false); };
   const removeBanner = () => Promise.resolve(window.Steward.publishProfile({ banner: '' }));
@@ -3637,7 +3641,7 @@ function DashBrandingPanel({ church }) {
       <div style={lbl}>Banner</div>
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A wide image at the top of your church in members’ apps. Landscape works best (about 3:1) — it’s centre-cropped to fit.</div>
       {/* live preview — banner + logo + name, the way members see the header */}
-      <div style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', border: '1px solid var(--line)', background: church.banner ? `center/cover no-repeat url(${church.banner})` : `linear-gradient(135deg, ${acc}, color-mix(in oklab, ${acc} 60%, #000))` }}>
+      <div style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', border: '1px solid var(--line)', background: church.banner ? `center/cover no-repeat url(${church.banner})` : `linear-gradient(135deg, ${acc}, color-mix(in oklab, ${acc} 60%, #000))`, WebkitMaskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none', maskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none' }}>
         <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
         <div style={{ position: 'absolute', left: 12, bottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
           <SkBadge initials={initials} picture={church.picture} accent={acc} size={36} radius={11} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
@@ -3651,6 +3655,17 @@ function DashBrandingPanel({ church }) {
         </label>
         {church.banner ? <button onClick={removeBanner} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}>Remove</button> : null}
       </div>
+
+      {church.banner ? (
+        <div style={{ marginTop: 14 }}>
+          <div style={lbl}>Banner fade</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>How softly the bottom of the banner blends into the page.</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input type="range" min="0" max="50" step="2" value={fade} onChange={e => onFade(Number(e.target.value))} style={{ flex: 1, accentColor: acc }} />
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-2)', minWidth: 52, textAlign: 'right' }}>{fade === 0 ? 'None' : fade + '%'}</span>
+          </div>
+        </div>
+      ) : null}
 
       <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
 

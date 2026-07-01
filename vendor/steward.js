@@ -10113,7 +10113,7 @@ zoo`.split("\n");
         const host = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
         if (local && host) nip05 = local + "@" + host;
       }
-      const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", banner: m.banner || "", accent: m.accent || "", channel: m.channel || "", audioFeed: m.audioFeed || "", lud16: (m.lud16 || "").trim(), giving: !!m.giving, features: m.features && typeof m.features === "object" ? m.features : {}, rules: m.rules && typeof m.rules === "object" ? m.rules : {} });
+      const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", banner: m.banner || "", bannerFade: typeof m.bannerFade === "number" ? m.bannerFade : 16, accent: m.accent || "", channel: m.channel || "", audioFeed: m.audioFeed || "", lud16: (m.lud16 || "").trim(), giving: !!m.giving, features: m.features && typeof m.features === "object" ? m.features : {}, rules: m.rules && typeof m.rules === "object" ? m.rules : {} });
       return publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content }, sk));
     },
     publishFund(fund) {
