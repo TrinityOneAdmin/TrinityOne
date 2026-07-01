@@ -567,7 +567,8 @@ function App() {
     if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchEvents)) { setChurchEvents([]); return; }
-    return window.Fellowship.subscribeChurchEvents(np, setChurchEvents);
+    setChurchEvents(lsGet('trinityone.serv.events.' + np, []));   // cache-first, so events don't flash blank
+    return window.Fellowship.subscribeChurchEvents(np, x => { setChurchEvents(x); lsSet('trinityone.serv.events.' + np, x); });
   }, [activeChurch, churches, connTick, lazyReady]);
   // the church's published rota/rosters/services — lets a member see who else is on the team that
   // day, who they can ask to swap, and a month view of services + events.
@@ -580,12 +581,19 @@ function App() {
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !window.Fellowship) { setChurchRotas([]); setChurchRosters([]); setChurchServices([]); setChurchRunsheets([]); setChurchTeams([]); setChurchGroups([]); return; }
+    // paint from cache first so the serving cards (rota / services / run sheets / teams) don't flash blank
+    // while the network sub catches up — the same cache-first trick the Care cards already use.
+    setChurchRotas(lsGet('trinityone.serv.rotas.' + np, []));
+    setChurchRosters(lsGet('trinityone.serv.rosters.' + np, []));
+    setChurchServices(lsGet('trinityone.serv.services.' + np, []));
+    setChurchRunsheets(lsGet('trinityone.serv.runsheets.' + np, []));
+    { const cg = lsGet('trinityone.serv.groups.' + np, []); setChurchGroups(cg); setChurchTeams(cg.filter(g => g && g.kind === 'team')); }
     const F = window.Fellowship, subs = [];
-    if (F.subscribeChurchRotas) subs.push(F.subscribeChurchRotas(np, setChurchRotas));
-    if (F.subscribeChurchRosters) subs.push(F.subscribeChurchRosters(np, setChurchRosters));
-    if (F.subscribeChurchServices) subs.push(F.subscribeChurchServices(np, setChurchServices));
-    if (F.subscribeChurchRunsheets) subs.push(F.subscribeChurchRunsheets(np, setChurchRunsheets));
-    if (F.subscribeChurchGroups) subs.push(F.subscribeChurchGroups(np, (gs) => { setChurchGroups(gs || []); setChurchTeams((gs || []).filter(g => g.kind === 'team')); }));
+    if (F.subscribeChurchRotas) subs.push(F.subscribeChurchRotas(np, x => { setChurchRotas(x); lsSet('trinityone.serv.rotas.' + np, x); }));
+    if (F.subscribeChurchRosters) subs.push(F.subscribeChurchRosters(np, x => { setChurchRosters(x); lsSet('trinityone.serv.rosters.' + np, x); }));
+    if (F.subscribeChurchServices) subs.push(F.subscribeChurchServices(np, x => { setChurchServices(x); lsSet('trinityone.serv.services.' + np, x); }));
+    if (F.subscribeChurchRunsheets) subs.push(F.subscribeChurchRunsheets(np, x => { setChurchRunsheets(x); lsSet('trinityone.serv.runsheets.' + np, x); }));
+    if (F.subscribeChurchGroups) subs.push(F.subscribeChurchGroups(np, (gs) => { const g = gs || []; setChurchGroups(g); setChurchTeams(g.filter(x => x && x.kind === 'team')); lsSet('trinityone.serv.groups.' + np, g); }));
     return () => subs.forEach(u => { try { u && u(); } catch {} });
   }, [activeChurch, churches, connTick]);
   // safeguarding: is THIS member a child for the active church, and who's cleared to contact youth.
