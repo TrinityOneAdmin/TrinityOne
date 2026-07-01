@@ -84,13 +84,13 @@ function ChurchPill({ ctx }) {
   if (c.banner) {
     return (
       <button onClick={ctx.openChurchSwitcher} style={{
-        position: 'relative', display: 'block', width: '100%', border: '1px solid var(--line)',
-        borderRadius: 18, overflow: 'hidden', cursor: 'pointer', boxShadow: 'var(--shadow)', textAlign: 'left',
+        position: 'relative', display: 'block', width: '100%',
+        overflow: 'hidden', cursor: 'pointer', boxShadow: 'var(--shadow)', textAlign: 'left',
         aspectRatio: '3 / 1', background: `center/cover no-repeat url(${c.banner})`,
         WebkitMaskImage: 'linear-gradient(to bottom, #000 84%, transparent)', maskImage: 'linear-gradient(to bottom, #000 84%, transparent)',   // soft fade at the bottom edge into the page
       }}>
         <span style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.62), rgba(0,0,0,0) 62%)' }} />
-        <span style={{ position: 'absolute', right: 12, top: 12, width: 30, height: 30, borderRadius: 999, background: 'rgba(0,0,0,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={18} stroke={2.4} color="#fff" /></span>
+        <span style={{ position: 'absolute', right: 12, top: 'calc(env(safe-area-inset-top, 0px) + 12px)', width: 30, height: 30, borderRadius: 999, background: 'rgba(0,0,0,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={18} stroke={2.4} color="#fff" /></span>
         <span style={{ position: 'absolute', left: 14, bottom: 22, right: 50, display: 'flex', alignItems: 'center', gap: 11 }}>
           <ChurchBadge church={c} size={40} radius={12} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>

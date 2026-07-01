@@ -365,7 +365,7 @@ function ChatScreen({ ctx }) {
 
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 5px)">
-      <div style={{ marginBottom: 14, animation: 'trinityFade .5s ease both' }}>
+      <div style={{ marginBottom: 14, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both' }}>
         <ChurchPill ctx={ctx} />
       </div>
       {(ctx.requireFullName && !(ctx.joinState && ctx.joinState.isPending) && (myName(id) || '').trim().split(/\s+/).filter(Boolean).length < 2) ? (
