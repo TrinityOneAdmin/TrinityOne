@@ -313,6 +313,13 @@ function TodayScreen({ ctx }) {
   const _careToday = new Date().toISOString().slice(0, 10);
   const myCareNeed = (_care.settings && _care.settings.enabled) ? (_care.needs || []).find(n => n.recipient && n.recipient.toLowerCase() === _myPub && (!n.endDate || n.endDate >= _careToday)) : null;
   const beingCaredFor = !!myCareNeed;
+  // the recipient can dismiss the care banner with ✕; it snoozes until the need changes (new id or edited ts)
+  const [careDismissTick, setCareDismissTick] = React.useState(0);
+  const careBannerDismissed = React.useMemo(() => {
+    if (!myCareNeed) return false;
+    try { const d = JSON.parse(localStorage.getItem('trinityone.care.bannerDismiss') || 'null'); return !!(d && d.id === myCareNeed.id && d.ts === myCareNeed.ts); } catch { return false; }
+  }, [myCareNeed && myCareNeed.id, myCareNeed && myCareNeed.ts, careDismissTick]);
+  const dismissCareBanner = (e) => { if (e) e.stopPropagation(); try { if (myCareNeed) localStorage.setItem('trinityone.care.bannerDismiss', JSON.stringify({ id: myCareNeed.id, ts: myCareNeed.ts })); } catch {} setCareDismissTick(t => t + 1); };
   const pNext = plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1];
 
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
@@ -363,13 +370,14 @@ function TodayScreen({ ctx }) {
       </div>
 
       {/* cared-for: someone in the church has a care need open for me — surface it warmly, link to the Care tab */}
-      {beingCaredFor ? (
+      {beingCaredFor && !careBannerDismissed ? (
         <div onClick={() => ctx.openServing('care', myCareNeed && myCareNeed.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 18, marginBottom: 22, cursor: 'pointer', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both' }}>
           <div style={{ width: 40, height: 40, borderRadius: 13, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 18%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={20} color="var(--sage)" /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Your church is caring for you</div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>Tap to see what’s arranged — and tick off any day you’re sorted.</div>
           </div>
+          <button onClick={dismissCareBanner} aria-label="Dismiss" title="Dismiss — it comes back if the care changes" style={{ flexShrink: 0, width: 26, height: 26, borderRadius: 999, border: 'none', background: 'transparent', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>✕</button>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
       ) : null}
