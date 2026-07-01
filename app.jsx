@@ -560,14 +560,29 @@ function App() {
   const [servingTab, setServingTab] = useA('serving');   // which Serving tab to land on (e.g. 'care' from the cared-for banner)
   const [careFocus, setCareFocus] = useA(null);          // a care need id to auto-open when Serving → Care opens (deep-link from the banner)
   const [eventOv, setEventOv] = useA(null);   // focused event-detail sheet
-  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyServingRequests) return window.Fellowship.subscribeMyServingRequests(setServReqs); }, [activeChurch, idTick, connTick]);
-  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyReqReplies) return window.Fellowship.subscribeMyReqReplies(setServReplies); }, [activeChurch, idTick, connTick]);
-  useAE(() => { if (window.Fellowship && window.Fellowship.subscribeMyRsvps) return window.Fellowship.subscribeMyRsvps(setMyRsvps); }, [activeChurch, idTick, connTick]);
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub || '';
+    const F = window.Fellowship; if (!F) return;
+    // cache-first: paint my serving requests / replies / RSVPs so the "You're serving" card + RSVP state
+    // don't flash blank while the network subs catch up.
+    setServReqs(lsGet('trinityone.serv.reqs.' + np, []));
+    setServReplies(lsGet('trinityone.serv.replies.' + np, {}));
+    setMyRsvps(lsGet('trinityone.serv.rsvps.' + np, {}));
+    const subs = [];
+    if (F.subscribeMyServingRequests) subs.push(F.subscribeMyServingRequests(x => { setServReqs(x); lsSet('trinityone.serv.reqs.' + np, x); }));
+    if (F.subscribeMyReqReplies) subs.push(F.subscribeMyReqReplies(x => { setServReplies(x); lsSet('trinityone.serv.replies.' + np, x); }));
+    if (F.subscribeMyRsvps) subs.push(F.subscribeMyRsvps(x => { setMyRsvps(x); lsSet('trinityone.serv.rsvps.' + np, x); }));
+    return () => subs.forEach(u => { try { u && u(); } catch {} });
+  }, [activeChurch, idTick, connTick]);
+  // paint events from cache IMMEDIATELY (not behind the lazy gate), then lazy-subscribe for fresh
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    setChurchEvents(np ? lsGet('trinityone.serv.events.' + np, []) : []);
+  }, [activeChurch, churches]);
   useAE(() => {
     if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchEvents)) { setChurchEvents([]); return; }
-    setChurchEvents(lsGet('trinityone.serv.events.' + np, []));   // cache-first, so events don't flash blank
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchEvents)) return;
     return window.Fellowship.subscribeChurchEvents(np, x => { setChurchEvents(x); lsSet('trinityone.serv.events.' + np, x); });
   }, [activeChurch, churches, connTick, lazyReady]);
   // the church's published rota/rosters/services — lets a member see who else is on the team that
