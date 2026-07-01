@@ -121,6 +121,94 @@ const careBtnHelp = { flexShrink: 0, padding: '6px 11px', borderRadius: 9, borde
 const careBtnGhost = { flexShrink: 0, padding: '6px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
 const careBtnMine = { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 11px', borderRadius: 9, border: '1px solid var(--sage)', background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', color: 'var(--sage)', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
 
+// ── "I'm here to help" availability — a member signals they're glad to help, so anyone who needs
+// something is encouraged to ask. Shown only inside the Care tab (embedded).
+const CARE_OFFER_TAGS = [['meals', 'Meals'], ['lifts', 'Lifts'], ['visits', 'Visits'], ['prayer', 'Prayer'], ['childcare', 'Childcare'], ['errands', 'Errands']];
+function careOfferLabel(id) { const t = CARE_OFFER_TAGS.find(x => x[0] === id); return t ? t[1] : id; }
+
+function CareAvailRow({ a, ctx, myPub }) {
+  const nm = careName(a.pubkey, myPub);
+  const canDM = !!(a.pubkey && ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(a.pubkey)));
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 0', borderTop: '1px solid color-mix(in oklab, var(--line) 60%, transparent)' }}>
+      <div style={{ width: 34, height: 34, borderRadius: 999, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13 }}>{(nm[0] || '?').toUpperCase()}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{nm}</div>
+        {a.tags && a.tags.length ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 4 }}>{a.tags.map(t => <span key={t} style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--sage)', background: 'color-mix(in oklab, var(--sage) 13%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 28%, transparent)', borderRadius: 999, padding: '2px 8px' }}>{careOfferLabel(t)}</span>)}</div> : null}
+        {a.note ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 4, whiteSpace: 'pre-wrap' }}>{a.note}</div> : null}
+      </div>
+      {canDM ? <button onClick={() => ctx.openDM(a.pubkey)} style={careBtnHelp}>Message</button> : null}
+    </div>
+  );
+}
+
+function CareAvailability({ ctx }) {
+  const care = ctx.care || {};
+  const myPub = (care.myPub || '').toLowerCase();
+  const avail = care.avail || [];
+  const mine = avail.find(a => (a.pubkey || '').toLowerCase() === myPub) || null;
+  const others = avail.filter(a => (a.pubkey || '').toLowerCase() !== myPub);
+  const isMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);
+  const churchPub = (window.Fellowship && window.Fellowship.churchPub) || '';
+  const [editing, setEditing] = React.useState(false);
+  const [tags, setTags] = React.useState(() => (mine && mine.tags) || []);
+  const [note, setNote] = React.useState(() => (mine && mine.note) || '');
+  const [opt, setOpt] = React.useState(null);   // optimistic listed-state; null = follow the relay
+  const listed = opt === null ? !!mine : opt;
+  // keep the draft in step with my published availability when I'm not editing; drop the optimistic override once the relay agrees
+  React.useEffect(() => { if (!editing) { setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); } if (opt !== null && !!mine === opt) setOpt(null); }, [mine ? mine.ts : 0, editing]);
+  const toggleTag = (id) => setTags(t => t.includes(id) ? t.filter(x => x !== id) : [...t, id]);
+  const save = () => { if (care.setAvail) care.setAvail(tags, note); setOpt(true); setEditing(false); };
+  const turnOff = () => { if (care.clearAvail) care.clearAvail(); setOpt(false); setEditing(false); setTags([]); setNote(''); };
+  const showTags = (mine && mine.tags && mine.tags.length) ? mine.tags : tags;
+  const box = { padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 14 };
+  const chipStyle = (on) => ({ padding: '6px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 16%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' });
+  return (
+    <div>
+      {others.length ? (
+        <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}><Icon name="heart" size={16} color="var(--sage)" /><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>Ready to help</div></div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>You don’t have to carry things alone. These friends have said they’re glad to help — reach out to one of them, or ask the care team.</div>
+          {others.map(a => <CareAvailRow key={a.pubkey} a={a} ctx={ctx} myPub={myPub} />)}
+          {churchPub ? <button onClick={() => ctx.openDM(churchPub)} style={{ ...careBtnGhost, marginTop: 11, width: '100%', justifyContent: 'center', padding: '9px', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={13} /> Ask the care team</button> : null}
+        </div>
+      ) : null}
+      {!isMinor ? (
+        <div style={box}>
+          {listed && !editing ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={14} color="var(--sage)" stroke={3} /> You’re ready to help</div>
+                {showTags && showTags.length ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 2 }}>{showTags.map(careOfferLabel).join(' · ')}</div> : null}
+              </div>
+              <button onClick={() => setEditing(true)} style={careBtnGhost}>Edit</button>
+              <button onClick={turnOff} style={careBtnGhost}>Turn off</button>
+            </div>
+          ) : editing ? (
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>What can you help with?</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>{CARE_OFFER_TAGS.map(([id, label]) => <button key={id} onClick={() => toggleTag(id)} style={chipStyle(tags.includes(id))}>{label}</button>)}</div>
+              <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Anything to add? e.g. “Weekday evenings are easiest for me”" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical' }} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button onClick={save} style={{ ...careBtnHelp, padding: '9px 16px', fontSize: 13 }}>{listed ? 'Save' : 'I’m available'}</button>
+                <button onClick={() => { setEditing(false); setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); }} style={{ ...careBtnGhost, padding: '9px 14px', fontSize: 13 }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>Willing to lend a hand?</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2, lineHeight: 1.45 }}>Let your church know you’re here — it makes it easier for someone to ask.</div>
+              </div>
+              <button onClick={() => setEditing(true)} style={{ ...careBtnHelp, padding: '9px 15px', fontSize: 13 }}>I’m here to help</button>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CareCard({ ctx, embedded }) {
   const care = ctx.care || {};
   const s = care.settings || {};
@@ -138,30 +226,28 @@ function CareCard({ ctx, embedded }) {
   const amCareTeam = s.visibility !== 'team' || onCareRoster;
   let live = (care.needs || []).filter(n => !n.endDate || n.endDate >= today);
   if (s.visibility === 'team' && !amCareTeam) live = live.filter(n => n.recipient && (n.recipient || '').toLowerCase() === myPub);
-  // embedded = rendered as the Serving "Care" tab (own page) → show an empty state instead of hiding.
-  if (!live.length) {
-    if (!embedded) return null;
-    return (
-      <div style={{ textAlign: 'center', padding: '46px 24px', color: 'var(--ink-3)' }}>
-        <div style={{ width: 56, height: 56, borderRadius: 18, margin: '0 auto 14px', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={26} stroke={1.5} color="var(--sage)" /></div>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, color: 'var(--ink)', marginBottom: 6 }}>No open needs right now</div>
-        <div style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>When someone in the church needs a hand — a meal, a ride, an errand — it’ll show up here for you to help.</div>
-      </div>
-    );
-  }
-  const inner = (
+  // the open-needs block — or, in the embedded Care tab, a gentle empty state (availability still shows above it)
+  const needsBlock = live.length ? (
     <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
         {live.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} canManage={onCareRoster} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
       </div>
     </div>
+  ) : (
+    <div style={{ textAlign: 'center', padding: '36px 24px 8px', color: 'var(--ink-3)' }}>
+      <div style={{ width: 56, height: 56, borderRadius: 18, margin: '0 auto 14px', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={26} stroke={1.5} color="var(--sage)" /></div>
+      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18, color: 'var(--ink)', marginBottom: 6 }}>No open needs right now</div>
+      <div style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>When someone in the church needs a hand — a meal, a ride, an errand — it’ll show up here for you to help.</div>
+    </div>
   );
-  if (embedded) return inner;
+  // embedded = the Serving "Care" tab: availability module first (offer help + who's ready), then the needs.
+  if (embedded) return (<React.Fragment><CareAvailability ctx={ctx} />{needsBlock}</React.Fragment>);
+  if (!live.length) return null;   // Today-card variant (currently unused): nothing to show with no needs
   return (
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
       <SectionLabel>Practical care</SectionLabel>
-      {inner}
+      {needsBlock}
     </div>
   );
 }

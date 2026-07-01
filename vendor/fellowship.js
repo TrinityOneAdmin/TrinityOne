@@ -5766,6 +5766,7 @@
   var CARE_D = "trinityone/care:";
   var CARESLOT_D = "trinityone/careslot:";
   var CARESKIP_D = "trinityone/careskip:";
+  var CAREAVAIL_D = "trinityone/careavail:";
   var FAMILY_KEY = "trinityone.family";
   function _loadChildren() {
     try {
@@ -7467,6 +7468,92 @@
       }
       if (!sk || !cp || !careId || !iso) return null;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
+      try {
+        await Promise.any(pool.publish(churchRelays(), evt));
+      } catch {
+      }
+      return evt;
+    },
+    // ── "I'm here to help" availability — a member signals they're willing to help, so people who need
+    // something are encouraged to ask. One replaceable doc per member per church (keyed by the member's own
+    // pubkey), church-readable. Minors are excluded at the relay (being listed would invite contact).
+    subscribeCareAvail(churchNpub, cb) {
+      const pubk = toPub(churchNpub);
+      if (!pubk) {
+        cb([]);
+        return () => {
+        };
+      }
+      const dtag = CAREAVAIL_D + pubk;
+      const byPub = /* @__PURE__ */ new Map();
+      let eosed = false;
+      const emit = () => {
+        const v = [...byPub.values()];
+        if (!eosed && !v.length) return;
+        cb(v);
+      };
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], "#church": [pubk], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d !== dtag) return;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            byPub.delete(e.pubkey);
+            emit();
+            return;
+          }
+          try {
+            const o = JSON.parse(e.content || "{}");
+            if (!o.available) {
+              byPub.delete(e.pubkey);
+              emit();
+              return;
+            }
+            byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), ts: e.created_at });
+            emit();
+          } catch {
+          }
+        },
+        oneose() {
+          eosed = true;
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // publish (or refresh) my availability. tags = short list like ['meals','lifts','visits','prayer','childcare'].
+    async setCareAvail(tags, note) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      if (!sk || !cp) return null;
+      const clean3 = Array.isArray(tags) ? tags.map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8) : [];
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ available: true, tags: clean3, note: String(note || "").trim().slice(0, 240) }) }, sk);
+      try {
+        await Promise.any(pool.publish(churchRelays(), evt));
+      } catch (e) {
+        console.warn("[fellowship] care avail publish failed", e);
+      }
+      return evt;
+    },
+    async clearCareAvail() {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      if (!sk || !cp) return null;
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
         await Promise.any(pool.publish(churchRelays(), evt));
       } catch {

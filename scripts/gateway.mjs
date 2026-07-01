@@ -125,6 +125,7 @@ const MEALS_SETTINGS_D = 'trinityone/meals-settings'; // church-signed config �
 const NEED_D = 'trinityone/care:';        // a care need — d=care:<id> (church / steward / care-team admin; or any member when openedBy='member')
 const SLOT_D = 'trinityone/careslot:';    // a member's fill for one (need,date) — d=careslot:<careId>:<iso> (member-signed, addressable per author)
 const SKIP_D = 'trinityone/careskip:';    // recipient marks a day they don't need help — d=careskip:<careId>:<iso> (RECIPIENT-only)
+const AVAIL_D = 'trinityone/careavail:';  // a member's "I'm here to help" availability — d=careavail:<churchpub> (member-signed, one per member per church; non-minors only)
 function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch { return null; } }
 // the relay can host MULTIPLE churches — each manages its own data, scoped by author. Configure via
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
@@ -450,6 +451,7 @@ function accept(e) {
       const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
       return !!careId && (e.pubkey === CARE_RECIPIENT.get(careId) || isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp));
     }
+    if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)
     return isMember;                                            // member's own data (MyData)
   }
   if (k === 1) {   // chat
@@ -493,7 +495,7 @@ function canRead(e, authed) {
     // already helping, and each other's "what I'm bringing" notes — not just stewards. The settings doc
     // is steward/church-authored and the rest member-authored, so they'd otherwise fail the roster gate
     // below. Write access stays gated in accept(); the UI still applies the per-need visibility setting.
-    if (d === MEALS_SETTINGS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) return true;
+    if (d === MEALS_SETTINGS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D) || d.startsWith(AVAIL_D)) return true;
     // roster-verify steward-authored church content: a doc carrying ['church',<cp>] is only served while
     // its author is on <cp>'s CURRENT signed roster — so a revoked steward's content stops being delivered.
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];

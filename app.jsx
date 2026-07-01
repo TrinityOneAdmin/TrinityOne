@@ -517,12 +517,13 @@ function App() {
   const [careNeeds, setCareNeeds] = useA([]);
   const [careSlots, setCareSlots] = useA([]);
   const [careSkips, setCareSkips] = useA([]);
+  const [careAvail, setCareAvail] = useA([]);   // members who've flipped "I'm here to help"
   const [optCare, setOptCare] = useA({});   // optimistic care fill/clear ('needId|iso' -> 'fill'|'clear') so "I'll help" flips instantly
   const careNpRef = React.useRef(null);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
-    if (!np || !F || !F.subscribeMealsSettings) { setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); careNpRef.current = null; return; }
+    if (!np || !F || !F.subscribeMealsSettings) { setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); setCareAvail([]); careNpRef.current = null; return; }
     const churchChanged = careNpRef.current !== np;
     careNpRef.current = np;
     // On a CHURCH CHANGE, paint from this church's cache (or empty). On a mere RECONNECT (same church), do NOT
@@ -533,17 +534,20 @@ function App() {
       setCareNeeds(lsGet('trinityone.care.n.' + np, []));
       setCareSlots(lsGet('trinityone.care.sl.' + np, []));
       setCareSkips(lsGet('trinityone.care.sk.' + np, []));
+      setCareAvail(lsGet('trinityone.care.av.' + np, []));
     } else {
       const cs = lsGet('trinityone.care.s.' + np, null); if (cs) setCareSettings(cs);
       const cn = lsGet('trinityone.care.n.' + np, null); if (cn) setCareNeeds(cn);
       const csl = lsGet('trinityone.care.sl.' + np, null); if (csl) setCareSlots(csl);
       const csk = lsGet('trinityone.care.sk.' + np, null); if (csk) setCareSkips(csk);
+      const cav = lsGet('trinityone.care.av.' + np, null); if (cav) setCareAvail(cav);
     }
     const subs = [
       F.subscribeMealsSettings(np, s => { setCareSettings(s); lsSet('trinityone.care.s.' + np, s); }),
       F.subscribeCareNeeds(np, n => { setCareNeeds(n); lsSet('trinityone.care.n.' + np, n); }),
       F.subscribeCareSlots(np, x => { setCareSlots(x); lsSet('trinityone.care.sl.' + np, x); }),
       F.subscribeCareSkips(np, x => { setCareSkips(x); lsSet('trinityone.care.sk.' + np, x); }),
+      F.subscribeCareAvail && F.subscribeCareAvail(np, x => { setCareAvail(x); lsSet('trinityone.care.av.' + np, x); }),
     ];
     return () => subs.forEach(u => { try { u && u(); } catch {} });
   }, [activeChurch, churches, connTick]);
@@ -1029,6 +1033,10 @@ function App() {
       setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note),
       skip: (careId, iso, reason) => window.Fellowship.markCareSkip(careId, iso, reason),
       clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso),
+      // "I'm here to help": the list of members who are available, plus this member's own signal actions
+      avail: careAvail,
+      setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r) toast('You’re listed — thank you for being ready to help'); return r; }),
+      clearAvail: () => window.Fellowship.clearCareAvail().then(r => { if (r) toast('You’re off the list'); return r; }),
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
