@@ -253,6 +253,7 @@ function ChatScreen({ ctx }) {
   const [activity, setActivity] = useC({});   // gid -> { text, ts }
   const [unread, setUnread] = useC({});        // gid -> count
   const [q, setQ] = useC('');                  // chat search query
+  const [searchOpen, setSearchOpen] = useC(false);   // search bar is hidden until the ⌕ in the header is tapped
   const [realGroups, setRealGroups] = useC([]); // the active church's REAL groups (steward console)
   const [cats, setCats] = useC([]);             // the church's group categories (named containers)
   const [collapsed, setCollapsed] = useC({});   // folded group categories — the member can collapse sections
@@ -378,6 +379,7 @@ function ChatScreen({ ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <IconBtn name="study" onClick={() => { if (searchOpen) { setSearchOpen(false); setQ(''); } else setSearchOpen(true); }} title="Search" />
           <span style={{ position: 'relative', display: 'inline-flex' }}>
             <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
             {ctx.dmUnread ? <span style={{ position: 'absolute', top: 4, right: 4, width: 10, height: 10, borderRadius: 999, background: 'var(--clay)', border: '2px solid var(--surface)', pointerEvents: 'none' }} /> : null}
@@ -444,12 +446,14 @@ function ChatScreen({ ctx }) {
         </div>
       ) : (
       <React.Fragment>
-      {/* search */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 46, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
+      {/* search — hidden until the header ⌕ is tapped */}
+      {searchOpen ? (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 46, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 18, animation: 'trinityFade .25s ease both' }}>
         <Icon name="study" size={19} color="var(--ink-3)" />
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search messages & groups…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
-        {q ? <button onClick={() => setQ('')} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={17} /></button> : null}
+        <input value={q} onChange={e => setQ(e.target.value)} autoFocus placeholder="Search messages & groups…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
+        <button onClick={() => { setQ(''); setSearchOpen(false); }} title="Close search" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={17} /></button>
       </div>
+      ) : null}
 
       {ql ? (
       <div style={{ animation: 'trinityFade .3s ease both' }}>
