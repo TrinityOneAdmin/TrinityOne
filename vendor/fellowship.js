@@ -7342,8 +7342,9 @@
         },
         oneose() {
           eosed = true;
-          emit();
+          if (byId.size) emit();
         }
+        // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
       });
       return () => {
         try {
@@ -7390,8 +7391,9 @@
         },
         oneose() {
           eosed = true;
-          emit();
+          if (byKey.size) emit();
         }
+        // sticky: don't blank slots/skips on a reconnect's empty EOSE; genuine clears come via the delete path
       });
       return () => {
         try {
@@ -7515,8 +7517,9 @@
         },
         oneose() {
           eosed = true;
-          emit();
+          if (byPub.size) emit();
         }
+        // sticky: don't blank the "ready to help" list on a reconnect's empty EOSE
       });
       return () => {
         try {

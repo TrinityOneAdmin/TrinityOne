@@ -993,7 +993,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
         try { const c = JSON.parse(e.content); byId.set(id, { id, displayLabel: c.displayLabel || '', type: c.type || 'meals', startDate: c.startDate || '', endDate: c.endDate || '', recipient: (c.recipient || '').toLowerCase(), notes: c.notes || '', dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: (c.dayMeals && typeof c.dayMeals === 'object') ? c.dayMeals : {}, ts: e.created_at }); emit(); } catch {}
       },
-      oneose() { eosed = true; emit(); },
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -1017,7 +1017,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byKey.delete(key); emit(); return; }
         try { byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || '{}')) }); emit(); } catch {}
       },
-      oneose() { eosed = true; emit(); },
+      oneose() { eosed = true; if (byKey.size) emit(); },   // sticky: don't blank slots/skips on a reconnect's empty EOSE; genuine clears come via the delete path
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -1079,7 +1079,7 @@ window.Fellowship = {
           emit();
         } catch {}
       },
-      oneose() { eosed = true; emit(); },
+      oneose() { eosed = true; if (byPub.size) emit(); },   // sticky: don't blank the "ready to help" list on a reconnect's empty EOSE
     });
     return () => { try { sub.close(); } catch {} };
   },
