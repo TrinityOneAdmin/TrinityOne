@@ -120,8 +120,8 @@
     position: absolute; inset: 0; z-index: 60; cursor: pointer;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
     background: radial-gradient(120% 90% at 50% 38%, #F3E4C4, var(--paper) 60%);
-    animation: spOut .45s ease 1.9s forwards;
   }
+  .to-splash.sp-fade { animation: spOut .45s ease forwards; }   /* fade only when the app says the cards are ready (JS-controlled) */
   .to-splash .sp-mark { width: 126px; height: 126px; }
   .to-splash .sp-arc { fill: none; stroke: var(--ink); stroke-width: 7; stroke-linecap: round; stroke-dasharray: 58; stroke-dashoffset: 0; }
   .to-splash .sp-spark { fill: var(--gold); transform-box: fill-box; transform-origin: center; transform: scale(1); }

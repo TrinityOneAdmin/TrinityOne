@@ -188,10 +188,18 @@ function EmptyState({ loading, error, onBrowse }) {
 }
 
 // ── "Halo" boot splash: logo reveal, auto-dismiss (tap to skip) ──
-function Splash({ onDone }) {
-  useAE(() => { const t = setTimeout(onDone, 2350); return () => clearTimeout(t); }, []);
+function Splash({ onDone, ready }) {
+  const [minDone, setMinDone] = useA(false);
+  const [fading, setFading] = useA(false);
+  useAE(() => {
+    const a = setTimeout(() => setMinDone(true), 1900);   // let the logo animation finish before we allow dismissal
+    const b = setTimeout(() => setFading(true), 4500);    // hard cap — never hang the splash even if data is slow
+    return () => { clearTimeout(a); clearTimeout(b); };
+  }, []);
+  useAE(() => { if (ready && minDone) setFading(true); }, [ready, minDone]);   // dismiss once the church's cards are loaded
+  useAE(() => { if (fading) { const t = setTimeout(onDone, 450); return () => clearTimeout(t); } }, [fading]);   // play the fade, then remove
   return (
-    <div className="to-splash" onClick={onDone}>
+    <div className={"to-splash" + (fading ? " sp-fade" : "")} onClick={() => setFading(true)}>
       <svg className="sp-mark" viewBox="0 0 100 100" aria-label="TrinityOne">
         <path className="sp-arc a1" d="M81.2 67.9 A36 36 0 0 1 31.3 80.7" />
         <path className="sp-arc a2" d="M18.8 68.0 A36 36 0 0 1 32.7 18.4" />
@@ -290,6 +298,7 @@ function App() {
   const servingParam = new URLSearchParams(location.search).get('serving');   // '1' opens the Serving overlay
   const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam || inviteParam || dmParam || servingParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
+  const [bootReady, setBootReady] = useA(false);   // true once the church's core data has arrived — holds the splash until the cards are ready
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
     onboardParam === '1' || (!deepLinked && !lsGet('trinityone.onboarded', false))
@@ -523,7 +532,7 @@ function App() {
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
-    if (!np || !F || !F.subscribeMealsSettings) { setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); setCareAvail([]); careNpRef.current = null; return; }
+    if (!np || !F || !F.subscribeMealsSettings) { setCareSettings({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' }); setCareNeeds([]); setCareSlots([]); setCareSkips([]); setCareAvail([]); setBootReady(true); careNpRef.current = null; return; }
     const churchChanged = careNpRef.current !== np;
     careNpRef.current = np;
     // On a CHURCH CHANGE, paint from this church's cache (or empty). On a mere RECONNECT (same church), do NOT
@@ -543,7 +552,7 @@ function App() {
       const cav = lsGet('trinityone.care.av.' + np, null); if (cav) setCareAvail(cav);
     }
     const subs = [
-      F.subscribeMealsSettings(np, s => { setCareSettings(s); lsSet('trinityone.care.s.' + np, s); }),
+      F.subscribeMealsSettings(np, s => { setCareSettings(s); lsSet('trinityone.care.s.' + np, s); setBootReady(true); }),
       F.subscribeCareNeeds(np, n => { setCareNeeds(n); lsSet('trinityone.care.n.' + np, n); }),
       F.subscribeCareSlots(np, x => { setCareSlots(x); lsSet('trinityone.care.sl.' + np, x); }),
       F.subscribeCareSkips(np, x => { setCareSkips(x); lsSet('trinityone.care.sk.' + np, x); }),
@@ -1295,7 +1304,7 @@ function App() {
           </div>
         ) : null}
 
-        {showSplash ? <Splash onDone={() => setShowSplash(false)} /> : null}
+        {showSplash ? <Splash onDone={() => setShowSplash(false)} ready={bootReady} /> : null}
         {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity}
           onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); promptFollowChurch(); }}
           onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); promptFollowChurch(); }} /> : null}
