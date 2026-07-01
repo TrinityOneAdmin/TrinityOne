@@ -735,7 +735,7 @@ window.Fellowship = {
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
           try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); _noteGroupLeaders(pubk, id, c, e.pubkey); emit(); } catch {}
         },
-        oneose() { eosed = true; emit(); },
+        oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
       return () => { try { sub.close(); } catch {} };
     };
@@ -761,7 +761,7 @@ window.Fellowship = {
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
           try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
         },
-        oneose() { eosed = true; emit(); },
+        oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
       return () => { try { sub.close(); } catch {} };
     };
@@ -879,7 +879,7 @@ window.Fellowship = {
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
           try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
         },
-        oneose() { eosed = true; emit(); },
+        oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
       return () => { try { sub.close(); } catch {} };
     };
@@ -916,7 +916,7 @@ window.Fellowship = {
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
           try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
         },
-        oneose() { eosed = true; emit(); },
+        oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
       return () => { try { sub.close(); } catch {} };
     };
@@ -941,7 +941,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
         try { byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
-      oneose() { eosed = true; emit(); },
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -1121,7 +1121,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
         try { const c = JSON.parse(e.content); byId.set(id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }); emit(); } catch {}
       },
-      oneose() { eosed = true; emit(); },
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
     return () => { window.removeEventListener('trinity-church-trust', onTrust); try { sub.close(); } catch {} };
   },
@@ -1165,7 +1165,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
         try { byId.set(id, { id, church: e.pubkey, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
       },
-      oneose() { emit(); },
+      oneose() { if (byId.size) emit(); },   // sticky: don't blank the "you're serving" card on a reconnect's empty EOSE
     });
     return () => { try { sub.close(); } catch {} };
   },

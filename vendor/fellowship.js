@@ -6847,8 +6847,9 @@
           },
           oneose() {
             eosed = true;
-            emit();
+            if (byId.size) emit();
           }
+          // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
         });
         return () => {
           try {
@@ -6900,8 +6901,9 @@
           },
           oneose() {
             eosed = true;
-            emit();
+            if (byId.size) emit();
           }
+          // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
         });
         return () => {
           try {
@@ -7120,8 +7122,9 @@
           },
           oneose() {
             eosed = true;
-            emit();
+            if (byId.size) emit();
           }
+          // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
         });
         return () => {
           try {
@@ -7183,8 +7186,9 @@
           },
           oneose() {
             eosed = true;
-            emit();
+            if (byId.size) emit();
           }
+          // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
         });
         return () => {
           try {
@@ -7237,8 +7241,9 @@
         },
         oneose() {
           eosed = true;
-          emit();
+          if (byId.size) emit();
         }
+        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
       return () => {
         try {
@@ -7603,8 +7608,9 @@
         },
         oneose() {
           eosed = true;
-          emit();
+          if (byId.size) emit();
         }
+        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
       return () => {
         window.removeEventListener("trinity-church-trust", onTrust);
@@ -7694,8 +7700,9 @@
           }
         },
         oneose() {
-          emit();
+          if (byId.size) emit();
         }
+        // sticky: don't blank the "you're serving" card on a reconnect's empty EOSE
       });
       return () => {
         try {
