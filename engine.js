@@ -90,6 +90,10 @@ window.sanitizeHtml = function (html) {
   // installed dictionary modules are consulted before the small built-in set
   const dicts = [];
   function addDict(entries){ if(entries) dicts.push(entries); notify(); }
+  // Lexicon dicts (Strong's ≈ 14k entries) aren't needed until a word is tapped — defer their parse off the
+  // boot path. They load on idle after boot, or on the first lex()/dict access, whichever comes first.
+  const _pendingDicts = []; let _dictsLoaded = false;
+  function _ensureDicts(){ if(_dictsLoaded) return; _dictsLoaded = true; for(const fn of _pendingDicts.splice(0)){ try{ fn(); }catch(e){ console.error("lazy dict", e); } } }
   // SECURITY-AUDIT-2026-06-24 N4: strip raw HTML from third-party dictionary string fields. Today
   // every lexicon value reaches the DOM as a React text child (auto-escaped, no XSS), so this is
   // defence in depth — but if a future change ever wraps lex output in dangerouslySetInnerHTML
@@ -99,20 +103,18 @@ window.sanitizeHtml = function (html) {
   const _LEX_FIELDS = ['lemma','translit','pos','short','gloss','def','deriv','kjv'];
   function _stripTags(s){ return (typeof s === 'string' && s.indexOf('<') !== -1) ? s.replace(/<[^>]*>/g, '') : s; }
   function loadDictJSON(obj){
-    const entries = (obj && obj.entries) || obj || {};
-    for (const k in entries) {
-      const e = entries[k];
-      if (e && typeof e === 'object') for (const f of _LEX_FIELDS) if (typeof e[f] === 'string') e[f] = _stripTags(e[f]);
-    }
-    addDict(entries);
+    // The security strip (raw HTML out of third-party dict fields) now happens lazily per-entry in lex() on
+    // lookup, so we skip the O(14k) walk here — it was a measurable boot cost for zero benefit before a tap.
+    addDict((obj && obj.entries) || obj || {});
   }
   const commentaries = {};   // abbr -> commentary source { name, getComment(book,chap) }
   function addCommentary(src){ if(!src) return null; let abbr = src.abbr || "Cmt", i = 2; while(commentaries[abbr] && commentaries[abbr].name !== src.name) abbr = (src.abbr || "Cmt") + i++; src.abbr = abbr; commentaries[abbr] = src; notify(); return abbr; }
   function lex(id){
     if(!id) return null;
+    _ensureDicts();
     id = id.toUpperCase();
     for(const d of dicts){
-      if(d[id]){ const e = d[id]; return { id, lang: id[0] === "H" ? "HEBREW" : "GREEK", lemma: e.lemma || "", translit: e.translit || "", pos: e.pos || "", short: e.short || "", gloss: e.gloss || "", def: e.def || "", deriv: e.deriv || "", kjv: e.kjv, occ: e.occ }; }
+      if(d[id]){ const e = d[id]; return { id, lang: id[0] === "H" ? "HEBREW" : "GREEK", lemma: _stripTags(e.lemma || ""), translit: _stripTags(e.translit || ""), pos: _stripTags(e.pos || ""), short: _stripTags(e.short || ""), gloss: _stripTags(e.gloss || ""), def: _stripTags(e.def || ""), deriv: _stripTags(e.deriv || ""), kjv: _stripTags(e.kjv), occ: e.occ }; }
     }
     const e = LEX[id];
     if(e) return Object.assign({ id, lang: id[0] === "H" ? "HEBREW" : "GREEK" }, e);
@@ -499,10 +501,12 @@ window.sanitizeHtml = function (html) {
       try{
         const bytes = await cacheGet(url);
         if(!bytes) continue;  // cache cleared — user can re-download
-        if((meta.format || "").toUpperCase() === "JSON") loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)));
+        if((meta.format || "").toUpperCase() === "JSON") { const raw = bytes; _pendingDicts.push(() => loadDictJSON(JSON.parse(new TextDecoder().decode(raw)))); }
         else await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
       }catch(e){ console.error("restore failed for", url, e); }
     }
+    // parse any deferred lexicon dicts during idle — ready before the reader's tapped, but not blocking boot
+    if(_pendingDicts.length){ if(typeof requestIdleCallback === 'function') requestIdleCallback(_ensureDicts, { timeout: 5000 }); else setTimeout(_ensureDicts, 1500); }
   }
 
   // ── hidden file input ──
