@@ -55,7 +55,7 @@ function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSetting
       {/* row 1 — Bible/Plans tabs share the line with the action icons */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px 0' }}>
         <div style={{ flex: 1, minWidth: 0 }}><ReadPlansTabs ctx={ctx} /></div>
-        <IconBtn name="study" size={18} onClick={() => ctx.openSearch()} style={{ width: 36, height: 36 }} />
+        <IconBtn name="search" size={18} onClick={() => ctx.openSearch()} style={{ width: 36, height: 36 }} />
         {canListen ? <IconBtn name="headphones" size={18} onClick={onListen} style={narrating ? { width: 36, height: 36, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} /> : null}
         <IconBtn name="compare" size={18} onClick={onCompare} style={compare ? { width: 36, height: 36, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} />
         <IconBtn name="sliders" size={18} onClick={onSettings} style={{ width: 36, height: 36 }} />

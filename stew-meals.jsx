@@ -7,12 +7,12 @@
 
 const MEALS_TYPES = [
   ['meals',     'Meals',     'gift'],
-  ['rides',     'Rides',     'globe'],
+  ['rides',     'Rides',     'calCheck'],
   ['moving',    'Moving',    'users'],
   ['errands',   'Errands',   'check'],
   ['diy',       'DIY',       'hand'],
   ['visits',    'Visits',    'heart'],
-  ['childcare', 'Childcare', 'shield'],
+  ['childcare', 'Childcare', 'child'],
 ];
 const MEALS_TYPE_LABEL = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[1]]));
 const MEALS_TYPE_ICON  = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[2]]));
@@ -269,7 +269,7 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21 }}>{need.displayLabel || 'A member in our church'}</div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
           </div>
-          <button onClick={onEdit} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="edit" size={14} color="currentColor" /> Edit</button>
+          <button onClick={onEdit} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
         </div>
         {need.notes ? <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{need.notes}</div> : null}
       </div>

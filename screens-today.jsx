@@ -25,7 +25,7 @@ function ProgressRing({ value, size = 46, stroke = 4, color = 'var(--clay)' }) {
 
 // ── Care / Meal trains: open needs the member can sign up to help with (Today card) ──
 const CARE_TYPE_LABEL = { meals: 'Meals', rides: 'Rides', moving: 'Moving', errands: 'Errands', diy: 'DIY', visits: 'Visits', childcare: 'Childcare' };
-const CARE_TYPE_ICON = { meals: 'heart', rides: 'calCheck', moving: 'users', errands: 'check', diy: 'hand', visits: 'users', childcare: 'child' };
+const CARE_TYPE_ICON = { meals: 'gift', rides: 'calCheck', moving: 'users', errands: 'check', diy: 'hand', visits: 'heart', childcare: 'child' };
 function careDateRange(start, end) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '')) return [];
   const s = new Date(start + 'T00:00:00');
@@ -91,7 +91,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
                     {dayMeals.length ? <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMeals.map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
                   </div>
                   <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
-                    {skipped ? <span>{mineFilled ? 'They’re sorted — no need, thanks 🙏' : 'Not needed this day'}</span>
+                    {skipped ? <span>{mineFilled ? 'They’re covered — no need, thanks 🙏' : 'Not needed this day'}</span>
                       : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
                       : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
                   </div>
@@ -100,7 +100,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
                     : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
                   {(isRecipient || (canManage && fills.length === 0)) && (skipped
                     ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
-                    : <button onClick={() => care.skip(need.id, iso)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? (fills.length ? 'Thanks — I’m sorted' : 'I’m sorted') : 'Skip'}</button>)}
+                    : <button onClick={() => care.skip(need.id, iso)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? (fills.length ? 'Thanks — I’m covered' : 'I’m covered') : 'Skip'}</button>)}
                 </div>
                 {mineFilled && !skipped && need.type === 'meals' ? (
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '0 0 7px' }}>
@@ -111,7 +111,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
               </div>
             );
           })}
-          {(isRecipient || canManage) ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>{isRecipient ? <React.Fragment>This is for you. Tap <b>I’m sorted</b> on any day you don’t need help</React.Fragment> : <React.Fragment>Care team: tap <b>Skip</b> on any day they’re already covered (e.g. if they’re not on the app)</React.Fragment>} — it comes off the list.</div> : null}
+          {(isRecipient || canManage) ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>{isRecipient ? <React.Fragment>This is for you. Tap <b>I’m covered</b> on any day you don’t need help</React.Fragment> : <React.Fragment>Care team: tap <b>Skip</b> on any day they’re already covered (e.g. if they’re not on the app)</React.Fragment>} — it comes off the list.</div> : null}
         </div>
       )}
     </div>
@@ -123,7 +123,7 @@ const careBtnMine = { flexShrink: 0, display: 'inline-flex', alignItems: 'center
 
 // ── "I'm here to help" availability — a member signals they're glad to help, so anyone who needs
 // something is encouraged to ask. Shown only inside the Care tab (embedded).
-const CARE_OFFER_TAGS = [['meals', 'Meals'], ['lifts', 'Lifts'], ['moving', 'Moving'], ['childcare', 'Childcare'], ['diy', 'DIY'], ['visits', 'Visits'], ['prayer', 'Prayer'], ['errands', 'Errands']];
+const CARE_OFFER_TAGS = [['meals', 'Meals'], ['rides', 'Rides'], ['moving', 'Moving'], ['childcare', 'Childcare'], ['diy', 'DIY'], ['visits', 'Visits'], ['prayer', 'Prayer'], ['errands', 'Errands']];
 function careOfferLabel(id) { const t = CARE_OFFER_TAGS.find(x => x[0] === id); return t ? t[1] : id; }
 
 function CareAvailRow({ a, ctx, myPub }) {
@@ -184,7 +184,7 @@ function CareAvailability({ ctx }) {
                 {showTags && showTags.length ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 2 }}>{showTags.map(careOfferLabel).join(' · ')}</div> : null}
               </div>
               <button onClick={() => setEditing(true)} style={careBtnGhost}>Edit</button>
-              <button onClick={turnOff} style={careBtnGhost}>Turn off</button>
+              <button onClick={turnOff} style={careBtnGhost}>Take a break</button>
             </div>
           ) : editing ? (
             <div>
@@ -319,7 +319,7 @@ function TodayScreen({ ctx }) {
     if (!myCareNeed) return false;
     try { const d = JSON.parse(localStorage.getItem('trinityone.care.bannerDismiss') || 'null'); return !!(d && d.id === myCareNeed.id && d.ts === myCareNeed.ts); } catch { return false; }
   }, [myCareNeed && myCareNeed.id, myCareNeed && myCareNeed.ts, careDismissTick]);
-  const dismissCareBanner = (e) => { if (e) e.stopPropagation(); try { if (myCareNeed) localStorage.setItem('trinityone.care.bannerDismiss', JSON.stringify({ id: myCareNeed.id, ts: myCareNeed.ts })); } catch {} setCareDismissTick(t => t + 1); };
+  const dismissCareBanner = (e) => { if (e) e.stopPropagation(); try { if (myCareNeed) localStorage.setItem('trinityone.care.bannerDismiss', JSON.stringify({ id: myCareNeed.id, ts: myCareNeed.ts })); } catch {} if (ctx.toast) ctx.toast('Okay — this comes back if anything about your care changes.'); setCareDismissTick(t => t + 1); };
   const pNext = plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1];
 
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
@@ -336,6 +336,7 @@ function TodayScreen({ ctx }) {
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-3)', letterSpacing: '.3px', textTransform: 'uppercase' }}>{dateStr}</div>
           <h1 style={{ margin: '4px 0 0', fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, letterSpacing: '-.3px', lineHeight: 1.05 }}>{greet}</h1>
+          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 7, padding: '3px 10px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 220, boxShadow: 'var(--shadow)' }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} /><span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {(() => {
@@ -345,7 +346,7 @@ function TodayScreen({ ctx }) {
             const unread = (D.NOTIFICATIONS || []).some(n => n.unread) || (ctx.netUnread > 0);
             return (
               <React.Fragment>
-                <button onClick={ctx.openSearch} aria-label="Search" style={hdrBtn}><Icon name="study" size={19} /></button>
+                <button onClick={ctx.openSearch} aria-label="Search" style={hdrBtn}><Icon name="search" size={19} /></button>
                 {ctx.church && ctx.church.audioFeed ? <button onClick={ctx.openListen} aria-label="Listen" style={hdrBtn}><Icon name="headphones" size={19} /></button> : null}
                 <button onClick={ctx.openNotifications} aria-label="Notifications" style={hdrBtn}>
                   <Icon name="bell" size={19} />
@@ -375,9 +376,9 @@ function TodayScreen({ ctx }) {
           <div style={{ width: 40, height: 40, borderRadius: 13, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 18%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={20} color="var(--sage)" /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Your church is caring for you</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>Tap to see what’s arranged — and tick off any day you’re sorted.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>Tap to see what’s arranged — and tick off any day you’re covered.</div>
           </div>
-          <button onClick={dismissCareBanner} aria-label="Dismiss" title="Dismiss — it comes back if the care changes" style={{ flexShrink: 0, width: 26, height: 26, borderRadius: 999, border: 'none', background: 'transparent', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>✕</button>
+          <button onClick={dismissCareBanner} aria-label="Dismiss" title="Dismiss — it comes back if the care changes" style={{ flexShrink: 0, width: 40, height: 40, marginRight: -6, borderRadius: 999, border: 'none', background: 'transparent', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>✕</button>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
       ) : null}

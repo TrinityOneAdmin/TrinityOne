@@ -266,9 +266,9 @@ function Overlay({ open, onClose, children, docked }) {
 }
 
 // ── Small bits ──
-function IconBtn({ name, onClick, size = 20, badge, style = {}, stroke = 1.9 }) {
+function IconBtn({ name, onClick, size = 20, badge, style = {}, stroke = 1.9, title, ...rest }) {
   return (
-    <button onClick={onClick} style={{
+    <button onClick={onClick} title={title} aria-label={title} {...rest} style={{
       width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
       background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer',
       display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',

@@ -31,7 +31,7 @@ function SearchScreen({ ctx, onBack }) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 15px', height: 50, borderRadius: 16,
         background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
-        <Icon name="study" size={20} color="var(--ink-3)" />
+        <Icon name="search" size={20} color="var(--ink-3)" />
         <input value={q} onChange={e => setQ(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') run(q); }}
           placeholder="Search this translation, or a Strong's no…" style={{

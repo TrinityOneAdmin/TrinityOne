@@ -379,7 +379,7 @@ function ChatScreen({ ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
         <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-          <IconBtn name="study" onClick={() => { if (searchOpen) { setSearchOpen(false); setQ(''); } else setSearchOpen(true); }} title="Search" />
+          <IconBtn name="search" onClick={() => { if (searchOpen) { setSearchOpen(false); setQ(''); } else setSearchOpen(true); }} title="Search" />
           <span style={{ position: 'relative', display: 'inline-flex' }}>
             <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
             {ctx.dmUnread ? <span style={{ position: 'absolute', top: 4, right: 4, width: 10, height: 10, borderRadius: 999, background: 'var(--clay)', border: '2px solid var(--surface)', pointerEvents: 'none' }} /> : null}
@@ -449,7 +449,7 @@ function ChatScreen({ ctx }) {
       {/* search — hidden until the header ⌕ is tapped */}
       {searchOpen ? (
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 46, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 18, animation: 'trinityFade .25s ease both' }}>
-        <Icon name="study" size={19} color="var(--ink-3)" />
+        <Icon name="search" size={19} color="var(--ink-3)" />
         <input value={q} onChange={e => setQ(e.target.value)} autoFocus placeholder="Search messages & groups…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
         <button onClick={() => { setQ(''); setSearchOpen(false); }} title="Close search" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={17} /></button>
       </div>
@@ -459,7 +459,7 @@ function ChatScreen({ ctx }) {
       <div style={{ animation: 'trinityFade .3s ease both' }}>
         {groupHits.length === 0 && msgHits.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--ink-3)' }}>
-            <Icon name="study" size={34} color="var(--ink-3)" />
+            <Icon name="search" size={34} color="var(--ink-3)" />
             <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, marginTop: 10 }}>No matches for “{q}”</p>
           </div>
         ) : null}
@@ -1212,7 +1212,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
           <div style={lblStyle}>SEND TO SOMEONE</div>
           {people.length > 6 ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 40, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 10 }}>
-              <Icon name="study" size={15} color="var(--ink-3)" />
+              <Icon name="search" size={15} color="var(--ink-3)" />
               <input value={pq} onChange={e => setPq(e.target.value)} placeholder="Search people…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
             </div>
           ) : null}
@@ -1398,7 +1398,7 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
         </div>
         <div style={{ padding: '6px 16px 12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 13px', height: 44, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-            <Icon name="study" size={17} color="var(--ink-3)" />
+            <Icon name="search" size={17} color="var(--ink-3)" />
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search people…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
           </div>
         </div>
