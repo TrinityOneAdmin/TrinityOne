@@ -245,21 +245,30 @@ window.sanitizeHtml = function (html) {
   }
   function buildFromUSFM(files, fallbackName){
     const dec = new TextDecoder("utf-8");
-    const store = {}, maxChap = {}, books = [];
+    const rawByBook = {}, parsed = {}, maxChap = {}, books = [];
     for(const nm of Object.keys(files)){
       if(nm.startsWith("__MACOSX") || !/\.(usfm|sfm)$/i.test(nm)) continue;
-      const { code, chapters } = parseUSFM(dec.decode(files[nm]));
-      let bookNum = USFM_BOOK[code];
+      const text = dec.decode(files[nm]);
+      // LAZY BIBLE (E1): identify the book + its chapter count cheaply here, but DEFER the expensive per-verse
+      // parse (parseUSFM) until the book is actually opened. Parsing all 66 books up front cost ~0.6s on
+      // desktop / 2-5s on a modest phone on EVERY boot; this drops it to a few ms for the one book being read.
+      // The \id + line-start \c detection mirrors parseUSFM exactly, so the book list + maxChap are identical.
+      const idm = text.match(/\\id\s+(\w+)/);
+      let bookNum = idm ? USFM_BOOK[idm[1].toUpperCase()] : 0;
       if(!bookNum){ const fm = nm.toUpperCase().match(/([1-3]?[A-Z]{2,3})\.(?:USFM|SFM)$/); if(fm) bookNum = USFM_BOOK[fm[1]]; }
       if(!bookNum) continue;
-      const mc = Math.max(0, ...Object.keys(chapters).map(Number));
+      let mc = 0; const cre = /^\\c\s+(\d+)/gm; let cm; while((cm = cre.exec(text))){ const n = +cm[1]; if(n > mc) mc = n; }
       if(mc <= 0) continue;
-      store[bookNum] = chapters; maxChap[bookNum] = mc;
+      rawByBook[bookNum] = text; maxChap[bookNum] = mc;
       if(!books.includes(bookNum)) books.push(bookNum);
     }
     if(!books.length) return null;
     books.sort((a, b) => a - b);
-    const get = (b, c) => (store[b] && store[b][c]) ? store[b][c].map(x => ({ v: x.v, html: x.html, text: stripTags(x.html) })) : [];
+    const chaptersFor = (b) => {
+      if(!parsed[b]){ const raw = rawByBook[b]; parsed[b] = raw ? (parseUSFM(raw).chapters || {}) : {}; rawByBook[b] = null; }
+      return parsed[b];
+    };
+    const get = (b, c) => { const ch = chaptersFor(b); return (ch && ch[c]) ? ch[c].map(x => ({ v: x.v, html: x.html, text: stripTags(x.html) })) : []; };
     return {
       abbr: (fallbackName || "USFM").replace(/\.(zip|usfm|sfm)$/i, "").slice(0, 12) || "USFM",
       name: fallbackName || "USFM Bible", kind: "usfm", books, maxChap,
