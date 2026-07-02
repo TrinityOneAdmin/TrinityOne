@@ -526,6 +526,17 @@ const MIME = {
 // the RSS has no CORS). Returns { channel:{name,url,platform}, videos:[{id,ytId,title,published,thumb}] }.
 const feedCache = new Map();            // channelUrl -> { ts, data }
 const FEED_TTL = 8 * 60 * 1000;
+const MAX_PROXY_BYTES = 5 * 1024 * 1024;   // cap upstream reads — an attacker-supplied URL could otherwise stream GBs into RAM
+const MAX_FEED_CACHE = 200;                // bound the proxy caches so distinct ?url= values can't grow them without limit
+function boundCache(m) { if (m.size < MAX_FEED_CACHE) return; const now = Date.now(); for (const [k, v] of m) if (now - v.ts > FEED_TTL) m.delete(k); while (m.size >= MAX_FEED_CACHE) { const k = m.keys().next().value; if (k === undefined) break; m.delete(k); } }
+async function readCapped(r, maxBytes) {
+  const cl = Number(r.headers.get('content-length') || 0);
+  if (cl && cl > maxBytes) throw new Error('response too large');
+  if (!r.body) { const t = await r.text(); if (t.length > maxBytes) throw new Error('response too large'); return t; }
+  const reader = r.body.getReader(); let total = 0; const chunks = [];
+  for (;;) { const { done, value } = await reader.read(); if (done) break; total += value.length; if (total > maxBytes) { try { await reader.cancel(); } catch {} throw new Error('response too large'); } chunks.push(Buffer.from(value)); }
+  return Buffer.concat(chunks).toString('utf8');
+}
 const decodeXml = (s) => String(s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
 // ---- SSRF guard: the /feed and /audiofeed proxies fetch church-supplied URLs server-side. Only
 // allow public http(s) hosts, re-checked on every redirect hop, so the proxy can't be aimed at the
@@ -557,7 +568,7 @@ async function fetchText(url) {
     const r = await fetch(cur, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; TrinityOne/1.0)' }, redirect: 'manual', signal: AbortSignal.timeout(8000) });
     if (r.status >= 300 && r.status < 400) { const loc = r.headers.get('location'); if (!loc) throw new Error('bad redirect'); cur = new URL(loc, cur).toString(); continue; }
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.text();
+    return readCapped(r, MAX_PROXY_BYTES);
   }
   throw new Error('too many redirects');
 }
@@ -594,7 +605,7 @@ async function getFeed(url) {
   if (/youtu\.?be|youtube\.com/.test(url) || /^@[\w.\-]+$/.test(url) || /^UC[\w-]+$/.test(url)) data = await resolveYouTube(url);
   else if (/rumble\.com/.test(url)) data = await resolveRumble(url);
   else data = { channel: { url, platform: 'link' }, videos: [] };
-  feedCache.set(url, { ts: Date.now(), data });
+  boundCache(feedCache); feedCache.set(url, { ts: Date.now(), data });
   return data;
 }
 
@@ -627,7 +638,7 @@ async function resolvePodcast(url) {
 async function getAudioFeed(url) {
   const c = audioCache.get(url); if (c && Date.now() - c.ts < FEED_TTL) return c.data;
   const data = await resolvePodcast(url);
-  audioCache.set(url, { ts: Date.now(), data });
+  boundCache(audioCache); audioCache.set(url, { ts: Date.now(), data });
   return data;
 }
 
@@ -1148,6 +1159,7 @@ const subs = new Map();   // ws -> Map(subId -> filters[])
 const server = createServer(serveStatic);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });   // 1 MB cap (default is 100 MB — memory-DoS guard)
 const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (members, chat, profiles, etc.)
+const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is a cheap unauthenticated CPU-DoS — cap it
 server.on('upgrade', (req, socket, head) => {
   if ((req.url || '').split('?')[0] !== '/relay') { socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
@@ -1196,6 +1208,7 @@ wss.on('connection', ws => {
       const subId = rest[0];
       let filters = rest.slice(1);
       if (filters.length === 1 && Array.isArray(filters[0])) filters = filters[0];
+      if (filters.length > MAX_FILTERS_PER_REQ) { ws.send(JSON.stringify(['CLOSED', subId, 'invalid: too many filters'])); return; }
       const mysubs = subs.get(ws);
       if (!mysubs.has(subId) && mysubs.size >= MAX_SUBS_PER_CONN) { ws.send(JSON.stringify(['CLOSED', subId, 'rate-limited: too many subscriptions'])); return; }
       mysubs.set(subId, filters);
