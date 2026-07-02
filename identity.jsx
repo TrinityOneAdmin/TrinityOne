@@ -13,8 +13,23 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   const [answers, setAnswers] = useId(['', '']);
   const [checkErr, setCheckErr] = useId('');
   useIdE(() => { if (open) { setStep(0); setName(''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '']); setCheckErr(''); } }, [open]);
-  // fetch the member's own 12 words when we reach the back-up step
-  useIdE(() => { if (step === 1 && words.length === 0 && window.TrinityIdentity && window.TrinityIdentity.exportMnemonic) { window.TrinityIdentity.exportMnemonic().then(m => { const w = String(m || '').trim().split(/\s+/).filter(Boolean); if (w.length) setWords(w); }).catch(() => {}); } }, [step]);
+  // fetch the member's own 12 words when we reach the back-up step. The secure store can answer empty for a
+  // moment right after boot, so retry until we get a full phrase rather than getting stuck on "Preparing…".
+  useIdE(() => {
+    if (step !== 1 || words.length) return;
+    let cancelled = false, tries = 0;
+    const grab = () => {
+      if (cancelled || !window.TrinityIdentity || !window.TrinityIdentity.exportMnemonic) return;
+      window.TrinityIdentity.exportMnemonic().then(m => {
+        if (cancelled) return;
+        const w = String(m || '').trim().split(/\s+/).filter(Boolean);
+        if (w.length >= 12) setWords(w);
+        else if (tries++ < 12) setTimeout(grab, 300);
+      }).catch(() => { if (!cancelled && tries++ < 12) setTimeout(grab, 300); });
+    };
+    grab();
+    return () => { cancelled = true; };
+  }, [step]);
   // pick two distinct positions to confirm when we reach the check step
   useIdE(() => { if (step === 2 && checkIdx.length === 0 && words.length >= 6) { const n = words.length; const a = Math.floor(Math.random() * n); let b = Math.floor(Math.random() * n), g = 0; while (b === a && g++ < 30) b = Math.floor(Math.random() * n); setCheckIdx([a, b].sort((x, y) => x - y)); setAnswers(['', '']); setCheckErr(''); } }, [step, words]);
   if (!open) return null;

@@ -221,6 +221,7 @@ function SchAddServiceModal({ onClose }) {
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
+      {repeat !== 'none' && until && until <= date ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
         <button onClick={save} disabled={!date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: date ? 1 : 0.55 }}><Icon name="plus" size={16} color="#fff" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
@@ -488,8 +489,8 @@ function DashRota({ onNewTeam }) {
                   <div onClick={() => setFillMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
                   <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 232, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
                     {[['This service', () => { setFillMenu(false); autoFill(); }, 'Fill the gaps on this service only'],
-                      ['Create + fill this month', () => autoFillAhead(1), 'Add weekly services for ~4 weeks and fill them'],
-                      ['Create + fill this quarter', () => autoFillAhead(3), 'Add weekly services for ~3 months and fill them']].map(([t, go, s]) => (
+                      ['Create + fill this month', () => { setFillMenu(false); if (window.confirm('Create weekly services for the next ~4 weeks and auto-fill them? This publishes them and asks the people assigned to serve.')) autoFillAhead(1); }, 'Add weekly services for ~4 weeks and fill them'],
+                      ['Create + fill this quarter', () => { setFillMenu(false); if (window.confirm('Create weekly services for the next ~3 months (around 13) and auto-fill them? This publishes them and asks everyone assigned to serve.')) autoFillAhead(3); }, 'Add weekly services for ~3 months and fill them']].map(([t, go, s]) => (
                       <button key={t} onClick={go} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
@@ -1010,6 +1011,7 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
           ) : null}
           <div style={{ marginTop: 12 }}><div style={roomLbl}>NOTE (OPTIONAL)</div><input value={note} onChange={e => setNote(e.target.value)} placeholder="optional" style={roomFld} /></div>
         </div>
+        {!title.trim() ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '0 24px 4px', lineHeight: 1.4 }}>Add what the room’s for above to book it.</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '14px 24px 20px' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Cancel</button>
           <button onClick={save} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 12, opacity: canSave ? 1 : 0.5 }}>{bk.id ? 'Save' : 'Book it'}</button>
