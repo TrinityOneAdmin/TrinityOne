@@ -23,6 +23,7 @@ const SQLITE_DB = process.env.RELAY_SQLITE || join(ROOT, 'relay', 'relay.sqlite'
 const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 20000;   // ephemeral budget; raise on a shared/public relay
 const NONMEMBER_KIND0_CAP = 1000;   // cap stored profiles from non-members (L2: prevent unbounded growth)
 const STEWARDREQ_CAP = 50;          // cap pending steward-requests per church from strangers (audit L1: anti-flood)
+const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs per member — one member can't disk-exhaust the relay with novel d-tags
 // relay feature toggles — what this box serves besides the Nostr relay itself (owner request). Defaults
 // preserve current behaviour (all on); edited via the token-gated /settings endpoint + the control dashboard.
 const SETTINGS_FILE = join(ROOT, 'relay', 'relay-settings.json');
@@ -452,7 +453,13 @@ function accept(e) {
       return !!careId && (e.pubkey === CARE_RECIPIENT.get(careId) || isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp));
     }
     if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)
-    return isMember;                                            // member's own data (MyData)
+    // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
+    // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
+    // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
+    if (!isMember) return false;
+    const mine = store.query({ kinds: [30078], authors: [e.pubkey], limit: MEMBER_DOC_CAP + 1 });
+    if (mine.length > MEMBER_DOC_CAP && !mine.some(x => (x.tags.find(t => t[0] === 'd') || [])[1] === d)) return false;
+    return true;
   }
   if (k === 1) {   // chat
     const g = gidOf(e);
@@ -850,7 +857,8 @@ function serveStatic(req, res) {
               const fresh = sigOk && Math.abs(Math.floor(Date.now() / 1000) - (a.created_at || 0)) <= 300;
               const ownsKey = sigOk && a.pubkey === hex;   // the signer IS the church being registered
               const uTag = sigOk && (a.tags.find(t => t[0] === 'u') || [])[1];
-              const uOk = uTag && /\/config\/?$/.test(String(uTag));   // bound to this endpoint (anti-replay)
+              let uOk = false;
+              try { const uu = new URL(String(uTag)); uOk = /\/config\/?$/.test(uu.pathname) && uu.host === (req.headers.host || '').split(',')[0].trim(); } catch {}   // L1: bind the proof to THIS relay's host + path (not just any /config) — anti-replay across relays
               if (!(sigOk && fresh && ownsKey && uOk)) { res.writeHead(401, H); res.end(JSON.stringify({ error: 'unauthorized: register with the admin token, or sign a fresh proof with this church key' })); return; }
             }
             const list = curChurches();
