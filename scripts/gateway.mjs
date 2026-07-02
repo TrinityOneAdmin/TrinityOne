@@ -1155,6 +1155,7 @@ if (store.count() === 0 && existsSync(DB)) {
   } catch (e) { console.warn('[relay] JSON→sqlite migration failed:', e.message); }
 }
 store.cull();
+let _putsSinceCull = 0;   // E6: cull runs every 256 stored events (or startup), not on every single one
 // rebuild member/broadcast/care state from the structured (kind-30078) docs, oldest-first as before
 if (CHURCH_PUBS.size) for (const e of store.query({ kinds: [30078], limit: 1000000 }).sort((a, b) => (a.created_at || 0) - (b.created_at || 0))) note(e);
 // now that group→church / member→church maps are built, attribute any events stored without a church
@@ -1209,13 +1210,14 @@ wss.on('connection', ws => {
       const putRes = store.put(evt, resolveChurch(evt));
       if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, true, 'have newer'])); return; }
       if (putRes === 'duplicate') { ws.send(JSON.stringify(['OK', evt.id, true, 'duplicate'])); return; }
-      store.cull();
+      if (++_putsSinceCull >= 256) { _putsSinceCull = 0; store.cull(); }   // E6: throttle the GROUP BY cull off the per-event hot path (was every stored event)
       maybePush(evt);   // notify the targeted member if this is a serving request
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
       maybePushMessage(evt);   // notify on a new DM (recipient) or church announcement (members)
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
+      let _evtJson = null;   // E6: serialize the event ONCE (lazily, on first match) and reuse for every matching subscriber — was N JSON.stringify(evt) for N subs
       for (const [client, m] of subs) { if (client.readyState !== 1) continue;
-        for (const [subId, filters] of m) if (matchAny(evt, filters) && canRead(evt, client._auth)) client.send(JSON.stringify(['EVENT', subId, evt])); }
+        for (const [subId, filters] of m) if (matchAny(evt, filters) && canRead(evt, client._auth)) { if (_evtJson === null) _evtJson = JSON.stringify(evt); client.send('["EVENT",' + JSON.stringify(subId) + ',' + _evtJson + ']'); } }
     } else if (type === 'REQ') {
       const subId = rest[0];
       let filters = rest.slice(1);

@@ -163,8 +163,10 @@
 <script src="vendor/identity.js"></script>
 <!-- Nostr chat transport (signed kind-1 over relays); exposes window.Fellowship -->
 <script src="vendor/fellowship.js"></script>
-<!-- In-app self-custodial Cashu (ecash) wallet, keyed to the Nostr identity; exposes window.TrinityWallet -->
-<script src="vendor/wallet.js"></script>
+<!-- In-app self-custodial Cashu (ecash) wallet (window.TrinityWallet). PARKED for the pilot (WALLET_ENABLED=false),
+     so its ~300KB bundle is NOT loaded at boot — every TrinityWallet reference is guarded. Re-enable by lazy-
+     injecting this script when the wallet flag flips (see WALLET_ENABLED in app.jsx). E4. -->
+<!-- <script src="vendor/wallet.js"></script> -->
 <!-- User-owned data store (local backend now; encrypted-Nostr swap later); exposes window.MyData -->
 <script src="vendor/mydata.js"></script>
 <!-- Real public-domain Library: window.TrinityLibrary (previews + available); full books in vendor/library/*.json.gz -->
