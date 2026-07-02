@@ -64,19 +64,9 @@ function scheduleVisible(list) {
   const nowS = Math.floor(Date.now() / 1000);
   return list.filter(m => !m.draft && (!m.publishAt || m.publishAt <= nowS));
 }
-// Re-fire a relay subscription when connectivity returns — a relay restart (e.g. the steward re-running
-// the installer) severs every websocket, and an open subscription won't re-deliver on its own, leaving
-// the list blank until a manual reload. makeSub() opens the relay subscription and returns its closer;
-// on `online` / window focus / tab-visible we swap in a fresh one (debounced) so it self-heals in a
-// second or two. Accumulator state lives in the caller's closure, so re-subscribing just refills it.
-function withReconnect(makeSub) {
-  // NOTE: reconnect/heartbeat re-subscribing was disabled — over a slow tunnel its repeated re-subscribes
-  // churned subscriptions on the relay and starved later queries (notably the per-member name fetches).
-  // Subscriptions are opened once and kept open (the original, reliable behaviour). Relay-restart recovery
-  // can be reintroduced later in a way that doesn't re-fire every church subscription.
-  const closer = makeSub();
-  return () => { try { closer && closer(); } catch {} };
-}
+// (Relay-restart recovery lives at the APP level: app.jsx's connTick tears down and re-creates every
+// church subscription on resume/online/heartbeat. The shared hubs below make that cheap — a re-open
+// reuses the in-memory buffer + a persisted `since` cursor instead of re-streaming the whole corpus.)
 function scheduleNextReveal(list, timer, emit) {
   if (timer) { clearTimeout(timer); timer = null; }
   const nowMs = Date.now();
@@ -208,6 +198,196 @@ function _noteGroupLeaders(cp, id, content, author) {
 // a group EVENT is trustworthy if authored by the church, a current roster steward, OR an empowered leader of that group
 function _groupEventTrusted(cp, gid, by) { return by === undefined || by === cp || !!(_churchRoster.get(cp) && _churchRoster.get(cp).has(by)) || !!(gid && _groupLeaders.get(gid) && _groupLeaders.get(gid).has(by)); }
 
+// ── shared per-church subscription hubs (efficiency fix E2) ─────────────────────────────────────────
+// Every church-docs reader used to open its OWN relay subscription carrying the byte-identical broad
+// filter (ALL of the church's kind-30078 docs), then discriminate client-side by d-tag prefix — so
+// opening the church screen re-streamed the whole doc corpus ~9+ times over, and every reconnect
+// (connTick fires every 90s while foregrounded) re-downloaded it all again. Now ONE subscription per
+// church feeds an in-memory bus; each feature registers a d-prefix handler and gets (a) a synchronous
+// replay of the buffered corpus (cache-first paint preserved), then (b) live events.
+//
+// The buffer keeps the latest event per (author, d-tag) — exactly the addressable-event identity — and
+// is persisted to localStorage together with a `since` cursor (running max created_at). A re-open only
+// asks the relay for events newer than the cursor minus a clock-skew slop; everything older replays
+// from the buffer, INCLUDING the in-memory-only docs a naive cursor would silently lose (the steward
+// roster for _churchVoice, group-key envelopes, safeguarding lists, meals settings). Deletions are
+// tombstone docs with a fresh created_at, so they still arrive through the cursor and clear items via
+// each feature's existing delete path. Safety valves: a full (no-since) sync runs at most once a day —
+// so anything a cursor could conceivably miss (severe author clock skew, an event withheld before
+// NIP-42 auth completed) self-heals within 24h — and a buffer too big to persist drops the cursor
+// entirely (next session = full sync, today's behaviour).
+const SINCE_SLOP = 3 * 86400;      // re-fetch this much history behind the cursor (author clock skew)
+const FUTURE_SKEW = 900;           // never advance the cursor past now+15min (a bad clock would wedge it)
+const FULL_SYNC_S = 86400;         // at most one full (no-since) catch-all sync per day
+const HUB_SAVE_CAP = 3000000;      // don't persist a buffer bigger than ~3MB — drop the cursor instead
+const DOCSHUB_KEY = 'trinityone.docshub.';   // + churchPubHex -> { since, fullAt, events }
+const MEMHUB_KEY = 'trinityone.memhub.';     // + churchPubHex -> { since, fullAt, members }
+const _dtag = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+const _slimEvt = (e) => ({ id: e.id, pubkey: e.pubkey, created_at: e.created_at, kind: e.kind, tags: e.tags, content: e.content });   // drop sig — the relay already verified it
+const _hubCursor = (hub, e) => { const t = e.created_at || 0; if (t > hub.since && t <= Math.floor(Date.now() / 1000) + FUTURE_SKEW) { hub.since = t; hub.dirty = true; } };
+const _hubSince = (hub) => { const nowS = Math.floor(Date.now() / 1000); hub.pendingFull = !hub.since || (nowS - (hub.fullAt || 0)) > FULL_SYNC_S; return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP); };
+const _hubEosed = (hub) => { hub.eosed = true; if (hub.pendingFull) { hub.pendingFull = false; hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; } };
+
+// ── docs hub: the church's kind-30078 corpus (groups, plans, devotionals, serving, care, …) ──
+const _docsHubs = new Map();   // churchPubHex -> hub (kept warm for the app's lifetime; sub closes at 0 refs)
+function _docsHubSaveNow(hub) {
+  if (hub.saveT) { clearTimeout(hub.saveT); hub.saveT = null; }
+  if (!hub.dirty) return;
+  hub.dirty = false;
+  const key = DOCSHUB_KEY + hub.cp;
+  try {
+    const s = JSON.stringify({ since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
+    if (s.length > HUB_SAVE_CAP) { localStorage.removeItem(key); return; }   // too big to trust a cursor over
+    localStorage.setItem(key, s);
+  } catch { try { localStorage.removeItem(key); } catch {} }
+}
+function _docsHubSaveSoon(hub) { if (!hub.saveT && hub.dirty) hub.saveT = setTimeout(() => { hub.saveT = null; _docsHubSaveNow(hub); }, 800); }
+function _docsHub(cp) {
+  let hub = _docsHubs.get(cp);
+  if (hub) return hub;
+  hub = { cp, handlers: new Set(), refs: 0, eosed: false, buf: new Map(), since: 0, fullAt: 0, pendingFull: false, dirty: false, saveT: null, closer: null };
+  _docsHubs.set(cp, hub);
+  try {
+    const raw = JSON.parse(localStorage.getItem(DOCSHUB_KEY + cp) || 'null');
+    if (raw && Array.isArray(raw.events)) {
+      hub.since = raw.since || 0; hub.fullAt = raw.fullAt || 0;
+      for (const e of raw.events) { if (e && e.pubkey && Array.isArray(e.tags)) hub.buf.set(e.pubkey + '|' + _dtag(e), e); }
+    }
+  } catch {}
+  // absorb hub-level docs from the persisted corpus BEFORE any feature registers: the steward roster
+  // (so _churchVoice trusts steward-authored docs immediately) and group-key envelopes (so encrypted
+  // groups decrypt) — both are in-memory only, and the since-cursor means they won't re-arrive.
+  for (const e of hub.buf.values()) { const d = _dtag(e); if (_absorbRoster(cp, d, e)) continue; if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(e); }
+  return hub;
+}
+function _docsHubOpen(hub) {
+  if (hub.closer) return;
+  const cp = hub.cp;
+  const since = _hubSince(hub);
+  const filters = [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }];
+  if (since) for (const f of filters) f.since = since;
+  const sub = pool.subscribeMany(churchRelays(), filters, {
+    onevent(e) {
+      const d = _dtag(e);
+      const key = e.pubkey + '|' + d;
+      const prev = hub.buf.get(key);
+      // stale-drop: everything on this hub is ADDRESSABLE (newest created_at per author+d wins). A
+      // lagging relay (e.g. one that missed a tombstone) can re-serve an older version inside the
+      // since-slop window — never let it overwrite the newer state we already hold/replayed. Equal
+      // timestamps still re-deliver (idempotent for every handler), like the old multi-relay behaviour.
+      if (prev && (e.created_at || 0) < (prev.created_at || 0)) return;
+      hub.buf.set(key, _slimEvt(e)); hub.dirty = true;
+      _hubCursor(hub, e);
+      _docsHubSaveSoon(hub);
+      if (_absorbRoster(cp, d, e)) { for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return; }
+      if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(e); return; }
+      for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { console.error(err); } }
+    },
+    oneose() {
+      _hubEosed(hub); _docsHubSaveSoon(hub);
+      for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(); } catch (err) { console.error(err); } }
+    },
+  });
+  hub.closer = () => { try { sub.close(); } catch {} };
+}
+// register a feature on a church's shared docs bus. h = { onevent(e, d), onroster?(), oneose?() }.
+// Replays the buffered corpus synchronously, then delivers live events. Sticky-EOSE stays in each
+// handler: oneose fires on the relay's EOSE (and immediately on a late registration if the initial
+// load already completed) — handlers keep their own "emit empty only after EOSE" guards.
+function _onChurchDocs(cp, h) {
+  const hub = _docsHub(cp);
+  hub.refs++; hub.handlers.add(h);
+  _docsHubOpen(hub);
+  const replay = [...hub.buf.values()].sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest first, so the newest version of a doc wins
+  for (const e of replay) {
+    const d = _dtag(e);
+    if (d === 'trinityone/stewards:' + cp || d.startsWith(GROUPKEY_D)) continue;   // hub-level docs, already absorbed
+    try { h.onevent(e, d); } catch (err) { console.error(err); }
+  }
+  if (hub.eosed && h.oneose) { try { h.oneose(); } catch (err) { console.error(err); } }
+  let off = false;
+  return () => {
+    if (off) return; off = true;
+    hub.handlers.delete(h);
+    // at 0 refs close the relay sub and flush; the hub object (buffer + cursor) stays warm in memory,
+    // so the app-level reconnect (connTick tears everything down, then re-registers) re-opens with the
+    // cursor instead of re-parsing disk or re-streaming the corpus.
+    if (--hub.refs <= 0) { hub.refs = 0; const close = hub.closer; hub.closer = null; if (close) close(); _docsHubSaveNow(hub); }
+  };
+}
+
+// ── members hub: kind-1 chatter + member:<church> joins — ONE sub feeds both the People directory
+// and the member count (they used to fetch the whole chat corpus twice, in parallel). msgs counts can
+// over-count across cursor overlaps/full re-syncs; they're only ever used as "has posted" + lastTs.
+const _memHubs = new Map();   // churchPubHex -> hub
+function _memHubSaveNow(hub) {
+  if (hub.saveT) { clearTimeout(hub.saveT); hub.saveT = null; }
+  if (!hub.dirty) return;
+  hub.dirty = false;
+  const key = MEMHUB_KEY + hub.cp;
+  try {
+    const s = JSON.stringify({ since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
+    if (s.length > HUB_SAVE_CAP) { localStorage.removeItem(key); return; }
+    localStorage.setItem(key, s);
+  } catch { try { localStorage.removeItem(key); } catch {} }
+}
+function _memHubSaveSoon(hub) { if (!hub.saveT && hub.dirty) hub.saveT = setTimeout(() => { hub.saveT = null; _memHubSaveNow(hub); }, 800); }
+function _memHub(cp) {
+  let hub = _memHubs.get(cp);
+  if (hub) return hub;
+  hub = { cp, byPub: new Map(), listeners: new Set(), refs: 0, eosed: false, since: 0, fullAt: 0, pendingFull: false, dirty: false, saveT: null, closer: null };
+  _memHubs.set(cp, hub);
+  let seeded = false;
+  try {
+    const raw = JSON.parse(localStorage.getItem(MEMHUB_KEY + cp) || 'null');
+    if (raw && Array.isArray(raw.members)) { hub.since = raw.since || 0; hub.fullAt = raw.fullAt || 0; for (const m of raw.members) { if (m && m.pubkey) hub.byPub.set(m.pubkey, m); } seeded = true; }
+  } catch {}
+  if (!seeded) { for (const m of loadMembersCache(cp)) { if (m && m.pubkey) hub.byPub.set(m.pubkey, m); } }   // legacy roster cache: instant paint, no cursor (first sync is full)
+  return hub;
+}
+function _memHubOpen(hub) {
+  if (hub.closer) return;
+  const cp = hub.cp;
+  const MEMBER_D = 'trinityone/member:';
+  const since = _hubSince(hub);
+  const filters = [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }];
+  if (since) for (const f of filters) f.since = since;
+  const sub = pool.subscribeMany(churchRelays(), filters, {
+    onevent(e) {
+      _hubCursor(hub, e);
+      if (e.pubkey === cp) { _memHubSaveSoon(hub); return; }
+      // seed name/nip05 from the persisted profile cache so known members render instantly
+      const m = hub.byPub.get(e.pubkey) || { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name: (profiles[e.pubkey] || {}).name || '', nip05: (profiles[e.pubkey] || {}).nip05 || '', picture: (profiles[e.pubkey] || {}).picture || '', hidden: !!(profiles[e.pubkey] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
+      if (e.kind === 30078) {
+        const d = _dtag(e);
+        if (d.indexOf(MEMBER_D) !== 0) { _memHubSaveSoon(hub); return; }
+        const left = e.tags.some(t => t[0] === 'deleted') || !e.content;
+        if (left) m.joined = 0; else { let j = e.created_at; try { j = JSON.parse(e.content).joined || e.created_at; } catch {} m.joined = j; }
+      } else { m.msgs++; if (e.created_at > m.lastTs) m.lastTs = e.created_at; }
+      hub.byPub.set(e.pubkey, m); hub.dirty = true;
+      _memHubSaveSoon(hub);
+      for (const l of [...hub.listeners]) { try { l.onchange && l.onchange(e.pubkey); } catch (err) { console.error(err); } }
+    },
+    oneose() {
+      _hubEosed(hub); _memHubSaveSoon(hub);
+      for (const l of [...hub.listeners]) { try { l.oneose && l.oneose(); } catch (err) { console.error(err); } }
+    },
+  });
+  hub.closer = () => { try { sub.close(); } catch {} };
+}
+function _onChurchMembers(cp, l) {
+  const hub = _memHub(cp);
+  hub.refs++; hub.listeners.add(l);
+  _memHubOpen(hub);
+  if (hub.eosed && l.oneose) { try { l.oneose(); } catch (err) { console.error(err); } }   // late registrant: initial load already done
+  let off = false;
+  return () => {
+    if (off) return; off = true;
+    hub.listeners.delete(l);
+    if (--hub.refs <= 0) { hub.refs = 0; const close = hub.closer; hub.closer = null; if (close) close(); _memHubSaveNow(hub); }
+  };
+}
+
 const AV_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 'crook', 'chalice', 'olive', 'mountain', 'well', 'star'];
 // church-signed photo-suppression: pubkeys whose uploaded photo a steward has reset. Populated by
 // subscribeChurchSafeguard (owner-only). The member can't be forced to change their key, but this
@@ -232,6 +412,9 @@ async function deriveFromIdentity() {
   sk = privateKeyFromSeedWords(mnemonic);
   pub = getPublicKey(sk);
   window.Fellowship.myPubkey = pub;
+  // group-key envelopes can replay from the persisted docs buffer BEFORE the signing key exists —
+  // re-unwrap them now that sk/pub are known, so invite-group decryption never needs a reload.
+  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(e); } }
   // signal that the signing key is now ready, so listeners (e.g. the app's serving subscriptions,
   // which bail when myPubkey is null) re-run with a valid pubkey instead of needing a restart.
   try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch {}
@@ -339,28 +522,13 @@ window.Fellowship = {
   // who posted (kind-1) or explicitly joined (member:<church>), minus those who left without posting.
   subscribeChurchMemberCount(churchNpub, cb) {
     const cp = toPub(churchNpub); if (!cp) { cb(0); return () => {}; }
-    const MEMBER_D = 'trinityone/member:';
-    const ppl = new Map();   // pubkey -> { msgs, joined }
     const cached = loadCountCache(cp);
     if (cached != null) cb(cached);   // show the last-known count instantly on load
-    const tally = () => { let n = 0; for (const v of ppl.values()) if (v.msgs > 0 || v.joined) n++; saveCountCache(cp, n); cb(n); };
-    const makeSub = () => {
-      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
-        onevent(e) {
-          if (e.pubkey === cp) return;
-          const m = ppl.get(e.pubkey) || { msgs: 0, joined: false };
-          if (e.kind === 30078) {
-            const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-            if (d.indexOf(MEMBER_D) !== 0) return;
-            m.joined = !(e.tags.some(t => t[0] === 'deleted') || !e.content);
-          } else { m.msgs++; }
-          ppl.set(e.pubkey, m); tally();
-        },
-        oneose() { tally(); },
-      });
-      return () => { try { sub.close(); } catch {} };
-    };
-    return withReconnect(makeSub);
+    const hub = _memHub(cp);   // shared with subscribeChurchMembers — the kind-1 corpus is fetched ONCE
+    const tally = () => { let n = 0; for (const v of hub.byPub.values()) if (v.msgs > 0 || v.joined) n++; saveCountCache(cp, n); cb(n); };
+    const off = _onChurchMembers(cp, { onchange: tally, oneose: tally });
+    if (hub.byPub.size) tally();   // derive instantly from the cached/buffered roster, refined live
+    return off;
   },
 
   // the church's people, for a member-facing directory: distinct folks (not the church) who joined
@@ -368,27 +536,18 @@ window.Fellowship = {
   // steward uses. Blocked members are withheld by the relay. The UI filters out the current user.
   subscribeChurchMembers(churchNpub, onMembers) {
     const cp = toPub(churchNpub); if (!cp) { onMembers([]); return () => {}; }
-    const MEMBER_D = 'trinityone/member:';
-    const byPub = new Map();          // pubkey -> { pubkey, npub, name, nip05, picture, joined, lastTs, msgs }
+    const hub = _memHub(cp);   // shared kind-1 + member-doc corpus (also feeds the member count)
     // ONE kept-open kind-0 subscription resolves ALL members' names at once. A sub-per-member blew past
     // the relay's 64-subscription-per-connection cap (members + chat + a sub each = the later name fetches
     // got 'rate-limited' and dropped — the cause of blank names). Batched = a single sub regardless of size.
     let profSub = null; const profAuthors = new Set(); let profTimer = null;
-    // seed from the persisted roster so the list paints instantly on load (then live events refresh it)
-    for (const m of loadMembersCache(cp)) { if (m && m.pubkey) byPub.set(m.pubkey, m); }
     // a member who opted out (kind-0 `hidden`) is withheld from the directory the others see
-    let eosed = false;   // sticky: hold last-known until EOSE
     const emit = (done) => {
-      const visible = [...byPub.values()].filter(m => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
-      if (!eosed && !done && !visible.length) return;
-      saveMembersCache(cp, [...byPub.values()]);   // keep the cache warm for next launch
+      const visible = [...hub.byPub.values()].filter(m => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+      if (!hub.eosed && !done && !visible.length) return;   // sticky: hold last-known until EOSE
+      saveMembersCache(cp, [...hub.byPub.values()]);   // keep the legacy cache warm for next launch
       onMembers(visible, !!done);
     };
-    // seed name/nip05 from the persisted profile cache so known members render instantly (no resolve lag)
-    const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: (profiles[pk] || {}).name || '', nip05: (profiles[pk] || {}).nip05 || '', picture: (profiles[pk] || {}).picture || '', hidden: !!(profiles[pk] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
-    // resolve each member's kind-0 name with its own subscription, kept OPEN (never closed on EOSE) so a
-    // slow relay's reply is never cut off — this is the original, proven approach. One sub per member is a
-    // touch chattier than a batch, but it reliably fills names in; correctness over cleverness.
     // (re)open the single profile sub for every still-unnamed member. churchRelays() — NOT
     // window.Fellowship.relays, which is empty on a native install. Kept open so a slow relay isn't cut off.
     const refreshProfiles = () => {
@@ -397,7 +556,7 @@ window.Fellowship = {
       if (!authors.length) return;
       try { profSub && profSub.close(); } catch {}   // replace the old one — never accumulate subscriptions
       profSub = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
-        onevent(e) { try { const meta = JSON.parse(e.content); profiles[e.pubkey] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = byPub.get(e.pubkey); if (m) { m.name = profiles[e.pubkey].name; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; } emit(); } catch {} },
+        onevent(e) { try { const meta = JSON.parse(e.content); profiles[e.pubkey] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { m.name = profiles[e.pubkey].name; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
         oneose() {},
       });
     };
@@ -406,26 +565,15 @@ window.Fellowship = {
       profAuthors.add(pk);
       if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);   // debounce the burst of arriving members
     };
-    const makeSub = () => {
-      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }], {
-        onevent(e) {
-          if (e.pubkey === cp) return;
-          const m = get(e.pubkey);
-          if (e.kind === 30078) {
-            const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-            if (d.indexOf(MEMBER_D) !== 0) return;
-            const left = e.tags.some(t => t[0] === 'deleted') || !e.content;
-            if (left) m.joined = 0; else { let j = e.created_at; try { j = JSON.parse(e.content).joined || e.created_at; } catch {} m.joined = j; }
-          } else { m.msgs++; if (e.created_at > m.lastTs) m.lastTs = e.created_at; }
-          byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit();
-        },
-        oneose() { eosed = true; emit(true); },   // initial load complete
-      });
-      return () => { try { sub.close(); } catch {} };
-    };
-    if (byPub.size) emit(false);   // paint the cached roster immediately, before the relay answers
-    const stop = withReconnect(makeSub);
-    return () => { stop(); if (profTimer) clearTimeout(profTimer); try { profSub && profSub.close(); } catch {} };
+    const off = _onChurchMembers(cp, {
+      onchange(pk) { ensureProfile(pk); emit(); },
+      oneose() { emit(true); },   // initial load complete
+    });
+    // the since-cursor means long-known members won't re-arrive as events — resolve names for the
+    // cached/buffered roster too, not just live arrivals
+    for (const pk of hub.byPub.keys()) ensureProfile(pk);
+    if (hub.byPub.size) emit(false);   // paint the cached roster immediately, before the relay answers
+    return () => { off(); if (profTimer) clearTimeout(profTimer); try { profSub && profSub.close(); } catch {} };
   },
 
   // relay configuration (persisted) — accepts ws:// or wss:// URLs
@@ -724,23 +872,17 @@ window.Fellowship = {
     // honour the steward's chosen order; client-roster-trust filters out forged/revoked authors (M2)
     let eosed = false;   // sticky: hold last-known until the relay's EOSE — don't blank on a transient/roster-lagged empty
     const emit = () => { const v = [...byId.values()].filter(g => _churchVoice(pubk, g)); if (!eosed && !v.length) return; saveDocCache('groups', pubk, v); onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
-    const makeSub = () => {
-      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-        onevent(e) {
-          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-          if (_absorbRoster(pubk, d, e)) { emit(); return; }   // the church-signed steward roster
-          if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(e); return; }   // an encrypted group's key envelope
-          if (!d.startsWith(GROUP_D)) return;
-          const id = d.slice(GROUP_D.length);
-          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-          try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); _noteGroupLeaders(pubk, id, c, e.pubkey); emit(); } catch {}
-        },
-        oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
-      });
-      return () => { try { sub.close(); } catch {} };
-    };
-    if (byId.size) emit();   // paint cached groups before the relay answers
-    return withReconnect(makeSub);
+    if (byId.size) emit();   // paint cached groups before the shared hub replays/answers
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {   // (the hub absorbs the steward roster + group-key envelopes centrally)
+        if (!d.startsWith(GROUP_D)) return;
+        const id = d.slice(GROUP_D.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); _noteGroupLeaders(pubk, id, c, e.pubkey); emit(); } catch {}
+      },
+      onroster() { emit(); },   // the church-signed steward roster arrived/changed — re-filter
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+    });
   },
 
   // ── read the church's group categories (named containers, kind-30078) ──
@@ -752,21 +894,17 @@ window.Fellowship = {
     for (const c of loadDocCache('categories', pubk)) { if (c && c.id) byId.set(c.id, c); }   // paint cached instantly
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = () => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); if (!eosed && !v.length) return; saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
-    const makeSub = () => {
-      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-        onevent(e) {
-          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-          if (!d.startsWith(CATEGORY_D)) return;
-          const id = d.slice(CATEGORY_D.length);
-          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-          try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
-        },
-        oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
-      });
-      return () => { try { sub.close(); } catch {} };
-    };
-    if (byId.size) emit();   // paint cached categories before the relay answers
-    return withReconnect(makeSub);
+    if (byId.size) emit();   // paint cached categories before the shared hub replays/answers
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {
+        if (!d.startsWith(CATEGORY_D)) return;
+        const id = d.slice(CATEGORY_D.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+      },
+      onroster() { emit(); },   // re-filter once the steward roster lands (steward-authored categories)
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+    });
   },
 
   // ── safeguarding: read the church's minors + approved-adults lists (kind-30078) ──
@@ -779,21 +917,16 @@ window.Fellowship = {
     let minors = [], approved = [], guardians = {}, nophoto = [];   // guardians: { childPub: [parentPub, …] }
     const me = window.Fellowship.myPubkey || pub;
     const emit = () => { _noPhoto = new Set(nophoto); onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)), photoBlocked: !!(me && nophoto.includes(me)) }); };
-    const makeSub = () => {
-      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-        onevent(e) {
-          if (e.pubkey !== pubk) return;   // safeguarding lists are OWNER-ONLY — only ever trust the church key (M2/safeguarding)
-          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-          if (d === 'trinityone/minors:' + pubk) { try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
-          else if (d === 'trinityone/approved:' + pubk) { try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
-          else if (d === 'trinityone/guardians:' + pubk) { try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
-          else if (d === 'trinityone/nophoto:' + pubk) { try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } emit(); }
-        },
-        oneose() { emit(); },
-      });
-      return () => { try { sub.close(); } catch {} };
-    };
-    return withReconnect(makeSub);
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {
+        if (e.pubkey !== pubk) return;   // safeguarding lists are OWNER-ONLY — only ever trust the church key (M2/safeguarding)
+        if (d === 'trinityone/minors:' + pubk) { try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
+        else if (d === 'trinityone/approved:' + pubk) { try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
+        else if (d === 'trinityone/guardians:' + pubk) { try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
+        else if (d === 'trinityone/nophoto:' + pubk) { try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } emit(); }
+      },
+      oneose() { emit(); },
+    });
   },
 
   // ── safeguarding v2: a parent creates a child account they own (mints a fresh key, sets the child up
@@ -837,20 +970,15 @@ window.Fellowship = {
     let approval = false, admitted = [];
     const me = window.Fellowship.myPubkey || pub;
     const emit = () => { const isAdmitted = !!(me && admitted.includes(me)); onState({ approval, isAdmitted, isPending: approval && !isAdmitted }); };
-    const makeSub = () => {
-      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-        onevent(e) {
-          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-          if (_absorbRoster(pubk, d, e)) { emit(); return; }
-          if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;   // trust church key or a current roster steward (M2)
-          if (d === 'trinityone/joinpolicy:' + pubk) { if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false; else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } } emit(); }
-          else if (d === 'trinityone/admitted:' + pubk) { try { admitted = (JSON.parse(e.content).pubkeys) || []; } catch { admitted = []; } emit(); }
-        },
-        oneose() { emit(); },
-      });
-      return () => { try { sub.close(); } catch {} };
-    };
-    return withReconnect(makeSub);
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {
+        if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;   // trust church key or a current roster steward (M2)
+        if (d === 'trinityone/joinpolicy:' + pubk) { if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false; else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } } emit(); }
+        else if (d === 'trinityone/admitted:' + pubk) { try { admitted = (JSON.parse(e.content).pubkeys) || []; } catch { admitted = []; } emit(); }
+      },
+      onroster() { emit(); },
+      oneose() { emit(); },
+    });
   },
 
   // ── read the reading plans a church shares (kind-30078, d=plan:) ──
@@ -869,22 +997,17 @@ window.Fellowship = {
       onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
       timer = scheduleNextReveal(all, timer, emit);
     };
-    const makeSub = () => {
-      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-        onevent(e) {
-          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-          if (_absorbRoster(pubk, d, e)) { emit(); return; }
-          if (!d.startsWith(PLAN_D)) return;
-          const id = d.slice(PLAN_D.length);
-          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-          try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
-        },
-        oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
-      });
-      return () => { try { sub.close(); } catch {} };
-    };
-    if (byId.size) emit();   // paint cached plans before the relay answers
-    const stop = withReconnect(makeSub);
+    if (byId.size) emit();   // paint cached plans before the shared hub replays/answers
+    const stop = _onChurchDocs(pubk, {
+      onevent(e, d) {
+        if (!d.startsWith(PLAN_D)) return;
+        const id = d.slice(PLAN_D.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+      },
+      onroster() { emit(); },
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+    });
     return () => { stop(); if (timer) clearTimeout(timer); };
   },
 
@@ -906,22 +1029,17 @@ window.Fellowship = {
       onDevos(scheduleVisible(all).sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
       timer = scheduleNextReveal(all, timer, emit);
     };
-    const makeSub = () => {
-      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-        onevent(e) {
-          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-          if (_absorbRoster(pubk, d, e)) { emit(); return; }
-          if (!d.startsWith(DEVO_D)) return;
-          const id = d.slice(DEVO_D.length);
-          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-          try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
-        },
-        oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
-      });
-      return () => { try { sub.close(); } catch {} };
-    };
-    if (byId.size) emit();   // paint cached devotionals before the relay answers
-    const stop = withReconnect(makeSub);
+    if (byId.size) emit();   // paint cached devotionals before the shared hub replays/answers
+    const stop = _onChurchDocs(pubk, {
+      onevent(e, d) {
+        if (!d.startsWith(DEVO_D)) return;
+        const id = d.slice(DEVO_D.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        try { byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
+      },
+      onroster() { emit(); },
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+    });
     return () => { stop(); if (timer) clearTimeout(timer); };
   },
 
@@ -932,18 +1050,16 @@ window.Fellowship = {
     const byId = new Map();
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = () => { const v = [...byId.values()].filter(x => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0)); if (!eosed && !v.length) return; onItems(v); };   // roster-trust (M2)
-    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (_absorbRoster(pubk, d, e)) { emit(); return; }
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {
         if (!d.startsWith(prefix)) return;
         const id = d.slice(prefix.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
         try { byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at, _by: e.pubkey }); emit(); } catch {}
       },
+      onroster() { emit(); },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
-    return () => { try { sub.close(); } catch {} };
   },
   // ── serving: services, per-service rotas, rosters, events the church publishes ──
   subscribeChurchServices(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/service:', (c, id) => ({ id, date: c.date, time: c.time, name: c.name }), cb); },
@@ -960,17 +1076,14 @@ window.Fellowship = {
     const OFF = { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' };
     if (!pubk) { cb({ ...OFF }); return () => {}; }
     let best = { ts: 0, doc: { ...OFF } };
-    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (_absorbRoster(pubk, d, e)) return;
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {
         if (d !== MEALS_SETTINGS_D) return;   // the relay write-gates settings to the church/stewards (accept policy), so trust what it serves here — don't drop it on a not-yet-loaded roster, which hid the whole Care module from members
         if ((e.created_at || 0) <= best.ts) return;
         try { const c = JSON.parse(e.content || '{}'); best = { ts: e.created_at || 0, doc: { enabled: !!c.enabled, visibility: c.visibility === 'team' ? 'team' : 'all', openedBy: c.openedBy === 'member' ? 'member' : 'steward', adminGroupId: String(c.adminGroupId || '') } }; cb({ ...best.doc }); } catch {}
       },
       oneose() { if (best.ts) cb({ ...best.doc }); },   // sticky: only emit on EOSE if we actually received settings — don't flip the card off on a reconnect's empty
     });
-    return () => { try { sub.close(); } catch {} };
   },
   // Open care needs. Authored by the church, a steward, or a care-team admin — all relay-enforced, so a
   // need present on the church's relay was written by an authorised pubkey. cb([{ id, displayLabel, type,
@@ -981,10 +1094,8 @@ window.Fellowship = {
     const byId = new Map();
     let eosed = false;   // sticky: don't blank the card with an empty emit before the relay confirms it's really empty (EOSE)
     const emit = () => { const v = [...byId.values()].sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); if (!eosed && !v.length) return; cb(v); };
-    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], authors: [pubk], '#t': [NET] }, { kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (_absorbRoster(pubk, d, e)) { emit(); return; }
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {
         if (!d.startsWith(CARE_D)) return;
         // accept church-voice (church/steward) or a doc explicitly tagged for this church (a care-team admin's)
         const tagged = (e.tags.find(t => t[0] === 'church') || [])[1];
@@ -993,9 +1104,9 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
         try { const c = JSON.parse(e.content); byId.set(id, { id, displayLabel: c.displayLabel || '', type: c.type || 'meals', startDate: c.startDate || '', endDate: c.endDate || '', recipient: (c.recipient || '').toLowerCase(), notes: c.notes || '', dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: (c.dayMeals && typeof c.dayMeals === 'object') ? c.dayMeals : {}, ts: e.created_at }); emit(); } catch {}
       },
+      onroster() { emit(); },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
     });
-    return () => { try { sub.close(); } catch {} };
   },
   // member offers to help (careslot:) + recipient skip-days (careskip:) — both member-signed, church-tagged.
   // Keyed needId|iso|pubkey so each member's fill for a (need,date) is one entry. No church-voice filter:
@@ -1006,9 +1117,10 @@ window.Fellowship = {
     const byKey = new Map();
     let eosed = false;   // sticky: same as needs — don't blank on a transient empty before EOSE
     const emit = () => { const v = [...byKey.values()]; if (!eosed && !v.length) return; cb(v); };
-    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+    // the shared hub's union filter is a superset of the old '#church'-only one; the d-prefix guard
+    // below keeps the delivered set identical (careslot:/careskip: docs are always church-tagged)
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {
         if (!d.startsWith(prefix)) return;
         const rest = d.slice(prefix.length).split(':');
         const needId = rest[0] || '', isoDate = rest[1] || '';
@@ -1019,7 +1131,6 @@ window.Fellowship = {
       },
       oneose() { eosed = true; if (byKey.size) emit(); },   // sticky: don't blank slots/skips on a reconnect's empty EOSE; genuine clears come via the delete path
     });
-    return () => { try { sub.close(); } catch {} };
   },
   subscribeCareSlots(churchNpub, cb) { return window.Fellowship._subCareTagged(churchNpub, CARESLOT_D, (o) => ({ note: String(o.note || '').trim() }), cb); },
   subscribeCareSkips(churchNpub, cb) { return window.Fellowship._subCareTagged(churchNpub, CARESKIP_D, (o) => ({ reason: String(o.reason || '').trim() }), cb); },
@@ -1067,9 +1178,8 @@ window.Fellowship = {
     const byPub = new Map();
     let eosed = false;   // sticky: don't blank on a transient empty before EOSE
     const emit = () => { const v = [...byPub.values()]; if (!eosed && !v.length) return; cb(v); };
-    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#church': [pubk], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {
         if (d !== dtag) return;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byPub.delete(e.pubkey); emit(); return; }
         try {
@@ -1081,7 +1191,6 @@ window.Fellowship = {
       },
       oneose() { eosed = true; if (byPub.size) emit(); },   // sticky: don't blank the "ready to help" list on a reconnect's empty EOSE
     });
-    return () => { try { sub.close(); } catch {} };
   },
   // publish (or refresh) my availability. tags = short list like ['meals','lifts','visits','prayer','childcare'].
   async setCareAvail(tags, note) {
