@@ -165,16 +165,22 @@ const JOIN_NOTIFIED = new Set();    // "pubkey:churchpub" we've already alerted 
 const BROADCAST = new Set();   // group ids the church marked broadcast
 const NETWORKS = new Set();    // network pubkeys this church joined — allowed to publish church-style content here
 const GROUP_LEADERS = new Map(); // groupId -> Set(pubkey) — members a leader empowered to post events for that group
+const GROUP_LEADER_BY = new Map(); // groupId -> { by, cp } — who authored the leader grant (M2: void it if they're later revoked)
 const STEWARDS_BY = new Map();   // churchpub -> Set(steward pubkeys) from the owner-signed stewards: roster (delegated, revocable authority)
 // Meal trains / care module state (rebuilt from stored events by note()):
 const ROSTER_PEOPLE = new Map();     // teamId(groupId) -> Set(pubkey) — people LINKED on a team roster; the care-team's members live here
+const ROSTER_BY = new Map();          // teamId(groupId) -> { by, cp } — who authored the roster (M2: void the care-admin grant if they're later revoked)
 const MEALS_ADMIN_GROUP = new Map(); // churchpub -> care-team groupId (its roster people may open/manage care needs)
 const MEALS_OPEN_MEMBER = new Set(); // churchpubs whose meals-settings allow ANY member to open their own care need (openedBy='member')
 const CARE_RECIPIENT = new Map();    // careId -> recipient pubkey (so a careskip: write can be gated to the recipient alone)
 // is `pub` a current steward of church `cp`? (empty/no roster => false => behaviour identical to pre-roster)
 const stewardOf = (pub, cp) => { const s = STEWARDS_BY.get(cp); return !!(cp && s && s.has(pub)); };
+// M2: a delegated leader/care-admin grant is only honoured while the steward who authored it is STILL a
+// steward (or the church/network key). So revoking a steward immediately drops the group-leader and
+// care-team grants they created — no re-derivation pass, the check just runs at use-time.
+const grantorOk = (src) => !!(src && (CHURCH_PUBS.has(src.by) || NETWORKS.has(src.by) || stewardOf(src.by, src.cp)));
 // is `pub` on the care-team of church `cp`? (a member of the roster of cp's configured care-team group)
-const careAdmin = (pub, cp) => { const g = cp && MEALS_ADMIN_GROUP.get(cp); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub)); };
+const careAdmin = (pub, cp) => { const g = cp && MEALS_ADMIN_GROUP.get(cp); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub) && grantorOk(ROSTER_BY.get(g))); };
 // the church a steward-authored CONTENT event acts for: its ["church", <cp>] tag, validated to a configured church.
 const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church'); const h = t && (toHexPub(t[1]) || t[1]); return h && CHURCH_PUBS.has(h) ? h : ''; };
 const BLOCKED_BY = new Map();    // churchpub -> Set(blocked member pubkeys); BLOCKED is the union for fast checks
@@ -334,12 +340,12 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, namedChurch(e)))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
-    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); return; }
+    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); return; }
     GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
     if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60));
     if (c.kind === 'broadcast') BROADCAST.add(id); else BROADCAST.delete(id);
     // a group def may name member leaders who can post events for that group
-    GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : []));
+    GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : [])); GROUP_LEADER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
     // invite-only groups carry the allowlist of member pubkeys who may post
     if (c.visibility === 'invite') { GROUP_VIS.set(id, 'invite'); GROUP_MEMBERS.set(id, new Set((Array.isArray(c.members) ? c.members : []).map(p => toHexPub(p) || p).filter(Boolean))); }
     else { GROUP_VIS.set(id, 'open'); GROUP_MEMBERS.delete(id); }
@@ -376,9 +382,9 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, namedChurch(e)))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
-    if (removed) { ROSTER_PEOPLE.delete(id); return; }
+    if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_BY.delete(id); return; }
     const set = new Set(); try { (JSON.parse(e.content).people || []).forEach(p => { const h = p && toHexPub(p.pub); if (h) set.add(h); }); } catch {}
-    ROSTER_PEOPLE.set(id, set);
+    ROSTER_PEOPLE.set(id, set); ROSTER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
   }
   else if (d === MEALS_SETTINGS_D) {   // optional Care module config — only the church key (or one of its stewards) sets it
     const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardOf(e.pubkey, cp = namedChurch(e)) ? cp : '');
@@ -417,7 +423,7 @@ function accept(e) {
     if (d.startsWith(EVENT_D) || d.startsWith(PIN_D) || d.startsWith(HIDE_D)) {   // church/steward, or a group's empowered member, may post events / pin / hide
       if (isLeader || stewardOf(e.pubkey, namedChurch(e))) return true;
       const g = eventGroup(e); const leaders = g && GROUP_LEADERS.get(g);
-      return !!(leaders && leaders.has(e.pubkey));
+      return !!(leaders && leaders.has(e.pubkey) && grantorOk(GROUP_LEADER_BY.get(g)));   // M2: void the grant if the steward who set it has since been revoked
     }
     // <cp>-keyed membership admin: the church is named in the d-tag → delegate to a steward of THAT church
     for (const pfx of [JOINPOLICY_D, ADMITTED_D]) {
@@ -504,6 +510,14 @@ function canRead(e, authed) {
     // is steward/church-authored and the rest member-authored, so they'd otherwise fail the roster gate
     // below. Write access stays gated in accept(); the UI still applies the per-need visibility setting.
     if (d === MEALS_SETTINGS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D) || d.startsWith(AVAIL_D)) return true;
+    // safeguarding lists (minors/approved/guardians) are PII — which pubkeys are children. Members need them to
+    // mirror the DM safeguarding gate on-device, but they must NOT be world-readable. Gate to authed members of
+    // that church (lazy NIP-42: the REQ handler challenges when one is withheld, then AUTH-success re-delivers).
+    if (d.startsWith(MINORS_D) || d.startsWith(APPROVED_D) || d.startsWith(GUARDIANS_D)) {
+      const cp = d.startsWith(MINORS_D) ? d.slice(MINORS_D.length) : d.startsWith(APPROVED_D) ? d.slice(APPROVED_D.length) : d.slice(GUARDIANS_D.length);
+      const md = MEMBER_DOCS.get(cp);
+      return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || stewardOf(authed, cp) || !!(md && md.has(authed)));
+    }
     // roster-verify steward-authored church content: a doc carrying ['church',<cp>] is only served while
     // its author is on <cp>'s CURRENT signed roster — so a revoked steward's content stops being delivered.
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];
@@ -1236,14 +1250,14 @@ wss.on('connection', ws => {
       mysubs.set(subId, filters);
       // serve everything this connection may read now (blocked members withheld; invite-only group
       // messages withheld from non-members per NIP-42)
-      let matched = []; const _seen = new Set();
-      for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey) || !canRead(e, ws._auth)) continue; matched.push(e); }
+      let matched = []; const _seen = new Set(); let wantsSafeguard = false;
+      for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D)) wantsSafeguard = true; } continue; } matched.push(e); }
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
       // is NOT challenged — those messages are just silently withheld — so ordinary reads pay no auth cost.
       const wantsInvite = !ws._auth && filters.some(f => (f['#t'] || []).some(t => GROUP_VIS.get(t) === 'invite'));
-      if (wantsInvite) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }
+      if (wantsInvite || wantsSafeguard) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }   // safeguarding: challenge so a member's client auths + gets the lists (AUTH-success re-delivers)
       const lim = Math.max(0, ...filters.map(f => f.limit || 0));
       if (lim) matched = matched.slice(-lim);
       for (const e of matched) ws.send(JSON.stringify(['EVENT', subId, e]));
