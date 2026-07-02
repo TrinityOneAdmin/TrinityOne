@@ -43,6 +43,7 @@ sed -i \
 rm -f "$WWW"/vendor/babel.min.js
 rm -f "$WWW"/stew-*.js "$WWW"/steward-root.js
 rm -f "$WWW"/vendor/steward*.js "$WWW"/vendor/jspdf.umd.min.js
+rm -f "$WWW"/vendor/fonts/f00[123].woff2 "$WWW"/vendor/fonts/f01[0123].woff2   # unused Bricolage Grotesque + Plus Jakarta Sans faces (only Sora + Newsreader are referenced)
 
 # Bible/lexicon modules are NOT embedded in the app — they download on demand (BSB auto-installs on
 # first launch). The web build still serves them same-origin from the deploy, so they live in www/
