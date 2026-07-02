@@ -3049,10 +3049,11 @@ function DashStewardsPanel({ church }) {
         {pending.map(r => (
           <div key={r.pubkey} style={{ padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 7 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-              <SkBadge initials={(r.name || niceName(r.pubkey)).split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()} size={32} radius={10} accent={SK_TINT.gold.fg} />
+              <SkBadge initials={niceName(r.pubkey).split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()} size={32} radius={10} accent={SK_TINT.gold.fg} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || niceName(r.pubkey)}</div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>{shortNpub(r.npub)} · wants to steward</div>
+                <div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{niceName(r.pubkey)}</div>
+                {r.name ? <div style={{ fontSize: 11.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>claims to be “{r.name}”</div> : null}
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>{r.npub} · wants to steward</div>
               </div>
               {approving === r.pubkey ? null : <React.Fragment>
                 <button onClick={() => startApprove(r.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '6px 11px', fontSize: 12.5 }}>{hasPin ? 'Approve…' : 'Approve'}</button>
@@ -3060,7 +3061,7 @@ function DashStewardsPanel({ church }) {
               </React.Fragment>}
             </div>
             {approving === r.pubkey ? <div style={{ marginTop: 9 }}>
-              <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 6 }}>Enter your PIN to approve <b>{r.name || niceName(r.pubkey)}</b>.</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 6 }}>Enter your PIN to approve <b>{niceName(r.pubkey)}</b>{r.name ? ' (claims to be “' + r.name + '”)' : ''} — check the npub above is who you expect.</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input type="password" inputMode="numeric" autoFocus value={approvePin} onChange={e => { setApprovePin(e.target.value); setApproveErr(''); }} onKeyDown={e => { if (e.key === 'Enter') confirmApprove(); }} placeholder="PIN" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
                 <button onClick={confirmApprove} className="sk-btn sk-btn--clay" style={{ padding: '8px 12px', fontSize: 12.5 }}>Approve</button>

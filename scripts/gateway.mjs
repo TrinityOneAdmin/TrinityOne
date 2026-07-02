@@ -679,6 +679,7 @@ const AZ_MAX_CONCURRENT = 4;                 // most simultaneous upstream fetch
 const AZ_WINDOW_MS = 60_000, AZ_MAX_PER_WINDOW = 200;   // per-IP: ~200 requests/min — SECURITY-AUDIT-2026-06-24 L11: raised from 30 because Tailscale Funnel / cloudflared collapse every public client behind one source IP. 4-concurrent global cap (AZ_MAX_CONCURRENT) remains the real DoS protection.
 let azInFlight = 0;
 const azHits = new Map();                    // ip -> [recent request timestamps]
+let _nip05Map = { ts: 0, map: null };        // cached slug->pubkey for /.well-known/nostr.json (rebuilt ≤ every 30s) so hammering ?name= can't trigger a full kind-0 scan+parse per request (M5)
 function clientIp(req) {
   const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   return xf || (req.socket && req.socket.remoteAddress) || 'unknown';
@@ -1085,14 +1086,22 @@ function serveStatic(req, res) {
     const slug = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
     // Resolve only the one requested slug. Churches outrank members on a contested slug; earliest
     // profile wins among the same tier. Same precedence as before, just no bulk dump.
-    const k0 = store.query({ kinds: [0], limit: 1000000 }).sort((a, b) => (CHURCH_PUBS.has(b.pubkey) - CHURCH_PUBS.has(a.pubkey)) || ((a.created_at || 0) - (b.created_at || 0)));
-    for (const e of k0) {
-      if (BLOCKED.has(e.pubkey)) continue;
-      let meta = {}; try { meta = JSON.parse(e.content); } catch {}
-      const local = (meta.nip05 && String(meta.nip05).includes('@')) ? slug(String(meta.nip05).split('@')[0]) : slug(meta.name);
-      if (local !== qName) continue;
-      res.writeHead(200, H); res.end(JSON.stringify({ names: { [qName]: e.pubkey }, relays: relayUrl ? { [e.pubkey]: [relayUrl] } : {} })); return;
+    // Resolve from a cached slug->pubkey map (rebuilt ≤ every 30s). Same precedence as before — church profiles
+    // outrank members, earliest wins among a tier — but the expensive kind-0 scan+parse now runs at most twice a
+    // minute regardless of request rate, so this endpoint can't be used as an unauthenticated CPU amplifier (M5).
+    if (!_nip05Map.map || Date.now() - _nip05Map.ts > 30000) {
+      const k0 = store.query({ kinds: [0], limit: 1000000 }).sort((a, b) => (CHURCH_PUBS.has(b.pubkey) - CHURCH_PUBS.has(a.pubkey)) || ((a.created_at || 0) - (b.created_at || 0)));
+      const map = new Map();
+      for (const e of k0) {
+        if (BLOCKED.has(e.pubkey)) continue;
+        let meta = {}; try { meta = JSON.parse(e.content); } catch {}
+        const local = (meta.nip05 && String(meta.nip05).includes('@')) ? slug(String(meta.nip05).split('@')[0]) : slug(meta.name);
+        if (local && !map.has(local)) map.set(local, e.pubkey);
+      }
+      _nip05Map = { ts: Date.now(), map };
     }
+    const pub = _nip05Map.map.get(qName);
+    if (pub) { res.writeHead(200, H); res.end(JSON.stringify({ names: { [qName]: pub }, relays: relayUrl ? { [pub]: [relayUrl] } : {} })); return; }
     res.writeHead(200, H); res.end(JSON.stringify({ names: {} })); return;
   }
   let p; try { p = decodeURIComponent(route); } catch { res.writeHead(400).end('bad request'); return; }
@@ -1157,7 +1166,10 @@ const matchAny = (evt, filters) => filters.some(f => matchFilter(evt, f));
 const subs = new Map();   // ws -> Map(subId -> filters[])
 
 const server = createServer(serveStatic);
-const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });   // 1 MB cap (default is 100 MB — memory-DoS guard)
+const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024,   // 1 MB cap (default is 100 MB — memory-DoS guard)
+  // permessage-deflate: ~70% off wire bytes for members on a thin pipe. Negotiated per-connection (clients that
+  // don't support it just skip it). No-context-takeover keeps per-connection memory bounded for many members.
+  perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true, concurrencyLimit: 10 } });
 const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (members, chat, profiles, etc.)
 const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is a cheap unauthenticated CPU-DoS — cap it
 server.on('upgrade', (req, socket, head) => {
