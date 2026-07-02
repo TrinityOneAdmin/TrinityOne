@@ -87,7 +87,7 @@ function ChurchPill({ ctx }) {
     return (
       <button onClick={ctx.openChurchSwitcher} style={{
         position: 'relative', display: 'block', width: '100%',
-        overflow: 'hidden', cursor: 'pointer', boxShadow: 'var(--shadow)', textAlign: 'left',
+        overflow: 'hidden', cursor: 'pointer', textAlign: 'left',   // no boxShadow: full-bleed banner shouldn't carry a fine edge line
         aspectRatio: '3 / 1',
       }}>
         {/* image + legibility scrim on a MASKED layer — the steward's fade blends THIS into the page.

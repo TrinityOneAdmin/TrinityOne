@@ -4,16 +4,30 @@ const { useState: useId, useEffect: useIdE } = React;
 // ════════ First-run identity moment ════════
 function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   const D = window.TrinityData;
+  const [step, setStep] = useId(0);   // 0 name, 1 back up the 12 words, 2 confirm a couple
   const [name, setName] = useId('');
   const [av, setAv] = useId({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' });
-  useIdE(() => { if (open) { setName(''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); } }, [open]);
+  const [words, setWords] = useId([]);
+  const [ack, setAck] = useId(false);
+  const [checkIdx, setCheckIdx] = useId([]);   // the two word positions we quiz
+  const [answers, setAnswers] = useId(['', '']);
+  const [checkErr, setCheckErr] = useId('');
+  useIdE(() => { if (open) { setStep(0); setName(''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '']); setCheckErr(''); } }, [open]);
+  // fetch the member's own 12 words when we reach the back-up step
+  useIdE(() => { if (step === 1 && words.length === 0 && window.TrinityIdentity && window.TrinityIdentity.exportMnemonic) { window.TrinityIdentity.exportMnemonic().then(m => { const w = String(m || '').trim().split(/\s+/).filter(Boolean); if (w.length) setWords(w); }).catch(() => {}); } }, [step]);
+  // pick two distinct positions to confirm when we reach the check step
+  useIdE(() => { if (step === 2 && checkIdx.length === 0 && words.length >= 6) { const n = words.length; const a = Math.floor(Math.random() * n); let b = Math.floor(Math.random() * n), g = 0; while (b === a && g++ < 30) b = Math.floor(Math.random() * n); setCheckIdx([a, b].sort((x, y) => x - y)); setAnswers(['', '']); setCheckErr(''); } }, [step, words]);
   if (!open) return null;
+  const finish = () => onSave({ name: name.trim(), avatar: av });
+  const canConfirm = answers[0] && answers[0].trim() && answers[1] && answers[1].trim();
+  const confirmWords = () => { const ok = checkIdx.length === 2 && checkIdx.every((idx, i) => (answers[i] || '').trim().toLowerCase() === (words[idx] || '').toLowerCase()); if (ok) finish(); else setCheckErr('That’s not quite right — check your written copy and try again.'); };
 
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 70, background: 'var(--paper)', display: 'flex', flexDirection: 'column',
       animation: 'trinityFade .4s ease both' }}>
       {/* header + fields scroll together so the keyboard never traps the input; footer stays pinned */}
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      {step === 0 ? (<React.Fragment>
       {/* warm header */}
       <div style={{ paddingTop: 64, paddingBottom: 22, textAlign: 'center', position: 'relative', overflow: 'hidden',
         background: 'radial-gradient(120% 80% at 50% -20%, var(--gold-tint), transparent 55%)' }}>
@@ -42,20 +56,54 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
         <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 12px' }}>CHOOSE YOUR MARK</label>
         <AvatarPicker value={av} name={name} onChange={setAv} />
       </div>
+      </React.Fragment>) : step === 1 ? (<React.Fragment>
+      {/* STEP 1 — back up the 12 words */}
+      <div style={{ padding: '60px 22px 12px', maxWidth: 480, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="key" size={28} /></div></div>
+        <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Back up your 12 words</h1>
+        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>These 12 words are the <b>only</b> way to get your account back if you lose your phone — no one can reset it for you. Write them on paper and keep them somewhere safe. Never photograph or share them.</p>
+        {words.length ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
+            {words.map((w, i) => <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 11, background: 'var(--surface)', border: '1px solid var(--line)' }}><span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', minWidth: 15 }}>{i + 1}</span><span style={{ fontSize: 15, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }}>{w}</span></div>)}
+          </div>
+        ) : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: 24 }}>Preparing your words…</div>}
+        <button onClick={() => { if (navigator.clipboard && words.length) { navigator.clipboard.writeText(words.join(' ')).catch(() => {}); } }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', padding: '10px', borderRadius: 12, fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 16 }}>Copy the 12 words</button>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 11, cursor: 'pointer', padding: '2px 2px' }}>
+          <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} style={{ width: 20, height: 20, marginTop: 1, accentColor: 'var(--clay)', flexShrink: 0 }} />
+          <span style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>I’ve written down my 12 words and stored them somewhere safe.</span>
+        </label>
+      </div>
+      </React.Fragment>) : (<React.Fragment>
+      {/* STEP 2 — confirm a couple of words */}
+      <div style={{ padding: '60px 22px 12px', maxWidth: 480, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="shield" size={28} /></div></div>
+        <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Quick check</h1>
+        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 20px', maxWidth: 360, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Just to be sure you’ve got them — type these two words from your written copy.</p>
+        {checkIdx.map((idx, i) => (
+          <div key={idx} style={{ marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' }}>WORD #{idx + 1}</label>
+            <input value={answers[i] || ''} onChange={e => { const a = [...answers]; a[i] = e.target.value; setAnswers(a); setCheckErr(''); }} autoFocus={i === 0} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="type it here" style={{ width: '100%', height: 50, boxSizing: 'border-box', border: '1px solid ' + (checkErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 16, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
+          </div>
+        ))}
+        {checkErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', margin: '2px 2px 8px', lineHeight: 1.4 }}>{checkErr}</div> : null}
+        <button onClick={() => setStep(1)} style={{ background: 'none', border: 'none', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '6px 2px', fontFamily: 'var(--font-ui)' }}>← Show my words again</button>
+      </div>
+      </React.Fragment>)}
       </div>
 
       {/* actions */}
       <div style={{ padding: '12px 22px 26px', borderTop: '1px solid var(--line-2)', background: 'var(--paper)' }}>
         <div style={{ maxWidth: 480, margin: '0 auto' }}>
-        <button onClick={() => onSave({ name: name.trim(), avatar: av })} style={{
-          width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', marginBottom: 10,
-          background: name.trim() ? 'var(--clay)' : 'var(--surface-2)', color: name.trim() ? '#fff' : 'var(--ink-3)',
-          boxShadow: name.trim() ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
-        }}>{name.trim() ? `Continue as ${name.trim()}` : 'Continue without a name'}</button>
-        <button onClick={onSkip} style={{
-          width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer',
-          color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)',
-        }}>Skip setup for now</button>
+        {step === 0 ? (<React.Fragment>
+          <button onClick={() => setStep(1)} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', marginBottom: 10, background: name.trim() ? 'var(--clay)' : 'var(--surface-2)', color: name.trim() ? '#fff' : 'var(--ink-3)', boxShadow: name.trim() ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{name.trim() ? `Continue as ${name.trim()}` : 'Continue without a name'}</button>
+          <button onClick={onSkip} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip setup for now</button>
+        </React.Fragment>) : step === 1 ? (<React.Fragment>
+          <button onClick={() => setStep(2)} disabled={!ack} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: ack ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
+          <button onClick={finish} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>I’ll back these up later</button>
+        </React.Fragment>) : (<React.Fragment>
+          <button onClick={confirmWords} disabled={!canConfirm} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: canConfirm ? 'pointer' : 'default', marginBottom: 10, background: canConfirm ? 'var(--clay)' : 'var(--surface-2)', color: canConfirm ? '#fff' : 'var(--ink-3)', boxShadow: canConfirm ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Confirm &amp; finish</button>
+          <button onClick={finish} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip for now</button>
+        </React.Fragment>)}
         </div>
       </div>
     </div>

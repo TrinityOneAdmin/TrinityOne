@@ -24,7 +24,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
           // selection/reading is a highlight, NOT an outline — an inline verse wraps across lines, and an
           // outline fragments into a separate oval per line. box-decoration-break: clone keeps the tint
           // continuous across the wrap so it reads as one highlighted verse.
-          background: reading ? 'color-mix(in oklab, var(--clay) 16%, transparent)' : (selected ? 'color-mix(in oklab, var(--clay) 20%, transparent)' : 'transparent'),
+          background: selected ? 'color-mix(in oklab, var(--clay) 30%, transparent)' : (reading ? 'color-mix(in oklab, var(--clay) 16%, transparent)' : 'transparent'),
           WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
           transition: 'background .2s',
         }}>
@@ -107,10 +107,10 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
         </div>
         <IconBtn name="x" onClick={onClose} />
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 16 }}>
-        <button onClick={ctx._shrink} disabled={!isMulti} style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-2)', minWidth: 110, textAlign: 'center' }}>{isMulti ? multi + ' verses · tap +' : 'Add verses (+)'}</span>
-        <button onClick={ctx._extend} style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16 }}>
+        <button onClick={ctx._shrink} disabled={!isMulti} title="Remove the last verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
+        <button onClick={ctx._extendUp} title="Add the verse before" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 38, padding: '0 14px', borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>＋ before</button>
+        <button onClick={ctx._extend} title="Add the verse after" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 38, padding: '0 14px', borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>＋ after</button>
       </div>
       {!isMulti ? <React.Fragment>
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>Highlight</div>
@@ -762,6 +762,7 @@ function ReadScreen({ ctx }) {
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: ctx.notes[keyOf(sel0)] || '' }); },
     // extend/shrink the selection into a contiguous passage from inside the sheet (the backdrop blocks tapping more verses)
     _extend: () => { const nx = (selSorted[selSorted.length - 1] || 0) + 1; if (verses.some(x => Number(x.v) === nx)) setSel([...sel, nx]); },
+    _extendUp: () => { const nx = (selSorted[0] || 0) - 1; if (nx >= 1 && verses.some(x => Number(x.v) === nx)) setSel([...sel, nx]); },
     _shrink: () => { const mx = selSorted[selSorted.length - 1]; if (selSorted.length > 1 && mx != null) setSel(sel.filter(x => Number(x) !== mx)); },
   };
 
