@@ -36,6 +36,14 @@ sed -i \
   -e 's#<script type="text/babel" src="\([^"]*\)\.jsx">#<script src="\1.js">#g' \
   "$WWW/index.html"
 
+# APK diet (E5): the PACKAGED member app loads NONE of these — drop them so they don't bloat the APK.
+# Verified against index.html: it references backup.js + mydata.js + library (kept), but NOT the Babel
+# runtime (the packaged HTML is pre-transpiled), the steward console (com.trinityone.steward is its own
+# APK), or the PDF lib (steward finance only). Saves ~1MB uncompressed.
+rm -f "$WWW"/vendor/babel.min.js
+rm -f "$WWW"/stew-*.js "$WWW"/steward-root.js
+rm -f "$WWW"/vendor/steward*.js "$WWW"/vendor/jspdf.umd.min.js
+
 # Bible/lexicon modules are NOT embedded in the app — they download on demand (BSB auto-installs on
 # first launch). The web build still serves them same-origin from the deploy, so they live in www/
 # for the PWA; the native APK ships none and pulls them from the gateway (engine.js ASSET_BASE).
