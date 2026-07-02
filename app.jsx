@@ -642,7 +642,12 @@ function App() {
     // show a neutral loading until the sub resolves — stops the community flashing before a pending join resolves.
     // reset only on an actual church change, not a mere reconnect (connTick), else the tab would blink each reconnect.
     if (joinChurchRef.current !== activeChurch) { setJoinState({ approval: false, isAdmitted: true, isPending: false, loaded: false }); joinChurchRef.current = activeChurch; }
-    return F.subscribeChurchJoin(np, (s) => setJoinState({ ...s, loaded: true }));
+    const unsub = F.subscribeChurchJoin(np, (s) => setJoinState({ ...s, loaded: true }));
+    // OFFLINE FALLBACK (U1): if the relay never answers (offline / hostile network), don't spin forever. After 6s,
+    // reveal the tab with whatever's cached and flag it offline so Chat shows a quiet "can't reach" note instead of
+    // an endless spinner. A later relay answer replaces this with the real join state.
+    const offlineT = setTimeout(() => setJoinState(js => (js && js.loaded) ? js : { approval: false, isAdmitted: true, isPending: false, loaded: true, offline: true }), 6000);
+    return () => { clearTimeout(offlineT); if (typeof unsub === 'function') unsub(); };
   }, [activeChurch, churches, connTick]);
   // tell the member the moment they're approved (pending → admitted), within the same church session
   const wasPendingRef = React.useRef(false);

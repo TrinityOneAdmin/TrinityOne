@@ -455,6 +455,13 @@ function ChatScreen({ ctx }) {
       </div>
       ) : null}
 
+      {ctx.joinState && ctx.joinState.offline ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 14, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: '#c2913a', flexShrink: 0 }} />
+          Can’t reach your church right now — showing what you last saw.
+        </div>
+      ) : null}
+
       {ql ? (
       <div style={{ animation: 'trinityFade .3s ease both' }}>
         {groupHits.length === 0 && msgHits.length === 0 ? (
