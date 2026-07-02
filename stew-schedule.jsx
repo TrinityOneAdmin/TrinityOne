@@ -587,6 +587,7 @@ window.DashRota = DashRota;
 function SchEventModal({ day, onClose }) {
   const ACCENTS = [['var(--clay)', 'Gathering'], ['var(--sage)', 'Prayer'], ['var(--gold)', 'Social'], ['#5360D6', 'Youth']];
   const allGroups = window.useStewardGroups();   // chat groups + teams the event can belong to
+  const existingEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // to gently warn on a same-time clash
   const [title, setTitle] = useSch('');
   const [date, setDate] = useSch(day || '');
   const [time, setTime] = useSch('19:30');
@@ -600,6 +601,8 @@ function SchEventModal({ day, onClose }) {
   const ownedNets = React.useMemo(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
   const asNetwork = !!asPub;
+  // gentle clash check (task 19): any existing event already at this exact date + time — informational, never blocks Save
+  const clashes = React.useMemo(() => (date && time) ? (existingEvents || []).filter(e => e && e.date === date && e.time === time && (e.title || '').trim()) : [], [existingEvents, date, time]);
   const onImage = (file) => {
     if (!file) return;
     const r = new FileReader();
@@ -641,6 +644,12 @@ function SchEventModal({ day, onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
+      {clashes.length ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, padding: '9px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
+          <Icon name="bell" size={15} color="#8a6717" style={{ flexShrink: 0 }} />
+          <span>This is at the same time as <b>{clashes[0].title}</b>{clashes.length > 1 ? ' and ' + (clashes.length - 1) + ' more' : ''} — just so you know.</span>
+        </div>
+      ) : null}
       <div style={schLbl}>Where</div>
       <input value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" style={schFld} />
       <div style={schLbl}>Type</div>

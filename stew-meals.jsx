@@ -325,6 +325,11 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const effMeals = (iso) => (dayMeals[iso] && dayMeals[iso].length) ? dayMeals[iso] : meals;
   const toggleDayMeal = (iso, m) => setDayMeals(dm => { const cur = (dm[iso] && dm[iso].length) ? dm[iso] : meals; const next = cur.includes(m) ? (cur.length > 1 ? cur.filter(x => x !== m) : cur) : MEAL_KINDS.map(k => k[0]).filter(k => cur.includes(k) || k === m); return { ...dm, [iso]: next }; });
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  // zero-audience guard (task 18): a team-visibility need with an empty care team reaches nobody
+  const mealsS = window.useMealsSettings ? window.useMealsSettings() : {};
+  const careRosters = window.useStewardRosters ? window.useStewardRosters() : [];
+  const careTeamPeople = ((careRosters || []).find(r => r && r.team === mealsS.adminGroupId) || {}).people || [];
+  const zeroAudience = mealsS.visibility === 'team' && (!mealsS.adminGroupId || careTeamPeople.length === 0);
   const [busy, setBusy]     = React.useState(false);
   const [err, setErr]       = React.useState('');
   const canSave = label.trim().length > 0 && dates.length > 0 && !busy;
@@ -426,6 +431,13 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any context the church needs to help well — allergies, drop-off times, the address, who not to ring after 9pm…" style={{ ...mealsFld, height: 'auto', minHeight: 88, padding: '11px 13px', resize: 'vertical' }} />
 
         {err ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
+
+        {zeroAudience ? (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, transparent)', fontSize: 12.5, color: 'var(--clay-ink)', lineHeight: 1.45 }}>
+            <span style={{ flexShrink: 0 }}>⚠</span>
+            <span>Care is set to <b>care-team only</b>, but {mealsS.adminGroupId ? 'the care team has no members yet' : 'no care team is chosen'} — so <b>no one will see this need</b>. Add people to the care team (Care → Settings), or switch care to “the whole church”.</span>
+          </div>
+        ) : null}
 
         <div style={{ display: 'flex', gap: 9, marginTop: 18, justifyContent: 'flex-end' }}>
           {isEdit ? <button onClick={remove} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13.5, color: 'var(--clay)' }}><Icon name="trash" size={14} color="var(--clay)" /> Close need</button> : null}

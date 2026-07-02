@@ -236,7 +236,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       footer={<React.Fragment>
         <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
-        <button onClick={() => saved && next()} disabled={!saved} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: saved ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
+        <button onClick={() => { if (saved || !phrase) next(); }} disabled={!saved && !!phrase} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (saved || !phrase) ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
       </React.Fragment>}>
       <div style={lbl}>RECOVERY PHRASE — 12 WORDS</div>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 14.5, lineHeight: 1.8, wordSpacing: 3, color: 'var(--ink)', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', borderRadius: 12, padding: '14px 16px' }}>{phrase || 'No recovery phrase available for this key.'}</div>
@@ -244,10 +244,14 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         {phrase ? <button onClick={() => { copyText(phrase); setKeyCopied(true); setTimeout(() => setKeyCopied(false), 1400); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name={keyCopied ? 'check' : 'receipt'} size={14} color="currentColor" /> {keyCopied ? 'Copied' : 'Copy'}</button> : null}
         <span style={{ fontSize: 12, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{npub.slice(0, 22)}…</span>
       </div>
+      {phrase ? (
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', fontSize: 13.5, fontWeight: 600 }}>
         <input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
         I’ve written these 12 words on paper and stored them safely
       </label>
+      ) : (
+      <div style={{ marginTop: 12, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>This key was imported, so its recovery phrase isn’t shown here — keep the copy you set up with somewhere safe. You can continue.</div>
+      )}
       <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
         {!relayOpen ? (
           <button onClick={() => setRelayOpen(true)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', padding: 0 }}>Running your own relay? Connect it →</button>
