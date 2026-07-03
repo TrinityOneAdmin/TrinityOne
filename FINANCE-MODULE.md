@@ -2,7 +2,7 @@
 
 **Status:** design draft · 2026-07-03 · branch `claude/finance-module`
 
-**Decisions (locked):** church/nonprofit only · nation-neutral · lives in the **steward console** · **rebuilt fresh** (new double-entry engine, not an extension of the current basic ledger) · **freemium**: a free *Standard* tier + a paid *Full* tier at **~$5/year**, activated by a **Lightning (Strike) invoice** and active only while paid · subscription revenue helps fund the relay network.
+**Decisions (locked):** church/nonprofit only · nation-neutral · lives in the **steward console** · **rebuilt fresh** (new double-entry engine, not an extension of the current basic ledger) · **freemium**: a free *Standard* tier + a paid *Full* tier at **~$5/year**, activated by a **Lightning invoice paid to the project's own self-custodial node** (no custodial/third-party account) and active only while paid · subscription revenue helps fund the relay network.
 
 ---
 
@@ -24,25 +24,24 @@ One rebuilt double-entry engine, two tiers:
 - **Nation-neutral by default** — core ledger/reports/language assume no country; regional tax/relief are optional off-by-default **packs** (consistent with the existing `giftAid` toggle policy).
 - **Thin-pipe first** — local-first, cache-first, offline; statement *import* (CSV/OFX) before live feeds.
 - **Correctness is existential** — invariants are tested, not hoped for (§7).
-- **Non-custodial** — Strike routes the sub payment; we never hold church or member funds (no KYC/AML surface).
+- **Non-custodial, no account** — the sub is received by the project's **own self-hosted Lightning node**; no third-party/custodial account, no KYC/AML surface, no one who can freeze or de-platform it. We never hold church or member funds.
 
 ## 4. Who it's for
 Treasurer (primary, read/write) · Independent examiner / accountant (review + adjust) · Trustees / pastor (read-only dashboard). Roles reuse the **steward-delegation** model (owner → treasurer → examiner → viewer), revocable, keyed.
 
-## 5. Strike integration — recommended design
-Goal: collect a ~$5/year Lightning payment, unlock Full, keep it non-custodial and nation-neutral, with almost-zero operational overhead.
+## 5. Payments — self-custodial Lightning (no third-party account)
+Goal: collect a ~$5/year payment, unlock Full, hold **no custodial account** and **no funds in any third party**, stay nation-neutral, near-zero overhead.
 
-**Receiving (server-side, on the relay — the Strike secret NEVER touches the client):**
+**The project runs its OWN Lightning backend — no Strike/custodial account.** A self-hosted **BTCPay Server or LNbits** node alongside the relay infra (self-hosting is already the ethos). It exposes a Bitcoin-native **Lightning address** (e.g. `sub@trinityone.church`) + an API to mint per-invoice requests. No business account, no KYC, no third party holding funds, nothing to freeze/de-platform — the $5s land straight in the project's own node.
+
+**Flow (the same shape as any invoice provider, just pointed at your own node):**
 1. In the console, the treasurer taps **"Unlock Full accounting — ~$5/year."**
-2. The console asks the **relay** to start activation. The relay calls the **Strike API**: create an **invoice** for the $5-equivalent, tagged `correlationId = <churchpub>:<period>`, then take a **quote** → Strike returns a **BOLT11 Lightning invoice** (+ optional on-chain).
-3. The console renders it as a **QR + copyable string** (reuse the app's existing QR renderer).
-
-**Paying (church side — wallet-agnostic → this is what makes it nation-neutral):**
-- The treasurer pays the BOLT11 from **any** Lightning wallet — Strike, Phoenix, Wallet of Satoshi, their own node, BTCPay, whatever. **No Strike account required by the church.** The $5 is billed as the sats-equivalent at pay time (Strike's USD quote), so the amount is BTC-denominated and country-agnostic.
+2. Console → **relay** → the self-hosted LN backend mints a **BOLT11 invoice** for the $5-equivalent, tagged with the church, shown as a **QR + copyable string** (reuse the app's QR renderer).
+3. The treasurer **pays it from any Lightning wallet** (BTC). The amount is the sats-equivalent at pay time → BTC-denominated and country-agnostic; no account needed by the church.
 - For $5, **Lightning-only** (on-chain fees can exceed the sub); offer a multi-year option if you want an on-chain path.
 
 **Confirming + entitlement:**
-- Strike fires a **webhook** to the relay on payment (fallback: the relay polls invoice status). On `PAID`, the relay sets `subscription[churchpub].paidUntil = now + 1y` and issues a **relay-signed entitlement** — an Ed25519-signed record the console verifies against the **baked-in relay pubkey** (the same trust anchor as the signed self-update). Entitlement can't be forged client-side.
+- The LN backend fires a **webhook** to the relay on payment (fallback: the relay polls invoice status). On `PAID`, the relay sets `subscription[churchpub].paidUntil = now + 1y` and issues a **relay-signed entitlement** — an Ed25519-signed record the console verifies against the **baked-in relay pubkey** (the same trust anchor as the signed self-update). Entitlement can't be forged client-side.
 
 **Enforcing "only while paid":**
 - **Client gate (primary):** the console shows Full features only while the verified entitlement is current, else Standard. Proportionate for an honest-church $5 product — this is a paywall, not DRM.
@@ -52,11 +51,13 @@ Goal: collect a ~$5/year Lightning payment, unlock Full, keep it non-custodial a
 - Relay reminds the console ~30 days before expiry (console notice / push). A fresh invoice extends `paidUntil`.
 - Grace (~1 week) → lapse → console reverts to Standard; Full writes lock; data preserved + exportable.
 
-**Node funding + economics:**
-- The $5 lands in the network's Strike account; a **defined, transparent share funds relay operations** (eventually dogfooded in the module's own books).
-- ~1–2 Strike API calls per church per year; Lightning fees are sats. $5/yr is comfortably viable.
+**"Pay by debit card" — the honest constraint:** a card charge always needs a card processor *somewhere*; you can't have both "no account anywhere" **and** a native card button. Two clean card paths:
+- **Account-less (recommended, default):** the card rail lives on the **payer's side** — a church with no Bitcoin funds *their own* wallet with a card (Strike, Cash App, Wallet of Satoshi's on-ramp, …) and pays the invoice. *Their* account, not the project's → "pay by card" works with **zero project account**. UX: *"No Bitcoin yet? Top up any Lightning wallet with a card, then pay this."*
+- **In-checkout card button (optional, later):** a literal "pay with card" button in the console needs a card-checkout provider account — the one unavoidable account (Zaprite / IBEX / OpenNode / BTCPay + a card plugin). Pick one that **settles to your self-custodial address** so funds stay non-custodial. Defer until card convenience is proven necessary.
 
-**Strike availability note:** Strike (the *receiver*) has country limits; the *payer* is wallet-agnostic so unaffected. If a region ever needs a non-Strike receiver, the identical invoice→pay→webhook flow works behind the relay with LNbits / BTCPay / a self-hosted node — Strike is the default, not a hard dependency.
+**Node funding + economics:**
+- The $5s land in the project's **own node**; a **defined, transparent share funds relay operations** (eventually dogfooded in the module's own books).
+- ~1–2 LN-backend calls per church per year; Lightning fees are sats. $5/yr is comfortably viable.
 
 ## 6. Feature scope by tier
 | Area | Standard (free) | Full (paid) |
@@ -100,4 +101,4 @@ Out of v1 entirely: payroll (later regional pack), inventory, projects/job-costi
 P0+P1 is a substantial focused build — the ledger engine + Strike activation is most of the risk. Full parity across P2–P4 is a multi-quarter road. Scope to P1; let real churches pull the rest.
 
 ## 11. Settled inputs
-Price **~$5/year**; **Strike** receiver (design in §5); **regional packs** as the extensibility mechanism (§7); **rebuild fresh** (new engine; the current basic treasurer ledger is superseded by the free Standard tier). Remaining to pin at P0 start: exact node-funding split (and whether to display it), and the multi-year/on-chain option.
+Price **~$5/year**; **self-hosted Lightning receiver** — BTCPay Server / LNbits on the project's own infra, **no custodial/third-party account** (design in §5); card is payer-side by default; **regional packs** as the extensibility mechanism (§7); **rebuild fresh** (new engine; the current basic treasurer ledger is superseded by the free Standard tier). Remaining to pin at P0 start: which LN backend (BTCPay vs LNbits vs a bare node), exact node-funding split (and whether to display it), the multi-year/on-chain option, and whether an in-checkout card provider is worth adding later.
