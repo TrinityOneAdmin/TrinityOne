@@ -91,14 +91,14 @@ Out of v1 entirely: payroll (later regional pack), inventory, projects/job-costi
 - Non-custodial throughout keeps clear of money-transmission / KYC.
 
 ## 9. Phasing
-- **P0 — Foundation:** ledger engine (double-entry + funds + relay-ordered sequencing), event model + encryption, roles, **invariant tests**, the **Strike activation state machine + relay-signed entitlement**, tier-gating (client + server backstop).
+- **P0 — Foundation:** ledger engine (double-entry + funds + relay-ordered sequencing), event model + encryption, roles, **invariant tests**, the **Lightning activation state machine + relay-signed entitlement**, tier-gating (client + server backstop).
 - **P1 — Standard tier shippable (free):** chart of accounts, income/expense, funds, trial balance + I&E, donor records, CSV export. *Beats a spreadsheet for most churches, at no cost.*
 - **P2 — Full tier core:** bills/AP + receipts, statement import + reconciliation, balance sheet + budgets, trustees' report, examiner access — behind the $5 paywall.
 - **P3 — Depth & first regional pack:** invoicing/AR, multi-currency, period close, the first relief pack (e.g. UK Gift Aid submission).
 - **P4 — Scale:** live bank feeds, more regional packs, integrations, (later) payroll pack.
 
 ## 10. Effort (honest)
-P0+P1 is a substantial focused build — the ledger engine + Strike activation is most of the risk. Full parity across P2–P4 is a multi-quarter road. Scope to P1; let real churches pull the rest.
+P0+P1 is a substantial focused build — the ledger engine + Lightning activation is most of the risk. Full parity across P2–P4 is a multi-quarter road. Scope to P1; let real churches pull the rest.
 
 ## 11. Settled inputs
 Price **~$5/year**; **self-hosted Lightning receiver** — BTCPay Server / LNbits on the project's own infra, **no custodial/third-party account** (design in §5); card is payer-side by default; **regional packs** as the extensibility mechanism (§7); **rebuild fresh** (new engine; the current basic treasurer ledger is superseded by the free Standard tier). Remaining to pin at P0 start: which LN backend (BTCPay vs LNbits vs a bare node), exact node-funding split (and whether to display it), the multi-year/on-chain option, and whether an in-checkout card provider is worth adding later.
