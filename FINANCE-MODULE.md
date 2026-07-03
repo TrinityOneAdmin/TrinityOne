@@ -1,106 +1,103 @@
-# TrinityOne Finance — Build Scope
+# TrinityOne Finance — Build Scope & Design
 
-**Status:** design draft · 2026-07-03
-**Decision:** church/nonprofit only · nation-neutral · steward-console module · activated by a Lightning (Strike) invoice, active only while paid.
+**Status:** design draft · 2026-07-03 · branch `claude/finance-module`
+
+**Decisions (locked):** church/nonprofit only · nation-neutral · lives in the **steward console** · **rebuilt fresh** (new double-entry engine, not an extension of the current basic ledger) · **freemium**: a free *Standard* tier + a paid *Full* tier at **~$5/year**, activated by a **Lightning (Strike) invoice** and active only while paid · subscription revenue helps fund the relay network.
 
 ---
 
 ## 1. Vision
-A complete accounting system for churches and small nonprofits — **as capable as Xero / QuickBooks**, but built around how churches actually keep money: real **fund accounting**, donations, trustees' reporting. It lives **in the steward console** as an optional module, is **switched on by paying a Lightning invoice** (Strike), and stays active **only while paid**. Its subscription revenue helps **fund the relay/node network** that keeps TrinityOne running. It is **nation-neutral** at its core, with country-specific tax/relief handled as optional, off-by-default packs.
+A complete accounting system for churches and small nonprofits — **as capable as Xero / QuickBooks for the church use case** — built around how churches actually keep money (real **fund accounting**, donations, trustees' reporting). It lives in the steward console, is **nation-neutral** at its core, and gates its advanced power behind a tiny yearly Lightning subscription whose revenue helps keep the relays running.
 
-Not a general SMB accounting product. Not the member app. Not custodial.
+Not general-SMB. Not the member app. Not custodial.
 
-## 2. Principles (inherited from the rest of TrinityOne)
-- **Owned by no one.** The church's books are their own encrypted events on their own key/relay. We never hold the data hostage — see §7.
-- **Nation-neutral by default.** The core ledger, reports, and language assume no country. Gift Aid, US 501(c)(3)/990, etc. are optional regional **packs**, off by default, never in the default framing. (Consistent with the existing `giftAid` toggle policy.)
-- **Works over a thin pipe.** Local-first, cache-first, offline-capable; statement *import* (CSV/OFX) before live bank feeds.
-- **Correctness is existential.** A ledger that doesn't balance destroys trust instantly — invariants are tested, not hoped for (§6).
-- **Non-custodial.** Strike routes the subscription payment; we never hold church or member funds. No KYC/AML surface.
+## 2. Tier model (free Standard / paid Full)
+One rebuilt double-entry engine, two tiers:
 
-## 3. Who it's for
-- **Treasurer** (primary) — keeps the books, reconciles the bank, runs donation-relief claims, produces year-end accounts.
-- **Independent examiner / accountant** (review + adjust, read-mostly).
-- **Trustees / pastor** (read-only dashboard — "where are we?").
-Roles reuse the existing **steward-delegation** model (owner → treasurer → examiner → viewer), revocable, keyed.
+- **Standard — free, always.** The essentials most small churches need: record income & expenditure, a handful of funds, donor records, the core reports (income & expenditure, fund balances), and CSV export. No payment, ever.
+- **Full — ~$5/year via Lightning.** The whole package: full chart of accounts, unlimited funds, **bank statement import + reconciliation**, bills / accounts payable with approvals, **invoicing / accounts receivable**, **multi-currency**, budgets, balance sheet + cash flow + aged reports + trustees' report, **examiner (multi-user) access**, period close, and **regional tax/relief packs** (e.g. UK Gift Aid) — all optional and off by default.
 
-## 4. Activation & subscription (the "only while paid" model)
-- The module is **off by default** in the steward console.
-- A steward **activates it by paying a Lightning invoice** (Strike) for a **prepaid period** (e.g. monthly / yearly). Lightning has no card-style auto-pull, so billing is prepaid + renewal-invoice + reminders, **not** silent recurring charges.
-- **State machine:** `off → active → grace → lapsed`.
-  - **active** — full read/write in the console.
-  - **grace** — short window after expiry; reminders; still writable.
-  - **lapsed** — the console module **locks for writing** (honouring "only while paid"), **but the church's data is never destroyed** (it's their encrypted events) and **stays exportable**; paying again **reactivates instantly** with all history intact. "You can't keep writing to the books until you renew — but you never lose them."
-- **Funds the network, transparently.** A defined share of subscription income funds relay operations; surface it ("your subscription keeps N relays running") — on-ethos and a selling point.
-- Billing runs **separately** from the church's own books (don't co-mingle our SaaS accounting with theirs).
+**"Only while paid" means graceful, not punitive.** When Full lapses, the console **reverts to Standard** — Full-tier *writing* locks, but every book, entry and attachment is preserved (it's the church's own encrypted data) and stays **exportable**, and Standard bookkeeping continues free. Re-paying reactivates Full instantly with all history intact. A church never loses its books over a missed renewal.
 
-## 5. Feature scope — full accounting, church-shaped
-Target is **parity with major accounting software for the church/NP use case**, phased. Grouped by area; MVP items marked.
+## 3. Principles (inherited)
+- **Owned by no one** — the books are the church's encrypted events on their own key/relay; export is always available (legal record-keeping is commonly 6+ years).
+- **Nation-neutral by default** — core ledger/reports/language assume no country; regional tax/relief are optional off-by-default **packs** (consistent with the existing `giftAid` toggle policy).
+- **Thin-pipe first** — local-first, cache-first, offline; statement *import* (CSV/OFX) before live feeds.
+- **Correctness is existential** — invariants are tested, not hoped for (§7).
+- **Non-custodial** — Strike routes the sub payment; we never hold church or member funds (no KYC/AML surface).
 
-**A. Ledger core (MVP — the foundation)**
-- Chart of accounts (assets / liabilities / equity / income / expenditure), church-NP default template.
-- **Double-entry journal** — every transaction balances; **append-only / immutable**; corrections by reversing entries, never edits.
-- **Fund accounting** — restricted / designated / general funds carried on every posting (the thing Xero does poorly and churches need most).
-- **Multi-currency** (nation-neutral → international churches need it): base currency + foreign transactions + revaluation. *(P2/P3.)*
+## 4. Who it's for
+Treasurer (primary, read/write) · Independent examiner / accountant (review + adjust) · Trustees / pastor (read-only dashboard). Roles reuse the **steward-delegation** model (owner → treasurer → examiner → viewer), revocable, keyed.
 
-**B. Money in**
-- Manual income + categorisation (MVP).
-- **Donations & donors** — donor records, statements (MVP→P2).
-- **Regional giving-relief pack** — e.g. UK Gift Aid claim builder + submission; US contribution statements — **optional, off by default** (P3, per region).
-- Sales invoicing / accounts receivable — hall hire, events, courses (P3).
+## 5. Strike integration — recommended design
+Goal: collect a ~$5/year Lightning payment, unlock Full, keep it non-custodial and nation-neutral, with almost-zero operational overhead.
 
-**C. Money out (P2)**
-- Bills / expenses, receipt attachments, **approvals via steward roles**, accounts payable, reimbursements.
+**Receiving (server-side, on the relay — the Strike secret NEVER touches the client):**
+1. In the console, the treasurer taps **"Unlock Full accounting — ~$5/year."**
+2. The console asks the **relay** to start activation. The relay calls the **Strike API**: create an **invoice** for the $5-equivalent, tagged `correlationId = <churchpub>:<period>`, then take a **quote** → Strike returns a **BOLT11 Lightning invoice** (+ optional on-chain).
+3. The console renders it as a **QR + copyable string** (reuse the app's existing QR renderer).
 
-**D. Banking & reconciliation (P2→P4)**
-- **Import**: CSV / OFX statement upload first (universal, thin-pipe-friendly).
-- **Reconcile**: match statement lines to ledger entries; flag unmatched.
-- Live bank feeds / Open Banking: P4 (per-bank, per-country — cost + compliance).
+**Paying (church side — wallet-agnostic → this is what makes it nation-neutral):**
+- The treasurer pays the BOLT11 from **any** Lightning wallet — Strike, Phoenix, Wallet of Satoshi, their own node, BTCPay, whatever. **No Strike account required by the church.** The $5 is billed as the sats-equivalent at pay time (Strike's USD quote), so the amount is BTC-denominated and country-agnostic.
+- For $5, **Lightning-only** (on-chain fees can exceed the sub); offer a multi-year option if you want an on-chain path.
 
-**E. Reports (MVP→P2)**
-- MVP: trial balance, income & expenditure (P&L), fund balances.
-- P2: balance sheet, cash flow, budget-vs-actual, aged debtors/creditors, **trustees' annual-report / fund-accounting summary** (SORP-style but nation-neutral).
-- Everything derived from the journal, materialised locally (cache-first).
+**Confirming + entitlement:**
+- Strike fires a **webhook** to the relay on payment (fallback: the relay polls invoice status). On `PAID`, the relay sets `subscription[churchpub].paidUntil = now + 1y` and issues a **relay-signed entitlement** — an Ed25519-signed record the console verifies against the **baked-in relay pubkey** (the same trust anchor as the signed self-update). Entitlement can't be forged client-side.
 
-**F. Multi-user, roles, audit (MVP→P2)**
-- Roles via the steward roster; **immutable audit trail** (who posted/approved what, when) falls out of the event-sourced design for free.
+**Enforcing "only while paid":**
+- **Client gate (primary):** the console shows Full features only while the verified entitlement is current, else Standard. Proportionate for an honest-church $5 product — this is a paywall, not DRM.
+- **Server backstop (light):** the relay refuses to *store* the **Full-tier event kinds** (reconciliation, invoices, regional-pack docs, …) unless the church has a current entitlement. Standard-tier kinds are always accepted (free). So the paywall isn't trivially bypassed by editing the client, without heavy DRM.
 
-**G. Attachments, exports, close (P2→P3)**
-- Receipt/document attachments; **first-class export** (CSV/JSON/PDF + full journal for an accountant); period lock / year-end close.
+**Renewal + lapse:**
+- Relay reminds the console ~30 days before expiry (console notice / push). A fresh invoice extends `paidUntil`.
+- Grace (~1 week) → lapse → console reverts to Standard; Full writes lock; data preserved + exportable.
 
-**H. Out of v1:** payroll (huge, per-jurisdiction — a later regional pack), inventory/stock, projects/job costing, fixed-asset registers, general-SMB features.
+**Node funding + economics:**
+- The $5 lands in the network's Strike account; a **defined, transparent share funds relay operations** (eventually dogfooded in the module's own books).
+- ~1–2 Strike API calls per church per year; Lightning fees are sats. $5/yr is comfortably viable.
 
-## 6. Architecture & data model
-- **Event-sourced, local-first, keyed to the church.** Each journal entry is a **signed, encrypted event** on the church's relay — only authorised roles can decrypt. Append-only = accounting integrity + audit trail for free. Lives in the **steward console** (`stew-*` / `steward.html`); no member-app surface.
-- **Consistency is THE technical decision.** Accounting demands balances that always reconcile, so use a **single-writer "book" model**: one authoritative write-path per set of books, with the **relay as ordering authority** and a **monotonic sequence number** per book; concurrent edits queue, they don't fork. (Multi-writer + later reconciliation is where naive event-sourced ledgers break — avoid it.)
-- **Reports are projections** rebuilt from the journal and cached locally, so they open offline over a thin pipe.
-- **Reuse everything:** identity/keys, the steward roster for roles, the relay + shared-sub (E2), cache-first paint, the module-toggle pattern, the Nostr doc model, the existing basic treasurer ledger as the seed.
-- **Invariant test suite** is non-negotiable: every projection (trial balance, fund balances, statements) must reconcile to the journal to the penny; debits == credits always; property-based tests on random transaction streams.
+**Strike availability note:** Strike (the *receiver*) has country limits; the *payer* is wallet-agnostic so unaffected. If a region ever needs a non-Strike receiver, the identical invoice→pay→webhook flow works behind the relay with LNbits / BTCPay / a self-hosted node — Strike is the default, not a hard dependency.
 
-## 7. Data ownership & retention
-- Data is the church's encrypted events on their key — **inherently theirs**, even lapsed/unsubscribed.
-- **Export always available** (even when lapsed) — legal record-keeping obligations (commonly 6+ years) mean "never lose the books" is a design requirement, not a nicety.
+## 6. Feature scope by tier
+| Area | Standard (free) | Full (paid) |
+|---|---|---|
+| Ledger | income/expense, double-entry, small fund set | full chart of accounts, unlimited funds |
+| Money in | manual income, donor records | invoicing / AR, regional giving-relief packs |
+| Money out | manual expense | bills / AP, approvals, reimbursements, receipts |
+| Banking | — | statement import (CSV/OFX) + reconciliation; live feeds (P4) |
+| Reports | I&E, fund balances | + balance sheet, cash flow, budgets, aged reports, trustees' report |
+| Currency | base only | multi-currency + revaluation |
+| Users | treasurer | + examiner (multi-user), period close/lock |
+| Everywhere | CSV export, immutable audit trail | + full journal / accountant export |
+Out of v1 entirely: payroll (later regional pack), inventory, projects/job-costing, fixed-asset registers, general-SMB, member-app finance UI.
 
-## 8. Compliance (read before committing)
-- **Nation-neutral core sidesteps most certification.** Country-specific tax filing (e.g. UK Making Tax Digital, HMRC-recognised software) is a real **per-region certification road** — pursued **only** where a regional pack demands it, not baseline.
-- Gift Aid / contribution-relief submission is per-region and lives in packs.
-- Non-custodial throughout (Strike routes; we never hold funds) keeps us clear of money-transmission/KYC.
+## 7. Architecture & data model (rebuilt fresh)
+- **Event-sourced, local-first, keyed to the church.** Each entry is a **signed, encrypted event** on the church's relay, decryptable only by authorised roles. Append-only = integrity + audit trail for free. Steward console only (`stew-*` / `steward.html`).
+- **Consistency is THE decision → single-writer "book" model.** One authoritative write-path per set of books; the **relay is the ordering authority**, assigning/validating a **monotonic sequence** per book; concurrent edits queue, they never fork. Corrections are **reversing entries** (append), never edits. (Multi-writer + later reconciliation is where naive event-sourced ledgers break — avoided.)
+- **Proposed event kinds** (church-keyed, encrypted):
+  - `finance/settings` — base currency, fiscal year, tier state.
+  - `finance/account:<id>` — a chart-of-accounts line (type, name, fund-eligibility).
+  - `finance/fund:<id>` — a fund (general / designated / restricted).
+  - `finance/journal:<seq>` — a **journal entry**: `{ seq, date, memo, postings:[{account, fund, dir:'dr'|'cr', currency, amount}], attachmentRefs, by, ts }`; **invariant: Σdebits == Σcredits**.
+  - `finance/donor:<id>`, `finance/contact:<id>`, `finance/invoice:<id>`, `finance/bill:<id>`, `finance/reconcile:<stmt>` — the Full-tier docs the server backstop gates.
+- **Projections** (trial balance, fund balances, P&L, balance sheet, aged) are rebuilt locally from the journal and cached (cache-first, offline). **Every projection must reconcile to the journal to the penny.**
+- **Roles** via the steward roster. **Regional packs** register additively (a pack supplies extra report formats + a relief-claim builder/exporter; core never imports a country).
+- Reuse: identity/keys, steward roster, relay + shared-sub (E2), cache-first paint, module-toggle pattern, QR renderer, the signed-entitlement trust anchor.
+
+## 8. Correctness & compliance
+- **Invariant test suite is non-negotiable:** debits == credits always; every projection reconciles to the journal; property-based tests over random transaction streams; period-close immutability.
+- **Nation-neutral core sidesteps most certification.** Country tax filing (e.g. UK MTD / HMRC-recognised software) is a per-region road, pursued **only** where a pack demands it — never baseline.
+- Non-custodial throughout keeps clear of money-transmission / KYC.
 
 ## 9. Phasing
-- **P0 — Foundation:** ledger engine (double-entry + funds + relay-ordered sequencing), event model, encryption, roles, invariant tests, the Strike prepaid-activation state machine.
-- **P1 — MVP (shippable, beats a spreadsheet):** chart of accounts, manual income/expense, fund balances, trial balance + I&E, donor records, CSV export, Lightning activation.
-- **P2 — Treasurer-complete:** bills/AP, receipts, statement import + reconciliation, balance sheet + budgets, trustees' report.
-- **P3 — Depth & regional:** invoicing/AR, multi-currency, period close/lock, first regional pack (e.g. UK Gift Aid submission).
+- **P0 — Foundation:** ledger engine (double-entry + funds + relay-ordered sequencing), event model + encryption, roles, **invariant tests**, the **Strike activation state machine + relay-signed entitlement**, tier-gating (client + server backstop).
+- **P1 — Standard tier shippable (free):** chart of accounts, income/expense, funds, trial balance + I&E, donor records, CSV export. *Beats a spreadsheet for most churches, at no cost.*
+- **P2 — Full tier core:** bills/AP + receipts, statement import + reconciliation, balance sheet + budgets, trustees' report, examiner access — behind the $5 paywall.
+- **P3 — Depth & first regional pack:** invoicing/AR, multi-currency, period close, the first relief pack (e.g. UK Gift Aid submission).
 - **P4 — Scale:** live bank feeds, more regional packs, integrations, (later) payroll pack.
 
 ## 10. Effort (honest)
-- **P0+P1** is a substantial focused build — the ledger engine + Strike activation is most of the risk; done well it's genuinely useful.
-- **Full parity** across all phases is a multi-quarter road. Scope to P1; let real churches pull the roadmap.
+P0+P1 is a substantial focused build — the ledger engine + Strike activation is most of the risk. Full parity across P2–P4 is a multi-quarter road. Scope to P1; let real churches pull the rest.
 
-## 11. Non-goals (v1)
-General-SMB market · payroll · inventory · projects/job costing · fixed-asset registers · live bank feeds · any country's tax filing in the baseline · custody of funds · member-app finance UI.
-
-## 12. Open items to settle before P0
-1. **Subscription price + period** and the node-funding split (and whether to show it).
-2. **Strike integration shape** — invoices + renewal reminders; who watches for payment (relay-side vs console-side).
-3. **Regional pack format** — how a country's relief/report rules plug in cleanly (so packs are additive, never core).
-4. **Seed vs rebuild** — extend the existing treasurer ledger's data, or start the double-entry engine fresh and migrate.
+## 11. Settled inputs
+Price **~$5/year**; **Strike** receiver (design in §5); **regional packs** as the extensibility mechanism (§7); **rebuild fresh** (new engine; the current basic treasurer ledger is superseded by the free Standard tier). Remaining to pin at P0 start: exact node-funding split (and whether to display it), and the multi-year/on-chain option.
