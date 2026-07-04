@@ -542,12 +542,11 @@ function canRead(e, authed) {
       const md = MEMBER_DOCS.get(cp);
       return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || stewardOf(authed, cp) || !!(md && md.has(authed)));
     }
-    // FINANCE (books) is the church's private accounts — read only by the church key or a CURRENT steward of it,
-    // never a member and never the world. (Content is also encrypted client-side; this gates the metadata too.)
-    if (d.startsWith('finance/')) {
-      const cp = finCp(e);
-      return !!authed && !!cp && (authed === cp || stewardOf(authed, cp));
-    }
+    // FINANCE (books): the content is encrypted client-side (encPublish self-encrypts to the church key), so
+    // the docs are ciphertext to everyone but the church. We do NOT gate reads behind NIP-42 auth — the pool
+    // (steward console + member app) doesn't auth, so a read-gate would block the church from reading its OWN
+    // books. Metadata-privacy via a proper NIP-42 auth handler is a queued follow-up (would also fix the
+    // safeguarding-list read-gate the same way). Confidentiality here rests on the encryption, not the relay.
     // roster-verify steward-authored church content: a doc carrying ['church',<cp>] is only served while
     // its author is on <cp>'s CURRENT signed roster — so a revoked steward's content stops being delivered.
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];
@@ -1281,7 +1280,7 @@ wss.on('connection', ws => {
       // serve everything this connection may read now (blocked members withheld; invite-only group
       // messages withheld from non-members per NIP-42)
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
-      for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith('finance/')) wantsSafeguard = true; } continue; } matched.push(e); }
+      for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D)) wantsSafeguard = true; } continue; } matched.push(e); }
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
