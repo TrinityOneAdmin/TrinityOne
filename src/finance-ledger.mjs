@@ -65,9 +65,9 @@ function _normalize(book, postings) {
   return norm;
 }
 
-export function post(book, { date = '', memo = '', postings, by = '', ts = 0, reverses = null } = {}) {
+export function post(book, { date = '', memo = '', postings, by = '', ts = 0, reverses = null, importKey = null } = {}) {
   const norm = _normalize(book, postings);
-  const entry = { seq: ++book._seq, date, memo, postings: norm, by, ts, reverses };
+  const entry = { seq: ++book._seq, date, memo, postings: norm, by, ts, reverses, importKey };
   book.journal.push(entry);
   return entry;
 }
@@ -78,7 +78,7 @@ export function applyEntry(book, entry) {
   if (!entry || !Number.isSafeInteger(entry.seq)) throw new Error('entry needs an integer seq');
   if (entry.seq !== book._seq + 1) throw new Error(`sequence gap/fork: expected ${book._seq + 1}, got ${entry.seq}`);
   const norm = _normalize(book, entry.postings);
-  const e = { seq: entry.seq, date: entry.date || '', memo: entry.memo || '', postings: norm, by: entry.by || '', ts: entry.ts || 0, reverses: entry.reverses ?? null };
+  const e = { seq: entry.seq, date: entry.date || '', memo: entry.memo || '', postings: norm, by: entry.by || '', ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null };
   book.journal.push(e); book._seq = entry.seq;
   return e;
 }
@@ -91,6 +91,14 @@ export function reverse(book, seq, { date, by = '', memo } = {}) {
   if (book.journal.some(e => e.reverses === seq)) throw new Error('entry #' + seq + ' is already reversed');
   const postings = orig.postings.map(p => ({ account: p.account, fund: p.fund, dir: p.dir === 'dr' ? 'cr' : 'dr', amount: p.amount }));
   return post(book, { date: date || orig.date, by, reverses: seq, memo: memo || `Reversal of #${seq}${orig.memo ? ': ' + orig.memo : ''}`, postings });
+}
+
+// The set of import fingerprints already in the journal — so a re-imported bank statement can't double-count
+// (each imported line carries its statement lineKey as entry.importKey; see finance-import.mjs).
+export function importedKeys(book) {
+  const s = new Set();
+  for (const e of book.journal) if (e.importKey) s.add(e.importKey);
+  return s;
 }
 
 // ── projections (everything is derived from the journal) ──

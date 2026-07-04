@@ -31,10 +31,18 @@ var FinanceLedger = (() => {
     createBook: () => createBook,
     docFor: () => docFor,
     fundBalances: () => fundBalances,
+    guessColumns: () => guessColumns,
+    importedKeys: () => importedKeys,
     incomeExpenditure: () => incomeExpenditure,
+    lineKey: () => lineKey,
+    parseCsv: () => parseCsv,
+    parseDate: () => parseDate,
+    parseMoney: () => parseMoney,
     post: () => post,
     rebuildBook: () => rebuildBook,
     reverse: () => reverse,
+    statementLines: () => statementLines,
+    suggestCategory: () => suggestCategory,
     trialBalance: () => trialBalance
   });
 
@@ -78,7 +86,7 @@ var FinanceLedger = (() => {
   function _normalize(book, postings) {
     if (!Array.isArray(postings) || postings.length < 2) throw new Error("a journal entry needs at least two postings");
     let dr = 0, cr = 0;
-    const norm = postings.map((p, i) => {
+    const norm2 = postings.map((p, i) => {
       const acc = book.accounts.get(p.account);
       if (!acc) throw new Error(`posting ${i}: unknown account "${p.account}"`);
       if (p.dir !== "dr" && p.dir !== "cr") throw new Error(`posting ${i}: dir must be 'dr' or 'cr'`);
@@ -90,19 +98,19 @@ var FinanceLedger = (() => {
       return { account: p.account, fund, dir: p.dir, amount: p.amount };
     });
     if (dr !== cr) throw new Error(`entry does not balance: debits ${dr} \u2260 credits ${cr}`);
-    return norm;
+    return norm2;
   }
-  function post(book, { date = "", memo = "", postings, by = "", ts = 0, reverses = null } = {}) {
-    const norm = _normalize(book, postings);
-    const entry = { seq: ++book._seq, date, memo, postings: norm, by, ts, reverses };
+  function post(book, { date = "", memo = "", postings, by = "", ts = 0, reverses = null, importKey = null } = {}) {
+    const norm2 = _normalize(book, postings);
+    const entry = { seq: ++book._seq, date, memo, postings: norm2, by, ts, reverses, importKey };
     book.journal.push(entry);
     return entry;
   }
   function applyEntry(book, entry) {
     if (!entry || !Number.isSafeInteger(entry.seq)) throw new Error("entry needs an integer seq");
     if (entry.seq !== book._seq + 1) throw new Error(`sequence gap/fork: expected ${book._seq + 1}, got ${entry.seq}`);
-    const norm = _normalize(book, entry.postings);
-    const e = { seq: entry.seq, date: entry.date || "", memo: entry.memo || "", postings: norm, by: entry.by || "", ts: entry.ts || 0, reverses: entry.reverses ?? null };
+    const norm2 = _normalize(book, entry.postings);
+    const e = { seq: entry.seq, date: entry.date || "", memo: entry.memo || "", postings: norm2, by: entry.by || "", ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null };
     book.journal.push(e);
     book._seq = entry.seq;
     return e;
@@ -114,6 +122,11 @@ var FinanceLedger = (() => {
     if (book.journal.some((e) => e.reverses === seq)) throw new Error("entry #" + seq + " is already reversed");
     const postings = orig.postings.map((p) => ({ account: p.account, fund: p.fund, dir: p.dir === "dr" ? "cr" : "dr", amount: p.amount }));
     return post(book, { date: date || orig.date, by, reverses: seq, memo: memo || `Reversal of #${seq}${orig.memo ? ": " + orig.memo : ""}`, postings });
+  }
+  function importedKeys(book) {
+    const s = /* @__PURE__ */ new Set();
+    for (const e of book.journal) if (e.importKey) s.add(e.importKey);
+    return s;
   }
   function accountNet(book) {
     const net = /* @__PURE__ */ new Map();
@@ -207,7 +220,7 @@ var FinanceLedger = (() => {
     const docs = [{ t: "settings", baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart }];
     for (const a of book.accounts.values()) docs.push({ t: "account", id: a.id, code: a.code, name: a.name, type: a.type });
     for (const f of book.funds.values()) if (f.id !== "general") docs.push({ t: "fund", id: f.id, name: f.name, kind: f.kind });
-    for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses });
+    for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null });
     return docs;
   }
   function docFor(entryOrObj, t) {
@@ -241,6 +254,130 @@ var FinanceLedger = (() => {
     }
     const chk = check(book);
     return { book, ok: errors.length === 0 && chk.ok, errors: errors.concat(chk.errors) };
+  }
+
+  // src/finance-import.mjs
+  var norm = (s) => String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  function parseCsv(text) {
+    const s = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const out = [];
+    let row = [], cur = "", q = false;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (q) {
+        if (c === '"') {
+          if (s[i + 1] === '"') {
+            cur += '"';
+            i++;
+          } else q = false;
+        } else cur += c;
+      } else if (c === '"') q = true;
+      else if (c === ",") {
+        row.push(cur);
+        cur = "";
+      } else if (c === "\n") {
+        row.push(cur);
+        out.push(row);
+        row = [];
+        cur = "";
+      } else cur += c;
+    }
+    if (cur !== "" || row.length) {
+      row.push(cur);
+      out.push(row);
+    }
+    const rows = out.filter((r) => r.some((c) => String(c).trim() !== ""));
+    return { header: rows[0] || [], rows: rows.slice(1) };
+  }
+  function guessColumns(header) {
+    const H = (header || []).map(norm);
+    const find = (...keys) => H.findIndex((h) => keys.some((k) => h.includes(k)));
+    const moneyIn = find("money in", "paid in", "amount in", "receipt", "deposit", "credit");
+    const moneyOut = find("money out", "paid out", "amount out", "withdraw", "payment", "debit");
+    const amount = moneyIn < 0 || moneyOut < 0 ? find("amount", "value") : -1;
+    const date = find("date");
+    let description = find("description", "details", "memo", "narrative", "reference", "payee", "name");
+    if (description === date) description = -1;
+    return {
+      date: date < 0 ? 0 : date,
+      description: description < 0 ? Math.min(1, Math.max(0, (header || []).length - 1)) : description,
+      amount,
+      moneyIn,
+      moneyOut
+    };
+  }
+  function parseMoney(str, decimals = 2) {
+    let s = String(str == null ? "" : str).trim();
+    if (!s) return null;
+    let neg = false;
+    if (/^\(.*\)$/.test(s)) {
+      neg = true;
+      s = s.slice(1, -1);
+    }
+    if (/^-|-$|\bdr\b|\bdebit\b/i.test(s)) neg = true;
+    s = s.replace(/cr|dr|debit|credit/ig, "").replace(/[£$€\s,+\-]/g, "");
+    if (!/[0-9]/.test(s)) return null;
+    const n = parseFloat(s);
+    if (!isFinite(n)) return null;
+    const minor = Math.round(n * Math.pow(10, decimals));
+    return neg ? -minor : minor;
+  }
+  var MONTHS = { jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06", jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12" };
+  function parseDate(str, monthFirst = false) {
+    const s = String(str == null ? "" : str).trim();
+    let m;
+    if (m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)) return m[1] + "-" + m[2].padStart(2, "0") + "-" + m[3].padStart(2, "0");
+    if (m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/)) {
+      let a = m[1], b = m[2], y = m[3];
+      if (y.length === 2) y = "20" + y;
+      const day = monthFirst ? b : a, mon = monthFirst ? a : b;
+      return y + "-" + mon.padStart(2, "0") + "-" + day.padStart(2, "0");
+    }
+    if (m = s.match(/^(\d{1,2})[\- ]([A-Za-z]{3})[A-Za-z]*[\- ](\d{2,4})/)) {
+      const mo = MONTHS[m[2].toLowerCase()];
+      let y = m[3];
+      if (y.length === 2) y = "20" + y;
+      if (mo) return y + "-" + mo + "-" + m[1].padStart(2, "0");
+    }
+    return "";
+  }
+  function lineKey(date, signedMinor, description) {
+    return (date || "") + "|" + signedMinor + "|" + norm(description).slice(0, 40);
+  }
+  function statementLines({ rows, mapping, decimals = 2, monthFirst = false } = {}) {
+    const out = [];
+    for (const r of rows || []) {
+      const date = parseDate(r[mapping.date] || "", monthFirst);
+      const description = String(r[mapping.description] || "").trim();
+      let amountMinor = null, dir = null;
+      if (mapping.amount != null && mapping.amount >= 0) {
+        const v = parseMoney(r[mapping.amount], decimals);
+        if (v != null && v !== 0) {
+          dir = v > 0 ? "in" : "out";
+          amountMinor = Math.abs(v);
+        }
+      } else {
+        const inV = mapping.moneyIn >= 0 ? parseMoney(r[mapping.moneyIn], decimals) : null;
+        const outV = mapping.moneyOut >= 0 ? parseMoney(r[mapping.moneyOut], decimals) : null;
+        if (inV) {
+          dir = "in";
+          amountMinor = Math.abs(inV);
+        } else if (outV) {
+          dir = "out";
+          amountMinor = Math.abs(outV);
+        }
+      }
+      if (!amountMinor || !dir) continue;
+      out.push({ date, description, amountMinor, dir, key: lineKey(date, dir === "in" ? amountMinor : -amountMinor, description) });
+    }
+    return out;
+  }
+  function suggestCategory(line, rules = []) {
+    const d = norm(line && line.description);
+    for (const rule of rules) {
+      if (rule && rule.match && d.includes(norm(rule.match))) return { account: rule.account, fund: rule.fund || null };
+    }
+    return null;
   }
   return __toCommonJS(finance_bundle_exports);
 })();

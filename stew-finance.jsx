@@ -47,7 +47,7 @@ function finItemToDoc(it) {
   if (id === 'settings') return { t: 'settings', baseCurrency: it.baseCurrency, decimals: it.decimals, fiscalYearStart: it.fiscalYearStart };
   if (id.startsWith('account:')) return { t: 'account', id: id.slice(8), code: it.code, name: it.name, type: it.type };
   if (id.startsWith('fund:')) return { t: 'fund', id: id.slice(5), name: it.name, kind: it.kind };
-  if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses };
+  if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null };
   return null;
 }
 function booksDownload(name, text) {
@@ -147,6 +147,164 @@ function BooksDonate({ onGave, onClose }) {
   );
 }
 
+// ---- import a bank statement (CSV → categorise → post) ----
+// Upload a CSV the bank exported, confirm which columns are which, review each line (pre-categorised, with
+// already-imported lines flagged via the importKey de-dup fingerprint), then post the selected ones as
+// balanced double-entry journal entries. All parsing is client-side (window.FinanceLedger import engine).
+function FinanceImport({ book, F, onPost, onClose }) {
+  const incomeAccts = [...book.accounts.values()].filter(a => a.type === 'income');
+  const expenseAccts = [...book.accounts.values()].filter(a => a.type === 'expense');
+  const funds = [...book.funds.values()];
+  const dec = book.decimals || 2;
+  const defAccount = (dir) => {
+    const list = dir === 'in' ? incomeAccts : expenseAccts;
+    const pref = dir === 'in' ? 'giving' : 'other-expense';
+    return (list.find(a => a.id === pref) || list[0] || {}).id || '';
+  };
+
+  const [step, setStep] = React.useState('upload');   // 'upload' → 'review'
+  const [fileName, setFileName] = React.useState('');
+  const [parsed, setParsed] = React.useState(null);   // { header, rows }
+  const [mapping, setMapping] = React.useState({ mode: 'single', date: 0, description: 1, amount: 2, moneyIn: -1, moneyOut: -1 });
+  const [monthFirst, setMonthFirst] = React.useState(false);
+  const [lines, setLines] = React.useState([]);       // statementLines output
+  const [rowState, setRowState] = React.useState([]); // per line: { account, fund, selected, dup }
+  const [err, setErr] = React.useState('');
+
+  const onFile = (ev) => {
+    const file = ev.target.files && ev.target.files[0]; if (!file) return;
+    setFileName(file.name); setErr('');
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const p = F.parseCsv(String(reader.result || ''));
+        if (!p.rows.length) { setParsed(null); setErr('That file has a header but no transaction rows.'); return; }
+        const g = F.guessColumns(p.header);
+        const split = (g.moneyIn >= 0 || g.moneyOut >= 0);
+        setParsed(p);
+        setMapping({ mode: split ? 'split' : 'single', date: g.date, description: g.description,
+          amount: g.amount >= 0 ? g.amount : 0, moneyIn: g.moneyIn, moneyOut: g.moneyOut });
+      } catch (e) { setParsed(null); setErr('Could not read that CSV.'); }
+    };
+    reader.onerror = () => setErr('Could not read that file.');
+    reader.readAsText(file);
+  };
+
+  const builtMapping = () => mapping.mode === 'single'
+    ? { date: mapping.date, description: mapping.description, amount: mapping.amount, moneyIn: -1, moneyOut: -1 }
+    : { date: mapping.date, description: mapping.description, amount: -1, moneyIn: mapping.moneyIn, moneyOut: mapping.moneyOut };
+
+  const toReview = () => {
+    if (!parsed) return;
+    const ls = F.statementLines({ rows: parsed.rows, mapping: builtMapping(), decimals: dec, monthFirst });
+    if (!ls.length) { setErr('No transactions found with those columns — check the amount column(s).'); return; }
+    const already = F.importedKeys(book);
+    const rs = ls.map(l => {
+      const sug = F.suggestCategory(l, []);
+      const account = (sug && book.accounts.get(sug.account)) ? sug.account : defAccount(l.dir);
+      const fund = (sug && sug.fund && book.funds.has(sug.fund)) ? sug.fund : 'general';
+      const dup = already.has(l.key);
+      return { account, fund, selected: !dup, dup };
+    });
+    setLines(ls); setRowState(rs); setErr(''); setStep('review');
+  };
+
+  const setRow = (i, patch) => setRowState(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const selectable = rowState.filter(r => !r.dup);
+  const nSel = rowState.filter(r => r.selected && !r.dup).length;
+  const nDup = rowState.filter(r => r.dup).length;
+  const allSel = selectable.length > 0 && selectable.every(r => r.selected);
+  const toggleAll = () => setRowState(rs => rs.map(r => r.dup ? r : { ...r, selected: !allSel }));
+
+  const doPost = () => {
+    const picks = [];
+    lines.forEach((l, i) => { const r = rowState[i]; if (r.selected && !r.dup) picks.push({ line: l, account: r.account, fund: r.fund }); });
+    if (!picks.length) { setErr('Select at least one transaction to import.'); return; }
+    onPost(picks); onClose();
+  };
+
+  const colSelect = (val, onChange, allowNone) => (
+    <select value={val} onChange={e => onChange(parseInt(e.target.value, 10))} style={bkFld}>
+      {allowNone && <option value={-1}>— none —</option>}
+      {parsed.header.map((h, i) => <option key={i} value={i}>{String(h).trim() || ('Column ' + (i + 1))}</option>)}
+    </select>
+  );
+  const seg = (v, label) => (
+    <button onClick={() => setMapping(m => ({ ...m, mode: v }))} style={{ flex: 1, height: 38, border: 'none', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13,
+      background: mapping.mode === v ? 'var(--clay)' : 'transparent', color: mapping.mode === v ? '#fff' : 'var(--ink-3)' }}>{label}</button>
+  );
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 62, padding: 16 }} onClick={onClose}>
+      <div style={{ ...bkCard, width: step === 'review' ? 640 : 460, maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Import a bank statement</h3>
+        <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>{step === 'upload' ? 'Upload a CSV your bank exported, then confirm the columns.' : 'Check each line, pick a category, then post.'}</div>
+
+        {step === 'upload' && (
+          <div style={{ overflow: 'auto' }}>
+            <label style={bkLbl}>Statement file (CSV)</label>
+            <input type="file" accept=".csv,text/csv" onChange={onFile} style={{ ...bkFld, height: 'auto', padding: 9, marginBottom: 14, lineHeight: 1.4 }} />
+            {parsed && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+                <div><label style={bkLbl}>Date column</label>{colSelect(mapping.date, v => setMapping(m => ({ ...m, date: v })))}</div>
+                <div><label style={bkLbl}>Description column</label>{colSelect(mapping.description, v => setMapping(m => ({ ...m, description: v })))}</div>
+                <div style={{ gridColumn: '1 / span 2' }}>
+                  <label style={bkLbl}>Amount columns</label>
+                  <div style={{ display: 'flex', gap: 6, background: 'var(--surface-2, #f2efe9)', borderRadius: 10, padding: 4, marginBottom: 8 }}>{seg('single', 'One signed column')}{seg('split', 'Separate in / out')}</div>
+                </div>
+                {mapping.mode === 'single'
+                  ? <div style={{ gridColumn: '1 / span 2' }}><label style={bkLbl}>Amount column (+ in / − out)</label>{colSelect(mapping.amount, v => setMapping(m => ({ ...m, amount: v })))}</div>
+                  : (<>
+                      <div><label style={bkLbl}>Money in column</label>{colSelect(mapping.moneyIn, v => setMapping(m => ({ ...m, moneyIn: v })), true)}</div>
+                      <div><label style={bkLbl}>Money out column</label>{colSelect(mapping.moneyOut, v => setMapping(m => ({ ...m, moneyOut: v })), true)}</div>
+                    </>)}
+                <label style={{ gridColumn: '1 / span 2', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, color: 'var(--ink)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={monthFirst} onChange={e => setMonthFirst(e.target.checked)} /> Dates are month-first (US: MM/DD/YYYY)
+                </label>
+              </div>
+            )}
+            {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
+            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+              <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+              <button onClick={toReview} disabled={!parsed} style={{ flex: 2, height: 44, border: 'none', background: parsed ? 'var(--clay)' : 'var(--line)', color: '#fff', borderRadius: 11, cursor: parsed ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Review transactions →</button>
+            </div>
+          </div>
+        )}
+
+        {step === 'review' && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, fontSize: 12.5, color: 'var(--ink-3)' }}>
+              <span>{nSel} selected · {lines.length} found{nDup ? ' · ' + nDup + ' already imported' : ''}</span>
+              <button onClick={toggleAll} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>{allSel ? 'Deselect all' : 'Select all'}</button>
+            </div>
+            <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)', borderRadius: 12 }}>
+              {lines.map((l, i) => { const r = rowState[i]; const accts = l.dir === 'in' ? incomeAccts : expenseAccts; return (
+                <div key={l.key + ':' + i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderTop: i ? '1px solid var(--line)' : 'none', opacity: r.dup ? .55 : 1 }}>
+                  <input type="checkbox" checked={r.selected && !r.dup} disabled={r.dup} onChange={e => setRow(i, { selected: e.target.checked })} />
+                  <div style={{ width: 82, flexShrink: 0, fontSize: 12, color: 'var(--ink-3)' }}>{l.date || <span style={{ color: 'var(--clay-deep, #b4462f)' }}>no date</span>}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.description || '(no description)'}{r.dup ? <span style={{ color: 'var(--ink-3)', fontWeight: 400, fontSize: 11.5 }}> · already imported</span> : ''}</div>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                      <select value={r.account} disabled={r.dup} onChange={e => setRow(i, { account: e.target.value })} style={{ ...bkFld, height: 30, fontSize: 12.5, padding: '0 8px', flex: 1 }}>{accts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+                      <select value={r.fund} disabled={r.dup} onChange={e => setRow(i, { fund: e.target.value })} style={{ ...bkFld, height: 30, fontSize: 12.5, padding: '0 8px', width: 130 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+                    </div>
+                  </div>
+                  <div style={{ width: 84, textAlign: 'right', flexShrink: 0, fontWeight: 800, fontSize: 13.5, color: l.dir === 'in' ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)' }}>{l.dir === 'in' ? '+' : '−'}{booksFmt(l.amountMinor, book)}</div>
+                </div>
+              ); })}
+            </div>
+            {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+              <button onClick={() => { setStep('upload'); setErr(''); }} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>← Back</button>
+              <button onClick={doPost} disabled={!nSel} style={{ flex: 2, height: 44, border: 'none', background: nSel ? 'var(--clay)' : 'var(--line)', color: '#fff', borderRadius: 11, cursor: nSel ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post {nSel} transaction{nSel === 1 ? '' : 's'}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- the main screen ----
 function DashFinance() {
   const F = window.FinanceLedger;
@@ -158,7 +316,7 @@ function DashFinance() {
   const book = bookRef.current;
   const [, setTick] = React.useState(0);
   const bump = () => setTick(t => t + 1);
-  const pubEntry = (b, e) => { if (useRelay) { try { S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses }); } catch (x) {} } else booksSave(b); };
+  const pubEntry = (b, e) => { if (useRelay) { try { S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null }); } catch (x) {} } else booksSave(b); };
   // relay-backed persistence: subscribe to the church's encrypted finance docs → rebuild the book; seed the
   // default chart on first use. Journal entries publish through the relay's single-writer seq guard.
   React.useEffect(() => {
@@ -179,6 +337,7 @@ function DashFinance() {
     return unsub;
   }, []);
   const [recording, setRecording] = React.useState(false);
+  const [importing, setImporting] = React.useState(false);
   const [reports, setReports] = React.useState(false);
   const [donate, setDonate] = React.useState(false);
   React.useEffect(() => {   // gentle donation nudge — once per session, unless hidden for ~3 months after giving
@@ -194,6 +353,19 @@ function DashFinance() {
     const entry = F.post(b, { date, memo, postings: P }); pubEntry(b, entry); bump();
   };
   const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); pubEntry(b, rev); bump(); } catch (e) {} };
+  // Post the lines the treasurer selected in the import modal. Each carries its statement lineKey as importKey
+  // so a future re-import of the same statement is flagged as already-imported (see FinanceImport de-dup).
+  const importStatement = (picks) => {
+    const b = bookRef.current;
+    for (const { line, account, fund } of picks) {
+      const amount = line.amountMinor;
+      const P = line.dir === 'in'
+        ? [{ account: 'bank', dir: 'dr', amount }, { account, fund, dir: 'cr', amount }]
+        : [{ account, fund, dir: 'dr', amount }, { account: 'bank', dir: 'cr', amount }];
+      try { const entry = F.post(b, { date: line.date, memo: line.description, importKey: line.key, postings: P }); pubEntry(b, entry); } catch (e) {}
+    }
+    bump();
+  };
   const funds = F.fundBalances(book);
   const ie = F.incomeExpenditure(book);
   const bank = F.trialBalance(book).rows.find(r => r.account === 'bank');
@@ -219,7 +391,10 @@ function DashFinance() {
           <h2 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 24 }}>Finance</h2>
           <div style={{ color: 'var(--ink-3)', fontSize: 13, marginTop: 2 }}>Your church's accounts — double-entry, with fund tracking.</div>
         </div>
-        <button onClick={() => setRecording(true)} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14 }}><Icon name="plus" size={16} color="#fff" /> Record a transaction</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={() => setImporting(true)} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
+          <button onClick={() => setRecording(true)} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14 }}><Icon name="plus" size={16} color="#fff" /> Record a transaction</button>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -282,6 +457,7 @@ function DashFinance() {
       </div>
 
       {recording && <BooksRecord book={book} onRecord={record} onClose={() => setRecording(false)} />}
+      {importing && <FinanceImport book={book} F={F} onPost={importStatement} onClose={() => setImporting(false)} />}
       {donate && <BooksDonate onGave={() => { booksDonateGave(); setDonate(false); }} onClose={() => setDonate(false)} />}
     </div>
   );

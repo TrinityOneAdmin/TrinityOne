@@ -1,7 +1,7 @@
 // Persistence round-trip + fork/gap detection.  Run: node --test scripts/finance-store.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createBook, addAccount, addFund, post, trialBalance, fundBalances, incomeExpenditure } from '../src/finance-ledger.mjs';
+import { createBook, addAccount, addFund, post, trialBalance, fundBalances, incomeExpenditure, importedKeys } from '../src/finance-ledger.mjs';
 import { bookToDocs, rebuildBook } from '../src/finance-store.mjs';
 
 function sampleBook() {
@@ -53,6 +53,22 @@ test('a FORK (two entries sharing a seq) is detected', () => {
   const { ok, errors } = rebuildBook([...docs, forged]);
   assert.equal(ok, false);
   assert.ok(errors.some(e => /gap\/fork/.test(e)), errors.join('; '));
+});
+
+test('importKey round-trips through docs and importedKeys() reflects the journal', () => {
+  const b = sampleBook();
+  post(b, { date: '2026-02-01', memo: 'imported offering', importKey: '2026-02-01|30000|imported offering',
+    postings: [ { account: 'bank', dir: 'dr', amount: 30000 }, { account: 'giving', dir: 'cr', amount: 30000 } ] });
+  // the three sampleBook() entries carry no importKey (default null); the 4th does.
+  const keys = importedKeys(b);
+  assert.equal(keys.size, 1);
+  assert.ok(keys.has('2026-02-01|30000|imported offering'));
+  // survives the docs round-trip (persist → rebuild), so a re-import can dedup against a rebuilt book.
+  const { book: r, ok, errors } = rebuildBook(bookToDocs(b));
+  assert.ok(ok, errors.join('; '));
+  assert.equal(r.journal[3].importKey, '2026-02-01|30000|imported offering');
+  assert.equal(r.journal[0].importKey, null);
+  assert.deepEqual([...importedKeys(r)], [...keys]);
 });
 
 test('rebuilding an empty/settings-only stream yields a valid empty book', () => {
