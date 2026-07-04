@@ -260,49 +260,7 @@ function useStewardAdmitted() {
 }
 window.useStewardAdmitted = useStewardAdmitted;
 
-// ---- optional Finance module (encrypted to the church key; window.StewardFinance) ----
-function useFinanceSettings() {
-  const idv = useStewardIdv();
-  // seed from the local cache so the "Finance" nav item paints on the FIRST render (no relay-round-trip lag)
-  const [s, setS] = useSt(() => ({ enabled: (window.StewardFinance && window.StewardFinance.cachedEnabled) ? window.StewardFinance.cachedEnabled() : false }));
-  useStE(() => (window.StewardFinance ? window.StewardFinance.subscribeSettings(setS) : undefined), [idv]);
-  return s;
-}
-window.useFinanceSettings = useFinanceSettings;
-
-function useFinanceDonors() {
-  const idv = useStewardIdv();
-  const [d, setD] = useSt([]);
-  useStE(() => (window.StewardFinance ? window.StewardFinance.subscribeDonors(setD) : undefined), [idv]);
-  return d;
-}
-window.useFinanceDonors = useFinanceDonors;
-
-function useFinanceFunds() {
-  const idv = useStewardIdv();
-  const [f, setF] = useSt([]);
-  useStE(() => (window.StewardFinance ? window.StewardFinance.subscribeFunds(setF) : undefined), [idv]);
-  return f;
-}
-window.useFinanceFunds = useFinanceFunds;
-
-function useFinanceTx() {
-  const idv = useStewardIdv();
-  const [t, setT] = useSt([]);
-  useStE(() => (window.StewardFinance ? window.StewardFinance.subscribeTx(setT) : undefined), [idv]);
-  return t;
-}
-window.useFinanceTx = useFinanceTx;
-
-function useFinanceClaims() {
-  const idv = useStewardIdv();
-  const [c, setC] = useSt([]);
-  useStE(() => (window.StewardFinance ? window.StewardFinance.subscribeClaims(setC) : undefined), [idv]);
-  return c;
-}
-window.useFinanceClaims = useFinanceClaims;
-
-// ---- Manna (optional money-out / disbursement module) — mirrors the Finance hooks above ----
+// ---- Manna (optional money-out / disbursement module) ----
 function useMannaSettings() {
   const idv = useStewardIdv();
   // seed from cache so the "Manna" nav item paints on the FIRST render (no relay-round-trip lag)

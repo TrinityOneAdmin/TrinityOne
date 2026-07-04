@@ -398,8 +398,7 @@ function StewDashboard({ initial = 'overview' }) {
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
   const church = window.useStewardChurch();   // real church profile + npub from the relay
-  // optional Finance module: its nav item appears only when a treasurer has switched it on
-  const finOn = window.useFinanceSettings ? !!window.useFinanceSettings().enabled : false;
+  const finOn = !!window.DashFinance;   // double-entry Finance module — shown whenever the engine loaded
   const mannaOn = false;   // Manna LOCKED for the pilot — not ready to surface yet (was: window.useMannaSettings ? !!window.useMannaSettings().enabled : false)
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
@@ -2396,19 +2395,7 @@ function BulkInviteModal({ onClose }) {
     const rdr = new FileReader();
     rdr.onload = () => {
       const txt = String(rdr.result || '');
-      try {
-        const P = window.StewardFinance;
-        if (P && P.parseCsv) {
-          const { header, rows } = P.parseCsv(txt); const cols = header || [];
-          let ni = cols.findIndex(h => /^name$|full.?name|display/i.test(h));
-          if (ni < 0) ni = cols.findIndex(h => /first|member|name/i.test(h));
-          if (ni < 0) ni = 0;
-          const li = cols.findIndex(h => /last|surname|family/i.test(h));
-          const picked = rows.map(r => ((r[ni] || '').trim() + (li >= 0 && r[li] ? ' ' + r[li].trim() : '')).trim()).filter(Boolean);
-          if (picked.length) { setNames(picked.join('\n')); return; }
-        }
-      } catch (err) {}
-      setNames(txt.split(/\r?\n/).map(s => (s.split(',')[0] || '').trim()).filter(Boolean).join('\n'));
+      setNames(txt.split(/\r?\n/).map(s => (s.split(',')[0] || '').trim()).filter(Boolean).join('\n'));   // first CSV column per line
     };
     rdr.readAsText(f);
   };
@@ -3805,7 +3792,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        {[['church', 'Church'], ['features', 'Features'], ['finance', 'Finance'], ['network', 'Network'], ['security', 'Security']].map(([k, label]) => (
+        {[['church', 'Church'], ['features', 'Features'], ['network', 'Network'], ['security', 'Security']].map(([k, label]) => (
           <button key={k} onClick={() => setSection(k)} style={{ padding: '8px 15px', borderRadius: 999, border: '1px solid ' + (section === k ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', background: section === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: section === k ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>{label}</button>
         ))}
       </div>
@@ -3845,11 +3832,6 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       <DashMealsPanel church={church} />
 
       <DashGivingPanel church={church} />
-      </React.Fragment> : null}
-
-      {section === 'finance' ? <React.Fragment>
-      <DashFinancePanel church={church} />
-      <DashMannaPanel church={church} />
       </React.Fragment> : null}
 
       {section === 'network' ? <React.Fragment>

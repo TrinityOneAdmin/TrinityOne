@@ -105,6 +105,7 @@ const NET = 'trinityone';
 const GROUP_D = 'trinityone/group:', FUND_D = 'trinityone/fund:', MEMBER_D = 'trinityone/member:', PLAN_D = 'trinityone/plan:', DEVO_D = 'trinityone/devotional:', ROTA_D = 'trinityone/rota:';
 const CATEGORY_D = 'trinityone/category:';   // steward-editable named container for groups (SECURITY-AUDIT-2026-06-24 M1)
 const ROSTER_D = 'trinityone/roster:', SERVICE_D = 'trinityone/service:', EVENT_D = 'trinityone/event:', REQUEST_D = 'trinityone/request:';
+const FIN_JOURNAL_D = 'finance/journal:';   // church-book double-entry journal entry — d=finance/journal:<seq>, ["church",<cp>], single-writer & append-only
 const ROOM_D = 'trinityone/room:', BOOKING_D = 'trinityone/booking:';   // shared room calendar (church-only writes)
 const RUNSHEET_D = 'trinityone/runsheet:';   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
 const NETWORK_D = 'trinityone/network:';   // the church declares it belongs to a network (the network's pubkey)
@@ -170,6 +171,7 @@ const STEWARDS_BY = new Map();   // churchpub -> Set(steward pubkeys) from the o
 // Meal trains / care module state (rebuilt from stored events by note()):
 const ROSTER_PEOPLE = new Map();     // teamId(groupId) -> Set(pubkey) — people LINKED on a team roster; the care-team's members live here
 const ROSTER_BY = new Map();          // teamId(groupId) -> { by, cp } — who authored the roster (M2: void the care-admin grant if they're later revoked)
+const FINANCE_SEQ = new Map();        // churchpub -> last accepted finance-journal seq — the relay is the ordering authority; the next write must be seq+1 (single-writer, no gaps/forks/edits)
 const MEALS_ADMIN_GROUP = new Map(); // churchpub -> care-team groupId (its roster people may open/manage care needs)
 const MEALS_OPEN_MEMBER = new Set(); // churchpubs whose meals-settings allow ANY member to open their own care need (openedBy='member')
 const CARE_RECIPIENT = new Map();    // careId -> recipient pubkey (so a careskip: write can be gated to the recipient alone)
@@ -183,6 +185,9 @@ const grantorOk = (src) => !!(src && (CHURCH_PUBS.has(src.by) || NETWORKS.has(sr
 const careAdmin = (pub, cp) => { const g = cp && MEALS_ADMIN_GROUP.get(cp); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub) && grantorOk(ROSTER_BY.get(g))); };
 // the church a steward-authored CONTENT event acts for: its ["church", <cp>] tag, validated to a configured church.
 const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church'); const h = t && (toHexPub(t[1]) || t[1]); return h && CHURCH_PUBS.has(h) ? h : ''; };
+// finance docs are authored EITHER by the church key itself (encPublish — self-encrypted, no ['church'] tag)
+// OR by a steward naming the church in a ['church'] tag. Resolve the owning church for the finance gates from both.
+const finCp = (e) => namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
 const BLOCKED_BY = new Map();    // churchpub -> Set(blocked member pubkeys); BLOCKED is the union for fast checks
 const BLOCKED = new Set();       // banned pubkeys — rejected on write, withheld on read
 function rebuildBlocked() { BLOCKED.clear(); for (const s of BLOCKED_BY.values()) for (const p of s) BLOCKED.add(p); rebuildMembers(); }
@@ -386,6 +391,13 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const set = new Set(); try { (JSON.parse(e.content).people || []).forEach(p => { const h = p && toHexPub(p.pub); if (h) set.add(h); }); } catch {}
     ROSTER_PEOPLE.set(id, set); ROSTER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
   }
+  else if (d.startsWith(FIN_JOURNAL_D)) {   // finance journal entry — track the book's high-water seq for the single-writer guard
+    const fcp = finCp(e);
+    if (fcp && (e.pubkey === fcp || stewardOf(e.pubkey, fcp))) {
+      const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
+      if (Number.isInteger(seq)) FINANCE_SEQ.set(fcp, Math.max(FINANCE_SEQ.get(fcp) || 0, seq));   // accepted entries are contiguous, so max == last-contiguous (rebuild-safe)
+    }
+  }
   else if (d === MEALS_SETTINGS_D) {   // optional Care module config — only the church key (or one of its stewards) sets it
     const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardOf(e.pubkey, cp = namedChurch(e)) ? cp : '');
     if (!owner) return;
@@ -432,6 +444,18 @@ function accept(e) {
     // SAFEGUARDING lists (who's a child / cleared adult / guardian link) — OWNER-ONLY (church key), never a delegated steward
     for (const pfx of [MINORS_D, APPROVED_D, GUARDIANS_D]) {
       if (d.startsWith(pfx)) return CHURCH_PUBS.has(e.pubkey) && d.slice(pfx.length) === e.pubkey;
+    }
+    // FINANCE journal — single-writer, relay-ordered, APPEND-ONLY. The seq lives in the (unencrypted) d-tag so
+    // the relay can order it without reading the (encrypted) entry; the church is named in a ["church",<cp>] tag.
+    if (d.startsWith(FIN_JOURNAL_D)) {
+      const cp = finCp(e);
+      if (!cp || !(e.pubkey === cp || stewardOf(e.pubkey, cp))) return false;   // church key, or a steward of cp (treasurer)
+      const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
+      return Number.isInteger(seq) && seq === (FINANCE_SEQ.get(cp) || 0) + 1;   // exactly the next seq → rejects gaps, forks AND edits
+    }
+    if (d.startsWith('finance/')) {   // other finance docs (settings / accounts / funds) — role-gated, no seq
+      const cp = finCp(e);
+      return !!cp && (e.pubkey === cp || stewardOf(e.pubkey, cp));
     }
     // church-authored CONTENT docs: a steward names the church via a ["church", <cp>] tag
     if (d.startsWith(GROUP_D) || d.startsWith(FUND_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
@@ -518,6 +542,11 @@ function canRead(e, authed) {
       const md = MEMBER_DOCS.get(cp);
       return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || stewardOf(authed, cp) || !!(md && md.has(authed)));
     }
+    // FINANCE (books): the content is encrypted client-side (encPublish self-encrypts to the church key), so
+    // the docs are ciphertext to everyone but the church. We do NOT gate reads behind NIP-42 auth — the pool
+    // (steward console + member app) doesn't auth, so a read-gate would block the church from reading its OWN
+    // books. Metadata-privacy via a proper NIP-42 auth handler is a queued follow-up (would also fix the
+    // safeguarding-list read-gate the same way). Confidentiality here rests on the encryption, not the relay.
     // roster-verify steward-authored church content: a doc carrying ['church',<cp>] is only served while
     // its author is on <cp>'s CURRENT signed roster — so a revoked steward's content stops being delivered.
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];
