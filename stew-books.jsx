@@ -41,6 +41,15 @@ function booksLoad() {
   return booksFresh();
 }
 function booksSave(book) { try { localStorage.setItem(BOOKS_LS, JSON.stringify(window.FinanceLedger.bookToDocs(book))); } catch (e) {} }
+// map an encSubscribe item ({ id: the d-suffix after 'finance/', ...decrypted }) back to a finance-store doc
+function finItemToDoc(it) {
+  const id = (it && it.id) || '';
+  if (id === 'settings') return { t: 'settings', baseCurrency: it.baseCurrency, decimals: it.decimals, fiscalYearStart: it.fiscalYearStart };
+  if (id.startsWith('account:')) return { t: 'account', id: id.slice(8), code: it.code, name: it.name, type: it.type };
+  if (id.startsWith('fund:')) return { t: 'fund', id: id.slice(5), name: it.name, kind: it.kind };
+  if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses };
+  return null;
+}
 function booksDownload(name, text) {
   try {
     const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
@@ -142,11 +151,33 @@ function BooksDonate({ onGave, onClose }) {
 function DashBooks() {
   const F = window.FinanceLedger;
   if (!F) return <div style={{ padding: 28, color: 'var(--ink-3)' }}>Loading the ledger engine…</div>;
+  const S = window.Steward;
+  const useRelay = !!(S && S.encSubscribe && S.encPublish);   // real console w/ the church key → relay-backed; else localStorage
   const bookRef = React.useRef(null);
-  if (!bookRef.current) bookRef.current = booksLoad();
+  if (!bookRef.current) bookRef.current = useRelay ? F.createBook({ baseCurrency: 'GBP', decimals: 2 }) : booksLoad();
   const book = bookRef.current;
   const [, setTick] = React.useState(0);
-  const refresh = () => { booksSave(book); setTick(t => t + 1); };
+  const bump = () => setTick(t => t + 1);
+  const pubEntry = (b, e) => { if (useRelay) { try { S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses }); } catch (x) {} } else booksSave(b); };
+  // relay-backed persistence: subscribe to the church's encrypted finance docs → rebuild the book; seed the
+  // default chart on first use. Journal entries publish through the relay's single-writer seq guard.
+  React.useEffect(() => {
+    if (!useRelay) return;
+    let seeded = false;
+    const unsub = S.encSubscribe('finance/', items => {
+      const docs = items.map(finItemToDoc).filter(Boolean);
+      if (!docs.length) {
+        if (seeded) return; seeded = true;
+        const b = booksFresh(); bookRef.current = b; bump();
+        S.encPublish('finance/settings', { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart });
+        for (const a of b.accounts.values()) S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type });
+        for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
+        return;
+      }
+      const r = F.rebuildBook(docs); if (r.book) { bookRef.current = r.book; bump(); }
+    });
+    return unsub;
+  }, []);
   const [recording, setRecording] = React.useState(false);
   const [reports, setReports] = React.useState(false);
   const [donate, setDonate] = React.useState(false);
@@ -156,12 +187,13 @@ function DashBooks() {
   }, []);
 
   const record = ({ dir, account, fund, amountMinor, date, memo }) => {
+    const b = bookRef.current;
     const P = dir === 'in'
       ? [{ account: 'bank', dir: 'dr', amount: amountMinor }, { account, fund, dir: 'cr', amount: amountMinor }]
       : [{ account, fund, dir: 'dr', amount: amountMinor }, { account: 'bank', dir: 'cr', amount: amountMinor }];
-    F.post(book, { date, memo, postings: P }); refresh();
+    const entry = F.post(b, { date, memo, postings: P }); pubEntry(b, entry); bump();
   };
-  const undo = seq => { try { F.reverse(book, seq); refresh(); } catch (e) {} };
+  const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); pubEntry(b, rev); bump(); } catch (e) {} };
   const funds = F.fundBalances(book);
   const ie = F.incomeExpenditure(book);
   const bank = F.trialBalance(book).rows.find(r => r.account === 'bank');
