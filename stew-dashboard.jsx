@@ -398,9 +398,7 @@ function StewDashboard({ initial = 'overview' }) {
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
   const church = window.useStewardChurch();   // real church profile + npub from the relay
-  // optional Finance module: its nav item appears only when a treasurer has switched it on
-  const finOn = window.useFinanceSettings ? !!window.useFinanceSettings().enabled : false;
-  const booksOn = !!window.DashBooks;   // NEW double-entry Books — shown whenever the engine loaded; P0.3 will gate it on the Lightning entitlement
+  const booksOn = !!window.DashBooks;   // double-entry Books module — shown whenever the engine loaded
   const mannaOn = false;   // Manna LOCKED for the pilot — not ready to surface yet (was: window.useMannaSettings ? !!window.useMannaSettings().enabled : false)
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
@@ -408,12 +406,11 @@ function StewDashboard({ initial = 'overview' }) {
     const copy = NAV.slice();
     const at = () => { const i = copy.findIndex(n => n.key === 'settings'); return i < 0 ? copy.length : i; };
     if (checkinOn) copy.splice(at(), 0, { key: 'checkin', label: 'Check-in', ic: 'child' });
-    if (finOn) copy.splice(at(), 0, { key: 'finance', label: 'Finance', ic: 'gift' });
     if (booksOn) copy.splice(at(), 0, { key: 'books', label: 'Books', ic: 'read' });
     if (mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
     if (mealsOn) copy.splice(at(), 0, { key: 'meals', label: 'Care', ic: 'heart' });
     return copy;
-  }, [finOn, booksOn, mannaOn, mealsOn, checkinOn]);
+  }, [booksOn, mannaOn, mealsOn, checkinOn]);
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
@@ -459,7 +456,6 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'resources' && <DashResources />}
       {tab === 'members' && <DashMembers />}
       {tab === 'checkin' && <DashCheckin />}
-      {tab === 'finance' && <DashFinance />}
       {tab === 'books' && <DashBooks />}
       {tab === 'manna' && <DashManna />}
       {tab === 'meals' && <DashMeals />}
@@ -2399,19 +2395,7 @@ function BulkInviteModal({ onClose }) {
     const rdr = new FileReader();
     rdr.onload = () => {
       const txt = String(rdr.result || '');
-      try {
-        const P = window.StewardFinance;
-        if (P && P.parseCsv) {
-          const { header, rows } = P.parseCsv(txt); const cols = header || [];
-          let ni = cols.findIndex(h => /^name$|full.?name|display/i.test(h));
-          if (ni < 0) ni = cols.findIndex(h => /first|member|name/i.test(h));
-          if (ni < 0) ni = 0;
-          const li = cols.findIndex(h => /last|surname|family/i.test(h));
-          const picked = rows.map(r => ((r[ni] || '').trim() + (li >= 0 && r[li] ? ' ' + r[li].trim() : '')).trim()).filter(Boolean);
-          if (picked.length) { setNames(picked.join('\n')); return; }
-        }
-      } catch (err) {}
-      setNames(txt.split(/\r?\n/).map(s => (s.split(',')[0] || '').trim()).filter(Boolean).join('\n'));
+      setNames(txt.split(/\r?\n/).map(s => (s.split(',')[0] || '').trim()).filter(Boolean).join('\n'));   // first CSV column per line
     };
     rdr.readAsText(f);
   };
@@ -3808,7 +3792,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        {[['church', 'Church'], ['features', 'Features'], ['finance', 'Finance'], ['network', 'Network'], ['security', 'Security']].map(([k, label]) => (
+        {[['church', 'Church'], ['features', 'Features'], ['network', 'Network'], ['security', 'Security']].map(([k, label]) => (
           <button key={k} onClick={() => setSection(k)} style={{ padding: '8px 15px', borderRadius: 999, border: '1px solid ' + (section === k ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', background: section === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: section === k ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>{label}</button>
         ))}
       </div>
@@ -3848,11 +3832,6 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       <DashMealsPanel church={church} />
 
       <DashGivingPanel church={church} />
-      </React.Fragment> : null}
-
-      {section === 'finance' ? <React.Fragment>
-      <DashFinancePanel church={church} />
-      <DashMannaPanel church={church} />
       </React.Fragment> : null}
 
       {section === 'network' ? <React.Fragment>
