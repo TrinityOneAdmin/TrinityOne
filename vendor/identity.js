@@ -34,9 +34,9 @@
   ));
   var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-  // ../../../node_modules/qrcode-generator/qrcode.js
+  // node_modules/qrcode-generator/qrcode.js
   var require_qrcode = __commonJS({
-    "../../../node_modules/qrcode-generator/qrcode.js"(exports, module) {
+    "node_modules/qrcode-generator/qrcode.js"(exports, module) {
       var qrcode2 = (function() {
         var qrcode3 = function(typeNumber, errorCorrectionLevel) {
           var PAD0 = 236;
@@ -1721,10 +1721,10 @@
     }
   });
 
-  // ../../../node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js
+  // node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js
   var createCapacitorPlatforms, initPlatforms, CapacitorPlatforms, addPlatform, setPlatform, ExceptionCode, CapacitorException, getPlatformId, createCapacitor, initCapacitorGlobal, Capacitor, registerPlugin, Plugins, WebPlugin, encode, decode, CapacitorCookiesPluginWeb, CapacitorCookies, readBlobAsBase64, normalizeHttpHeaders, buildUrlParams, buildRequestInit, CapacitorHttpPluginWeb, CapacitorHttp;
   var init_dist = __esm({
-    "../../../node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js"() {
+    "node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js"() {
       createCapacitorPlatforms = (win) => {
         const defaultPlatformMap = /* @__PURE__ */ new Map();
         defaultPlatformMap.set("web", { name: "web" });
@@ -2228,10 +2228,10 @@
     }
   });
 
-  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js
   var StorageErrorType, KeychainAccess, StorageError;
   var init_definitions = __esm({
-    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js"() {
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js"() {
       (function(StorageErrorType2) {
         StorageErrorType2["missingKey"] = "missingKey";
         StorageErrorType2["invalidData"] = "invalidData";
@@ -2255,7 +2255,7 @@
     }
   });
 
-  // ../../../node_modules/async-mutex/index.mjs
+  // node_modules/async-mutex/index.mjs
   function insertSorted(a, v) {
     const i2 = findIndexFromEnd(a, (other) => v.priority <= other.priority);
     a.splice(i2 + 1, 0, v);
@@ -2270,7 +2270,7 @@
   }
   var E_TIMEOUT, E_ALREADY_LOCKED, E_CANCELED, __awaiter$2, Semaphore, __awaiter$1, Mutex;
   var init_async_mutex = __esm({
-    "../../../node_modules/async-mutex/index.mjs"() {
+    "node_modules/async-mutex/index.mjs"() {
       E_TIMEOUT = new Error("timeout while waiting for mutex to become available");
       E_ALREADY_LOCKED = new Error("mutex already locked");
       E_CANCELED = new Error("request for lock canceled");
@@ -2466,7 +2466,7 @@
     }
   });
 
-  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js
   function isStorageErrorType(value) {
     return value !== void 0 && Object.keys(StorageErrorType).includes(value);
   }
@@ -2487,7 +2487,7 @@
   }
   var mutex, SecureStorageBase, isoDateRE;
   var init_base = __esm({
-    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js"() {
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js"() {
       init_dist();
       init_async_mutex();
       init_definitions();
@@ -2631,14 +2631,14 @@
     }
   });
 
-  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js
   var web_exports = {};
   __export(web_exports, {
     SecureStorageWeb: () => SecureStorageWeb
   });
   var SecureStorageWeb;
   var init_web = __esm({
-    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js"() {
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js"() {
       init_base();
       SecureStorageWeb = class extends SecureStorageBase {
         // @native
@@ -2692,14 +2692,14 @@
     }
   });
 
-  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js
   var native_exports = {};
   __export(native_exports, {
     SecureStorageNative: () => SecureStorageNative
   });
   var SecureStorageNative;
   var init_native = __esm({
-    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js"() {
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js"() {
       init_base();
       SecureStorageNative = class extends SecureStorageBase {
         constructor(capProxy) {
@@ -2752,7 +2752,7 @@
     }
   });
 
-  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js
   var esm_exports = {};
   __export(esm_exports, {
     KeychainAccess: () => KeychainAccess,
@@ -2762,7 +2762,7 @@
   });
   var proxy;
   var init_esm = __esm({
-    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js"() {
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js"() {
       init_dist();
       init_definitions();
       proxy = registerPlugin("SecureStorage", {
@@ -2773,7 +2773,7 @@
     }
   });
 
-  // ../../../node_modules/@noble/hashes/utils.js
+  // node_modules/@noble/hashes/utils.js
   function isBytes(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -2924,7 +2924,7 @@
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
   });
 
-  // ../../../node_modules/nostr-tools/node_modules/@scure/bip39/wordlists/english.js
+  // node_modules/nostr-tools/node_modules/@scure/bip39/wordlists/english.js
   var wordlist = `abandon
 ability
 able
@@ -4974,7 +4974,7 @@ zero
 zone
 zoo`.split("\n");
 
-  // ../../../node_modules/@noble/hashes/hmac.js
+  // node_modules/@noble/hashes/hmac.js
   var _HMAC = class {
     constructor(hash, key) {
       __publicField(this, "oHash");
@@ -5045,7 +5045,7 @@ zoo`.split("\n");
   var hmac = (hash, key, message) => new _HMAC(hash, key).update(message).digest();
   hmac.create = (hash, key) => new _HMAC(hash, key);
 
-  // ../../../node_modules/@noble/hashes/pbkdf2.js
+  // node_modules/@noble/hashes/pbkdf2.js
   function pbkdf2Init(hash, _password, _salt, _opts) {
     ahash(hash);
     const opts = checkOpts({ dkLen: 32, asyncTick: 10 }, _opts);
@@ -5090,7 +5090,7 @@ zoo`.split("\n");
     return pbkdf2Output(PRF, PRFSalt, DK, prfW, u);
   }
 
-  // ../../../node_modules/@noble/hashes/_md.js
+  // node_modules/@noble/hashes/_md.js
   function Chi(a, b, c) {
     return a & b ^ ~a & c;
   }
@@ -5221,7 +5221,7 @@ zoo`.split("\n");
     327033209
   ]);
 
-  // ../../../node_modules/@noble/hashes/_u64.js
+  // node_modules/@noble/hashes/_u64.js
   var U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
   var _32n = /* @__PURE__ */ BigInt(32);
   function fromBig(n, le = false) {
@@ -5256,7 +5256,7 @@ zoo`.split("\n");
   var add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
   var add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
 
-  // ../../../node_modules/@noble/hashes/sha2.js
+  // node_modules/@noble/hashes/sha2.js
   var SHA256_K = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -5612,7 +5612,7 @@ zoo`.split("\n");
     /* @__PURE__ */ oidNist(3)
   );
 
-  // ../../../node_modules/@scure/base/index.js
+  // node_modules/@scure/base/index.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -6000,7 +6000,7 @@ zoo`.split("\n");
   }
   var bech32 = /* @__PURE__ */ genBech32("bech32");
 
-  // ../../../node_modules/nostr-tools/node_modules/@scure/bip39/index.js
+  // node_modules/nostr-tools/node_modules/@scure/bip39/index.js
   var isJapanese = (wordlist3) => wordlist3[0] === "\u3042\u3044\u3053\u304F\u3057\u3093";
   function nfkd(str) {
     if (typeof str !== "string")
@@ -6048,7 +6048,7 @@ zoo`.split("\n");
     return pbkdf2(sha512, normalize(mnemonic).nfkd, psalt(passphrase), { c: 2048, dkLen: 64 });
   }
 
-  // ../../../node_modules/@noble/curves/utils.js
+  // node_modules/@noble/curves/utils.js
   var _0n = /* @__PURE__ */ BigInt(0);
   var _1n = /* @__PURE__ */ BigInt(1);
   function abool(value, title = "") {
@@ -6197,7 +6197,7 @@ zoo`.split("\n");
     };
   }
 
-  // ../../../node_modules/@noble/curves/abstract/modular.js
+  // node_modules/@noble/curves/abstract/modular.js
   var _0n2 = /* @__PURE__ */ BigInt(0);
   var _1n2 = /* @__PURE__ */ BigInt(1);
   var _2n = /* @__PURE__ */ BigInt(2);
@@ -6583,7 +6583,7 @@ zoo`.split("\n");
     return isLE ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
   }
 
-  // ../../../node_modules/@noble/curves/abstract/curve.js
+  // node_modules/@noble/curves/abstract/curve.js
   var _0n3 = /* @__PURE__ */ BigInt(0);
   var _1n3 = /* @__PURE__ */ BigInt(1);
   function negateCt(condition, item) {
@@ -6816,7 +6816,7 @@ zoo`.split("\n");
     };
   }
 
-  // ../../../node_modules/@noble/curves/abstract/weierstrass.js
+  // node_modules/@noble/curves/abstract/weierstrass.js
   var divNearest = (num2, den) => (num2 + (num2 >= 0 ? den : -den) / _2n2) / den;
   function _splitEndoScalar(k, basis, n) {
     const [[a1, b1], [a2, b2]] = basis;
@@ -7689,7 +7689,7 @@ zoo`.split("\n");
     });
   }
 
-  // ../../../node_modules/@noble/curves/secp256k1.js
+  // node_modules/@noble/curves/secp256k1.js
   var secp256k1_CURVE = {
     p: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f"),
     n: BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"),
@@ -7842,7 +7842,7 @@ zoo`.split("\n");
     };
   })();
 
-  // ../../../node_modules/@noble/hashes/legacy.js
+  // node_modules/@noble/hashes/legacy.js
   var Rho160 = /* @__PURE__ */ Uint8Array.from([
     7,
     4,
@@ -7960,7 +7960,7 @@ zoo`.split("\n");
   };
   var ripemd160 = /* @__PURE__ */ createHasher(() => new _RIPEMD160());
 
-  // ../../../node_modules/@scure/bip32/index.js
+  // node_modules/@scure/bip32/index.js
   var Point = secp256k1.Point;
   var { Fn } = Point;
   var base58check = createBase58check(sha256);
@@ -8193,7 +8193,7 @@ zoo`.split("\n");
     }
   };
 
-  // ../../../node_modules/nostr-tools/lib/esm/nip06.js
+  // node_modules/nostr-tools/lib/esm/nip06.js
   var DERIVATION_PATH = `m/44'/1237'`;
   function privateKeyFromSeedWords(mnemonic, passphrase, accountIndex = 0) {
     let root = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic, passphrase));
@@ -8206,7 +8206,7 @@ zoo`.split("\n");
     return generateMnemonic(wordlist);
   }
 
-  // ../../../node_modules/nostr-tools/lib/esm/pure.js
+  // node_modules/nostr-tools/lib/esm/pure.js
   var verifiedSymbol = /* @__PURE__ */ Symbol("verified");
   var isRecord = (obj) => obj instanceof Object;
   function validateEvent(event) {
@@ -8285,7 +8285,7 @@ zoo`.split("\n");
   var finalizeEvent = i.finalizeEvent;
   var verifyEvent = i.verifyEvent;
 
-  // ../../../node_modules/nostr-tools/lib/esm/nip19.js
+  // node_modules/nostr-tools/lib/esm/nip19.js
   var utf8Decoder2 = new TextDecoder("utf-8");
   var utf8Encoder2 = new TextEncoder();
   var Bech32MaxSize = 5e3;
@@ -8300,7 +8300,7 @@ zoo`.split("\n");
     return encodeBech32(prefix, bytes);
   }
 
-  // ../../../node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
+  // node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
   function isBytes3(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -8359,7 +8359,7 @@ zoo`.split("\n");
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
   });
 
-  // ../../../node_modules/@scure/bip39/node_modules/@noble/hashes/_md.js
+  // node_modules/@scure/bip39/node_modules/@noble/hashes/_md.js
   function Chi2(a, b, c) {
     return a & b ^ ~a & c;
   }
@@ -8473,7 +8473,7 @@ zoo`.split("\n");
     1541459225
   ]);
 
-  // ../../../node_modules/@scure/bip39/node_modules/@noble/hashes/sha2.js
+  // node_modules/@scure/bip39/node_modules/@noble/hashes/sha2.js
   var SHA256_K2 = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -8624,7 +8624,7 @@ zoo`.split("\n");
     /* @__PURE__ */ oidNist2(1)
   );
 
-  // ../../../node_modules/@scure/bip39/node_modules/@scure/base/index.js
+  // node_modules/@scure/bip39/node_modules/@scure/base/index.js
   function isBytes4(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -8912,7 +8912,7 @@ zoo`.split("\n");
     padding: padding2
   });
 
-  // ../../../node_modules/@scure/bip39/index.js
+  // node_modules/@scure/bip39/index.js
   function nfkd2(str) {
     if (typeof str !== "string")
       throw new TypeError("invalid mnemonic type: " + typeof str);
@@ -8958,7 +8958,7 @@ zoo`.split("\n");
     return true;
   }
 
-  // ../../../node_modules/@scure/bip39/wordlists/english.js
+  // node_modules/@scure/bip39/wordlists/english.js
   var wordlist2 = /* @__PURE__ */ Object.freeze(`abandon
 ability
 able
