@@ -34,9 +34,9 @@
   ));
   var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-  // node_modules/qrcode-generator/qrcode.js
+  // ../../../node_modules/qrcode-generator/qrcode.js
   var require_qrcode = __commonJS({
-    "node_modules/qrcode-generator/qrcode.js"(exports, module) {
+    "../../../node_modules/qrcode-generator/qrcode.js"(exports, module) {
       var qrcode2 = (function() {
         var qrcode3 = function(typeNumber, errorCorrectionLevel) {
           var PAD0 = 236;
@@ -1721,10 +1721,10 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js
   var createCapacitorPlatforms, initPlatforms, CapacitorPlatforms, addPlatform, setPlatform, ExceptionCode, CapacitorException, getPlatformId, createCapacitor, initCapacitorGlobal, Capacitor, registerPlugin, Plugins, WebPlugin, encode, decode, CapacitorCookiesPluginWeb, CapacitorCookies, readBlobAsBase64, normalizeHttpHeaders, buildUrlParams, buildRequestInit, CapacitorHttpPluginWeb, CapacitorHttp;
   var init_dist = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js"() {
       createCapacitorPlatforms = (win) => {
         const defaultPlatformMap = /* @__PURE__ */ new Map();
         defaultPlatformMap.set("web", { name: "web" });
@@ -2228,10 +2228,10 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js
   var StorageErrorType, KeychainAccess, StorageError;
   var init_definitions = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js"() {
       (function(StorageErrorType2) {
         StorageErrorType2["missingKey"] = "missingKey";
         StorageErrorType2["invalidData"] = "invalidData";
@@ -2255,7 +2255,7 @@
     }
   });
 
-  // node_modules/async-mutex/index.mjs
+  // ../../../node_modules/async-mutex/index.mjs
   function insertSorted(a, v) {
     const i2 = findIndexFromEnd(a, (other) => v.priority <= other.priority);
     a.splice(i2 + 1, 0, v);
@@ -2270,7 +2270,7 @@
   }
   var E_TIMEOUT, E_ALREADY_LOCKED, E_CANCELED, __awaiter$2, Semaphore, __awaiter$1, Mutex;
   var init_async_mutex = __esm({
-    "node_modules/async-mutex/index.mjs"() {
+    "../../../node_modules/async-mutex/index.mjs"() {
       E_TIMEOUT = new Error("timeout while waiting for mutex to become available");
       E_ALREADY_LOCKED = new Error("mutex already locked");
       E_CANCELED = new Error("request for lock canceled");
@@ -2466,7 +2466,7 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js
   function isStorageErrorType(value) {
     return value !== void 0 && Object.keys(StorageErrorType).includes(value);
   }
@@ -2487,7 +2487,7 @@
   }
   var mutex, SecureStorageBase, isoDateRE;
   var init_base = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js"() {
       init_dist();
       init_async_mutex();
       init_definitions();
@@ -2631,14 +2631,14 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js
   var web_exports = {};
   __export(web_exports, {
     SecureStorageWeb: () => SecureStorageWeb
   });
   var SecureStorageWeb;
   var init_web = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js"() {
       init_base();
       SecureStorageWeb = class extends SecureStorageBase {
         // @native
@@ -2692,14 +2692,14 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js
   var native_exports = {};
   __export(native_exports, {
     SecureStorageNative: () => SecureStorageNative
   });
   var SecureStorageNative;
   var init_native = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js"() {
       init_base();
       SecureStorageNative = class extends SecureStorageBase {
         constructor(capProxy) {
@@ -2752,7 +2752,7 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js
   var esm_exports = {};
   __export(esm_exports, {
     KeychainAccess: () => KeychainAccess,
@@ -2762,7 +2762,7 @@
   });
   var proxy;
   var init_esm = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js"() {
       init_dist();
       init_definitions();
       proxy = registerPlugin("SecureStorage", {
@@ -2773,7 +2773,7 @@
     }
   });
 
-  // node_modules/@noble/hashes/utils.js
+  // ../../../node_modules/@noble/hashes/utils.js
   function isBytes(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -2924,7 +2924,7 @@
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
   });
 
-  // node_modules/nostr-tools/node_modules/@scure/bip39/wordlists/english.js
+  // ../../../node_modules/nostr-tools/node_modules/@scure/bip39/wordlists/english.js
   var wordlist = `abandon
 ability
 able
@@ -4974,7 +4974,7 @@ zero
 zone
 zoo`.split("\n");
 
-  // node_modules/@noble/hashes/hmac.js
+  // ../../../node_modules/@noble/hashes/hmac.js
   var _HMAC = class {
     constructor(hash, key) {
       __publicField(this, "oHash");
@@ -5045,7 +5045,7 @@ zoo`.split("\n");
   var hmac = (hash, key, message) => new _HMAC(hash, key).update(message).digest();
   hmac.create = (hash, key) => new _HMAC(hash, key);
 
-  // node_modules/@noble/hashes/pbkdf2.js
+  // ../../../node_modules/@noble/hashes/pbkdf2.js
   function pbkdf2Init(hash, _password, _salt, _opts) {
     ahash(hash);
     const opts = checkOpts({ dkLen: 32, asyncTick: 10 }, _opts);
@@ -5090,7 +5090,7 @@ zoo`.split("\n");
     return pbkdf2Output(PRF, PRFSalt, DK, prfW, u);
   }
 
-  // node_modules/@noble/hashes/_md.js
+  // ../../../node_modules/@noble/hashes/_md.js
   function Chi(a, b, c) {
     return a & b ^ ~a & c;
   }
@@ -5221,7 +5221,7 @@ zoo`.split("\n");
     327033209
   ]);
 
-  // node_modules/@noble/hashes/_u64.js
+  // ../../../node_modules/@noble/hashes/_u64.js
   var U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
   var _32n = /* @__PURE__ */ BigInt(32);
   function fromBig(n, le = false) {
@@ -5256,7 +5256,7 @@ zoo`.split("\n");
   var add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
   var add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
 
-  // node_modules/@noble/hashes/sha2.js
+  // ../../../node_modules/@noble/hashes/sha2.js
   var SHA256_K = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -5612,7 +5612,7 @@ zoo`.split("\n");
     /* @__PURE__ */ oidNist(3)
   );
 
-  // node_modules/@scure/base/index.js
+  // ../../../node_modules/@scure/base/index.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -6000,7 +6000,7 @@ zoo`.split("\n");
   }
   var bech32 = /* @__PURE__ */ genBech32("bech32");
 
-  // node_modules/nostr-tools/node_modules/@scure/bip39/index.js
+  // ../../../node_modules/nostr-tools/node_modules/@scure/bip39/index.js
   var isJapanese = (wordlist3) => wordlist3[0] === "\u3042\u3044\u3053\u304F\u3057\u3093";
   function nfkd(str) {
     if (typeof str !== "string")
@@ -6048,7 +6048,7 @@ zoo`.split("\n");
     return pbkdf2(sha512, normalize(mnemonic).nfkd, psalt(passphrase), { c: 2048, dkLen: 64 });
   }
 
-  // node_modules/@noble/curves/utils.js
+  // ../../../node_modules/@noble/curves/utils.js
   var _0n = /* @__PURE__ */ BigInt(0);
   var _1n = /* @__PURE__ */ BigInt(1);
   function abool(value, title = "") {
@@ -6197,7 +6197,7 @@ zoo`.split("\n");
     };
   }
 
-  // node_modules/@noble/curves/abstract/modular.js
+  // ../../../node_modules/@noble/curves/abstract/modular.js
   var _0n2 = /* @__PURE__ */ BigInt(0);
   var _1n2 = /* @__PURE__ */ BigInt(1);
   var _2n = /* @__PURE__ */ BigInt(2);
@@ -6583,7 +6583,7 @@ zoo`.split("\n");
     return isLE ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
   }
 
-  // node_modules/@noble/curves/abstract/curve.js
+  // ../../../node_modules/@noble/curves/abstract/curve.js
   var _0n3 = /* @__PURE__ */ BigInt(0);
   var _1n3 = /* @__PURE__ */ BigInt(1);
   function negateCt(condition, item) {
@@ -6816,7 +6816,7 @@ zoo`.split("\n");
     };
   }
 
-  // node_modules/@noble/curves/abstract/weierstrass.js
+  // ../../../node_modules/@noble/curves/abstract/weierstrass.js
   var divNearest = (num2, den) => (num2 + (num2 >= 0 ? den : -den) / _2n2) / den;
   function _splitEndoScalar(k, basis, n) {
     const [[a1, b1], [a2, b2]] = basis;
@@ -7689,7 +7689,7 @@ zoo`.split("\n");
     });
   }
 
-  // node_modules/@noble/curves/secp256k1.js
+  // ../../../node_modules/@noble/curves/secp256k1.js
   var secp256k1_CURVE = {
     p: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f"),
     n: BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"),
@@ -7842,7 +7842,7 @@ zoo`.split("\n");
     };
   })();
 
-  // node_modules/@noble/hashes/legacy.js
+  // ../../../node_modules/@noble/hashes/legacy.js
   var Rho160 = /* @__PURE__ */ Uint8Array.from([
     7,
     4,
@@ -7960,7 +7960,7 @@ zoo`.split("\n");
   };
   var ripemd160 = /* @__PURE__ */ createHasher(() => new _RIPEMD160());
 
-  // node_modules/@scure/bip32/index.js
+  // ../../../node_modules/@scure/bip32/index.js
   var Point = secp256k1.Point;
   var { Fn } = Point;
   var base58check = createBase58check(sha256);
@@ -8193,7 +8193,7 @@ zoo`.split("\n");
     }
   };
 
-  // node_modules/nostr-tools/lib/esm/nip06.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip06.js
   var DERIVATION_PATH = `m/44'/1237'`;
   function privateKeyFromSeedWords(mnemonic, passphrase, accountIndex = 0) {
     let root = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic, passphrase));
@@ -8206,7 +8206,7 @@ zoo`.split("\n");
     return generateMnemonic(wordlist);
   }
 
-  // node_modules/nostr-tools/lib/esm/pure.js
+  // ../../../node_modules/nostr-tools/lib/esm/pure.js
   var verifiedSymbol = /* @__PURE__ */ Symbol("verified");
   var isRecord = (obj) => obj instanceof Object;
   function validateEvent(event) {
@@ -8285,7 +8285,7 @@ zoo`.split("\n");
   var finalizeEvent = i.finalizeEvent;
   var verifyEvent = i.verifyEvent;
 
-  // node_modules/nostr-tools/lib/esm/nip19.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip19.js
   var utf8Decoder2 = new TextDecoder("utf-8");
   var utf8Encoder2 = new TextEncoder();
   var Bech32MaxSize = 5e3;
@@ -8300,7 +8300,7 @@ zoo`.split("\n");
     return encodeBech32(prefix, bytes);
   }
 
-  // node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
+  // ../../../node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
   function isBytes3(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -8359,7 +8359,7 @@ zoo`.split("\n");
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
   });
 
-  // node_modules/@scure/bip39/node_modules/@noble/hashes/_md.js
+  // ../../../node_modules/@scure/bip39/node_modules/@noble/hashes/_md.js
   function Chi2(a, b, c) {
     return a & b ^ ~a & c;
   }
@@ -8473,7 +8473,7 @@ zoo`.split("\n");
     1541459225
   ]);
 
-  // node_modules/@scure/bip39/node_modules/@noble/hashes/sha2.js
+  // ../../../node_modules/@scure/bip39/node_modules/@noble/hashes/sha2.js
   var SHA256_K2 = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -8624,7 +8624,7 @@ zoo`.split("\n");
     /* @__PURE__ */ oidNist2(1)
   );
 
-  // node_modules/@scure/bip39/node_modules/@scure/base/index.js
+  // ../../../node_modules/@scure/bip39/node_modules/@scure/base/index.js
   function isBytes4(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -8912,7 +8912,7 @@ zoo`.split("\n");
     padding: padding2
   });
 
-  // node_modules/@scure/bip39/index.js
+  // ../../../node_modules/@scure/bip39/index.js
   function nfkd2(str) {
     if (typeof str !== "string")
       throw new TypeError("invalid mnemonic type: " + typeof str);
@@ -8958,7 +8958,7 @@ zoo`.split("\n");
     return true;
   }
 
-  // node_modules/@scure/bip39/wordlists/english.js
+  // ../../../node_modules/@scure/bip39/wordlists/english.js
   var wordlist2 = /* @__PURE__ */ Object.freeze(`abandon
 ability
 able
@@ -11011,10 +11011,32 @@ zoo`.split("\n"));
   // src/identity.src.js
   var import_qrcode_generator = __toESM(require_qrcode());
   var STORE_KEY = "trinityone.nostr.mnemonic";
+  var ENC_KEY = "trinityone.nostr.mnemonic.enc";
   var HANDLE_POOL = ["Cedar", "River", "Sparrow", "Olive", "Wren", "Maple", "Reed", "Dove", "Ash", "Linden", "Heron", "Bramble"];
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
   var memMnemonic = null;
   var webPersisted = false;
+  var sessionMnemonic = null;
+  var b64e = (u8) => btoa(String.fromCharCode(...u8));
+  var b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  async function deriveAes(pin, salt) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 21e4, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+  function encRaw() {
+    try {
+      return localStorage.getItem(ENC_KEY);
+    } catch {
+      return null;
+    }
+  }
+  function hasEnc() {
+    return !!encRaw();
+  }
+  async function decryptEnc(pin) {
+    const o = JSON.parse(encRaw());
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt)), b64d(o.ct)));
+  }
   function hashStr(s) {
     let h = 0;
     for (let i2 = 0; i2 < s.length; i2++) h = h * 31 + s.charCodeAt(i2) >>> 0;
@@ -11037,6 +11059,7 @@ zoo`.split("\n"));
     return !isNative() && !webPersisted;
   }
   async function secureGet() {
+    if (hasEnc()) return sessionMnemonic;
     if (!isNative()) {
       try {
         const v = localStorage.getItem(STORE_KEY);
@@ -11075,12 +11098,32 @@ zoo`.split("\n"));
       console.warn("[identity] secure set failed", e);
     }
   }
+  async function secureRemove() {
+    memMnemonic = null;
+    webPersisted = false;
+    try {
+      localStorage.removeItem(STORE_KEY);
+    } catch (e) {
+    }
+    if (isNative()) {
+      try {
+        const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+        await SecureStorage.remove(STORE_KEY);
+      } catch (e) {
+        console.warn("[identity] secure remove failed", e);
+      }
+    }
+  }
   function deriveProfile(mnemonic) {
     const sk = privateKeyFromSeedWords(mnemonic);
     const pub = getPublicKey(sk);
     return profileFromPub(pub);
   }
   async function init() {
+    if (hasEnc()) {
+      applyLocked();
+      return;
+    }
     let mnemonic = await secureGet();
     if (!mnemonic) {
       mnemonic = generateSeedWords();
@@ -11091,14 +11134,29 @@ zoo`.split("\n"));
   function apply(profile, meta) {
     window.TrinityIdentity.current = profile;
     window.TrinityIdentity.ephemeral = !!(meta && meta.ephemeral);
+    window.TrinityIdentity.locked = false;
     window.dispatchEvent(new CustomEvent("trinity-identity", { detail: profile }));
+  }
+  function applyLocked() {
+    window.TrinityIdentity.current = null;
+    window.TrinityIdentity.ephemeral = false;
+    window.TrinityIdentity.locked = true;
+    window.dispatchEvent(new CustomEvent("trinity-identity-lock", { detail: { locked: true } }));
+    window.dispatchEvent(new CustomEvent("trinity-identity", { detail: null }));
   }
   window.TrinityIdentity = {
     current: null,
     ephemeral: false,
+    locked: false,
+    // true when a community PIN is set and hasn't been entered this session
     ready: null,
     async regenerate() {
       const mnemonic = generateSeedWords();
+      try {
+        localStorage.removeItem(ENC_KEY);
+      } catch (e) {
+      }
+      sessionMnemonic = null;
       await secureSet(mnemonic);
       apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
       return window.TrinityIdentity.current;
@@ -11113,13 +11171,103 @@ zoo`.split("\n"));
     async exportMnemonic() {
       return secureGet();
     },
-    // restore an identity from a pasted 12-word BIP-39 phrase
+    // restore an identity from a pasted 12-word BIP-39 phrase. RECOVERY ALWAYS WINS: importing clears any
+    // community-PIN lock and restores the plaintext seed, so a forgotten PIN can NEVER trap the key —
+    // the 12 words bring the identity back and turn protection off (the member can re-enable it after).
     async importMnemonic(words) {
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
+      try {
+        localStorage.removeItem(ENC_KEY);
+      } catch (e) {
+      }
+      sessionMnemonic = null;
       await secureSet(m);
       apply(deriveProfile(m), { ephemeral: isEphemeral() });
       return window.TrinityIdentity.current;
+    },
+    // ───────────────────────── Optional community PIN (OFF by default) ─────────────────────────
+    // hasPin(): a PIN blob exists.  isLocked(): a PIN is set and we haven't unlocked this session.
+    hasPin() {
+      return hasEnc();
+    },
+    isLocked() {
+      return hasEnc() && !sessionMnemonic;
+    },
+    // Turn protection ON: encrypt the current seed under the PIN, then wipe every plaintext copy.
+    // Requires the seed to be available (identity unlocked / no prior PIN). Returns false if it can't.
+    async setPin(pin) {
+      if (!pin) return false;
+      const m = sessionMnemonic || await secureGet();
+      if (!m) return false;
+      const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt), new TextEncoder().encode(m)));
+      try {
+        localStorage.setItem(ENC_KEY, JSON.stringify({ v: 1, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
+      } catch (e) {
+        return false;
+      }
+      sessionMnemonic = m;
+      window.TrinityIdentity.locked = false;
+      await secureRemove();
+      return true;
+    },
+    // Enter the PIN → decrypt into memory and light the identity back up (fires trinity-identity so
+    // Fellowship re-derives the signing key). Returns true on success, false on a wrong PIN.
+    async unlock(pin) {
+      if (!hasEnc()) return true;
+      let m;
+      try {
+        m = await decryptEnc(pin);
+      } catch (e) {
+        return false;
+      }
+      sessionMnemonic = m;
+      window.TrinityIdentity.locked = false;
+      apply(deriveProfile(m), { ephemeral: false });
+      return true;
+    },
+    // check a PIN with NO side effects (gates "turn off" / "change PIN")
+    async verifyPin(pin) {
+      if (!hasEnc()) return false;
+      try {
+        await decryptEnc(pin);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+    // Turn protection OFF: verify the PIN, restore the plaintext seed, remove the blob.
+    async removePin(pin) {
+      if (!hasEnc()) return true;
+      let m;
+      try {
+        m = await decryptEnc(pin);
+      } catch (e) {
+        return false;
+      }
+      await secureSet(m);
+      try {
+        localStorage.removeItem(ENC_KEY);
+      } catch (e) {
+      }
+      sessionMnemonic = null;
+      window.TrinityIdentity.locked = false;
+      apply(deriveProfile(m), { ephemeral: isEphemeral() });
+      return true;
+    },
+    // Re-lock this session WITHOUT removing the PIN (forget the decrypted seed). Community becomes
+    // unreachable until unlock() is called again.
+    lock() {
+      if (!hasEnc()) return false;
+      sessionMnemonic = null;
+      window.TrinityIdentity.locked = true;
+      try {
+        if (window.Fellowship && window.Fellowship.clearCommunityCache) window.Fellowship.clearCommunityCache();
+      } catch (e) {
+      }
+      applyLocked();
+      return true;
     },
     // steward onboarding: mint a NEW identity to hand to a member (does NOT touch yours)
     makeInvite() {

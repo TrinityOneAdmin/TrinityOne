@@ -184,6 +184,106 @@ function RecoverySheet({ open, onClose, ctx }) {
 }
 window.RecoverySheet = RecoverySheet;
 
+// ════════ Community PIN — optional lock over the church side (OFF by default) ════════
+// Three states, derived live from window.TrinityIdentity:
+//   • no PIN  → set up (PIN + confirm) — encrypts the identity at rest under the PIN
+//   • locked  → enter PIN to unlock the church community for this session
+//   • on      → protected: lock now, or turn protection off (needs the PIN)
+// The Bible reader, study and library never need this — they run with no identity at all.
+function CommunitySecuritySheet({ open, onClose, ctx }) {
+  const ID = window.TrinityIdentity || {};
+  const hasPin = !!(ID.hasPin && ID.hasPin());
+  const locked = !!(ID.isLocked && ID.isLocked());
+  const [pin, setPin] = useIx('');
+  const [pin2, setPin2] = useIx('');
+  const [off, setOff] = useIx('');       // PIN entry when turning protection off
+  const [showOff, setShowOff] = useIx(false);
+  const [err, setErr] = useIx('');
+  const [busy, setBusy] = useIx(false);
+  useIxE(() => { if (!open) { setPin(''); setPin2(''); setOff(''); setShowOff(false); setErr(''); setBusy(false); } }, [open]);
+
+  const done = (msg) => { ctx.toast(msg); onClose(); };
+  const doEnable = async () => {
+    if ((pin || '').length < 4) { setErr('Choose a PIN of at least 4 characters.'); return; }
+    if (pin !== pin2) { setErr('The two PINs don’t match.'); return; }
+    setBusy(true); setErr('');
+    const ok = await ID.setPin(pin); setBusy(false);
+    if (ok) done('Church community is now protected'); else setErr('Couldn’t turn on protection — your identity isn’t loaded right now.');
+  };
+  const doUnlock = async () => {
+    if (!pin) { setErr('Enter your PIN.'); return; }
+    setBusy(true); setErr('');
+    const ok = await ID.unlock(pin); setBusy(false);
+    if (ok) done('Unlocked'); else setErr('That PIN didn’t work. If you’ve forgotten it, restore your 12-word recovery phrase to get back in.');
+  };
+  const doDisable = async () => {
+    if (!off) { setErr('Enter your PIN to turn protection off.'); return; }
+    setBusy(true); setErr('');
+    const ok = await ID.removePin(off); setBusy(false);
+    if (ok) done('Protection turned off'); else setErr('That PIN didn’t work.');
+  };
+  const doLock = () => { if (ID.lock) ID.lock(); done('Church community locked'); };
+
+  const inp = { width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface)', padding: '0 14px', fontSize: 16, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' };
+  const primary = { width: '100%', padding: 14, borderRadius: 14, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 };
+  const ghost = { width: '100%', padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginTop: 10 };
+
+  return (
+    <BottomSheet open={open} onClose={onClose} maxHeight="86%" z={62}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="lock" size={19} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>Community lock</div>
+        </div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+
+      {locked ? (
+        <React.Fragment>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 16px' }}>
+            Enter your PIN to open the church community on this device. Your Bible and study stay open either way.</p>
+          <input type="password" inputMode="numeric" autoFocus value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN" style={inp} />
+          {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
+          <button onClick={doUnlock} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Unlock'}</button>
+        </React.Fragment>
+      ) : !hasPin ? (
+        <React.Fragment>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 8px' }}>
+            Protect the church community with a PIN. Your Nostr identity is encrypted on this device, so without the PIN the community can’t be opened and messages can’t be read — the app looks like a plain Bible reader.</p>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 0 16px' }}>
+            If you forget the PIN, restore your 12-word recovery phrase to get back in. Keep those words safe.</p>
+          <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN" style={inp} />
+          <input type="password" inputMode="numeric" value={pin2} onChange={e => setPin2(e.target.value)} placeholder="Confirm PIN" style={{ ...inp, marginTop: 10 }} />
+          {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
+          <button onClick={doEnable} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Turn on protection'}</button>
+        </React.Fragment>
+      ) : (
+        <React.Fragment>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 28%, transparent)', margin: '6px 0 14px' }}>
+            <Icon name="check" size={16} stroke={2.4} color="var(--sage)" />
+            <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink)' }}>Church community is protected on this device.</span>
+          </div>
+          <button onClick={doLock} style={{ ...primary, background: 'var(--clay)' }}>Lock now</button>
+          {!showOff ? (
+            <button onClick={() => { setShowOff(true); setErr(''); }} style={ghost}>Turn off protection…</button>
+          ) : (
+            <div style={{ marginTop: 12, padding: 13, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: 13, color: 'var(--ink-2)', marginBottom: 9 }}>Enter your PIN to turn protection off. Your identity will be stored unencrypted again.</div>
+              <input type="password" inputMode="numeric" value={off} onChange={e => setOff(e.target.value)} placeholder="Your PIN" style={inp} />
+              {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
+              <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
+                <button onClick={() => { setShowOff(false); setOff(''); setErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
+                <button onClick={doDisable} disabled={busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : 'Turn off'}</button>
+              </div>
+            </div>
+          )}
+        </React.Fragment>
+      )}
+    </BottomSheet>
+  );
+}
+window.CommunitySecuritySheet = CommunitySecuritySheet;
+
 // ════════ Steward invite ════════
 // Builds a real, scannable invite: <base>/?invite=<fresh-identity>&follow=<church>&relay=<relay>.
 // Scanning it (any camera or the in-app scanner) opens TrinityOne, adopts the ready-made anonymous

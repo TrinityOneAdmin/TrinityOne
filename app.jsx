@@ -312,12 +312,21 @@ function App() {
   const [walletSheet, setWalletSheet] = useA(false);   // member wallet hub (balance + add + withdraw)
   const [confirmExit, setConfirmExit] = useA(false);   // hardware-back on Today -> confirm before close
   const [idTick, forceId] = useA(0);           // bumps on identity / profile changes (also re-runs subs that need myPubkey)
+  // Optional community PIN: when a PIN is set and not entered this session the identity is locked, the
+  // church side is hidden, and the app presents as a plain Bible reader. Tracked live off the identity.
+  const [commLocked, setCommLocked] = useA(() => !!(window.TrinityIdentity && window.TrinityIdentity.isLocked && window.TrinityIdentity.isLocked()));
+  const [commSec, setCommSec] = useA(false);   // the Community-lock sheet (set up / unlock / turn off)
   useAE(() => {
-    const h = () => forceId(x => x + 1);
+    const refreshLock = () => setCommLocked(!!(window.TrinityIdentity && window.TrinityIdentity.isLocked && window.TrinityIdentity.isLocked()));
+    const h = () => { forceId(x => x + 1); refreshLock(); };
     window.addEventListener('trinity-identity', h);
+    window.addEventListener('trinity-identity-lock', h);
     window.addEventListener('trinity-profiles', h);
-    return () => { window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-profiles', h); };
+    return () => { window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); };
   }, []);
+  // forensic hygiene: at a locked boot, wipe any community caches left on disk from a previous session
+  // (Fellowship is loaded by the time this React effect runs, so the load-order gap in identity.js is safe).
+  useAE(() => { if (commLocked && window.Fellowship && window.Fellowship.clearCommunityCache) { try { window.Fellowship.clearCommunityCache(); } catch (e) {} } }, []);
   // the in-app wallet is the member's, always-on (rides on their key) — boot it once so the balance is
   // ready everywhere (profile hub, Giving tab), independent of any church's giving switch.
   useAE(() => { if (WALLET_ENABLED && window.TrinityWallet) window.TrinityWallet.init().catch(() => {}); }, []);
@@ -1011,6 +1020,9 @@ function App() {
     openProfile: () => setProfile(true),
     openMember: (name) => { const m = window.TrinityData.MEMBERS[name]; if (m) setMember(m); else toast('Opening ' + name); },
     openRecovery: () => setIdSheet('recovery'),
+    // optional community PIN
+    openCommunitySecurity: () => setCommSec(true),
+    commLocked, hasCommunityPin: !!(window.TrinityIdentity && window.TrinityIdentity.hasPin && window.TrinityIdentity.hasPin()),
     openInvite: () => setIdSheet('invite'),
     openShareApp: () => setIdSheet('shareapp'),
     openRelays: () => setIdSheet('relays'),
@@ -1147,6 +1159,7 @@ function App() {
   window.trinityGoBack = () => {
     const layers = [
       [wordOv, () => setWordOv(null)], [member, () => setMember(null)], [profile, () => setProfile(false)],
+      [commSec, () => setCommSec(false)],
       [idSheet, () => setIdSheet(null)], [searchOpen, () => setSearchOpen(false)], [listen, () => setListen(false)], [audioBibles, () => setAudioBibles(false)],
       [notif, () => setNotif(false)], [allUses, () => setAllUses(null)], [concord, () => setConcord(false)],
       [video, () => setVideo(null)], [book, () => setBook(null)], [collection, () => setCollection(null)],
@@ -1187,10 +1200,12 @@ function App() {
   // per-church feature toggles: the active church can hide whole tabs (steward → Congregation features).
   // Unset = on. Today always shows. Maps: read→Bible, chat→Community, library→Library.
   const cf = (ctx.church && ctx.church.features) || {};
-  const tabOn = { today: true, read: cf.read !== false, chat: cf.community !== false, library: cf.library !== false };
+  // community PIN: while locked, the Community tab is hidden — the app is just a Bible reader until the PIN is entered
+  const tabOn = { today: true, read: cf.read !== false, chat: cf.community !== false && !commLocked, library: cf.library !== false };
   const visibleTabs = TABS.filter(t => tabOn[t.id]);
-  // if the steward turned off the tab you're on, fall back to Today
-  useAE(() => { if (!tabOn[tab]) setTab('today'); }, [tabOn.read, tabOn.chat, tabOn.library, tab]);
+  // if the steward turned off the tab you're on (or it's PIN-locked), fall back to Today. When the reason
+  // is the lock, surface the unlock sheet so a deep-link into Community still leads somewhere.
+  useAE(() => { if (!tabOn[tab]) { if (tab === 'chat' && commLocked) setCommSec(true); setTab('today'); } }, [tabOn.read, tabOn.chat, tabOn.library, tab, commLocked]);
 
   return (
     <div ref={wrapRef} className={cx('trinity', t.dark && 'dark')} style={{ ...rootStyle, ...(fullscreen ? { position: 'fixed', inset: 0 } : { transformOrigin: 'center center' }) }}>
@@ -1271,6 +1286,7 @@ function App() {
             <ProfileSheet open={profile} onClose={() => setProfile(false)} identity={identity} onSave={saveIdentity} ctx={ctx} />
             <MemberCard member={member} open={!!member} onClose={() => setMember(null)} ctx={ctx} />
             <RecoverySheet open={idSheet === 'recovery'} onClose={() => setIdSheet(null)} ctx={ctx} />
+            <CommunitySecuritySheet open={commSec} onClose={() => setCommSec(false)} ctx={ctx} />
             <InviteSheet open={idSheet === 'invite'} onClose={() => setIdSheet(null)} identity={identity} ctx={ctx} />
             <ShareAppSheet open={idSheet === 'shareapp'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />

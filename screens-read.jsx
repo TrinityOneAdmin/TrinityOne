@@ -481,6 +481,18 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
           }}>{ctx.accent === id ? <Icon name="check" size={18} stroke={2.6} color="#fff" /> : null}</button>
         ))}
       </div>
+
+      {/* Optional community PIN — locks ONLY the church side; the Bible reader always stays open. */}
+      <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, margin: '22px 0 14px' }}>Church community</div>
+      <button onClick={() => ctx.openCommunitySecurity && ctx.openCommunitySecurity()} style={{
+        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '14px 16px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface-2)',
+        cursor: 'pointer', color: 'var(--ink)', marginBottom: 6,
+      }}>
+        <span style={{ fontWeight: 600, fontSize: 15, display: 'flex', alignItems: 'center', gap: 9 }}><Icon name="lock" size={18} /> {ctx.commLocked ? 'Unlock community' : (ctx.hasCommunityPin ? 'Community lock' : 'Protect with a PIN')}</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: ctx.commLocked ? 'var(--clay)' : (ctx.hasCommunityPin ? 'var(--sage)' : 'var(--ink-3)') }}>{ctx.commLocked ? 'Locked' : (ctx.hasCommunityPin ? 'On' : 'Off')}</span>
+      </button>
+      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 4 }}>A PIN over the church community only. Your Bible and study always stay open.</div>
     </BottomSheet>
   );
 }
