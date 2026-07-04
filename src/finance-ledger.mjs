@@ -48,7 +48,7 @@ export function addFund(book, { id, name, kind = 'general' }) {
 
 // Post a BALANCED journal entry. postings: [{ account, fund?, dir:'dr'|'cr', amount(+int) }]
 // income/expense postings default to the general fund; the cash side (asset/liability/equity) may be fund-less.
-export function post(book, { date = '', memo = '', postings, by = '', ts = 0, reverses = null } = {}) {
+function _normalize(book, postings) {
   if (!Array.isArray(postings) || postings.length < 2) throw new Error('a journal entry needs at least two postings');
   let dr = 0, cr = 0;
   const norm = postings.map((p, i) => {
@@ -62,9 +62,25 @@ export function post(book, { date = '', memo = '', postings, by = '', ts = 0, re
     return { account: p.account, fund, dir: p.dir, amount: p.amount };
   });
   if (dr !== cr) throw new Error(`entry does not balance: debits ${dr} ≠ credits ${cr}`);
+  return norm;
+}
+
+export function post(book, { date = '', memo = '', postings, by = '', ts = 0, reverses = null } = {}) {
+  const norm = _normalize(book, postings);
   const entry = { seq: ++book._seq, date, memo, postings: norm, by, ts, reverses };
   book.journal.push(entry);
   return entry;
+}
+
+// Rebuild path: append an entry at its ORIGINAL seq, enforcing contiguity. This is the single-writer guard on
+// the client side — a gap OR a fork (a repeated seq) throws instead of silently corrupting the ledger.
+export function applyEntry(book, entry) {
+  if (!entry || !Number.isSafeInteger(entry.seq)) throw new Error('entry needs an integer seq');
+  if (entry.seq !== book._seq + 1) throw new Error(`sequence gap/fork: expected ${book._seq + 1}, got ${entry.seq}`);
+  const norm = _normalize(book, entry.postings);
+  const e = { seq: entry.seq, date: entry.date || '', memo: entry.memo || '', postings: norm, by: entry.by || '', ts: entry.ts || 0, reverses: entry.reverses ?? null };
+  book.journal.push(e); book._seq = entry.seq;
+  return e;
 }
 
 // Reverse a prior entry by appending its mirror — the ledger is append-only, we never edit history.
@@ -94,6 +110,9 @@ export function trialBalance(book) {
     const bal = n.dr - n.cr;                       // debit-positive
     return { account: a.id, name: a.name, type: a.type, debit: bal > 0 ? bal : 0, credit: bal < 0 ? -bal : 0 };
   });
+  // deterministic conventional order (asset→liability→equity→income→expense, then by id) so the rebuilt
+  // book presents identically no matter what order its events arrived in.
+  rows.sort((a, b) => ACCOUNT_TYPES.indexOf(a.type) - ACCOUNT_TYPES.indexOf(b.type) || (a.account < b.account ? -1 : a.account > b.account ? 1 : 0));
   const totalDebit = rows.reduce((s, r) => s + r.debit, 0);
   const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
   return { rows, totalDebit, totalCredit, balanced: totalDebit === totalCredit };
@@ -108,7 +127,8 @@ export function fundBalances(book) {
     if (a.type === 'income') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'cr' ? p.amount : -p.amount));
     else if (a.type === 'expense') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'dr' ? -p.amount : p.amount));
   }
-  return [...book.funds.values()].map(f => ({ fund: f.id, name: f.name, kind: f.kind, balance: bal.get(f.id) || 0 }));
+  return [...book.funds.values()].map(f => ({ fund: f.id, name: f.name, kind: f.kind, balance: bal.get(f.id) || 0 }))
+    .sort((a, b) => (a.fund === 'general') - (b.fund === 'general') === 0 ? (a.fund < b.fund ? -1 : a.fund > b.fund ? 1 : 0) : (a.fund === 'general' ? -1 : 1));   // general first, then by id — deterministic
 }
 
 export function incomeExpenditure(book, { from = '', to = '￿' } = {}) {
