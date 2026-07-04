@@ -1,23 +1,26 @@
 # TrinityOne Finance — Build Scope & Design
 
-**Status:** design draft · 2026-07-03 · branch `claude/finance-module`
+**Status:** design draft · 2026-07-04 · branch `claude/finance-module`
 
-**Decisions (locked):** church/nonprofit only · nation-neutral · lives in the **steward console** · **rebuilt fresh** (new double-entry engine, not an extension of the current basic ledger) · **freemium**: a free *Standard* tier + a paid *Full* tier at **~$5/year**, activated by a **Lightning invoice paid to the project's own self-custodial node** (no custodial/third-party account) and active only while paid · subscription revenue helps fund the relay network.
+**Decisions (locked):** church/nonprofit only · nation-neutral · lives in the **steward console** · **rebuilt fresh** (new double-entry engine, not an extension of the current basic ledger) · **free & open, no paywall** — every feature works for every church; monetised only by a **gentle donation nudge** shown when the books are opened (hidden ~3 months after a gift), which needs just a static donation address, not an invoice-minting backend.
 
 ---
 
 ## 1. Vision
-A complete accounting system for churches and small nonprofits — **as capable as Xero / QuickBooks for the church use case** — built around how churches actually keep money (real **fund accounting**, donations, trustees' reporting). It lives in the steward console, is **nation-neutral** at its core, and gates its advanced power behind a tiny yearly Lightning subscription whose revenue helps keep the relays running.
+A complete accounting system for churches and small nonprofits — **as capable as Xero / QuickBooks for the church use case** — built around how churches actually keep money (real **fund accounting**, donations, trustees' reporting). It lives in the steward console, is **nation-neutral** at its core, and stays **free and open** — every feature works for every church — with a gentle donation nudge that helps keep the shared relays running.
 
 Not general-SMB. Not the member app. Not custodial.
 
-## 2. Tier model (free Standard / paid Full)
-One rebuilt double-entry engine, two tiers:
+## 2. Free & open — a donation nudge, not a paywall
+One rebuilt double-entry engine, **every feature free for every church** (AGPL, self-hostable). No tiers, no lock, no entitlement.
 
-- **Standard — free, always.** The essentials most small churches need: record income & expenditure, a handful of funds, donor records, the core reports (income & expenditure, fund balances), and CSV export. No payment, ever.
-- **Full — ~$5/year via Lightning.** The whole package: full chart of accounts, unlimited funds, **bank statement import + reconciliation**, bills / accounts payable with approvals, **invoicing / accounts receivable**, **multi-currency**, budgets, balance sheet + cash flow + aged reports + trustees' report, **examiner (multi-user) access**, period close, and **regional tax/relief packs** (e.g. UK Gift Aid) — all optional and off by default.
+**The nudge.** When a steward opens the books, a gentle dialog appears — *"Keep TrinityOne going"* — with suggested amounts, **Give with Lightning** (a `lightning:` link any wallet opens) + a copyable address, and a "give another way" link (Strike / other gateway). Buttons: *Maybe later* (no change) and *I've given*. After a gift it's **hidden ~3 months**; otherwise it reappears once per session. It never blocks anything.
 
-**"Only while paid" means graceful, not punitive.** When Full lapses, the console **reverts to Standard** — Full-tier *writing* locks, but every book, entry and attachment is preserved (it's the church's own encrypted data) and stays **exportable**, and Standard bookkeeping continues free. Re-paying reactivates Full instantly with all history intact. A church never loses its books over a missed renewal.
+**Why this fits.** TrinityOne is AGPL and self-hostable, so a feature paywall can't hold anyway (a self-hoster may legally strip it) — and the README's thesis is *not being charged for the tools*. A donation ask is honest: the software is free and yours; a gift just helps cover the shared relays you're using. It also needs only a **static donation address** — no per-invoice Lightning backend, no entitlement infra.
+
+**Detection.** For now the 3-month hide is honour-system (the *I've given* button). It can be upgraded to real payment detection later if/when a Lightning backend is stood up.
+
+**The features** (all free): full chart of accounts, unlimited funds, income & expenditure + fund balances, donor records, CSV export today — and, on the roadmap, bank statement import + reconciliation, bills / AP with approvals, invoicing / AR, multi-currency, budgets, balance sheet + trustees' report, examiner (multi-user) access, period close, and **regional tax/relief packs** (e.g. UK Gift Aid, off by default).
 
 ## 3. Principles (inherited)
 - **Owned by no one** — the books are the church's encrypted events on their own key/relay; export is always available (legal record-keeping is commonly 6+ years).
@@ -29,8 +32,10 @@ One rebuilt double-entry engine, two tiers:
 ## 4. Who it's for
 Treasurer (primary, read/write) · Independent examiner / accountant (review + adjust) · Trustees / pastor (read-only dashboard). Roles reuse the **steward-delegation** model (owner → treasurer → examiner → viewer), revocable, keyed.
 
-## 5. Payments — self-custodial Lightning (no third-party account)
-Goal: collect a ~$5/year payment, unlock Full, hold **no custodial account** and **no funds in any third party**, stay nation-neutral, near-zero overhead.
+## 5. Payments — self-custodial Lightning (deferred; see §2)
+> **Superseded for the subscription:** §2's donation nudge replaced the paid tier, so **no invoice-minting / entitlement backend is needed to ship**. This section is retained for two *future* uses: (a) optional real payment-detection for the donation nudge, and (b) per-church **giving** receiving (tithes/offerings) — likely on the church-box (`CHURCH-BOX.md`), not the project relay. The design below still applies if/when either is built.
+
+Goal (future): collect a payment to the project's **own self-custodial node** — **no custodial account**, **no funds in any third party**, nation-neutral, near-zero overhead.
 
 **The project runs its OWN Lightning backend — no Strike/custodial account.** A self-hosted **BTCPay Server or LNbits** node alongside the relay infra (self-hosting is already the ethos). It exposes a Bitcoin-native **Lightning address** (e.g. `sub@trinityone.church`) + an API to mint per-invoice requests. No business account, no KYC, no third party holding funds, nothing to freeze/de-platform — the $5s land straight in the project's own node.
 
@@ -91,9 +96,9 @@ Out of v1 entirely: payroll (later regional pack), inventory, projects/job-costi
 - Non-custodial throughout keeps clear of money-transmission / KYC.
 
 ## 9. Phasing
-- **P0 — Foundation:** ledger engine (double-entry + funds + relay-ordered sequencing), event model + encryption, roles, **invariant tests**, the **Lightning activation state machine + relay-signed entitlement**, tier-gating (client + server backstop).
-- **P1 — Standard tier shippable (free):** chart of accounts, income/expense, funds, trial balance + I&E, donor records, CSV export. *Beats a spreadsheet for most churches, at no cost.*
-- **P2 — Full tier core:** bills/AP + receipts, statement import + reconciliation, balance sheet + budgets, trustees' report, examiner access — behind the $5 paywall.
+- **P0 — Foundation:** ledger engine (double-entry + funds + relay-ordered sequencing), event model + encryption, roles, **invariant tests**, the console UI, and the **donation nudge** (§2). No entitlement / tier-gating (dropped with the paywall).
+- **P1 — Shippable core (free):** chart of accounts, income/expense, funds, trial balance + I&E, donor records, CSV export. *Beats a spreadsheet for most churches, at no cost.*
+- **P2 — Deeper features (still free):** bills/AP + receipts, statement import + reconciliation, balance sheet + budgets, trustees' report, examiner access.
 - **P3 — Depth & first regional pack:** invoicing/AR, multi-currency, period close, the first relief pack (e.g. UK Gift Aid submission).
 - **P4 — Scale:** live bank feeds, more regional packs, integrations, (later) payroll pack.
 
@@ -101,4 +106,4 @@ Out of v1 entirely: payroll (later regional pack), inventory, projects/job-costi
 P0+P1 is a substantial focused build — the ledger engine + Lightning activation is most of the risk. Full parity across P2–P4 is a multi-quarter road. Scope to P1; let real churches pull the rest.
 
 ## 11. Settled inputs
-Price **~$5/year**; **self-hosted Lightning receiver** — BTCPay Server / LNbits on the project's own infra, **no custodial/third-party account** (design in §5); card is payer-side by default; **regional packs** as the extensibility mechanism (§7); **rebuild fresh** (new engine; the current basic treasurer ledger is superseded by the free Standard tier). Remaining to pin at P0 start: which LN backend (BTCPay vs LNbits vs a bare node), exact node-funding split (and whether to display it), the multi-year/on-chain option, and whether an in-checkout card provider is worth adding later.
+**Free & open, donation nudge** (no paywall/tiers — §2), needing only a **static donation address** (an LN address + a Strike/other link); **regional packs** as the extensibility mechanism (§7); **rebuild fresh** (new engine; the current basic treasurer ledger is superseded). Deferred (not needed to ship): the self-hosted Lightning receiver + which backend (BTCPay vs LNbits vs a bare node) — only relevant if we later add real donation-payment *detection*, or per-church **giving** (§5, `CHURCH-BOX.md`).
