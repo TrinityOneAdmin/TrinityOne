@@ -31,7 +31,8 @@ export function guessColumns(header) {
   const moneyOut = find('money out', 'paid out', 'amount out', 'withdraw', 'payment', 'debit');
   const amount = (moneyIn < 0 || moneyOut < 0) ? find('amount', 'value') : -1;
   const date = find('date');
-  const description = find('description', 'details', 'memo', 'narrative', 'reference', 'payee', 'name', 'transaction');
+  let description = find('description', 'details', 'memo', 'narrative', 'reference', 'payee', 'name');
+  if (description === date) description = -1;   // don't let the date column double as the description
   return {
     date: date < 0 ? 0 : date,
     description: description < 0 ? Math.min(1, Math.max(0, (header || []).length - 1)) : description,
