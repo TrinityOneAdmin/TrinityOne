@@ -8,6 +8,20 @@
 const BOOKS_LS = 'trinityone.books.v1';
 const CCY_SYM = { GBP: '£', USD: '$', EUR: '€', sats: '⚡' };
 
+// Donation nudge — TrinityOne stays free & open (AGPL). When a church opens its books we gently ask for a
+// gift toward the shared relays + development. Shown once per session until they give, then hidden ~3 months.
+// No paywall, no lock: everything works whether or not they give.
+const DONATE_LS = 'trinityone.books.donateHiddenUntil';
+const DONATE = {
+  ln: 'donate@trinityone.church',        // TODO(owner): real Lightning address / LNURL for donations
+  alt: 'https://strike.me/trinityone',   // TODO(owner): real Strike (or other gateway) donation link — '' to hide
+  suggest: ['£5', '£10', '£25'],
+  hideDays: 90,
+};
+let _booksDonateShown = false;           // once per app session
+function booksDonateHiddenUntil() { try { return parseInt(localStorage.getItem(DONATE_LS) || '0', 10) || 0; } catch (e) { return 0; } }
+function booksDonateGave() { try { localStorage.setItem(DONATE_LS, String(Date.now() + DONATE.hideDays * 864e5)); } catch (e) {} }
+
 function booksFresh() {
   const F = window.FinanceLedger;
   const b = F.createBook({ baseCurrency: 'GBP', decimals: 2 });
@@ -102,6 +116,28 @@ function BooksRecord({ book, onRecord, onClose }) {
   );
 }
 
+// ---- the "support TrinityOne" donation nudge (shown on open; no paywall) ----
+function BooksDonate({ onGave, onClose }) {
+  const [copied, setCopied] = React.useState(false);
+  const copyLn = () => { try { navigator.clipboard.writeText(DONATE.ln); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch (e) {} };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70, padding: 16 }} onClick={onClose}>
+      <div style={{ ...bkCard, width: 400, maxWidth: '100%' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}><Icon name="gift" size={20} color="var(--clay)" /><h3 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Keep TrinityOne going</h3></div>
+        <p style={{ color: 'var(--ink)', fontSize: 14, lineHeight: 1.5, margin: '0 0 14px' }}>TrinityOne is free and open — no fees, no lock-in, and your books are always yours. If your church is able, a gift helps cover the shared relays and keep the tools growing. Thank you. 🙏</p>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>{DONATE.suggest.map(a => <span key={a} style={{ border: '1px solid var(--line)', borderRadius: 999, padding: '5px 12px', fontSize: 13, fontWeight: 700, color: 'var(--ink-3)' }}>{a}</span>)}<span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>or any amount</span></div>
+        <a href={'lightning:' + DONATE.ln} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 46, borderRadius: 12, background: 'var(--clay)', color: '#fff', textDecoration: 'none', fontFamily: 'var(--font-ui)', fontWeight: 800, marginBottom: 8 }}>⚡ Give with Lightning</a>
+        <button onClick={copyLn} style={{ width: '100%', height: 38, border: '1px solid var(--line)', background: 'transparent', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink-3)', fontSize: 13, marginBottom: 8 }}>{copied ? 'Copied ✓' : DONATE.ln}</button>
+        {DONATE.alt ? <a href={DONATE.alt} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13, marginBottom: 14 }}>Give another way →</a> : null}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Maybe later</button>
+          <button onClick={onGave} style={{ flex: 1, height: 44, border: 'none', background: 'var(--sage, #5c8a6a)', color: '#fff', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>I've given</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---- the main screen ----
 function DashBooks() {
   const F = window.FinanceLedger;
@@ -113,6 +149,11 @@ function DashBooks() {
   const refresh = () => { booksSave(book); setTick(t => t + 1); };
   const [recording, setRecording] = React.useState(false);
   const [reports, setReports] = React.useState(false);
+  const [donate, setDonate] = React.useState(false);
+  React.useEffect(() => {   // gentle donation nudge — once per session, unless hidden for ~3 months after giving
+    if (_booksDonateShown || Date.now() < booksDonateHiddenUntil()) return;
+    _booksDonateShown = true; setDonate(true);
+  }, []);
 
   const record = ({ dir, account, fund, amountMinor, date, memo }) => {
     const P = dir === 'in'
@@ -205,10 +246,11 @@ function DashBooks() {
 
       <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <Icon name="gift" size={17} color="var(--clay)" />
-        <div><b style={{ color: 'var(--ink)' }}>Coming with Full (~$5/yr):</b> bank reconciliation, bills &amp; approvals, invoicing, budgets, multi-currency, a balance sheet + trustees' report, and regional giving-relief packs — unlocked with a one-off Lightning payment.</div>
+        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bank reconciliation, bills &amp; approvals, invoicing, budgets, multi-currency, a balance sheet + trustees' report, and regional giving-relief packs. TrinityOne charges nothing — <button onClick={() => setDonate(true)} style={{ border: 'none', background: 'transparent', padding: 0, color: 'var(--clay)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5 }}>support the project →</button></div>
       </div>
 
       {recording && <BooksRecord book={book} onRecord={record} onClose={() => setRecording(false)} />}
+      {donate && <BooksDonate onGave={() => { booksDonateGave(); setDonate(false); }} onClose={() => setDonate(false)} />}
     </div>
   );
 }
