@@ -45,7 +45,7 @@ rm -rf "$WWW"; mkdir -p "$WWW/vendor"
 cp steward.html "$WWW/index.html"
 cp brand.css "$WWW/"
 cp icons.jsx stew-data.jsx stew-console.jsx stew-schedule.jsx stew-templates.jsx \
-   stew-dashboard.jsx stew-books.jsx stew-manna.jsx stew-meals.jsx stew-relay.jsx stew-extension.jsx stew-phone.jsx stew-custody.jsx \
+   stew-dashboard.jsx stew-finance.jsx stew-manna.jsx stew-meals.jsx stew-relay.jsx stew-extension.jsx stew-phone.jsx stew-custody.jsx \
    backup.jsx steward-root.jsx "$WWW/"
 cp -r vendor/fonts "$WWW/vendor/"
 cp vendor/react.production.min.js vendor/react-dom.production.min.js vendor/steward.js vendor/finance-ledger.js vendor/steward-manna.js vendor/steward-meals.js vendor/jsqr.js vendor/jspdf.umd.min.js "$WWW/vendor/"

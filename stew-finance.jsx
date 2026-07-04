@@ -1,4 +1,4 @@
-// stew-books.jsx — the rebuilt-fresh Finance module: a double-entry "Books" screen on window.FinanceLedger
+// stew-finance.jsx — the rebuilt-fresh Finance module: a double-entry accounting screen on window.FinanceLedger
 // (FINANCE-MODULE.md). Real fund accounting; the treasurer records money in/out in plain language and the
 // engine keeps the balanced double-entry underneath. Amounts are INTEGER minor units under the hood.
 //
@@ -148,7 +148,7 @@ function BooksDonate({ onGave, onClose }) {
 }
 
 // ---- the main screen ----
-function DashBooks() {
+function DashFinance() {
   const F = window.FinanceLedger;
   if (!F) return <div style={{ padding: 28, color: 'var(--ink-3)' }}>Loading the ledger engine…</div>;
   const S = window.Steward;
@@ -202,7 +202,7 @@ function DashBooks() {
   const exportCsv = () => {
     const rows = [['seq', 'date', 'memo', 'account', 'fund', 'debit', 'credit']];
     for (const e of book.journal) for (const p of e.postings) rows.push([e.seq, e.date, e.memo, (book.accounts.get(p.account) || {}).name || p.account, p.fund || '', p.dir === 'dr' ? p.amount : '', p.dir === 'cr' ? p.amount : '']);
-    booksDownload('books-' + booksTodayISO() + '.csv', rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n'));
+    booksDownload('finance-' + booksTodayISO() + '.csv', rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n'));
   };
 
   const stat = (label, val, tone) => (
@@ -216,7 +216,7 @@ function DashBooks() {
     <div style={{ padding: '4px 2px 40px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
         <div>
-          <h2 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 24 }}>Books</h2>
+          <h2 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 24 }}>Finance</h2>
           <div style={{ color: 'var(--ink-3)', fontSize: 13, marginTop: 2 }}>Your church's accounts — double-entry, with fund tracking.</div>
         </div>
         <button onClick={() => setRecording(true)} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14 }}><Icon name="plus" size={16} color="#fff" /> Record a transaction</button>
@@ -286,4 +286,4 @@ function DashBooks() {
     </div>
   );
 }
-window.DashBooks = DashBooks;
+window.DashFinance = DashFinance;

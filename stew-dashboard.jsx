@@ -398,7 +398,7 @@ function StewDashboard({ initial = 'overview' }) {
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
   const church = window.useStewardChurch();   // real church profile + npub from the relay
-  const booksOn = !!window.DashBooks;   // double-entry Books module — shown whenever the engine loaded
+  const finOn = !!window.DashFinance;   // double-entry Finance module — shown whenever the engine loaded
   const mannaOn = false;   // Manna LOCKED for the pilot — not ready to surface yet (was: window.useMannaSettings ? !!window.useMannaSettings().enabled : false)
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
@@ -406,11 +406,11 @@ function StewDashboard({ initial = 'overview' }) {
     const copy = NAV.slice();
     const at = () => { const i = copy.findIndex(n => n.key === 'settings'); return i < 0 ? copy.length : i; };
     if (checkinOn) copy.splice(at(), 0, { key: 'checkin', label: 'Check-in', ic: 'child' });
-    if (booksOn) copy.splice(at(), 0, { key: 'books', label: 'Books', ic: 'read' });
+    if (finOn) copy.splice(at(), 0, { key: 'finance', label: 'Finance', ic: 'gift' });
     if (mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
     if (mealsOn) copy.splice(at(), 0, { key: 'meals', label: 'Care', ic: 'heart' });
     return copy;
-  }, [booksOn, mannaOn, mealsOn, checkinOn]);
+  }, [finOn, mannaOn, mealsOn, checkinOn]);
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
@@ -456,7 +456,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'resources' && <DashResources />}
       {tab === 'members' && <DashMembers />}
       {tab === 'checkin' && <DashCheckin />}
-      {tab === 'books' && <DashBooks />}
+      {tab === 'finance' && <DashFinance />}
       {tab === 'manna' && <DashManna />}
       {tab === 'meals' && <DashMeals />}
       {tab === 'settings' && <DashSettings onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
