@@ -85,7 +85,7 @@ const TABS = [
   { id: 'chat', label: 'Community', icon: 'chat' },
   { id: 'library', label: 'Library', icon: 'library' },
 ];
-function TabBar({ active, onChange, unread = {}, tabs = TABS }) {
+function TabBar({ active, onChange, unread = {}, tabs = TABS, onProfile, profileAv, profileName }) {
   return (
     <div style={{
       position: 'absolute', left: 12, right: 12, bottom: 'max(12px, env(safe-area-inset-bottom))', zIndex: 25,
@@ -112,12 +112,24 @@ function TabBar({ active, onChange, unread = {}, tabs = TABS }) {
           </button>
         );
       })}
+      {/* You & settings — reachable from every tab (hidden while the community is PIN-locked, so a locked
+         phone still reads as a plain Bible app). Opens the identity/settings hub. */}
+      {onProfile ? (
+        <button onClick={onProfile} title="You & settings" style={{
+          border: 'none', background: 'none', cursor: 'pointer',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+          padding: '6px 4px', flex: 1, color: 'var(--ink-3)', position: 'relative',
+        }}>
+          <div style={{ lineHeight: 0 }}><UserAvatar av={profileAv} name={profileName} size={24} /></div>
+          <span style={{ fontSize: 10.5, fontWeight: 500, letterSpacing: '.1px' }}>You</span>
+        </button>
+      ) : null}
     </div>
   );
 }
 
 // ── Desktop left sidebar nav (replaces the floating TabBar on a wide screen) ──
-function DesktopNav({ active, onChange, unread = {}, tabs = TABS }) {
+function DesktopNav({ active, onChange, unread = {}, tabs = TABS, onProfile, profileAv, profileName }) {
   return (
     <div style={{
       width: 240, flexShrink: 0, height: '100%', boxSizing: 'border-box',
@@ -145,6 +157,16 @@ function DesktopNav({ active, onChange, unread = {}, tabs = TABS }) {
         })}
       </div>
       <div style={{ flex: 1 }} />
+      {/* You & settings — same hub as mobile; hidden while PIN-locked */}
+      {onProfile ? (
+        <button onClick={onProfile} title="You & settings" style={{
+          display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 13, marginBottom: 4,
+          border: 'none', cursor: 'pointer', background: 'transparent', color: 'var(--ink-2)',
+          fontFamily: 'var(--font-ui)', fontSize: 14.5, fontWeight: 700, textAlign: 'left',
+        }}>
+          <UserAvatar av={profileAv} name={profileName} size={26} /> You &amp; settings
+        </button>
+      ) : null}
       <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '1.5px', textTransform: 'uppercase', color: 'var(--ink-3)', padding: '10px 13px' }}>Read · Gather · Share</div>
     </div>
   );

@@ -11011,10 +11011,32 @@ zoo`.split("\n"));
   // src/identity.src.js
   var import_qrcode_generator = __toESM(require_qrcode());
   var STORE_KEY = "trinityone.nostr.mnemonic";
+  var ENC_KEY = "trinityone.nostr.mnemonic.enc";
   var HANDLE_POOL = ["Cedar", "River", "Sparrow", "Olive", "Wren", "Maple", "Reed", "Dove", "Ash", "Linden", "Heron", "Bramble"];
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
   var memMnemonic = null;
   var webPersisted = false;
+  var sessionMnemonic = null;
+  var b64e = (u8) => btoa(String.fromCharCode(...u8));
+  var b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  async function deriveAes(pin, salt) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 21e4, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+  function encRaw() {
+    try {
+      return localStorage.getItem(ENC_KEY);
+    } catch {
+      return null;
+    }
+  }
+  function hasEnc() {
+    return !!encRaw();
+  }
+  async function decryptEnc(pin) {
+    const o = JSON.parse(encRaw());
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt)), b64d(o.ct)));
+  }
   function hashStr(s) {
     let h = 0;
     for (let i2 = 0; i2 < s.length; i2++) h = h * 31 + s.charCodeAt(i2) >>> 0;
@@ -11037,6 +11059,7 @@ zoo`.split("\n"));
     return !isNative() && !webPersisted;
   }
   async function secureGet() {
+    if (hasEnc()) return sessionMnemonic;
     if (!isNative()) {
       try {
         const v = localStorage.getItem(STORE_KEY);
@@ -11075,12 +11098,32 @@ zoo`.split("\n"));
       console.warn("[identity] secure set failed", e);
     }
   }
+  async function secureRemove() {
+    memMnemonic = null;
+    webPersisted = false;
+    try {
+      localStorage.removeItem(STORE_KEY);
+    } catch (e) {
+    }
+    if (isNative()) {
+      try {
+        const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+        await SecureStorage.remove(STORE_KEY);
+      } catch (e) {
+        console.warn("[identity] secure remove failed", e);
+      }
+    }
+  }
   function deriveProfile(mnemonic) {
     const sk = privateKeyFromSeedWords(mnemonic);
     const pub = getPublicKey(sk);
     return profileFromPub(pub);
   }
   async function init() {
+    if (hasEnc()) {
+      applyLocked();
+      return;
+    }
     let mnemonic = await secureGet();
     if (!mnemonic) {
       mnemonic = generateSeedWords();
@@ -11091,14 +11134,29 @@ zoo`.split("\n"));
   function apply(profile, meta) {
     window.TrinityIdentity.current = profile;
     window.TrinityIdentity.ephemeral = !!(meta && meta.ephemeral);
+    window.TrinityIdentity.locked = false;
     window.dispatchEvent(new CustomEvent("trinity-identity", { detail: profile }));
+  }
+  function applyLocked() {
+    window.TrinityIdentity.current = null;
+    window.TrinityIdentity.ephemeral = false;
+    window.TrinityIdentity.locked = true;
+    window.dispatchEvent(new CustomEvent("trinity-identity-lock", { detail: { locked: true } }));
+    window.dispatchEvent(new CustomEvent("trinity-identity", { detail: null }));
   }
   window.TrinityIdentity = {
     current: null,
     ephemeral: false,
+    locked: false,
+    // true when a community PIN is set and hasn't been entered this session
     ready: null,
     async regenerate() {
       const mnemonic = generateSeedWords();
+      try {
+        localStorage.removeItem(ENC_KEY);
+      } catch (e) {
+      }
+      sessionMnemonic = null;
       await secureSet(mnemonic);
       apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
       return window.TrinityIdentity.current;
@@ -11113,13 +11171,103 @@ zoo`.split("\n"));
     async exportMnemonic() {
       return secureGet();
     },
-    // restore an identity from a pasted 12-word BIP-39 phrase
+    // restore an identity from a pasted 12-word BIP-39 phrase. RECOVERY ALWAYS WINS: importing clears any
+    // community-PIN lock and restores the plaintext seed, so a forgotten PIN can NEVER trap the key —
+    // the 12 words bring the identity back and turn protection off (the member can re-enable it after).
     async importMnemonic(words) {
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
+      try {
+        localStorage.removeItem(ENC_KEY);
+      } catch (e) {
+      }
+      sessionMnemonic = null;
       await secureSet(m);
       apply(deriveProfile(m), { ephemeral: isEphemeral() });
       return window.TrinityIdentity.current;
+    },
+    // ───────────────────────── Optional community PIN (OFF by default) ─────────────────────────
+    // hasPin(): a PIN blob exists.  isLocked(): a PIN is set and we haven't unlocked this session.
+    hasPin() {
+      return hasEnc();
+    },
+    isLocked() {
+      return hasEnc() && !sessionMnemonic;
+    },
+    // Turn protection ON: encrypt the current seed under the PIN, then wipe every plaintext copy.
+    // Requires the seed to be available (identity unlocked / no prior PIN). Returns false if it can't.
+    async setPin(pin) {
+      if (!pin) return false;
+      const m = sessionMnemonic || await secureGet();
+      if (!m) return false;
+      const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt), new TextEncoder().encode(m)));
+      try {
+        localStorage.setItem(ENC_KEY, JSON.stringify({ v: 1, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
+      } catch (e) {
+        return false;
+      }
+      sessionMnemonic = m;
+      window.TrinityIdentity.locked = false;
+      await secureRemove();
+      return true;
+    },
+    // Enter the PIN → decrypt into memory and light the identity back up (fires trinity-identity so
+    // Fellowship re-derives the signing key). Returns true on success, false on a wrong PIN.
+    async unlock(pin) {
+      if (!hasEnc()) return true;
+      let m;
+      try {
+        m = await decryptEnc(pin);
+      } catch (e) {
+        return false;
+      }
+      sessionMnemonic = m;
+      window.TrinityIdentity.locked = false;
+      apply(deriveProfile(m), { ephemeral: false });
+      return true;
+    },
+    // check a PIN with NO side effects (gates "turn off" / "change PIN")
+    async verifyPin(pin) {
+      if (!hasEnc()) return false;
+      try {
+        await decryptEnc(pin);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+    // Turn protection OFF: verify the PIN, restore the plaintext seed, remove the blob.
+    async removePin(pin) {
+      if (!hasEnc()) return true;
+      let m;
+      try {
+        m = await decryptEnc(pin);
+      } catch (e) {
+        return false;
+      }
+      await secureSet(m);
+      try {
+        localStorage.removeItem(ENC_KEY);
+      } catch (e) {
+      }
+      sessionMnemonic = null;
+      window.TrinityIdentity.locked = false;
+      apply(deriveProfile(m), { ephemeral: isEphemeral() });
+      return true;
+    },
+    // Re-lock this session WITHOUT removing the PIN (forget the decrypted seed). Community becomes
+    // unreachable until unlock() is called again.
+    lock() {
+      if (!hasEnc()) return false;
+      sessionMnemonic = null;
+      window.TrinityIdentity.locked = true;
+      try {
+        if (window.Fellowship && window.Fellowship.clearCommunityCache) window.Fellowship.clearCommunityCache();
+      } catch (e) {
+      }
+      applyLocked();
+      return true;
     },
     // steward onboarding: mint a NEW identity to hand to a member (does NOT touch yours)
     makeInvite() {

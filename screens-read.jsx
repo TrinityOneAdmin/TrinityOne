@@ -481,6 +481,23 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
           }}>{ctx.accent === id ? <Icon name="check" size={18} stroke={2.6} color="#fff" /> : null}</button>
         ))}
       </div>
+
+      {/* When the community is PIN-locked, the main settings (opened from the Community tab) are unreachable —
+         so this is the always-visible UNLOCK. When unlocked, the control lives in Settings → Community privacy. */}
+      {ctx.commLocked ? (
+        <React.Fragment>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, margin: '22px 0 14px' }}>Church community</div>
+          <button onClick={() => ctx.openCommunitySecurity && ctx.openCommunitySecurity()} style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '14px 16px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface-2)',
+            cursor: 'pointer', color: 'var(--ink)', marginBottom: 6,
+          }}>
+            <span style={{ fontWeight: 600, fontSize: 15, display: 'flex', alignItems: 'center', gap: 9 }}><Icon name="lock" size={18} /> Unlock community</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--clay)' }}>Locked</span>
+          </button>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 4 }}>Enter your PIN to open the church community. Your Bible and study stay open either way.</div>
+        </React.Fragment>
+      ) : null}
     </BottomSheet>
   );
 }

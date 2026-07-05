@@ -6411,6 +6411,40 @@
       window.Fellowship.churchPub = toPub(npubOrHex);
       return window.Fellowship.churchPub;
     },
+    // Community-PIN forensic hygiene: wipe every localStorage cache that would reveal church membership
+    // or leak cached community content (profiles, member rosters, group/category lists, doc + member
+    // hubs, chat-seen markers, family links). Called on lock and at a locked boot. Bible/study/reading
+    // caches are deliberately left untouched — the app must still work as an offline Bible reader.
+    clearCommunityCache() {
+      const PREFIXES = [
+        "trinityone.profile",
+        "trinityone.members.",
+        "trinityone.membercount.",
+        "trinityone.docshub.",
+        "trinityone.memhub.",
+        "trinityone.groups.",
+        "trinityone.cats.",
+        "trinityone.chatSeen",
+        "trinityone.family"
+      ];
+      try {
+        const kill = [];
+        for (let i3 = 0; i3 < localStorage.length; i3++) {
+          const k = localStorage.key(i3);
+          if (k && PREFIXES.some((p) => k.startsWith(p))) kill.push(k);
+        }
+        kill.forEach((k) => {
+          try {
+            localStorage.removeItem(k);
+          } catch (e) {
+          }
+        });
+        for (const k of Object.keys(profiles)) delete profiles[k];
+        window.Fellowship.myProfile = null;
+      } catch (e) {
+        console.warn("[fellowship] clearCommunityCache failed", e);
+      }
+    },
     // NIP-98-style signed proof that we control this key, bound to a URL/endpoint — so a push
     // subscription can't be registered under another member's pubkey. Returns a signed event or null.
     async signAuth(url) {
