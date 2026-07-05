@@ -266,8 +266,9 @@ function maybePushJoin(evt, wasMember) {
     const churchPub = d.slice(MEMBER_D.length);
     if (!CHURCH_PUBS.has(churchPub) || evt.pubkey === churchPub) return;
     if ((evt.tags || []).some(t => t[0] === 'deleted') || !evt.content) return;   // a leave, not a join
+    if (wasMember) return;   // ALREADY a known member (persisted state) → a boot re-announce, not a new join — the fix for re-notify-after-restart
     const key = evt.pubkey + ':' + churchPub;
-    if (JOIN_NOTIFIED.has(key)) return;   // already told the steward (dedupe re-announce heartbeats)
+    if (JOIN_NOTIFIED.has(key)) return;   // secondary in-session dedupe
     JOIN_NOTIFIED.add(key);
     const name = displayName(evt.pubkey);   // best-effort: the joiner's latest kind-0 display name
     // a church that requires approval gets a "wants to join" request; otherwise it's a fresh join
@@ -1254,7 +1255,10 @@ wss.on('connection', ws => {
       // hostile lud16 to redirect giving), or flood forged events to evict real ones (MAX_EVENTS DoS).
       if (!verifyEvent(evt)) { ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: signature failed'])); return; }
       if (!accept(evt)) { ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: not a member or not permitted for this group'])); return; }
-      const wasMember = MEMBERS.has(evt.pubkey);   // capture before note() flips it, to detect a genuinely new join
+      // was this pubkey ALREADY a known member of the church it's posting to? MEMBER_DOCS is rebuilt from stored
+      // docs, so this survives relay restarts — a boot re-announce won't re-alert the steward. Captured before note().
+      const _mdD = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
+      const wasMember = _mdD.startsWith(MEMBER_D) && (MEMBER_DOCS.get(_mdD.slice(MEMBER_D.length)) || new Set()).has(evt.pubkey);
       note(evt);   // a membership/broadcast change takes effect for subsequent events
       // durable store handles replaceable dedup + smart retention (structure kept, oldest ephemeral culled).
       // 'have-newer' / 'duplicate' → acknowledge but don't re-broadcast.
