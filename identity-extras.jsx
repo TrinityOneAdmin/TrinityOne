@@ -233,7 +233,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="lock" size={19} /></div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>Community lock</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>Identity lock</div>
         </div>
         <IconBtn name="x" onClick={onClose} />
       </div>
@@ -249,7 +249,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
       ) : !hasPin ? (
         <React.Fragment>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 8px' }}>
-            Protect the church community with a PIN. Your Nostr identity is encrypted on this device, so without the PIN the community can’t be opened and messages can’t be read — the app looks like a plain Bible reader.</p>
+            Lock your identity with a PIN. It’s encrypted on this device, so without the PIN the church community can’t be opened and messages can’t be read — the app looks like a plain Bible reader.</p>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 0 16px' }}>
             If you forget the PIN, restore your 12-word recovery phrase to get back in. Keep those words safe.</p>
           <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN" style={inp} />
