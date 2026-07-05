@@ -71,13 +71,15 @@ App id `com.trinityone.app` (member) / `com.trinityone.steward` (console).
 
 No login, no email, no phone number. Identity is a key held on the device, protected by a **strict CSP** and an optional **PIN**; a hardware/out-of-page signer ([Keykeeper](reference/SPINE.md)) is on the roadmap. Study data (notes/highlights/plans) stays on the device. Direct messages are end-to-end encrypted; the relay stores only signed events — which a self-hosting church holds on its own hardware.
 
-**Found a vulnerability?** See **[SECURITY.md](SECURITY.md)**. Child-protection design is in **[SAFEGUARDING.md](SAFEGUARDING.md)**.
+**Found a vulnerability?** See **[SECURITY.md](SECURITY.md)**. Child-protection design is in **[SAFEGUARDING.md](docs/security/SAFEGUARDING.md)**.
 
 ## Docs
 
-- [`STEWARD-GUIDE.md`](STEWARD-GUIDE.md) — running a church from the console
-- [`SAFEGUARDING.md`](SAFEGUARDING.md) — protecting young people
-- [`TREASURY.md`](TREASURY.md) — the Finance / giving-records module
+**New here?** Start with **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — a map of the whole repo (what the pieces are, how they talk, where to start reading). Full documentation is in **[`docs/`](docs/README.md)**:
+
+- [`docs/guides/STEWARD-GUIDE.md`](docs/guides/STEWARD-GUIDE.md) — running a church from the console
+- [`docs/security/SAFEGUARDING.md`](docs/security/SAFEGUARDING.md) — protecting young people
+- [`docs/design/FINANCE-MODULE.md`](docs/design/FINANCE-MODULE.md) · [`docs/design/TREASURY.md`](docs/design/TREASURY.md) — the Finance / giving-records module
 - [`reference/SPINE.md`](reference/SPINE.md) — architecture spine + roadmap
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md)
 

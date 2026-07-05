@@ -4,7 +4,7 @@
 
 This is the map of the **steward console** — the desktop/web app you use to run your church
 (`steward.html`). Members use the phone app; stewards use this. A companion guide goes deeper where the
-stakes are higher: **[SAFEGUARDING.md](SAFEGUARDING.md)** (protecting young people). To share running the
+stakes are higher: **[SAFEGUARDING.md](../security/SAFEGUARDING.md)** (protecting young people). To share running the
 church with someone else — a revocable delegated steward, or a full handoff — see
 **[STEWARDS-AND-HANDOFF-EXPLAINED.md](STEWARDS-AND-HANDOFF-EXPLAINED.md)**.
 
@@ -77,7 +77,7 @@ Everyone who's joined.
   **confirm** a request a parent sent from their own phone. A child with no parent linked shows a quiet
   **"no guardian"** tag — perfectly fine for a youth-club child whose parents don't attend; they're still
   protected (only cleared adults can DM them). These actions are **owner-only**, so they're hidden when
-  you're acting as someone else's delegated steward. See **[SAFEGUARDING.md](SAFEGUARDING.md)**.
+  you're acting as someone else's delegated steward. See **[SAFEGUARDING.md](../security/SAFEGUARDING.md)**.
 - **Requests to join** — if approval-to-join is on (see *Settings → Joining*), new people wait here for
   your **Approve** / **Decline**.
 
