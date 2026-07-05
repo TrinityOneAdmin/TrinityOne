@@ -14,7 +14,7 @@ export function bookToDocs(book) {
   const docs = [{ t: 'settings', baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart }];
   for (const a of book.accounts.values()) docs.push({ t: 'account', id: a.id, code: a.code, name: a.name, type: a.type });
   for (const f of book.funds.values()) if (f.id !== 'general') docs.push({ t: 'fund', id: f.id, name: f.name, kind: f.kind });   // 'general' is implicit (createBook adds it)
-  for (const e of book.journal) docs.push({ t: 'journal', seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses });
+  for (const e of book.journal) docs.push({ t: 'journal', seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null });
   return docs;
 }
 
