@@ -622,6 +622,43 @@ window.sanitizeHtml = function (html) {
     return rows.map(r => ({ book: r.book, chap: r.chap, verse: r.verse, ref: bookName(r.book) + " " + r.chap + ":" + r.verse, text: r.text }));
   }
 
+  // Free-text search over installed dictionary/lexicon DEFINITIONS (distinct from search(), which scans
+  // verse text). Walks every loaded dict + the built-in lexicon, matching the query against each entry's
+  // headword (id/topic, lemma, transliteration, short gloss) and its body. Returns lex()-shaped entries,
+  // best matches first (headword hits above body hits, then by frequency), tag-stripped, capped.
+  function searchDict(query, cap){
+    const q = String(query || "").trim().toLowerCase();
+    if(q.length < 2) return [];
+    _ensureDicts();
+    cap = cap || 60;
+    const FIELDS = ['lemma','translit','pos','short','gloss','def','deriv','kjv'];
+    const seen = new Set(), hits = [];
+    const scan = (map) => {
+      for(const id in map){
+        if(seen.has(id)) continue;                       // first dict wins, mirroring lex() precedence
+        const e = map[id]; if(!e || typeof e !== "object") continue;
+        const idl = id.toLowerCase();
+        const head = (id + " " + (e.lemma||"") + " " + (e.translit||"") + " " + (e.short||"")).toLowerCase();
+        const body = FIELDS.map(f => e[f] || "").join(" ").toLowerCase();
+        let rank = 0;
+        if(idl === q || head.split(/\s+/).includes(q)) rank = 3;   // exact headword
+        else if(head.indexOf(q) !== -1) rank = 2;                  // partial headword
+        else if(body.indexOf(q) !== -1) rank = 1;                 // in the definition body
+        if(rank){ seen.add(id); hits.push({ id, e, rank }); }
+      }
+    };
+    for(const d of dicts) scan(d);
+    scan(LEX);
+    hits.sort((a, b) => b.rank - a.rank || (b.e.occ || 0) - (a.e.occ || 0));
+    const strong = id => /^[GH]\d+$/i.test(id);
+    return hits.slice(0, cap).map(({ id, e }) => ({
+      id, lang: strong(id) ? (id[0].toUpperCase() === "H" ? "HEBREW" : "GREEK") : "",
+      lemma: _stripTags(e.lemma || ""), translit: _stripTags(e.translit || ""), pos: _stripTags(e.pos || ""),
+      short: _stripTags(e.short || ""), gloss: _stripTags(e.gloss || ""), def: _stripTags(e.def || ""),
+      deriv: _stripTags(e.deriv || ""), kjv: _stripTags(e.kjv), occ: e.occ
+    }));
+  }
+
   // ── boot: restore installed modules, then optional ?module=<url> autoload ──
   async function autoLoad(){
     loadingFlag = true; notify();
@@ -656,7 +693,7 @@ window.sanitizeHtml = function (html) {
     get loading(){ return loadingFlag; },
     get activeVersion(){ return active; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
-    versions, books, maxChapter, getVerses, getCommentary, commentaryList, bookMeta, defaultLoc, step, refLabel, refKey, search,
+    versions, books, maxChapter, getVerses, getCommentary, commentaryList, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
   };
 

@@ -1,4 +1,4 @@
-// screens-search.jsx — full-text search across the loaded module (+ Strong's lookup)
+// screens-search.jsx — full-text search across the loaded module + installed dictionary definitions (+ Strong's lookup)
 const { useState: useSrch } = React;
 
 function SearchScreen({ ctx, onBack }) {
@@ -13,6 +13,8 @@ function SearchScreen({ ctx, onBack }) {
   const isStrong = /^[GH]\d+$/i.test(active);
   const lexEntry = isStrong ? Bible.lex(active) : null;
   const hits = active && !isStrong ? Bible.search(active, 250, ver) : [];
+  // free-text search also scans installed dictionary/lexicon DEFINITIONS (guard in case an older cached engine has no searchDict)
+  const dictHits = active && !isStrong && Bible.searchDict ? Bible.searchDict(active, 24) : [];
   const seeds = ['light', 'love', 'God', 'beginning', 'life'];
 
   const hl = (text) => {
@@ -34,7 +36,7 @@ function SearchScreen({ ctx, onBack }) {
         <Icon name="search" size={20} color="var(--ink-3)" />
         <input value={q} onChange={e => setQ(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') run(q); }}
-          placeholder="Search this translation, or a Strong's no…" style={{
+          placeholder="Search verses &amp; definitions, or a Strong's no…" style={{
             flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 16,
             fontFamily: 'var(--font-ui)', color: 'var(--ink)',
           }} />
@@ -96,6 +98,28 @@ function SearchScreen({ ctx, onBack }) {
             </div>
           ) : (
             <React.Fragment>
+              {dictHits.length ? (
+                <div style={{ marginBottom: 22 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', letterSpacing: '.5px', marginBottom: 10 }}>DICTIONARY · {dictHits.length}{dictHits.length >= 24 ? '+' : ''} match{dictHits.length === 1 ? '' : 'es'}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                    {dictHits.map(d => {
+                      const strong = /^[GH]\d+$/i.test(d.id);
+                      return (
+                        <div key={d.id} onClick={strong ? () => ctx.openWord(d.id) : undefined} style={{
+                          padding: '13px 15px', borderRadius: 15, background: 'var(--surface)', border: '1px solid var(--line)',
+                          boxShadow: 'var(--shadow)', cursor: strong ? 'pointer' : 'default' }}>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: 'var(--font-read)', fontSize: 18, fontWeight: 600, color: 'var(--ink)' }}>{d.lemma || d.id}</span>
+                            {d.translit ? <span style={{ fontFamily: 'var(--font-read)', fontStyle: 'italic', fontSize: 14, color: 'var(--ink-2)' }}>{d.translit}</span> : null}
+                            {strong ? <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-soft)', padding: '2px 8px', borderRadius: 999 }}>{d.id}</span> : null}
+                          </div>
+                          {(d.short || d.gloss) ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.45 }}>{d.short || d.gloss}</div> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
               <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18 }}>
                 <b style={{ color: 'var(--ink)' }}>{hits.length}{hits.length >= 250 ? '+' : ''}</b> result{hits.length === 1 ? '' : 's'} for “<b style={{ color: 'var(--clay)' }}>{active}</b>”
               </div>
