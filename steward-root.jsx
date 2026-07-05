@@ -16,141 +16,64 @@ function useStewardIdv() {
 }
 window.useStewardIdv = useStewardIdv;
 
-// live church data from the relay (published by this console). Shared by the dashboard sections.
-function useStewardFunds() {
-  const idv = useStewardIdv();
-  const [funds, setFunds] = useSt([]);
-  useStE(() => window.Steward.subscribeFunds(setFunds), [idv]);
-  return funds;
+// live church data from the relay. Nearly every hook here is the same shape — subscribe to a data stream,
+// re-render when the active identity changes — so they're built from ONE factory instead of copy-paste.
+// makeSub(getObj, method, makeInit) returns such a hook: guarded (a missing engine/method is a no-op),
+// lazy per-instance initial value, re-subscribes on identity change. The handful that don't fit (custom
+// callback, derived, polling, two-effect) stay hand-written below.
+(function () {   // factory scope — keeps makeSub / S / MA / ME out of the shared global scope
+function makeSub(getObj, method, makeInit) {
+  return function () {
+    const idv = useStewardIdv();
+    const [v, setV] = useSt(makeInit);
+    useStE(() => { const o = getObj(); return o && o[method] ? o[method](setV) : undefined; }, [idv]);
+    return v;
+  };
 }
-window.useStewardFunds = useStewardFunds;
+const S = () => window.Steward, MA = () => window.StewardManna, ME = () => window.StewardMeals;
 
-function useStewardGroups() {
-  const idv = useStewardIdv();
-  const [groups, setGroups] = useSt([]);
-  useStE(() => window.Steward.subscribeGroups(setGroups), [idv]);
-  return groups;
-}
-window.useStewardGroups = useStewardGroups;
+window.useStewardFunds = makeSub(S, 'subscribeFunds', () => []);
+window.useStewardGroups = makeSub(S, 'subscribeGroups', () => []);
+window.useStewardCategories = makeSub(S, 'subscribeCategories', () => []);
+window.useStewardPlans = makeSub(S, 'subscribePlans', () => []);
+window.useStewardDevotionals = makeSub(S, 'subscribeDevotionals', () => []);
+window.useStewardRotas = makeSub(S, 'subscribeRotas', () => []);
+window.useStewardRosters = makeSub(S, 'subscribeRosters', () => []);
+window.useStewardServices = makeSub(S, 'subscribeServices', () => []);
+window.useStewardRunsheets = makeSub(S, 'subscribeRunsheets', () => []);
+window.useStewardCheckins = makeSub(S, 'subscribeCheckins', () => []);
+window.useStewardEvents = makeSub(S, 'subscribeEvents', () => []);
+window.useStewardRooms = makeSub(S, 'subscribeRooms', () => []);
+window.useStewardBookings = makeSub(S, 'subscribeBookings', () => []);
+window.useStewardUnavail = makeSub(S, 'subscribeUnavail', () => ({}));
+window.useStewardRsvps = makeSub(S, 'subscribeRsvps', () => ({}));
+window.useStewardRequestReplies = makeSub(S, 'subscribeRequestReplies', () => []);
+window.useStewardRequests = makeSub(S, 'subscribeRequests', () => []);
+window.useStewardBlocked = makeSub(S, 'subscribeBlocked', () => []);
+window.useStewardStewards = makeSub(S, 'subscribeStewards', () => []);
+window.usePendingStewards = makeSub(S, 'subscribeStewardRequests', () => []);
+window.useStewardSafeguard = makeSub(S, 'subscribeSafeguard', () => ({ minors: [], approved: [] }));
+window.useStewardGuardianRequests = makeSub(S, 'subscribeGuardianRequests', () => []);
+window.useStewardGuardians = makeSub(S, 'subscribeGuardians', () => ({}));
+window.useStewardJoinPolicy = makeSub(S, 'subscribeJoinPolicy', () => false);
+window.useStewardAdmitted = makeSub(S, 'subscribeAdmitted', () => []);
+window.useStewardStats = makeSub(S, 'subscribeStats', () => ({ events: 0, announcements: 0 }));
+window.useStewardActivity = makeSub(S, 'subscribeActivity', () => []);
+// Manna — optional money-out / disbursement module
+window.useMannaSettings = makeSub(MA, 'subscribeSettings', () => ({ enabled: (window.StewardManna && window.StewardManna.cachedEnabled) ? window.StewardManna.cachedEnabled() : false }));
+window.useMannaFunds = makeSub(MA, 'subscribeFunds', () => []);
+window.useMannaRequests = makeSub(MA, 'subscribeRequests', () => []);
+window.useMannaVouches = makeSub(MA, 'subscribeVouches', () => []);
+window.useMannaTestimony = makeSub(MA, 'subscribeTestimony', () => []);
+window.useMannaRecords = makeSub(MA, 'subscribeRecords', () => []);
+// Meals / Care — optional practical-care module
+window.useMealsSettings = makeSub(ME, 'subscribeSettings', () => ({ enabled: (window.StewardMeals && window.StewardMeals.cachedEnabled) ? window.StewardMeals.cachedEnabled() : false }));
+window.useMealsNeeds = makeSub(ME, 'subscribeNeeds', () => []);
+window.useMealsSlots = makeSub(ME, 'subscribeSlots', () => []);
+window.useMealsSkips = makeSub(ME, 'subscribeSkips', () => []);
+})();
 
-function useStewardCategories() {
-  const idv = useStewardIdv();
-  const [cats, setCats] = useSt([]);
-  useStE(() => window.Steward.subscribeCategories ? window.Steward.subscribeCategories(setCats) : undefined, [idv]);
-  return cats;
-}
-window.useStewardCategories = useStewardCategories;
-
-function useStewardPlans() {
-  const idv = useStewardIdv();
-  const [plans, setPlans] = useSt([]);
-  useStE(() => window.Steward.subscribePlans(setPlans), [idv]);
-  return plans;
-}
-window.useStewardPlans = useStewardPlans;
-
-function useStewardDevotionals() {
-  const idv = useStewardIdv();
-  const [devos, setDevos] = useSt([]);
-  useStE(() => window.Steward.subscribeDevotionals(setDevos), [idv]);
-  return devos;
-}
-window.useStewardDevotionals = useStewardDevotionals;
-
-function useStewardRotas() {
-  const idv = useStewardIdv();
-  const [rotas, setRotas] = useSt([]);
-  useStE(() => window.Steward.subscribeRotas(setRotas), [idv]);
-  return rotas;
-}
-window.useStewardRotas = useStewardRotas;
-
-function useStewardRosters() {
-  const idv = useStewardIdv();
-  const [rosters, setRosters] = useSt([]);
-  useStE(() => window.Steward.subscribeRosters(setRosters), [idv]);
-  return rosters;
-}
-window.useStewardRosters = useStewardRosters;
-
-function useStewardServices() {
-  const idv = useStewardIdv();
-  const [services, setServices] = useSt([]);
-  useStE(() => window.Steward.subscribeServices(setServices), [idv]);
-  return services;
-}
-window.useStewardServices = useStewardServices;
-function useStewardRunsheets() {
-  const idv = useStewardIdv();
-  const [sheets, setSheets] = useSt([]);
-  useStE(() => window.Steward.subscribeRunsheets(setSheets), [idv]);
-  return sheets;
-}
-window.useStewardRunsheets = useStewardRunsheets;
-function useStewardCheckins() {
-  const idv = useStewardIdv();
-  const [list, setList] = useSt([]);
-  useStE(() => window.Steward.subscribeCheckins(setList), [idv]);
-  return list;
-}
-window.useStewardCheckins = useStewardCheckins;
-
-function useStewardEvents() {
-  const idv = useStewardIdv();
-  const [events, setEvents] = useSt([]);
-  useStE(() => window.Steward.subscribeEvents(setEvents), [idv]);
-  return events;
-}
-window.useStewardEvents = useStewardEvents;
-
-function useStewardRooms() {
-  const idv = useStewardIdv();
-  const [rooms, setRooms] = useSt([]);
-  useStE(() => window.Steward.subscribeRooms(setRooms), [idv]);
-  return rooms;
-}
-window.useStewardRooms = useStewardRooms;
-
-function useStewardBookings() {
-  const idv = useStewardIdv();
-  const [bookings, setBookings] = useSt([]);
-  useStE(() => window.Steward.subscribeBookings(setBookings), [idv]);
-  return bookings;
-}
-window.useStewardBookings = useStewardBookings;
-
-function useStewardUnavail() {
-  const idv = useStewardIdv();
-  const [unavail, setUnavail] = useSt({});
-  useStE(() => window.Steward.subscribeUnavail(setUnavail), [idv]);
-  return unavail;
-}
-window.useStewardUnavail = useStewardUnavail;
-
-function useStewardRsvps() {
-  const idv = useStewardIdv();
-  const [rsvps, setRsvps] = useSt({});
-  useStE(() => window.Steward.subscribeRsvps(setRsvps), [idv]);
-  return rsvps;
-}
-window.useStewardRsvps = useStewardRsvps;
-
-function useStewardRequestReplies() {
-  const idv = useStewardIdv();
-  const [replies, setReplies] = useSt([]);
-  useStE(() => window.Steward.subscribeRequestReplies(setReplies), [idv]);
-  return replies;
-}
-window.useStewardRequestReplies = useStewardRequestReplies;
-
-function useStewardRequests() {
-  const idv = useStewardIdv();
-  const [requests, setRequests] = useSt([]);
-  useStE(() => window.Steward.subscribeRequests(setRequests), [idv]);
-  return requests;
-}
-window.useStewardRequests = useStewardRequests;
-
+// ── hooks that don't fit the factory (custom callback / derived / polling / two-effect) ──
 function useStewardNetworks() {
   const [networks, setNetworks] = useSt([]);
   useStE(() => window.Steward.subscribeNetworks(setNetworks), []);
@@ -158,8 +81,7 @@ function useStewardNetworks() {
 }
 window.useStewardNetworks = useStewardNetworks;
 
-// churches whose owner-signed roster lists OUR key — we can switch to acting as their steward (phase 2b).
-// Fires 'steward-networks' so the IdentitySwitcher re-renders with the new actable identities.
+// churches whose owner-signed roster lists OUR key — we can act as their steward (phase 2b).
 function useStewardStewardedChurches() {
   const [churches, setChurches] = useSt([]);
   useStE(() => (window.Steward.subscribeStewardedChurches
@@ -169,17 +91,16 @@ function useStewardStewardedChurches() {
 }
 window.useStewardStewardedChurches = useStewardStewardedChurches;
 
-// people participating in this church's chat (derived from messages addressed to the church)
+// people in this church's chat — seeded from the local roster cache so Members paints on first render
 function useStewardMembers() {
   const idv = useStewardIdv();
-  // seed from the local roster cache so the Members list paints on first render (no empty→list flash)
   const [members, setMembers] = useSt(() => { try { return JSON.parse(localStorage.getItem('trinityone.steward.members.' + ((window.Steward && window.Steward.churchPub) || '')) || '[]') || []; } catch { return []; } });
   useStE(() => window.Steward.subscribeMembers(setMembers), [idv]);
   return members;
 }
 window.useStewardMembers = useStewardMembers;
 
-// pubkey -> member, for name lookups (e.g. the Care module showing who filled a slot)
+// pubkey -> member, for name lookups (derived from the members list)
 function useStewardDirectory() {
   const members = useStewardMembers();
   return React.useMemo(() => {
@@ -189,160 +110,6 @@ function useStewardDirectory() {
   }, [members]);
 }
 window.useStewardDirectory = useStewardDirectory;
-
-function useStewardBlocked() {
-  const idv = useStewardIdv();
-  const [blocked, setBlocked] = useSt([]);
-  useStE(() => window.Steward.subscribeBlocked(setBlocked), [idv]);
-  return blocked;   // array of blocked hex pubkeys
-}
-window.useStewardBlocked = useStewardBlocked;
-
-// the delegated steward roster (owner-signed) → array of hex pubkeys
-function useStewardStewards() {
-  const idv = useStewardIdv();
-  const [stewards, setStewards] = useSt([]);
-  useStE(() => (window.Steward.subscribeStewards ? window.Steward.subscribeStewards(setStewards) : undefined), [idv]);
-  return stewards;
-}
-window.useStewardStewards = useStewardStewards;
-
-// would-be stewards who scanned this church's invite and are waiting for the owner to approve them
-function usePendingStewards() {
-  const idv = useStewardIdv();
-  const [reqs, setReqs] = useSt([]);
-  useStE(() => (window.Steward.subscribeStewardRequests ? window.Steward.subscribeStewardRequests(setReqs) : undefined), [idv]);
-  return reqs;   // [{ pubkey, npub, name }]
-}
-window.usePendingStewards = usePendingStewards;
-
-// safeguarding: this church's minors + cleared-adults lists → { minors:[], approved:[] } (hex pubkeys)
-function useStewardSafeguard() {
-  const idv = useStewardIdv();
-  const [lists, setLists] = useSt({ minors: [], approved: [] });
-  useStE(() => window.Steward.subscribeSafeguard(setLists), [idv]);
-  return lists;
-}
-window.useStewardSafeguard = useStewardSafeguard;
-
-// safeguarding v2: pending parent guardian-link requests → [{ child, parent, parentName, childName, ts }]
-function useStewardGuardianRequests() {
-  const idv = useStewardIdv();
-  const [reqs, setReqs] = useSt([]);
-  useStE(() => window.Steward.subscribeGuardianRequests(setReqs), [idv]);
-  return reqs;
-}
-window.useStewardGuardianRequests = useStewardGuardianRequests;
-
-// safeguarding v2: confirmed parent↔child map → { childPub: [parentPub, …] }
-function useStewardGuardians() {
-  const idv = useStewardIdv();
-  const [map, setMap] = useSt({});
-  useStE(() => window.Steward.subscribeGuardians(setMap), [idv]);
-  return map;
-}
-window.useStewardGuardians = useStewardGuardians;
-
-// joining: does this church require steward approval, and who's been admitted
-function useStewardJoinPolicy() {
-  const idv = useStewardIdv();
-  const [approval, setApproval] = useSt(false);
-  useStE(() => window.Steward.subscribeJoinPolicy(setApproval), [idv]);
-  return approval;
-}
-window.useStewardJoinPolicy = useStewardJoinPolicy;
-
-function useStewardAdmitted() {
-  const idv = useStewardIdv();
-  const [list, setList] = useSt([]);
-  useStE(() => window.Steward.subscribeAdmitted(setList), [idv]);
-  return list;   // array of admitted hex pubkeys
-}
-window.useStewardAdmitted = useStewardAdmitted;
-
-// ---- Manna (optional money-out / disbursement module) ----
-function useMannaSettings() {
-  const idv = useStewardIdv();
-  // seed from cache so the "Manna" nav item paints on the FIRST render (no relay-round-trip lag)
-  const [s, setS] = useSt(() => ({ enabled: (window.StewardManna && window.StewardManna.cachedEnabled) ? window.StewardManna.cachedEnabled() : false }));
-  useStE(() => (window.StewardManna ? window.StewardManna.subscribeSettings(setS) : undefined), [idv]);
-  return s;
-}
-window.useMannaSettings = useMannaSettings;
-
-function useMannaFunds() {
-  const idv = useStewardIdv();
-  const [f, setF] = useSt([]);
-  useStE(() => (window.StewardManna ? window.StewardManna.subscribeFunds(setF) : undefined), [idv]);
-  return f;
-}
-window.useMannaFunds = useMannaFunds;
-
-function useMannaRequests() {
-  const idv = useStewardIdv();
-  const [r, setR] = useSt([]);
-  useStE(() => (window.StewardManna ? window.StewardManna.subscribeRequests(setR) : undefined), [idv]);
-  return r;
-}
-window.useMannaRequests = useMannaRequests;
-
-function useMannaVouches() {
-  const idv = useStewardIdv();
-  const [v, setV] = useSt([]);
-  useStE(() => (window.StewardManna ? window.StewardManna.subscribeVouches(setV) : undefined), [idv]);
-  return v;
-}
-window.useMannaVouches = useMannaVouches;
-
-function useMannaTestimony() {
-  const idv = useStewardIdv();
-  const [t, setT] = useSt([]);
-  useStE(() => (window.StewardManna ? window.StewardManna.subscribeTestimony(setT) : undefined), [idv]);
-  return t;
-}
-window.useMannaTestimony = useMannaTestimony;
-
-function useMannaRecords() {
-  const idv = useStewardIdv();
-  const [r, setR] = useSt([]);
-  useStE(() => (window.StewardManna ? window.StewardManna.subscribeRecords(setR) : undefined), [idv]);
-  return r;
-}
-window.useMannaRecords = useMannaRecords;
-
-// ---- optional Meal trains / Care module (church-signed care: docs; window.StewardMeals) ----
-function useMealsSettings() {
-  const idv = useStewardIdv();
-  // seed from the local cache so the "Care" nav item paints on the FIRST render (no relay-round-trip lag)
-  const [s, setS] = useSt(() => ({ enabled: (window.StewardMeals && window.StewardMeals.cachedEnabled) ? window.StewardMeals.cachedEnabled() : false }));
-  useStE(() => (window.StewardMeals ? window.StewardMeals.subscribeSettings(setS) : undefined), [idv]);
-  return s;
-}
-window.useMealsSettings = useMealsSettings;
-
-function useMealsNeeds() {
-  const idv = useStewardIdv();
-  const [n, setN] = useSt([]);
-  useStE(() => (window.StewardMeals ? window.StewardMeals.subscribeNeeds(setN) : undefined), [idv]);
-  return n;
-}
-window.useMealsNeeds = useMealsNeeds;
-
-function useMealsSlots() {
-  const idv = useStewardIdv();
-  const [sl, setSl] = useSt([]);
-  useStE(() => (window.StewardMeals ? window.StewardMeals.subscribeSlots(setSl) : undefined), [idv]);
-  return sl;
-}
-window.useMealsSlots = useMealsSlots;
-
-function useMealsSkips() {
-  const idv = useStewardIdv();
-  const [sk, setSk] = useSt([]);
-  useStE(() => (window.StewardMeals ? window.StewardMeals.subscribeSkips(setSk) : undefined), [idv]);
-  return sk;
-}
-window.useMealsSkips = useMealsSkips;
 
 // live relay status (re-probed every 10s) + the church's footprint count on the relay
 function useStewardRelays() {
@@ -358,29 +125,13 @@ function useStewardRelays() {
 }
 window.useStewardRelays = useStewardRelays;
 
-function useStewardStats() {
-  const idv = useStewardIdv();
-  const [stats, setStats] = useSt({ events: 0, announcements: 0 });
-  useStE(() => window.Steward.subscribeStats(setStats), [idv]);
-  return stats;
-}
-window.useStewardStats = useStewardStats;
-
-function useStewardActivity() {
-  const idv = useStewardIdv();
-  const [activity, setActivity] = useSt([]);
-  useStE(() => window.Steward.subscribeActivity(setActivity), [idv]);
-  return activity;
-}
-window.useStewardActivity = useStewardActivity;
-
 // the active identity's own profile (name etc.) + npub — church, or a network when toggled
 function useStewardChurch() {
   const idv = useStewardIdv();
   const [p, setP] = useSt({});
   useStE(() => { setP({}); return window.Steward.subscribeProfile(setP); }, [idv]);
-  // any instance that receives the kind-0 broadcasts it, so every view (header, Settings, badges)
-  // stays in sync even if this instance's own relay sub mounted before the church's relays were ready.
+  // any instance that receives the kind-0 broadcasts it, so every view stays in sync even if this
+  // instance's own relay sub mounted before the church's relays were ready.
   useStE(() => { const f = (e) => { if (e.detail) setP(e.detail); }; window.addEventListener('steward-profile', f); return () => window.removeEventListener('steward-profile', f); }, [idv]);
   return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', channel: (p && p.channel) || '', audioFeed: (p && p.audioFeed) || '', lud16: (p && p.lud16) || '', giving: !!(p && p.giving), picture: (p && p.picture) || '', banner: (p && p.banner) || '', accent: (p && p.accent) || '', features: (p && p.features) || {}, rules: (p && p.rules) || {}, npub: window.Steward.npub || '', isNetwork: window.Steward.isViewingNetwork ? window.Steward.isViewingNetwork() : false };
 }
