@@ -1215,7 +1215,7 @@ function App() {
             <UpdateBanner ctx={ctx} />
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', overflow: 'hidden' }}>
-                <DesktopNav active={tab} onChange={(t) => { setOpenServing(false); setTab(t); }} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} />
+                <DesktopNav active={tab} onChange={(t) => { setOpenServing(false); setTab(t); }} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} onProfile={commLocked ? undefined : () => ctx.openProfile()} profileAv={identity.avatar} profileName={identity.name} />
                 {tab === 'chat' && ctx.church && ctx.church.npub ? (
                   <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
@@ -1255,7 +1255,7 @@ function App() {
               <React.Fragment>
                 <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>
                 <MiniPlayer ctx={ctx} />
-                <TabBar active={tab} onChange={setTab} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} />
+                <TabBar active={tab} onChange={setTab} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} onProfile={commLocked ? undefined : () => ctx.openProfile()} profileAv={identity.avatar} profileName={identity.name} />
               </React.Fragment>
             )}
 
