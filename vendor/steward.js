@@ -9755,9 +9755,11 @@ zoo`.split("\n");
   }
   var b64e = (u82) => btoa(String.fromCharCode(...u82));
   var b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-  async function deriveAes(pin, salt) {
+  var PIN_ITER = 6e5;
+  var PIN_ITER_LEGACY = 21e4;
+  async function deriveAes(pin, salt, iterations) {
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
-    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 21e4, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iterations || PIN_ITER_LEGACY, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
   async function publish(evt) {
     try {
@@ -9844,8 +9846,8 @@ zoo`.split("\n");
       const seed = currentMnemonic || lsGet(KEY_LS);
       if (!seed || !pin) return false;
       const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
-      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt), new TextEncoder().encode(seed)));
-      lsSet(ENC_LS, JSON.stringify({ v: 1, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
+      lsSet(ENC_LS, JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
       try {
         localStorage.removeItem(KEY_LS);
       } catch {
@@ -9858,7 +9860,7 @@ zoo`.split("\n");
       if (!raw) return true;
       try {
         const o = JSON.parse(raw);
-        const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt)), b64d(o.ct)));
+        const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
         setKey(seed);
         window.Steward.locked = false;
         window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
@@ -9883,7 +9885,7 @@ zoo`.split("\n");
       if (!raw) return false;
       try {
         const o = JSON.parse(raw);
-        await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt)), b64d(o.ct));
+        await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct));
         return true;
       } catch {
         return false;

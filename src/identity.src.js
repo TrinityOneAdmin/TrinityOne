@@ -29,15 +29,21 @@ let sessionMnemonic = null;   // seed decrypted from the PIN blob, held in memor
 // (SHA-256, 210 000 iterations) → AES-GCM-256. No home-rolled crypto; identical blob shape {v,salt,iv,ct}. ──
 const b64e = (u8) => btoa(String.fromCharCode(...u8));
 const b64d = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-async function deriveAes(pin, salt) {
+// SECURITY-AUDIT-2026-07-06 M11: the PIN is the ONLY secret over the at-rest seed blob, offline-brute-forceable
+// on a seized device — so use a costlier KDF (600k, matching the backup file's floor; was 210k). The iteration
+// count is STORED in the blob (`it`) so EXISTING blobs written at 210k still decrypt (o.it || legacy) and no
+// member is ever locked out; only new/re-set PINs use the stronger cost.
+const PIN_ITER = 600000;              // new blobs
+const PIN_ITER_LEGACY = 210000;       // blobs written before this change (no `it` field)
+async function deriveAes(pin, salt, iterations) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 210000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iterations || PIN_ITER_LEGACY, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
 function encRaw() { try { return localStorage.getItem(ENC_KEY); } catch { return null; } }
 function hasEnc() { return !!encRaw(); }
 async function decryptEnc(pin) {   // returns the seed string, or throws on wrong PIN / damaged blob
   const o = JSON.parse(encRaw());
-  return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt)), b64d(o.ct)));
+  return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
 }
 
 function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
@@ -184,8 +190,8 @@ window.TrinityIdentity = {
     const m = sessionMnemonic || await secureGet();   // secureGet returns the plaintext seed while no blob exists yet
     if (!m) return false;
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
-    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt), new TextEncoder().encode(m)));
-    try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 1, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) })); }
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(m)));
+    try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) })); }   // M11: v2 blob carries its iteration count
     catch (e) { return false; }
     sessionMnemonic = m;                 // stay unlocked for the rest of this session
     window.TrinityIdentity.locked = false;

@@ -205,9 +205,14 @@ function _setNeedsPin(v) {
 }
 const b64e = (u8) => btoa(String.fromCharCode(...u8));
 const b64d = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-async function deriveAes(pin, salt) {
+// SECURITY-AUDIT-2026-07-06 M11: costlier KDF (600k, was 210k) over the at-rest CHURCH-KEY blob. The iteration
+// count is stored in the blob (`it`), so an EXISTING church-key PIN written at 210k still unlocks (o.it || legacy)
+// — no owner is ever locked out of their church identity; only new/re-set PINs use the stronger cost.
+const PIN_ITER = 600000;
+const PIN_ITER_LEGACY = 210000;
+async function deriveAes(pin, salt, iterations) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 210000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iterations || PIN_ITER_LEGACY, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
 async function publish(evt) {
   try { await Promise.any(pool.publish(relays(), evt)); }
@@ -280,8 +285,8 @@ window.Steward = {
     const seed = currentMnemonic || lsGet(KEY_LS);
     if (!seed || !pin) return false;
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
-    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt), new TextEncoder().encode(seed)));
-    lsSet(ENC_LS, JSON.stringify({ v: 1, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
+    lsSet(ENC_LS, JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));   // M11: v2 blob carries its iteration count
     try { localStorage.removeItem(KEY_LS); } catch {}
     _setNeedsPin(false);   // SECURITY-AUDIT-2026-06-25 Critical-2: encrypted form now persisted; clear the force flag
     return true;
@@ -290,7 +295,7 @@ window.Steward = {
     const raw = lsGet(ENC_LS); if (!raw) return true;
     try {
       const o = JSON.parse(raw);
-      const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt)), b64d(o.ct)));
+      const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
       setKey(seed); window.Steward.locked = false;
       window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
       return true;
@@ -307,7 +312,7 @@ window.Steward = {
     const raw = lsGet(ENC_LS); if (!raw) return false;
     try {
       const o = JSON.parse(raw);
-      await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt)), b64d(o.ct));
+      await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct));
       return true;
     } catch { return false; }
   },
