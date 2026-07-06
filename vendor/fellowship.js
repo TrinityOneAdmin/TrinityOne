@@ -5785,27 +5785,30 @@
   }
   var _gkeys = {};
   var _gkeyTs = {};
+  var _gkKey = (cp, gid) => (cp || "") + "|" + gid;
   var _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
   function _ingestGroupKey(cp, e) {
     const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
     if (!d.startsWith(GROUPKEY_D)) return;
     if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
     const gid = d.slice(GROUPKEY_D.length);
+    const k = _gkKey(cp, gid);
     const ts = e.created_at || 0;
-    if (ts < (_gkeyTs[gid] || 0)) return;
-    _gkeyTs[gid] = ts;
+    if (ts > Math.floor(Date.now() / 1e3) + FUTURE_SKEW) return;
+    if (ts < (_gkeyTs[k] || 0)) return;
+    _gkeyTs[k] = ts;
     try {
       const env = JSON.parse(e.content || "{}");
       const mine = env.keys && pub && env.keys[pub];
-      if (mine && sk) _gkeys[gid] = _unhex(decrypt(mine, getConversationKey(sk, e.pubkey)));
-      else if (!mine) delete _gkeys[gid];
+      if (mine && sk) _gkeys[k] = _unhex(decrypt(mine, getConversationKey(sk, e.pubkey)));
+      else if (!mine) delete _gkeys[k];
     } catch {
     }
   }
-  function _decEvt(e) {
+  function _decEvt(cp, e) {
     if (!e.tags || !e.tags.some((t) => t[0] === "enc")) return e;
     const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
-    const key = gid && _gkeys[gid];
+    const key = gid && _gkeys[_gkKey(cp, gid)];
     if (!key) return null;
     try {
       return { ...e, content: decrypt(e.content, key) };
@@ -6688,7 +6691,7 @@
       if (!sk) await window.Fellowship.ready;
       const churchTag = window.Fellowship.churchPub ? [["p", window.Fellowship.churchPub]] : [];
       let body = content, encTag = [];
-      const gkey = _gkeys[groupId];
+      const gkey = _gkeys[_gkKey(window.Fellowship.churchPub, groupId)];
       if (gkey) {
         try {
           body = encrypt(content, gkey);
@@ -6882,7 +6885,7 @@
           if (cp && !e.tags.some((t) => t[0] === "p" && t[1] === cp)) return;
           const gid = (e.tags.find((t) => t[0] === "t" && set.has(t[1])) || [])[1];
           if (gid) {
-            const dec = _decEvt(e);
+            const dec = _decEvt(cp, e);
             if (!dec) return;
             try {
               onEvent(gid, dec);
@@ -6947,7 +6950,7 @@
           if (!e.tags.some((t) => t[0] === "t" && t[1] === groupId)) return;
           const cp = window.Fellowship.churchPub;
           if (cp && !e.tags.some((t) => t[0] === "p" && t[1] === cp)) return;
-          const dec = _decEvt(e);
+          const dec = _decEvt(cp, e);
           if (!dec) return;
           try {
             onEvent(dec);

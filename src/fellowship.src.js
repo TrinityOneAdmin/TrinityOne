@@ -30,8 +30,14 @@ const CAREAVAIL_D = 'trinityone/careavail:';// a member's "I'm here to help" ava
 const FAMILY_KEY = 'trinityone.family';
 function _loadChildren() { try { return JSON.parse(localStorage.getItem(FAMILY_KEY) || '[]') || []; } catch { return []; } }
 function _saveChildLink(link) { const list = _loadChildren().filter(c => c && c.child !== link.child); list.push(link); try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {} }
-const _gkeys = {};   // groupId -> Uint8Array(32) group key, unwrapped from the church's envelope for me
-const _gkeyTs = {};  // groupId -> newest envelope created_at accepted (stale-drop for replayed rotations)
+// SECURITY-AUDIT-2026-07-06 H5: cache group keys per CHURCH, not by bare group-id. Group ids are the
+// low-entropy, attacker-guessable `grp<Date.now()>`; a member also joined to an attacker-run church could
+// otherwise publish a church-signed `groupkey:<victimGroupId>` that clobbers the real church's cached key
+// for the same id (→ DoS the encrypted group, or seal the victim's next post under the attacker's key and
+// read the plaintext). Keying by `<churchPub>|<gid>` isolates each church's key space so ids can't collide.
+const _gkeys = {};   // "<cp>|<groupId>" -> Uint8Array(32) group key, unwrapped from that church's envelope for me
+const _gkeyTs = {};  // "<cp>|<groupId>" -> newest envelope created_at accepted (stale-drop for replayed rotations)
+const _gkKey = (cp, gid) => (cp || '') + '|' + gid;
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
 const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
 // unwrap my entry from a key envelope and cache the group key (NIP-44, church<->me conversation key).
@@ -43,22 +49,24 @@ function _ingestGroupKey(cp, e) {
   const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(GROUPKEY_D)) return;
   if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;   // untrusted author
   const gid = d.slice(GROUPKEY_D.length);
+  const k = _gkKey(cp, gid);
   const ts = e.created_at || 0;
-  if (ts < (_gkeyTs[gid] || 0)) return;   // a lagging relay replaying an OLDER envelope can't resurrect a rotated-out key
-  _gkeyTs[gid] = ts;
+  if (ts > Math.floor(Date.now() / 1000) + FUTURE_SKEW) return;   // SECURITY-AUDIT-2026-07-06 H5: a far-future envelope must not wedge future rotations via the stale-drop below
+  if (ts < (_gkeyTs[k] || 0)) return;   // a lagging relay replaying an OLDER envelope can't resurrect a rotated-out key
+  _gkeyTs[k] = ts;
   try {
     const env = JSON.parse(e.content || '{}');
     const mine = env.keys && pub && env.keys[pub];
-    if (mine && sk) _gkeys[gid] = _unhex(nip44d(mine, nip44ck(sk, e.pubkey)));
-    else if (!mine) delete _gkeys[gid];   // dropped from the group (rotation) → lose the key
+    if (mine && sk) _gkeys[k] = _unhex(nip44d(mine, nip44ck(sk, e.pubkey)));
+    else if (!mine) delete _gkeys[k];   // dropped from the group (rotation) → lose the key
   } catch {}
 }
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
-function _decEvt(e) {
+function _decEvt(cp, e) {
   if (!e.tags || !e.tags.some(t => t[0] === 'enc')) return e;
   const gid = (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1];
-  const key = gid && _gkeys[gid];
+  const key = gid && _gkeys[_gkKey(cp, gid)];   // SECURITY-AUDIT-2026-07-06 H5: this church's key for this gid, not a collided one
   if (!key) return null;
   try { return { ...e, content: nip44d(e.content, key) }; } catch { return null; }
 }
@@ -665,7 +673,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     const churchTag = window.Fellowship.churchPub ? [['p', window.Fellowship.churchPub]] : [];
     let body = content, encTag = [];
-    const gkey = _gkeys[groupId];   // encrypted group → seal the content so even the relay can't read it
+    const gkey = _gkeys[_gkKey(window.Fellowship.churchPub, groupId)];   // encrypted group → seal under THIS church's key (H5)
     if (gkey) { try { body = nip44e(content, gkey); encTag = [['enc', '1']]; } catch (e) {} }
     const evt = finalizeEvent({
       kind: 1, created_at: Math.floor(Date.now() / 1000),
@@ -769,7 +777,7 @@ window.Fellowship = {
         const cp = window.Fellowship.churchPub;
         if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
         const gid = (e.tags.find(t => t[0] === 't' && set.has(t[1])) || [])[1];
-        if (gid) { const dec = _decEvt(e); if (!dec) return; try { onEvent(gid, dec); } catch (err) { console.error(err); } }
+        if (gid) { const dec = _decEvt(cp, e); if (!dec) return; try { onEvent(gid, dec); } catch (err) { console.error(err); } }
       },
       oneose() {},
     });
@@ -808,7 +816,7 @@ window.Fellowship = {
         // and only this church's messages (when scoped) — avoids cross-church group-id collisions
         const cp = window.Fellowship.churchPub;
         if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
-        const dec = _decEvt(e); if (!dec) return;   // encrypted + I'm not a member (no key) → don't show
+        const dec = _decEvt(cp, e); if (!dec) return;   // encrypted + I'm not a member (no key) → don't show
         try { onEvent(dec); } catch (err) { console.error(err); }
       },
       oneose() {},
