@@ -82,11 +82,11 @@ say "Fetching the app into $DIR (from $SRC)"
 mkdir -p "$DIR"
 TARBALL="$(mktemp)"; trap 'rm -f "$TARBALL"' EXIT
 curl -fsSL "$SRC/relay-app/bundle.tgz" -o "$TARBALL" || die "couldn't download the code bundle from $SRC/relay-app/bundle.tgz"
-tar -xzf "$TARBALL" -C "$DIR" --exclude='relay/*' || die "couldn't unpack the code bundle"
+tar -xzf "$TARBALL" -C "$DIR" --no-same-owner --exclude='relay/*' || die "couldn't unpack the code bundle"   # SECURITY-AUDIT-2026-07-06 M10
 ok "code unpacked"
 
 say "Installing the relay's runtime dependencies (ws, web-push, nostr-tools)"
-( cd "$DIR" && npm install --no-audit --no-fund --no-save ws web-push nostr-tools >/dev/null 2>&1 ) || die "npm install failed"
+( cd "$DIR" && npm install --ignore-scripts --no-audit --no-fund --no-save ws web-push nostr-tools >/dev/null 2>&1 ) || die "npm install failed"   # SECURITY-AUDIT-2026-07-06 H3: no install-script RCE
 ok "dependencies ready"
 
 # ── write policy (church.json) ──────────────────────────────────────────────────
@@ -106,7 +106,12 @@ else
   [ -s "$DIR/relay/church.json" ] || echo '{"churches":[]}' > "$DIR/relay/church.json"
   warn "no church key set yet — the relay is open until you add one to $DIR/relay/church.json and restart"
 fi
-chown -R "$SVC_USER:$SVC_USER" "$DIR"
+# SECURITY-AUDIT-2026-07-06 H4: only the data dir relay/ is service-writable (systemd ReadWritePaths=$DIR/relay);
+# keep code + the root-run update script + the release-signing pubkey root-owned so a compromised relay
+# process can't rewrite the updater or swap the trust anchor. Code was extracted + npm-installed as root above.
+chown -R "$SVC_USER:$SVC_USER" "$DIR/relay"
+chown -R root:root "$DIR/scripts" "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
+chmod 0644 "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
 
 # ── systemd service ─────────────────────────────────────────────────────────────
 say "Installing the boot service ($SVC)"

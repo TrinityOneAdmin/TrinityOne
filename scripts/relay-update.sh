@@ -46,8 +46,10 @@ fi
 BACKUP="$DIR/relay/.code-backup.tgz"
 tar -czf "$BACKUP" -C "$DIR" --exclude='./relay' --exclude='./node_modules' . 2>/dev/null || true
 
-# swap in the new code; --exclude keeps this box's relay/ secrets + data untouched
-tar -xzf "$TARBALL" -C "$DIR" --exclude='relay/*' || { log "unpack failed"; exit 1; }
+# swap in the new code; --exclude keeps this box's relay/ secrets + data untouched.
+# SECURITY-AUDIT-2026-07-06 M10: --no-same-owner so the archive can't set arbitrary uid/gid on extracted
+# files (extract as root → files owned by root, the intended state; see the chown note below).
+tar -xzf "$TARBALL" -C "$DIR" --no-same-owner --exclude='relay/*' || { log "unpack failed"; exit 1; }
 # also pull the latest APK(s) so the in-app auto-update DOWNLOAD stays in lockstep with the new web + manifest.
 # (Previously a separate, easily-forgotten "Fetch latest APK" dashboard step → manifest said vN but the APK file
 #  lagged at vN-1, so members got no update or a stale one. One .update-request now deploys everything.)
@@ -57,8 +59,20 @@ for f in trinityone.apk trinityone-steward.apk; do
     mv "$APKDIR/$f.part" "$APKDIR/$f"; log "fetched APK $f ($(stat -c%s "$APKDIR/$f") bytes)"
   else rm -f "$APKDIR/$f.part"; log "APK fetch skipped for $f (not on origin or <1MB)"; fi
 done
-( cd "$DIR" && npm install --no-audit --no-fund --no-save ws web-push nostr-tools >/dev/null 2>&1 ) || log "npm install warned (continuing)"
-chown -R "$SVC_USER:$SVC_USER" "$DIR"
+# SECURITY-AUDIT-2026-07-06 H3: --ignore-scripts so a hijacked dependency's install/postinstall can't run
+# arbitrary code AS ROOT on every relay in the fleet. (Kept as `npm install` rather than `npm ci` on purpose:
+# ci wipes node_modules first, so a transient failure on a box we can't SSH into would leave the relay unable
+# to start with no node_modules in the code-backup to roll back to. Lockfile-pinned installs are a follow-up
+# that needs a safe test window / bundled node_modules.)
+( cd "$DIR" && npm install --ignore-scripts --no-audit --no-fund --no-save ws web-push nostr-tools >/dev/null 2>&1 ) || log "npm install warned (continuing)"
+# SECURITY-AUDIT-2026-07-06 H4: the unprivileged service user must NOT own the root-run update script or the
+# release-signing trust anchor — owning them, a compromised relay process could rewrite the script or swap the
+# pubkey and hijack the whole fleet's next signed update. Only relay/ needs to be service-writable (the systemd
+# unit's ReadWritePaths=$DIR/relay already confines the relay's writes there); keep code + scripts + pubkey
+# root-owned (world-readable, so the service still reads them).
+chown -R "$SVC_USER:$SVC_USER" "$DIR/relay"
+chown -R root:root "$DIR/scripts" "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
+chmod 0644 "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
 
 log "restarting $SVC"
 systemctl restart "$SVC"
@@ -74,8 +88,9 @@ if [ "$ok" = 1 ]; then
   rm -f "$BACKUP"
 else
   log "new build did not come up — rolling back"
-  tar -xzf "$BACKUP" -C "$DIR" 2>/dev/null
-  chown -R "$SVC_USER:$SVC_USER" "$DIR"
+  tar -xzf "$BACKUP" -C "$DIR" --no-same-owner 2>/dev/null
+  chown -R "$SVC_USER:$SVC_USER" "$DIR/relay"
+  chown -R root:root "$DIR/scripts" "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
   systemctl restart "$SVC"
   log "rolled back to the previous build"
   exit 1
