@@ -6080,6 +6080,9 @@
         _hubCursor(hub, e);
         _docsHubSaveSoon(hub);
         if (_absorbRoster(cp, d, e)) {
+          for (const e2 of hub.buf.values()) {
+            if (_dtag(e2).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2);
+          }
           for (const h of [...hub.handlers]) {
             try {
               h.onroster && h.onroster();

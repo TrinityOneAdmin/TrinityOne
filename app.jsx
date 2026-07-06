@@ -441,6 +441,14 @@ function App() {
     if (!inviteParam && !followParam) return;
     let cleanup;
     (async () => {
+      // SECURITY-AUDIT-2026-07-06 L3: capture the invite context, then scrub the URL IMMEDIATELY — before the
+      // confirm dialog and the multi-second awaits below. Previously the scrub ran only at the very END and was
+      // skipped entirely if the user cancelled the overwrite confirm, so the cleartext BIP-39 seed lingered in
+      // the address bar / history / bookmarks (and could leak via Referer on the next request).
+      const _search = (typeof location !== 'undefined' && location.search) || '';
+      const _inviteSeed = inviteParam ? decodeURIComponent(inviteParam) : '';
+      let _nameP = ''; try { _nameP = new URLSearchParams(_search).get('name') || ''; } catch (e) {}
+      try { const u = new URL(location.href); ['invite', 'follow', 'relay', 'name'].forEach(k => u.searchParams.delete(k)); const q = u.searchParams.toString(); history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + u.hash); } catch (e) {}
       // a steward invite hands the recipient a ready-made anonymous identity — adopt it first, then join
       if (inviteParam && window.TrinityIdentity && window.TrinityIdentity.importMnemonic) {
         // SECURITY-AUDIT-2026-06-24 L8: an `?invite=<seed>` URL carries a BIP-39 mnemonic in cleartext.
@@ -457,20 +465,19 @@ function App() {
         }
         const before = (window.Fellowship && window.Fellowship.myPubkey) || '';
         try {
-          await window.TrinityIdentity.importMnemonic(decodeURIComponent(inviteParam));
+          await window.TrinityIdentity.importMnemonic(_inviteSeed);
           try { lsSet('trinityone.onboarded', true); } catch (e) {}
           // wait for the fellowship transport to re-derive its signing key from the new identity,
           // so membership is announced (and chat is signed) as the invited identity, not the old one
           for (let i = 0; i < 25; i++) { await new Promise(r => setTimeout(r, 100)); const now = window.Fellowship && window.Fellowship.myPubkey; if (now && now !== before) break; }
         } catch (e) {}
       }
-      const src = (followParam || '') + ((typeof location !== 'undefined' && location.search) || '');
+      const src = (followParam || '') + _search;   // captured before the scrub — still carries ?relay= etc. for followChurch
       if (/npub1[0-9a-z]{20,}/.test(src)) { const off = followChurch(src); if (typeof off === 'function') cleanup = off; }
       // a bulk-invite slip carries the person's name (?name=) so the steward's directory shows it without
       // anyone typing. Set it ONLY for a fresh scanner with no name yet — never overwrite an existing name.
-      let nameP = ''; try { nameP = new URLSearchParams(location.search).get('name') || ''; } catch (e) {}
-      if (nameP) {
-        const want = decodeURIComponent(nameP).slice(0, 40).trim();
+      if (_nameP) {
+        const want = decodeURIComponent(_nameP).slice(0, 40).trim();
         for (let i = 0; i < 20 && want; i++) {
           await new Promise(r => setTimeout(r, 150));
           const cur = window.Fellowship && window.Fellowship.myProfile;
@@ -480,9 +487,7 @@ function App() {
           break;
         }
       }
-      // SECURITY: scrub the secret invite seed (and follow/relay/name) from the URL so it doesn't linger in
-      // browser history, bookmarks, or leak via the Referer header on the next outbound request.
-      try { const u = new URL(location.href); ['invite', 'follow', 'relay', 'name'].forEach(k => u.searchParams.delete(k)); const q = u.searchParams.toString(); history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + u.hash); } catch (e) {}
+      // (the URL was already scrubbed at the top of this effect — L3)
     })();
     return () => { if (cleanup) cleanup(); };
   }, []);

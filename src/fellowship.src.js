@@ -298,7 +298,14 @@ function _docsHubOpen(hub) {
       hub.buf.set(key, _slimEvt(e)); hub.dirty = true;
       _hubCursor(hub, e);
       _docsHubSaveSoon(hub);
-      if (_absorbRoster(cp, d, e)) { for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return; }
+      if (_absorbRoster(cp, d, e)) {
+        // SECURITY-AUDIT-2026-07-06 L7 (availability): a steward-authored group-key envelope that arrived on the
+        // LIVE path BEFORE this roster was rejected by _ingestGroupKey (author not yet trusted) and — unlike the
+        // boot path — was never retried, so the encrypted group stayed blank until the next app start. Now that
+        // the roster establishes trust, re-ingest the buffered envelopes (mirrors the boot-replay loop).
+        for (const e2 of hub.buf.values()) { if (_dtag(e2).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); }
+        for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return;
+      }
       if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(cp, e); return; }
       for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { console.error(err); } }
     },
