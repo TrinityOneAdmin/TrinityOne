@@ -540,8 +540,14 @@ function canRead(e, authed) {
     // that church (lazy NIP-42: the REQ handler challenges when one is withheld, then AUTH-success re-delivers).
     if (d.startsWith(MINORS_D) || d.startsWith(APPROVED_D) || d.startsWith(GUARDIANS_D)) {
       const cp = d.startsWith(MINORS_D) ? d.slice(MINORS_D.length) : d.startsWith(APPROVED_D) ? d.slice(APPROVED_D.length) : d.slice(GUARDIANS_D.length);
+      // SECURITY-AUDIT-2026-07-06 H1: gate to an EFFECTIVE member of THIS church — not the raw MEMBER_DOCS
+      // join set, which still contains blocked + unapproved-pending pubkeys. Otherwise any stranger (even one
+      // the church has BANNED) could self-join, AUTH with their own key, and read the plaintext list of which
+      // members are children. Mirror rebuildMembers()'s per-church logic: joined ∧ not blocked ∧ (approved | not gated).
       const md = MEMBER_DOCS.get(cp);
-      return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || stewardOf(authed, cp) || !!(md && md.has(authed)));
+      const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
+      const effectiveMember = !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));
+      return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || stewardOf(authed, cp) || effectiveMember);
     }
     // FINANCE (books): the content is encrypted client-side (encPublish self-encrypts to the church key), so
     // the docs are ciphertext to everyone but the church. We do NOT gate reads behind NIP-42 auth — the pool
@@ -715,6 +721,11 @@ const CSP = [
   // <style> blocks; font-src self covers the local woff2s.
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
+  // SECURITY-AUDIT-2026-07-06 M8: the profile-picture/accent/thumb url() BEACON vector is closed at the
+  // SOURCE now (safeImgUrl/safeCssColor reject remote URLs before they reach CSS; v.thumb pinned to i.ytimg.com).
+  // img-src MUST keep 'https:' because podcast/sermon artwork (<itunes:image>) is legitimately remote and
+  // pulled un-proxied from the church's RSS feed (getAudioFeed) — tightening here would blank that artwork on
+  // web. A future full lockdown needs the feed proxy to same-origin the images first.
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob: https:",
   "connect-src 'self' https: wss: ws:",
@@ -1308,17 +1319,22 @@ wss.on('connection', ws => {
       try {
         const ch = evt && (evt.tags.find(t => t[0] === 'challenge') || [])[1];
         const fresh = evt && Math.abs(Math.floor(Date.now() / 1000) - (evt.created_at || 0)) < 600;
-        if (evt && evt.kind === 22242 && ch === ws._challenge && fresh && verifyEvent(evt)) {
+        if (evt && evt.kind === 22242 && ch === ws._challenge && fresh && verifyEvent(evt) && !BLOCKED.has(evt.pubkey)) {
+          // SECURITY-AUDIT-2026-07-06 H1: a BLOCKED pubkey must never satisfy a read gate — refuse to authenticate it.
           ws._auth = evt.pubkey; ws.send(JSON.stringify(['OK', evt.id, true, '']));
-          // now authed: replay the invite-only messages their open subs were waiting on (public events
-          // were already delivered at REQ time, so only re-send invite-group ones to avoid duplicates)
+          // now authed: replay everything the open subs were waiting on that the connection can NOW read
+          // but could NOT while unauthed — invite-only group messages AND the safeguarding lists (minors/
+          // approved/guardians). SECURITY-AUDIT-2026-07-06 H1: the old gate re-sent ONLY invite-group kind-1,
+          // so a legitimately-authed member never received the safeguarding docs (the mirror silently
+          // degraded). Re-send anything withheld-when-unauthed (`!canRead(e,null)`) — public events already
+          // went out at REQ time, so `canRead(e,null)===true` skips them and no duplicate is sent.
           const mine = subs.get(ws);
           if (mine) for (const [subId, filters] of mine) {
             const seen = new Set();
             for (const f of filters) for (const e of store.query(f)) {
               if (seen.has(e.id)) continue; seen.add(e.id);
               if (BLOCKED.has(e.pubkey) || !canRead(e, ws._auth)) continue;
-              const g = gidOf(e); if (g && GROUP_VIS.get(g) === 'invite') ws.send(JSON.stringify(['EVENT', subId, e]));
+              if (!canRead(e, null)) ws.send(JSON.stringify(['EVENT', subId, e]));
             }
           }
         } else ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed: bad challenge or signature']));
