@@ -310,6 +310,11 @@ function DashFinance() {
   const F = window.FinanceLedger;
   if (!F) return <div style={{ padding: 28, color: 'var(--ink-3)' }}>Loading the ledger engine…</div>;
   const S = window.Steward;
+  // Defensive: never run relay-backed Finance under a delegated steward's key — encPublish would sign/encrypt
+  // with the wrong key and omit the ['church'] tag, so the relay rejects every write and the book silently
+  // re-seeds empty on reload. The nav already hides Finance when acting as a delegated steward; this guards
+  // any other entry (deep link, tab state). (audit 2026-07-06 #3)
+  if (S && S.actingChurch) return <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Finance is on the church console</div>The books are kept on the church’s own key. Open the console with the church key to record and view finances — delegated-steward bookkeeping isn’t available yet.</div>;
   const useRelay = !!(S && S.encSubscribe && S.encPublish);   // real console w/ the church key → relay-backed; else localStorage
   const bookRef = React.useRef(null);
   if (!bookRef.current) bookRef.current = useRelay ? F.createBook({ baseCurrency: 'GBP', decimals: 2 }) : booksLoad();

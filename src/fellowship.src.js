@@ -31,12 +31,21 @@ const FAMILY_KEY = 'trinityone.family';
 function _loadChildren() { try { return JSON.parse(localStorage.getItem(FAMILY_KEY) || '[]') || []; } catch { return []; } }
 function _saveChildLink(link) { const list = _loadChildren().filter(c => c && c.child !== link.child); list.push(link); try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {} }
 const _gkeys = {};   // groupId -> Uint8Array(32) group key, unwrapped from the church's envelope for me
+const _gkeyTs = {};  // groupId -> newest envelope created_at accepted (stale-drop for replayed rotations)
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
 const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
-// unwrap my entry from a key envelope and cache the group key (NIP-44, church<->me conversation key)
-function _ingestGroupKey(e) {
+// unwrap my entry from a key envelope and cache the group key (NIP-44, church<->me conversation key).
+// SECURITY (audit 2026-07-06 #4): the envelope is church-signed, so accept it ONLY from the church key or a
+// current roster steward. The unwrap uses the conversation key with the AUTHOR, so an attacker-signed
+// envelope (arriving on a shared/second-church relay whose write-gate we don't control) would otherwise
+// decrypt fine and let the attacker SUBSTITUTE or DELETE the group key. cp is the owning church pubkey.
+function _ingestGroupKey(cp, e) {
   const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(GROUPKEY_D)) return;
+  if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;   // untrusted author
   const gid = d.slice(GROUPKEY_D.length);
+  const ts = e.created_at || 0;
+  if (ts < (_gkeyTs[gid] || 0)) return;   // a lagging relay replaying an OLDER envelope can't resurrect a rotated-out key
+  _gkeyTs[gid] = ts;
   try {
     const env = JSON.parse(e.content || '{}');
     const mine = env.keys && pub && env.keys[pub];
@@ -257,7 +266,8 @@ function _docsHub(cp) {
   // absorb hub-level docs from the persisted corpus BEFORE any feature registers: the steward roster
   // (so _churchVoice trusts steward-authored docs immediately) and group-key envelopes (so encrypted
   // groups decrypt) — both are in-memory only, and the since-cursor means they won't re-arrive.
-  for (const e of hub.buf.values()) { const d = _dtag(e); if (_absorbRoster(cp, d, e)) continue; if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(e); }
+  for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);   // absorb the full roster FIRST so the group-key author check can trust roster stewards regardless of buffer order
+  for (const e of hub.buf.values()) { if (_dtag(e).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); }
   return hub;
 }
 function _docsHubOpen(hub) {
@@ -280,7 +290,7 @@ function _docsHubOpen(hub) {
       _hubCursor(hub, e);
       _docsHubSaveSoon(hub);
       if (_absorbRoster(cp, d, e)) { for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return; }
-      if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(e); return; }
+      if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(cp, e); return; }
       for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { console.error(err); } }
     },
     oneose() {
@@ -414,7 +424,7 @@ async function deriveFromIdentity() {
   window.Fellowship.myPubkey = pub;
   // group-key envelopes can replay from the persisted docs buffer BEFORE the signing key exists —
   // re-unwrap them now that sk/pub are known, so invite-group decryption never needs a reload.
-  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(e); } }
+  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); } }
   // signal that the signing key is now ready, so listeners (e.g. the app's serving subscriptions,
   // which bail when myPubkey is null) re-run with a valid pubkey instead of needing a restart.
   try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch {}

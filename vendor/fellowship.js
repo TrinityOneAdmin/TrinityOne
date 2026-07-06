@@ -5784,11 +5784,16 @@
     }
   }
   var _gkeys = {};
+  var _gkeyTs = {};
   var _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
-  function _ingestGroupKey(e) {
+  function _ingestGroupKey(cp, e) {
     const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
     if (!d.startsWith(GROUPKEY_D)) return;
+    if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
     const gid = d.slice(GROUPKEY_D.length);
+    const ts = e.created_at || 0;
+    if (ts < (_gkeyTs[gid] || 0)) return;
+    _gkeyTs[gid] = ts;
     try {
       const env = JSON.parse(e.content || "{}");
       const mine = env.keys && pub && env.keys[pub];
@@ -6048,10 +6053,9 @@
       }
     } catch {
     }
+    for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);
     for (const e of hub.buf.values()) {
-      const d = _dtag(e);
-      if (_absorbRoster(cp, d, e)) continue;
-      if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(e);
+      if (_dtag(e).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e);
     }
     return hub;
   }
@@ -6082,7 +6086,7 @@
           return;
         }
         if (d.startsWith(GROUPKEY_D)) {
-          _ingestGroupKey(e);
+          _ingestGroupKey(cp, e);
           return;
         }
         for (const h of [...hub.handlers]) {
@@ -6315,7 +6319,7 @@
     for (const hub of _docsHubs.values()) {
       for (const e of hub.buf.values()) {
         const d = _dtag(e);
-        if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(e);
+        if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e);
       }
     }
     try {

@@ -76,16 +76,22 @@ async function secureGet() {
     return typeof v === 'string' ? v : null;
   } catch (e) { console.warn('[identity] secure get failed', e); return null; }
 }
+// Persist the plaintext seed. Returns TRUE only if it durably landed — callers that then delete another
+// copy (removePin) MUST check this, or a silent native failure destroys the only durable copy of the key.
 async function secureSet(mnemonic) {
   if (!isNative()) {
     memMnemonic = mnemonic;
-    try { localStorage.setItem(STORE_KEY, mnemonic); webPersisted = true; } catch (e) { webPersisted = false; }
-    return;
+    try { localStorage.setItem(STORE_KEY, mnemonic); webPersisted = true; return true; } catch (e) { webPersisted = false; return false; }
   }
   try {
     const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
     await SecureStorage.set(STORE_KEY, mnemonic);
-  } catch (e) { console.warn('[identity] secure set failed', e); }
+    // read-back: a Keystore that silently no-ops the write (known on some Androids after credential changes)
+    // returns from set() without throwing — only a mismatched read exposes it. Get-throw stays lenient
+    // (set didn't throw) so we don't report a false failure.
+    try { const v = await SecureStorage.get(STORE_KEY); if (v != null && v !== mnemonic) return false; } catch (e) {}
+    return true;
+  } catch (e) { console.warn('[identity] secure set failed', e); return false; }
 }
 // remove every PLAINTEXT copy of the seed (web localStorage + native secure store). The encrypted
 // blob is untouched. Called when a PIN is enabled so no readable key remains at rest.
@@ -174,7 +180,7 @@ window.TrinityIdentity = {
   // Turn protection ON: encrypt the current seed under the PIN, then wipe every plaintext copy.
   // Requires the seed to be available (identity unlocked / no prior PIN). Returns false if it can't.
   async setPin(pin) {
-    if (!pin) return false;
+    if (!pin || pin.length < 6) return false;   // floor: the PIN is the only secret over the at-rest blob (audit #5); UI adds the all-numeric rule
     const m = sessionMnemonic || await secureGet();   // secureGet returns the plaintext seed while no blob exists yet
     if (!m) return false;
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
@@ -205,7 +211,10 @@ window.TrinityIdentity = {
   async removePin(pin) {
     if (!hasEnc()) return true;
     let m; try { m = await decryptEnc(pin); } catch (e) { return false; }
-    await secureSet(m);
+    // Restore the plaintext seed FIRST and only drop the encrypted blob if that durably landed. If native
+    // persistence fails, keep the blob + PIN + session so the key is never left with no durable copy.
+    const saved = await secureSet(m);
+    if (!saved) return false;
     try { localStorage.removeItem(ENC_KEY); } catch (e) {}
     sessionMnemonic = null;
     window.TrinityIdentity.locked = false;

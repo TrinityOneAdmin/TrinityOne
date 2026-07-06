@@ -398,7 +398,11 @@ function StewDashboard({ initial = 'overview' }) {
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
   const church = window.useStewardChurch();   // real church profile + npub from the relay
-  const finOn = !!window.DashFinance;   // double-entry Finance module — shown whenever the engine loaded
+  // double-entry Finance module — church-key console ONLY. Under a delegated steward's key encPublish
+  // signs/encrypts with the wrong key and carries no ['church'] tag, so the relay rejects every write and
+  // encSubscribe returns nothing → the book silently re-seeds empty on reload (data loss). Hide it until
+  // the delegated-steward finance path exists. (audit 2026-07-06 #3)
+  const finOn = !!window.DashFinance && !(window.Steward && window.Steward.actingChurch);
   const mannaOn = false;   // Manna LOCKED for the pilot — not ready to surface yet (was: window.useMannaSettings ? !!window.useMannaSettings().enabled : false)
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in

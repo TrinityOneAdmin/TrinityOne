@@ -204,7 +204,11 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
 
   const done = (msg) => { ctx.toast(msg); onClose(); };
   const doEnable = async () => {
-    if ((pin || '').length < 4) { setErr('Choose a PIN of at least 4 characters.'); return; }
+    // The PIN is the ONLY secret protecting the at-rest encrypted seed blob (offline-brute-forceable if the
+    // device is imaged), so a 4-digit PIN (~13 bits) is too weak. Require 6+ chars, and 8+ if all-numeric.
+    // (audit 2026-07-06 #5)
+    if ((pin || '').length < 6) { setErr('Choose a PIN of at least 6 characters. Adding letters makes it much harder to guess.'); return; }
+    if (/^\d+$/.test(pin) && pin.length < 8) { setErr('An all-number PIN is easy to guess — use 8+ digits, or add letters.'); return; }
     if (pin !== pin2) { setErr('The two PINs don’t match.'); return; }
     setBusy(true); setErr('');
     const ok = await ID.setPin(pin); setBusy(false);
@@ -220,7 +224,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
     if (!off) { setErr('Enter your PIN to turn protection off.'); return; }
     setBusy(true); setErr('');
     const ok = await ID.removePin(off); setBusy(false);
-    if (ok) done('Protection turned off'); else setErr('That PIN didn’t work.');
+    if (ok) done('Protection turned off'); else setErr('Couldn’t turn protection off — check your PIN and try again.');
   };
   const doLock = () => { if (ID.lock) ID.lock(); done('Church community locked'); };
 
@@ -242,7 +246,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
         <React.Fragment>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 16px' }}>
             Enter your PIN to open the church community on this device. Your Bible and study stay open either way.</p>
-          <input type="password" inputMode="numeric" autoFocus value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN" style={inp} />
+          <input type="password" autoFocus value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN" style={inp} />
           {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
           <button onClick={doUnlock} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Unlock'}</button>
         </React.Fragment>
@@ -252,8 +256,8 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
             Lock your identity with a PIN. It’s encrypted on this device, so without the PIN the church community can’t be opened and messages can’t be read — the app looks like a plain Bible reader.</p>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 0 16px' }}>
             If you forget the PIN, restore your 12-word recovery phrase to get back in. Keep those words safe.</p>
-          <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN" style={inp} />
-          <input type="password" inputMode="numeric" value={pin2} onChange={e => setPin2(e.target.value)} placeholder="Confirm PIN" style={{ ...inp, marginTop: 10 }} />
+          <input type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN or passphrase" style={inp} />
+          <input type="password" value={pin2} onChange={e => setPin2(e.target.value)} placeholder="Confirm PIN" style={{ ...inp, marginTop: 10 }} />
           {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
           <button onClick={doEnable} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Turn on protection'}</button>
         </React.Fragment>

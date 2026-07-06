@@ -11086,16 +11086,24 @@ zoo`.split("\n"));
       try {
         localStorage.setItem(STORE_KEY, mnemonic);
         webPersisted = true;
+        return true;
       } catch (e) {
         webPersisted = false;
+        return false;
       }
-      return;
     }
     try {
       const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
       await SecureStorage.set(STORE_KEY, mnemonic);
+      try {
+        const v = await SecureStorage.get(STORE_KEY);
+        if (v != null && v !== mnemonic) return false;
+      } catch (e) {
+      }
+      return true;
     } catch (e) {
       console.warn("[identity] secure set failed", e);
+      return false;
     }
   }
   async function secureRemove() {
@@ -11197,7 +11205,7 @@ zoo`.split("\n"));
     // Turn protection ON: encrypt the current seed under the PIN, then wipe every plaintext copy.
     // Requires the seed to be available (identity unlocked / no prior PIN). Returns false if it can't.
     async setPin(pin) {
-      if (!pin) return false;
+      if (!pin || pin.length < 6) return false;
       const m = sessionMnemonic || await secureGet();
       if (!m) return false;
       const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
@@ -11246,7 +11254,8 @@ zoo`.split("\n"));
       } catch (e) {
         return false;
       }
-      await secureSet(m);
+      const saved = await secureSet(m);
+      if (!saved) return false;
       try {
         localStorage.removeItem(ENC_KEY);
       } catch (e) {
