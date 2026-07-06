@@ -379,7 +379,12 @@ function DashFinance() {
   const exportCsv = () => {
     const rows = [['seq', 'date', 'memo', 'account', 'fund', 'debit', 'credit']];
     for (const e of book.journal) for (const p of e.postings) rows.push([e.seq, e.date, e.memo, (book.accounts.get(p.account) || {}).name || p.account, p.fund || '', p.dir === 'dr' ? p.amount : '', p.dir === 'cr' ? p.amount : '']);
-    booksDownload('finance-' + booksTodayISO() + '.csv', rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n'));
+    // SECURITY-AUDIT-2026-07-06 H6: CSV formula-injection guard. `memo` carries bank-statement descriptions
+    // imported verbatim (attacker-controllable via a payment reference). RFC-4180 quoting does NOT stop a cell
+    // that STARTS with = + - @ (or tab/CR) from being run as a formula when the treasurer opens the file in
+    // Excel/Sheets (=HYPERLINK/WEBSERVICE exfil, or DDE command exec). Prefix such cells with a ' to neutralise.
+    const csvCell = c => { let s = String(c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+    booksDownload('finance-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n'));
   };
 
   const stat = (label, val, tone) => (
