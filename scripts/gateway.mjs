@@ -422,9 +422,16 @@ function accept(e) {
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
     if (isMember) return true;                                   // members/leaders: always
     if (store.query({ kinds: [0], authors: [e.pubkey], limit: 1 }).length) return true;  // a stranger updating their own
-    let strangers = 0;                                           // else cap how many non-member profiles we store
-    for (const x of store.query({ kinds: [0], limit: 1000000 })) { if (!(CHURCH_PUBS.has(x.pubkey) || NETWORKS.has(x.pubkey) || MEMBERS.has(x.pubkey))) strangers++; }
-    return strangers < NONMEMBER_KIND0_CAP;
+    // SECURITY-AUDIT-2026-07-06 M6: reject in O(cap) once the stranger cap is reached, instead of scanning +
+    // JSON-parsing the ENTIRE kind-0 table (limit 1e6) on every stranger profile write — a cheap-request →
+    // expensive-work amplifier a spammer could drive with fresh keypairs. Bound the query to what's needed to
+    // count the cap (members + up-to-cap strangers) and early-break, so the work never exceeds O(cap).
+    let strangers = 0;
+    for (const x of store.query({ kinds: [0], limit: NONMEMBER_KIND0_CAP + MEMBERS.size + 16 })) {
+      if (CHURCH_PUBS.has(x.pubkey) || NETWORKS.has(x.pubkey) || MEMBERS.has(x.pubkey)) continue;
+      if (++strangers >= NONMEMBER_KIND0_CAP) return false;
+    }
+    return true;
   }
   if (k === 30078) {
     const d = dtag(e);
@@ -434,9 +441,16 @@ function accept(e) {
     if (d.startsWith(STEWARDS_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(STEWARDS_D.length) === e.pubkey;   // OWNER-ONLY: only the church key edits its own steward roster
     if (d.startsWith(BLOCKED_D)) return isLeader;                                                                // OWNER-ONLY: banning is not delegated to stewards
     if (d.startsWith(EVENT_D) || d.startsWith(PIN_D) || d.startsWith(HIDE_D)) {   // church/steward, or a group's empowered member, may post events / pin / hide
-      if (isLeader || stewardOf(e.pubkey, namedChurch(e))) return true;
-      const g = eventGroup(e); const leaders = g && GROUP_LEADERS.get(g);
-      return !!(leaders && leaders.has(e.pubkey) && grantorOk(GROUP_LEADER_BY.get(g)));   // M2: void the grant if the steward who set it has since been revoked
+      // SECURITY-AUDIT-2026-07-06 M5: bind authority to the church that actually OWNS the referenced group,
+      // not the one the author self-declares in its ['church'] tag. Otherwise a steward of church A could
+      // pin/hide content in church B's group by naming A. GROUP_CHURCH is the group's true owner.
+      const g = eventGroup(e); const owner = g && GROUP_CHURCH.get(g);
+      if (owner) {
+        if (e.pubkey === owner || isNetwork || stewardOf(e.pubkey, owner)) return true;   // owner church, its network, or a steward OF THE OWNER
+        const leaders = GROUP_LEADERS.get(g);
+        return !!(leaders && leaders.has(e.pubkey) && grantorOk(GROUP_LEADER_BY.get(g)));   // an empowered leader of that group (grant voided if its granter was revoked)
+      }
+      return isLeader || stewardOf(e.pubkey, namedChurch(e));   // group unknown to this relay → no target to cross-bind against; fall back to the self-named gate
     }
     // <cp>-keyed membership admin: the church is named in the d-tag → delegate to a steward of THAT church
     for (const pfx of [JOINPOLICY_D, ADMITTED_D]) {
@@ -458,8 +472,12 @@ function accept(e) {
       const cp = finCp(e);
       return !!cp && (e.pubkey === cp || stewardOf(e.pubkey, cp));
     }
+    // SECURITY-AUDIT-2026-07-06 M4: a giving fund carries the church's PAYMENT DESTINATION (lnaddr) — where
+    // donations go. That is OWNER-ONLY: a delegated steward must not be able to create/replace a fund with
+    // their own Lightning address and silently redirect members' gifts. Not in the steward-delegated set below.
+    if (d.startsWith(FUND_D)) return isLeader;
     // church-authored CONTENT docs: a steward names the church via a ["church", <cp>] tag
-    if (d.startsWith(GROUP_D) || d.startsWith(FUND_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
+    if (d.startsWith(GROUP_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
       || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(REQUEST_D)
       || d.startsWith(ROOM_D) || d.startsWith(BOOKING_D) || d.startsWith(RUNSHEET_D)
       || d.startsWith(CATEGORY_D)) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
