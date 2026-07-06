@@ -11025,18 +11025,78 @@ zoo`.split("\n"));
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
     return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iterations || PIN_ITER_LEGACY, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
-  function encRaw() {
+  function encMarker() {
     try {
-      return localStorage.getItem(ENC_KEY);
+      return JSON.parse(localStorage.getItem(ENC_KEY) || "null");
     } catch {
       return null;
     }
   }
   function hasEnc() {
-    return !!encRaw();
+    try {
+      return !!localStorage.getItem(ENC_KEY);
+    } catch {
+      return false;
+    }
+  }
+  async function getEncBlob() {
+    const o = encMarker();
+    if (!o) return null;
+    if (o.native && isNative()) {
+      try {
+        const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+        const s = await SecureStorage.get(ENC_KEY);
+        return s ? JSON.parse(s) : null;
+      } catch (e) {
+        console.warn("[identity] secure enc get failed", e);
+        return null;
+      }
+    }
+    return o.ct ? o : null;
+  }
+  async function secureSetEnc(blobStr) {
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      await SecureStorage.set(ENC_KEY, blobStr);
+      try {
+        const v = await SecureStorage.get(ENC_KEY);
+        if (v != null && v !== blobStr) return false;
+      } catch (e) {
+      }
+      return true;
+    } catch (e) {
+      console.warn("[identity] secure enc set failed", e);
+      return false;
+    }
+  }
+  async function secureRemoveEnc() {
+    if (!isNative()) return;
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      await SecureStorage.remove(ENC_KEY);
+    } catch (e) {
+      console.warn("[identity] secure enc remove failed", e);
+    }
+  }
+  async function clearEnc() {
+    try {
+      localStorage.removeItem(ENC_KEY);
+    } catch (e) {
+    }
+    await secureRemoveEnc();
+  }
+  async function hasOrphanEncBlob() {
+    try {
+      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+      const s = await SecureStorage.get(ENC_KEY);
+      return !!(s && String(s).indexOf('"ct"') >= 0);
+    } catch (e) {
+      return false;
+    }
   }
   async function decryptEnc(pin) {
-    const o = JSON.parse(encRaw());
+    const o = await getEncBlob();
+    if (!o) throw new Error("no encrypted blob");
     return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
   }
   function hashStr(s) {
@@ -11136,6 +11196,14 @@ zoo`.split("\n"));
     }
     let mnemonic = await secureGet();
     if (!mnemonic) {
+      if (isNative() && await hasOrphanEncBlob()) {
+        try {
+          localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 }));
+        } catch (e) {
+        }
+        applyLocked();
+        return;
+      }
       mnemonic = generateSeedWords();
       await secureSet(mnemonic);
     }
@@ -11162,10 +11230,7 @@ zoo`.split("\n"));
     ready: null,
     async regenerate() {
       const mnemonic = generateSeedWords();
-      try {
-        localStorage.removeItem(ENC_KEY);
-      } catch (e) {
-      }
+      await clearEnc();
       sessionMnemonic = null;
       await secureSet(mnemonic);
       apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -11187,10 +11252,7 @@ zoo`.split("\n"));
     async importMnemonic(words) {
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
-      try {
-        localStorage.removeItem(ENC_KEY);
-      } catch (e) {
-      }
+      await clearEnc();
       sessionMnemonic = null;
       await secureSet(m);
       apply(deriveProfile(m), { ephemeral: isEphemeral() });
@@ -11212,10 +11274,20 @@ zoo`.split("\n"));
       if (!m) return false;
       const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(m)));
-      try {
-        localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
-      } catch (e) {
-        return false;
+      const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) });
+      if (isNative()) {
+        if (!await secureSetEnc(blob)) return false;
+        try {
+          localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 }));
+        } catch (e) {
+          return false;
+        }
+      } else {
+        try {
+          localStorage.setItem(ENC_KEY, blob);
+        } catch (e) {
+          return false;
+        }
       }
       sessionMnemonic = m;
       window.TrinityIdentity.locked = false;
@@ -11235,6 +11307,19 @@ zoo`.split("\n"));
       sessionMnemonic = m;
       window.TrinityIdentity.locked = false;
       apply(deriveProfile(m), { ephemeral: false });
+      try {
+        const o = encMarker();
+        if (isNative() && o && o.ct && !o.native) {
+          const raw = localStorage.getItem(ENC_KEY);
+          if (raw && await secureSetEnc(raw)) {
+            try {
+              localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 }));
+            } catch (e) {
+            }
+          }
+        }
+      } catch (e) {
+      }
       return true;
     },
     // check a PIN with NO side effects (gates "turn off" / "change PIN")
@@ -11258,10 +11343,7 @@ zoo`.split("\n"));
       }
       const saved = await secureSet(m);
       if (!saved) return false;
-      try {
-        localStorage.removeItem(ENC_KEY);
-      } catch (e) {
-      }
+      await clearEnc();
       sessionMnemonic = null;
       window.TrinityIdentity.locked = false;
       apply(deriveProfile(m), { ephemeral: isEphemeral() });

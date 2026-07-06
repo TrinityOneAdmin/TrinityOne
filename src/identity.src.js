@@ -39,10 +39,47 @@ async function deriveAes(pin, salt, iterations) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iterations || PIN_ITER_LEGACY, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
-function encRaw() { try { return localStorage.getItem(ENC_KEY); } catch { return null; } }
-function hasEnc() { return !!encRaw(); }
+// localStorage[ENC_KEY] holds EITHER the full blob (web + legacy native) OR a {native:1} marker (native, M12).
+// Its mere presence means "a PIN is set" — so hasEnc() stays synchronous and the boot/lock flow is unchanged.
+function encMarker() { try { return JSON.parse(localStorage.getItem(ENC_KEY) || 'null'); } catch { return null; } }
+function hasEnc() { try { return !!localStorage.getItem(ENC_KEY); } catch { return false; } }
+// SECURITY-AUDIT-2026-07-06 M12: on native the encrypted seed blob lives in the OS hardware store (Keystore/
+// Keychain), NOT a plain localStorage file — so a forensic image of the app's WebView storage never yields the
+// ciphertext to brute-force offline; extracting it requires the device's hardware-bound key. localStorage keeps
+// only a non-secret marker. Web/desktop keeps the blob in localStorage as before (no secure store there).
+async function getEncBlob() {   // the {v,it,salt,iv,ct} object, or null
+  const o = encMarker(); if (!o) return null;
+  if (o.native && isNative()) {
+    try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); const s = await SecureStorage.get(ENC_KEY); return s ? JSON.parse(s) : null; }
+    catch (e) { console.warn('[identity] secure enc get failed', e); return null; }
+  }
+  return o.ct ? o : null;   // web / legacy-native: the full blob is right here in localStorage
+}
+// write the ciphertext blob to the hardware store, returning TRUE only if it durably landed (read-back verified).
+// setPin MUST gate on this before dropping the plaintext, or a silent Keystore no-op would orphan the only key.
+async function secureSetEnc(blobStr) {
+  try {
+    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
+    await SecureStorage.set(ENC_KEY, blobStr);
+    try { const v = await SecureStorage.get(ENC_KEY); if (v != null && v !== blobStr) return false; } catch (e) {}
+    return true;
+  } catch (e) { console.warn('[identity] secure enc set failed', e); return false; }
+}
+async function secureRemoveEnc() {   // drop the native blob (recovery / removePin); no-op on web
+  if (!isNative()) return;
+  try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); await SecureStorage.remove(ENC_KEY); }
+  catch (e) { console.warn('[identity] secure enc remove failed', e); }
+}
+async function clearEnc() { try { localStorage.removeItem(ENC_KEY); } catch (e) {} await secureRemoveEnc(); }
+// native: is there an encrypted-seed blob in the hardware store with NO localStorage marker? (marker lost to a
+// kill before flush). Only setPin writes this blob; removePin/recovery/regenerate all clearEnc() it — so an
+// orphan can only mean "a PIN was set but the marker didn't persist", which init() recovers as a locked identity.
+async function hasOrphanEncBlob() {
+  try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); const s = await SecureStorage.get(ENC_KEY); return !!(s && String(s).indexOf('"ct"') >= 0); }
+  catch (e) { return false; }
+}
 async function decryptEnc(pin) {   // returns the seed string, or throws on wrong PIN / damaged blob
-  const o = JSON.parse(encRaw());
+  const o = await getEncBlob(); if (!o) throw new Error('no encrypted blob');
   return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
 }
 
@@ -122,7 +159,13 @@ async function init() {
   // so Fellowship never gets a signing key and the app looks like a plain Bible reader.
   if (hasEnc()) { applyLocked(); return; }
   let mnemonic = await secureGet();
-  if (!mnemonic) { mnemonic = generateSeedWords(); await secureSet(mnemonic); }
+  if (!mnemonic) {
+    // SECURITY-AUDIT-2026-07-06 M12 resilience: the localStorage marker may have been lost (app killed before the
+    // WebView flushed it), but the encrypted seed is still safe in the hardware store. Recover the PIN-locked
+    // identity instead of silently minting a new key. (In the pre-M12 design a lost blob meant the seed was gone.)
+    if (isNative() && await hasOrphanEncBlob()) { try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 })); } catch (e) {} applyLocked(); return; }
+    mnemonic = generateSeedWords(); await secureSet(mnemonic);
+  }
   apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
 }
 
@@ -152,7 +195,7 @@ window.TrinityIdentity = {
   async regenerate() {
     const mnemonic = generateSeedWords();
     // a brand-new identity starts with no PIN — clear any stale lock so the fresh key persists plainly
-    try { localStorage.removeItem(ENC_KEY); } catch (e) {}
+    await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
     sessionMnemonic = null;
     await secureSet(mnemonic);
     apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -172,7 +215,7 @@ window.TrinityIdentity = {
   async importMnemonic(words) {
     const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
-    try { localStorage.removeItem(ENC_KEY); } catch (e) {}
+    await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
     sessionMnemonic = null;
     await secureSet(m);
     apply(deriveProfile(m), { ephemeral: isEphemeral() });
@@ -191,8 +234,16 @@ window.TrinityIdentity = {
     if (!m) return false;
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(m)));
-    try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) })); }   // M11: v2 blob carries its iteration count
-    catch (e) { return false; }
+    const blob = JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) });   // M11: carries its iteration count
+    if (isNative()) {
+      // SECURITY-AUDIT-2026-07-06 M12: put the ciphertext in the hardware store, and CONFIRM it durably landed
+      // BEFORE writing the marker or dropping the plaintext — a failed Keystore write leaves the plaintext seed
+      // intact (the PIN simply isn't set), so the only durable copy of the key is never destroyed.
+      if (!(await secureSetEnc(blob))) return false;
+      try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 })); } catch (e) { return false; }
+    } else {
+      try { localStorage.setItem(ENC_KEY, blob); } catch (e) { return false; }   // web/desktop: no secure store — keep the blob in localStorage
+    }
     sessionMnemonic = m;                 // stay unlocked for the rest of this session
     window.TrinityIdentity.locked = false;
     await secureRemove();                // drop the plaintext seed (web localStorage + native secure store)
@@ -206,6 +257,16 @@ window.TrinityIdentity = {
     sessionMnemonic = m;
     window.TrinityIdentity.locked = false;
     apply(deriveProfile(m), { ephemeral: false });
+    // SECURITY-AUDIT-2026-07-06 M12 migration: a PIN set before this change kept the blob in localStorage on
+    // native. Now that we've unlocked (blob + pin in hand), move it into the hardware store and swap localStorage
+    // to a marker — but only after the Keystore copy is verified durable, so the transition can't lose the key.
+    try {
+      const o = encMarker();
+      if (isNative() && o && o.ct && !o.native) {
+        const raw = localStorage.getItem(ENC_KEY);
+        if (raw && await secureSetEnc(raw)) { try { localStorage.setItem(ENC_KEY, JSON.stringify({ v: 2, native: 1 })); } catch (e) {} }
+      }
+    } catch (e) {}
     return true;
   },
   // check a PIN with NO side effects (gates "turn off" / "change PIN")
@@ -221,7 +282,7 @@ window.TrinityIdentity = {
     // persistence fails, keep the blob + PIN + session so the key is never left with no durable copy.
     const saved = await secureSet(m);
     if (!saved) return false;
-    try { localStorage.removeItem(ENC_KEY); } catch (e) {}
+    await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
     sessionMnemonic = null;
     window.TrinityIdentity.locked = false;
     apply(deriveProfile(m), { ephemeral: isEphemeral() });
