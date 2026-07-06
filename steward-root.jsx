@@ -142,8 +142,13 @@ window.useStewardChurch = useStewardChurch;
 // steward chooses. Seeding the starter groups happens in "Start a new church" (seedNewChurch).
 function initChurch() {
   const params = new URLSearchParams(location.search);
-  const inject = params.get('churchkey');                 // test hook: load a known church key
-  if (inject) { window.Steward.init(inject); return; }
+  // SECURITY-AUDIT-2026-07-06 H7: ?churchkey= is a DEV-ONLY test hook that overwrites the church key in
+  // localStorage. Ungated, a crafted same-origin link ("tap to restore your church") could load an attacker
+  // seed and — via the forced PIN step — overwrite the real encrypted key, permanently destroying an
+  // un-backed-up church identity. Gate to localhost, and never overwrite an existing key (mirrors ?adopt).
+  const isDevHost = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  const inject = params.get('churchkey');                 // test hook: load a known church key (dev only)
+  if (inject && isDevHost && !window.Steward.hasKey) { window.Steward.init(inject); return; }
   const adopt = params.get('adopt');                      // QR/link handoff: adopt a church on launch
   if (adopt && !window.Steward.hasKey) { try { window.Steward.adoptChurch(adopt); try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {} } catch (e) {} }
   window.Steward.init();                                  // load the saved key if there is one (no auto-create)
