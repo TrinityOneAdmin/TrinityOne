@@ -48,13 +48,15 @@ function svMyTeams(ctx) {
 }
 
 function ServAvatar({ name, size = 34, accent = 'var(--clay)', me = false }) {
-  return <div style={{ width: size, height: size, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: me ? size * 0.3 : size * 0.36, background: me ? 'var(--ink)' : `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 62%, #16120c))` }}>{me ? 'You' : svInitials(name)}</div>;
+  const ac = safeCssColor(accent);   // SECURITY-AUDIT-2026-07-06 H2/L6: guard team accent against url() beacon smuggling
+  return <div style={{ width: size, height: size, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: me ? size * 0.3 : size * 0.36, background: me ? 'var(--ink)' : `linear-gradient(150deg, ${ac}, color-mix(in oklab, ${ac} 62%, #16120c))` }}>{me ? 'You' : svInitials(name)}</div>;
 }
 function ServDateBlock({ iso, accent = 'var(--clay)', tint = true }) {
   const p = svParts(iso);
+  const ac = safeCssColor(accent);   // SECURITY-AUDIT-2026-07-06 accent-mopup
   return (
-    <div style={{ width: 52, flexShrink: 0, textAlign: 'center', borderRadius: 13, padding: '7px 0', background: tint ? `color-mix(in oklab, ${accent} 13%, var(--surface))` : 'transparent', border: tint ? `1px solid color-mix(in oklab, ${accent} 26%, transparent)` : 'none' }}>
-      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: accent }}>{p.dow}</div>
+    <div style={{ width: 52, flexShrink: 0, textAlign: 'center', borderRadius: 13, padding: '7px 0', background: tint ? `color-mix(in oklab, ${ac} 13%, var(--surface))` : 'transparent', border: tint ? `1px solid color-mix(in oklab, ${ac} 26%, transparent)` : 'none' }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: ac }}>{p.dow}</div>
       <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, lineHeight: 1, color: 'var(--ink)' }}>{p.day}</div>
       <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--ink-3)', textTransform: 'uppercase' }}>{p.mon}</div>
     </div>
@@ -66,7 +68,7 @@ function svGhost() { return { flex: 1, padding: 14, borderRadius: 14, border: '1
 // ── respond to a "can you serve?" request ──
 function RespondSheet({ open, req, onClose, onSwap, ctx }) {
   if (!req) return null;
-  const acc = req.accent || 'var(--clay)';
+  const acc = safeCssColor(req.accent);   // SECURITY-AUDIT-2026-07-06 accent-mopup
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="80%" z={70}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
@@ -150,7 +152,7 @@ function ManageSheet({ open, item, onClose, onSwap, ctx }) {
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="68%" z={70}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '4px 2px 16px' }}>
-        <div style={{ width: 44, height: 44, borderRadius: 13, background: `color-mix(in oklab, ${item.accent || 'var(--clay)'} 15%, var(--surface))`, color: item.accent || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={item.icon || 'hand'} size={23} /></div>
+        <div style={{ width: 44, height: 44, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(item.accent)} 15%, var(--surface))`, color: safeCssColor(item.accent), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={item.icon || 'hand'} size={23} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{item.teamName} · {item.role}</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{svParts(item.date).dow} {svParts(item.date).day} {svParts(item.date).mon} · {item.time}</div>
@@ -370,7 +372,7 @@ function MyMonth({ ctx, onManage, onRunsheet }) {
           {selServ.map(it => (
             <div key={it.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <button onClick={() => onManage(it)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', width: '100%' }}>
-              <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${it.accent || 'var(--sage)'} 15%, var(--surface))`, color: it.accent || 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={it.icon || 'hand'} size={20} /></div>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${safeCssColor(it.accent, 'var(--sage)')} 15%, var(--surface))`, color: safeCssColor(it.accent, 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={it.icon || 'hand'} size={20} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>Serving · {it.teamName}</div>
                 <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{it.role} · {it.time}</div>
@@ -536,7 +538,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   <div style={{ borderRadius: 20, padding: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', textAlign: 'center', marginBottom: 16 }}>
                     <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 12 }}>
                       {(ctx.myRosterTeams || []).slice(0, 4).map(t => (
-                        <div key={t.id} style={{ width: 46, height: 46, borderRadius: 14, background: `color-mix(in oklab, ${t.accent || 'var(--clay)'} 15%, var(--surface))`, color: t.accent || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={t.icon || 'hand'} size={24} /></div>
+                        <div key={t.id} style={{ width: 46, height: 46, borderRadius: 14, background: `color-mix(in oklab, ${safeCssColor(t.accent)} 15%, var(--surface))`, color: safeCssColor(t.accent), display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={t.icon || 'hand'} size={24} /></div>
                       ))}
                     </div>
                     <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>You’re on {(ctx.myRosterTeams || []).length === 1 ? 'the ' + ctx.myRosterTeams[0].name + ' team' : (ctx.myRosterTeams || []).length + ' teams'}</div>
@@ -578,7 +580,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                 <div style={{ flex: 1, padding: '13px 14px', borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{ display: 'flex' }}>
                     {myTeams.slice(0, 3).map((t, i) => (
-                      <div key={t.id} style={{ marginLeft: i ? -8 : 0, width: 32, height: 32, borderRadius: 10, background: `color-mix(in oklab, ${t.accent} 16%, var(--surface))`, color: t.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--surface-2)' }}><Icon name={t.icon} size={17} /></div>
+                      <div key={t.id} style={{ marginLeft: i ? -8 : 0, width: 32, height: 32, borderRadius: 10, background: `color-mix(in oklab, ${safeCssColor(t.accent)} 16%, var(--surface))`, color: safeCssColor(t.accent), display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--surface-2)' }}><Icon name={t.icon} size={17} /></div>
                     ))}
                   </div>
                   <div style={{ minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700 }}>My teams</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{myTeams.map(t => t.name).join(' · ')}</div></div>

@@ -199,8 +199,8 @@ function GiveSheet({ fund, open, onClose, ctx, balance, onGive, onPickFund, onNe
     <BottomSheet open={open} onClose={onClose} maxHeight="90%">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <button onClick={() => stage === 'amount' && setPicking(p => !p)} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: stage === 'amount' ? 'pointer' : 'default', textAlign: 'left', padding: 0, flex: 1, minWidth: 0 }}>
-          <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${fund.accent} 16%, var(--surface))`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', color: fund.accent, flexShrink: 0 }}><Icon name={fund.icon} size={22} /></div>
+          <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(fund.accent)} 16%, var(--surface))`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(fund.accent), flexShrink: 0 }}><Icon name={fund.icon} size={22} /></div>
           <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, lineHeight: 1.05 }}>Give to {fund.name}</span>
@@ -219,9 +219,9 @@ function GiveSheet({ fund, open, onClose, ctx, balance, onGive, onPickFund, onNe
             return (
               <button key={f.id} onClick={() => { onPickFund && onPickFund(f); setPicking(false); }} style={{
                 display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 14, cursor: 'pointer', textAlign: 'left',
-                border: on ? `2px solid ${f.accent}` : '1px solid var(--line)', background: on ? `color-mix(in oklab, ${f.accent} 12%, var(--surface))` : 'var(--surface-2)' }}>
-                <div style={{ width: 38, height: 38, borderRadius: 11, background: `color-mix(in oklab, ${f.accent} 16%, var(--surface))`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', color: f.accent, flexShrink: 0 }}><Icon name={f.icon} size={20} /></div>
+                border: on ? `2px solid ${safeCssColor(f.accent)}` : '1px solid var(--line)', background: on ? `color-mix(in oklab, ${safeCssColor(f.accent)} 12%, var(--surface))` : 'var(--surface-2)' }}>
+                <div style={{ width: 38, height: 38, borderRadius: 11, background: `color-mix(in oklab, ${safeCssColor(f.accent)} 16%, var(--surface))`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(f.accent), flexShrink: 0 }}><Icon name={f.icon} size={20} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{f.name}</div>
                   <div style={{ fontSize: 12, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.desc}</div>
@@ -337,8 +337,8 @@ function FundDetailSheet({ fund, open, onClose, ctx, onGive }) {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 18 }}>
-        <div style={{ width: 56, height: 56, borderRadius: 16, background: `color-mix(in oklab, ${fund.accent} 16%, var(--surface))`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', color: fund.accent, flexShrink: 0 }}><Icon name={fund.icon} size={28} fill={fund.icon === 'bolt'} /></div>
+        <div style={{ width: 56, height: 56, borderRadius: 16, background: `color-mix(in oklab, ${safeCssColor(fund.accent)} 16%, var(--surface))`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(fund.accent), flexShrink: 0 }}><Icon name={fund.icon} size={28} fill={fund.icon === 'bolt'} /></div>
         <div style={{ flex: 1, minWidth: 0, paddingTop: 2 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, lineHeight: 1.1 }}>{fund.name}</div>
           <div style={{ fontFamily: 'var(--font-read)', fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 4, textWrap: 'pretty' }}>{fund.desc}</div>
@@ -357,10 +357,10 @@ function FundDetailSheet({ fund, open, onClose, ctx, onGive }) {
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 800, color: 'var(--ink)' }}>{fmtUsd(raised)}</span>
             <span style={{ fontSize: 13.5, color: 'var(--ink-2)', fontWeight: 600 }}>of {fmtUsd(fund.goal)}</span>
-            <span style={{ marginLeft: 'auto', fontSize: 12.5, fontWeight: 800, color: fund.accent, background: `color-mix(in oklab, ${fund.accent} 14%, var(--surface))`, padding: '3px 10px', borderRadius: 999 }}>{pct}%</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12.5, fontWeight: 800, color: safeCssColor(fund.accent), background: `color-mix(in oklab, ${safeCssColor(fund.accent)} 14%, var(--surface))`, padding: '3px 10px', borderRadius: 999 }}>{pct}%</span>
           </div>
           <div style={{ position: 'relative', height: 10, borderRadius: 999, background: 'var(--line)', margin: '12px 0 0', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: pct + '%', borderRadius: 999, background: fund.accent }} />
+            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: pct + '%', borderRadius: 999, background: safeCssColor(fund.accent) }} />
           </div>
           {raised === 0 ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Just getting started — be the first to give.</div> : null}
           {fund.milestones && fund.milestones.length ? (
@@ -370,10 +370,10 @@ function FundDetailSheet({ fund, open, onClose, ctx, onGive }) {
                 return (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 0', borderTop: '1px solid var(--line-2)' }}>
                     <div style={{ width: 22, height: 22, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      background: reached ? fund.accent : 'transparent', border: reached ? 'none' : '2px solid var(--line)' }}>
+                      background: reached ? safeCssColor(fund.accent) : 'transparent', border: reached ? 'none' : '2px solid var(--line)' }}>
                       {reached ? <Icon name="check" size={13} stroke={2.8} color="#fff" /> : null}</div>
                     <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: reached ? 'var(--ink)' : 'var(--ink-2)' }}>{m.label}</span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: reached ? fund.accent : 'var(--ink-3)' }}>{fmtUsd(m.amount)}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: reached ? safeCssColor(fund.accent) : 'var(--ink-3)' }}>{fmtUsd(m.amount)}</span>
                   </div>
                 );
               })}
@@ -398,8 +398,8 @@ function FundDetailSheet({ fund, open, onClose, ctx, onGive }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {rows.map((r, i) => (
           <div key={i} style={{ display: 'flex', gap: 13, alignItems: 'flex-start' }}>
-            <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, background: `color-mix(in oklab, ${r.accent} 14%, var(--surface))`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', color: r.accent }}><Icon name={r.ic} size={19} fill={r.fill} /></div>
+            <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, background: `color-mix(in oklab, ${safeCssColor(r.accent)} 14%, var(--surface))`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(r.accent) }}><Icon name={r.ic} size={19} fill={r.fill} /></div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{r.title}</div>
               <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginTop: 1, textWrap: 'pretty' }}>{r.body}</div>
@@ -627,16 +627,16 @@ function GivingView({ ctx, history, setHistory, giveSignal }) {
           {FUNDS.map(f => (
             <div key={f.id} onClick={() => setDetail(f)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
               background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
-              <div style={{ width: 44, height: 44, borderRadius: 13, background: `color-mix(in oklab, ${f.accent} 16%, var(--surface))`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', color: f.accent, flexShrink: 0 }}><Icon name={f.icon} size={23} /></div>
+              <div style={{ width: 44, height: 44, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(f.accent)} 16%, var(--surface))`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(f.accent), flexShrink: 0 }}><Icon name={f.icon} size={23} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{f.name}</div>
                 <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>{f.desc}</div>
               </div>
               <button onClick={(e) => { e.stopPropagation(); setFund(f); }} aria-label={`Give to ${f.name}`} style={{
                 display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5,
-                color: f.accent, background: `color-mix(in oklab, ${f.accent} 14%, var(--surface))`, border: `1px solid color-mix(in oklab, ${f.accent} 30%, transparent)`,
-                padding: '8px 13px', borderRadius: 999 }}>Give<Icon name="chevR" size={15} color={f.accent} /></button>
+                color: safeCssColor(f.accent), background: `color-mix(in oklab, ${safeCssColor(f.accent)} 14%, var(--surface))`, border: `1px solid color-mix(in oklab, ${safeCssColor(f.accent)} 30%, transparent)`,
+                padding: '8px 13px', borderRadius: 999 }}>Give<Icon name="chevR" size={15} color={safeCssColor(f.accent)} /></button>
             </div>
           ))}
         </div>

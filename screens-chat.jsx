@@ -31,15 +31,18 @@ function avOf(d) { return d.av || { kind: 'monogram', color: d.color || '#5E8C6A
 // avatar = profile picture if set, else a colored circle with the name's initial
 function Avatar({ handle, color, size = 38, src }) {
   const [err, setErr] = useC(false);
-  if (src && !err) {
-    return <img src={src} alt="" onError={() => setErr(true)}
+  // SECURITY-AUDIT-2026-07-06 accent-mopup: handle/color/src come from an untrusted member profile.
+  // src → data: image only (no remote beacon); color → hex/var() only (no url() smuggling into the gradient).
+  const pic = safeImgUrl(src), col = safeCssColor(color);
+  if (pic && !err) {
+    return <img src={pic} alt="" onError={() => setErr(true)}
       style={{ width: size, height: size, borderRadius: 999, objectFit: 'cover', flexShrink: 0 }} />;
   }
   const word = (handle || 'Anonymous').split(' ').slice(-1)[0];
   return (
     <div style={{
       width: size, height: size, borderRadius: 999, flexShrink: 0,
-      background: `linear-gradient(150deg, ${color}, color-mix(in oklab, ${color} 60%, #16120c))`,
+      background: `linear-gradient(150deg, ${col}, color-mix(in oklab, ${col} 60%, #16120c))`,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       color: '#fff', fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: size * 0.4,
     }}>{(word[0] || '?').toUpperCase()}</div>
@@ -329,8 +332,8 @@ function ChatScreen({ ctx }) {
       border: '1px solid ' + (ctx.openGroupId === g.id ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', boxShadow: 'var(--shadow)',
     }}>
       <div style={{ position: 'relative', flexShrink: 0 }}>
-        <div style={{ width: 50, height: 50, borderRadius: 16, background: `color-mix(in oklab, ${g.accent} 16%, var(--surface))`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', color: g.accent }}>
+        <div style={{ width: 50, height: 50, borderRadius: 16, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent) }}>
           <Icon name={g.team ? 'shield' : g.prayer ? 'pray' : 'chat'} size={25} stroke={1.8} />
         </div>
       </div>
@@ -474,7 +477,7 @@ function ChatScreen({ ctx }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: groupHits.length ? 22 : 0 }}>
           {groupHits.map(g => (
             <div key={g.id} onClick={() => openGroup(g)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
-              <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${g.accent} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: g.accent, flexShrink: 0 }}><Icon name={g.prayer ? 'pray' : 'chat'} size={22} /></div>
+              <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent), flexShrink: 0 }}><Icon name={g.prayer ? 'pray' : 'chat'} size={22} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{hi(g.name)}</div>
                 <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{g.kind} · {g.members} members</div>
@@ -836,7 +839,7 @@ function GroupEventComposer({ group, ctx, onClose }) {
   const [where, setWhere] = useC('');
   const [blurb, setBlurb] = useC('');
   const [busy, setBusy] = useC(false);
-  const accent = group.accent || 'var(--clay)';
+  const accent = safeCssColor(group.accent);   // SECURITY-AUDIT-2026-07-06 L6: guard against url() beacon in the accent
   const save = async () => {
     if (!title.trim() || !date) return;
     setBusy(true);
@@ -978,7 +981,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           {!docked ? <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button> : null}
-          <div style={{ width: 40, height: 40, borderRadius: 13, background: `color-mix(in oklab, ${group.accent} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: group.accent, flexShrink: 0 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent), flexShrink: 0 }}>
             <Icon name={group.prayer ? 'pray' : 'chat'} size={22} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{group.name}</div>
@@ -1018,8 +1021,8 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
                 const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()] || '';
                 return (
                   <button key={e.id} onClick={() => ctx.openEvent ? ctx.openEvent(e) : (ctx.openServing && ctx.openServing())} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 8, borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
-                    <div style={{ width: 42, flexShrink: 0, textAlign: 'center', borderRadius: 10, padding: '5px 0', background: `color-mix(in oklab, ${e.accent || 'var(--clay)'} 13%, var(--surface))` }}>
-                      <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', color: e.accent || 'var(--clay)' }}>{dow}</div>
+                    <div style={{ width: 42, flexShrink: 0, textAlign: 'center', borderRadius: 10, padding: '5px 0', background: `color-mix(in oklab, ${safeCssColor(e.accent)} 13%, var(--surface))` }}>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', color: safeCssColor(e.accent) }}>{dow}</div>
                       <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17, lineHeight: 1 }}>{d.getDate()}</div>
                       <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--ink-3)', textTransform: 'uppercase' }}>{mon}</div>
                     </div>
@@ -1202,7 +1205,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: people.length ? 18 : 0 }}>
             {postable.map(g => (
               <button key={g.id} onClick={() => sendToGroup(g)} style={rowStyle}>
-                <div style={{ width: 38, height: 38, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || 'var(--clay)'} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: g.accent || 'var(--clay)', flexShrink: 0 }}>
+                <div style={{ width: 38, height: 38, borderRadius: 12, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent), flexShrink: 0 }}>
                   <Icon name={g.prayer ? 'pray' : 'chat'} size={20} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.name}</div>

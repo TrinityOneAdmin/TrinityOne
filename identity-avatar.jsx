@@ -33,9 +33,12 @@ function UserAvatar({ av, name, size = 44, ring = false }) {
   const color = /^#[0-9a-fA-F]{3,8}$/.test(_rawColor) ? _rawColor : '#5E8C6A';
   const initial = (name && name.trim()) ? name.trim()[0].toUpperCase() : null;
   const shadow = ring ? `0 0 0 3px var(--surface), 0 0 0 4.5px ${color}` : 'none';
-  // uploaded photo — only ever offered when the church enables member photos AND the member isn't a minor
-  if (av && av.kind === 'photo' && av.photo) {
-    return <img src={av.photo} alt={name ? name + '’s picture' : 'Profile picture'} style={{
+  // uploaded photo — only ever offered when the church enables member photos AND the member isn't a minor.
+  // SECURITY-AUDIT-2026-07-06 M7: av.photo comes from an untrusted kind-0; a remote URL here would beacon every
+  // viewer's IP. Uploads are cropped to data: URIs, so accept ONLY those (safeImgUrl) — reject remote URLs.
+  const photo = av && av.kind === 'photo' && safeImgUrl(av.photo);
+  if (photo) {
+    return <img src={photo} alt={name ? name + '’s picture' : 'Profile picture'} style={{
       width: size, height: size, borderRadius: 999, flexShrink: 0, objectFit: 'cover', display: 'block',
       boxShadow: shadow, background: 'var(--surface-2)' }} />;
   }

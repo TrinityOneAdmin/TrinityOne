@@ -37,7 +37,7 @@ function NotificationsScreen({ open, onClose, ctx }) {
         <div onClick={() => setDetail(null)} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(20,15,10,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end' }}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxHeight: '80%', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', padding: '20px 20px 30px', animation: 'trinityRise .24s cubic-bezier(.2,.8,.3,1) both' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 12 }}>
-              <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, background: `color-mix(in oklab, ${detail.accent} 16%, var(--surface))`, color: detail.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={NOTIF_ICON[detail.kind] || 'bell'} size={21} /></div>
+              <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, background: `color-mix(in oklab, ${safeCssColor(detail.accent)} 16%, var(--surface))`, color: safeCssColor(detail.accent), display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={NOTIF_ICON[detail.kind] || 'bell'} size={21} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{detail.group}</div>
                 <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{detail.kind === 'network' ? 'Network announcement' : 'Announcement'} · {relTimeNotif(detail.ts)}</div>
@@ -92,7 +92,7 @@ function NotifRow({ n, ic, onClick }) {
       boxShadow: n.unread ? 'none' : 'var(--shadow)',
     }}>
       <div style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: `color-mix(in oklab, ${n.accent} 16%, var(--surface))`, color: n.accent }}>
+        background: `color-mix(in oklab, ${safeCssColor(n.accent)} 16%, var(--surface))`, color: safeCssColor(n.accent) }}>
         <Icon name={ic} size={20} stroke={2} fill={n.kind === 'amen'} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -232,7 +232,7 @@ const transBtn = { width: 44, height: 44, borderRadius: 999, border: 'none', bac
 function NotifToggleRow({ icon, accent, label, sub, on, disabled, onFlip }) {
   return (
     <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left', opacity: disabled ? .45 : 1 }}>
-      <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `color-mix(in oklab, ${accent || 'var(--ink-2)'} 14%, var(--surface-2))`, color: accent || 'var(--ink-2)' }}>
+      <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `color-mix(in oklab, ${safeCssColor(accent, 'var(--ink-2)')} 14%, var(--surface-2))`, color: safeCssColor(accent, 'var(--ink-2)') }}>
         <Icon name={icon} size={19} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>

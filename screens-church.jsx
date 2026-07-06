@@ -64,14 +64,17 @@ function QRScanner({ onResult, onCancel }) {
 
 // church avatar — rounded square with initials over the church accent
 function ChurchBadge({ church, size = 46, radius = 14 }) {
-  const accent = church.accent || 'var(--clay)';
+  // SECURITY-AUDIT-2026-07-06 H2: accent/picture come from the untrusted relay-published church profile;
+  // guard both so a crafted value can't smuggle a url() beacon (deanonymises every follower on render).
+  const accent = safeCssColor(church.accent, 'var(--clay)');
+  const pic = safeImgUrl(church.picture);
   return (
     <div style={{
       width: size, height: size, borderRadius: radius, flexShrink: 0, overflow: 'hidden',
-      background: church.picture ? `center/cover no-repeat url(${church.picture})` : `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 62%, #16120c))`,
+      background: pic ? `center/cover no-repeat url("${pic}")` : `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 62%, #16120c))`,
       display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
       fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: size * 0.38, letterSpacing: '.3px',
-    }}>{church.picture ? '' : church.initials}</div>
+    }}>{pic ? '' : church.initials}</div>
   );
 }
 window.ChurchBadge = ChurchBadge;
@@ -81,7 +84,8 @@ function ChurchPill({ ctx }) {
   const c = ctx.church;
   if (!c) return null;
   // with a brand banner: a wide header image with the badge + name overlaid (the church's identity).
-  if (c.banner) {
+  const banner = safeImgUrl(c.banner);   // SECURITY-AUDIT-2026-07-06 H2: only a data: URI, never a remote beacon URL
+  if (banner) {
     const bf = (typeof c.bannerFade === 'number') ? Math.max(0, Math.min(60, c.bannerFade)) : 16;   // steward-set fade %; default 16 = the original look
     const bmask = bf > 0 ? `linear-gradient(to bottom, #000 ${100 - bf}%, transparent)` : 'none';
     return (
@@ -93,7 +97,7 @@ function ChurchPill({ ctx }) {
         {/* image + legibility scrim on a MASKED layer — the steward's fade blends THIS into the page.
             The badge + name below sit on an unmasked layer, so they stay crisp even at a heavy fade. */}
         <span style={{ position: 'absolute', inset: 0, WebkitMaskImage: bmask, maskImage: bmask }}>
-          <span style={{ position: 'absolute', inset: 0, background: `center/cover no-repeat url(${c.banner})` }} />
+          <span style={{ position: 'absolute', inset: 0, background: `center/cover no-repeat url("${banner}")` }} />
           <span style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.62), rgba(0,0,0,0) 62%)' }} />
         </span>
         <span style={{ position: 'absolute', right: 12, top: 'calc(env(safe-area-inset-top, 0px) + 12px)', width: 30, height: 30, borderRadius: 999, background: 'rgba(0,0,0,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={18} stroke={2.4} color="#fff" /></span>

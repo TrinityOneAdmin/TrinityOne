@@ -6,8 +6,8 @@ function ModuleTile({ m, onClick }) {
       background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)'
     }}>
       <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0,
-        background: `color-mix(in oklab, ${m.accent} 16%, var(--surface))`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', color: m.accent }}>
+        background: `color-mix(in oklab, ${safeCssColor(m.accent)} 16%, var(--surface))`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(m.accent) }}>
         <Icon name={m.icon} size={23} stroke={1.8} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -356,7 +356,7 @@ function ModuleView({ module, open, onClose, ctx }) {
   const catFiltered = cat === 'All' ? raw : raw.filter(it => it.cat === cat);
   const ql = q.trim().toLowerCase();
   const items = ql ? catFiltered.filter(it => (it.name + ' ' + (it.sub || '')).toLowerCase().includes(ql)) : catFiltered;
-  const accent = module.accent;
+  const accent = safeCssColor(module.accent);   // SECURITY-AUDIT-2026-07-06 accent-mopup: no url() beacon via a crafted module accent
 
   const openItem = (it) => {
     if (it.journal) { onClose(); setTimeout(() => ctx.openJournal(it.journal), 200); return; }

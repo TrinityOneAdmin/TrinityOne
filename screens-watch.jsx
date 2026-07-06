@@ -25,15 +25,18 @@ function openExternal(url) {
 // Real YouTube thumbnail when available; warm gradient fallback otherwise.
 function VideoPoster({ v, h = 200, rounded = 20 }) {
   const [err, setErr] = useW(false);
-  const accent = v.accent || 'var(--clay)';
-  const showThumb = v.thumb && !err;
+  const accent = safeCssColor(v.accent);   // SECURITY-AUDIT-2026-07-06 H2/L6: no url() beacon via a crafted accent
+  // SECURITY-AUDIT-2026-07-06 M8-family: v.thumb comes from an untrusted video doc; a remote thumb URL would
+  // beacon every viewer's IP. Legit thumbs are always YouTube's i.ytimg.com — accept only that host.
+  const thumb = /^https:\/\/i\.ytimg\.com\//.test(v.thumb || '') ? v.thumb : '';
+  const showThumb = thumb && !err;
   return (
     <div style={{
       position: 'relative', height: h, borderRadius: rounded, overflow: 'hidden',
       background: `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 55%, #16120c))`,
     }}>
       {showThumb
-        ? <img src={v.thumb} alt="" loading="lazy" onError={() => setErr(true)}
+        ? <img src={thumb} alt="" loading="lazy" onError={() => setErr(true)}
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
         : <div style={{ position: 'absolute', right: -22, bottom: -26, opacity: .16 }}><Icon name={v.icon || 'play'} size={Math.round(h * 0.9)} stroke={1.2} color="#fff" /></div>}
       <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.30), transparent 48%)' }} />
