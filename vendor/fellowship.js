@@ -5764,6 +5764,7 @@
   var GROUPKEY_D = "trinityone/groupkey:";
   var MEALS_SETTINGS_D = "trinityone/meals-settings";
   var CARE_D = "trinityone/care:";
+  var ROSTER_PFX = "trinityone/roster:";
   var CARESLOT_D = "trinityone/careslot:";
   var CARESKIP_D = "trinityone/careskip:";
   var CAREAVAIL_D = "trinityone/careavail:";
@@ -7536,17 +7537,45 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      let eosed = false;
+      const rosterPeople = /* @__PURE__ */ new Map();
+      let openedBy = "steward", adminGroupId = "", eosed = false;
+      const careTrusted = (by) => _churchVoice(pubk, { _by: by }) || openedBy === "member" || !!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by);
       const emit = () => {
-        const v = [...byId.values()].sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
+        const v = [...byId.values()].filter((n) => careTrusted(n._by)).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
         if (!eosed && !v.length) return;
         cb(v);
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {
+          if (d === MEALS_SETTINGS_D) {
+            if (_churchVoice(pubk, { _by: e.pubkey })) {
+              try {
+                const c = JSON.parse(e.content || "{}");
+                openedBy = c.openedBy === "member" ? "member" : "steward";
+                adminGroupId = String(c.adminGroupId || "");
+              } catch {
+              }
+              emit();
+            }
+            return;
+          }
+          if (d.startsWith(ROSTER_PFX)) {
+            if (_churchVoice(pubk, { _by: e.pubkey })) {
+              const team = d.slice(ROSTER_PFX.length);
+              const set = /* @__PURE__ */ new Set();
+              try {
+                (JSON.parse(e.content || "{}").people || []).forEach((p) => {
+                  const h = toPub(p && p.pub);
+                  if (h) set.add(h);
+                });
+              } catch {
+              }
+              rosterPeople.set(team, set);
+              emit();
+            }
+            return;
+          }
           if (!d.startsWith(CARE_D)) return;
-          const tagged = (e.tags.find((t) => t[0] === "church") || [])[1];
-          if (!_churchVoice(pubk, { _by: e.pubkey }) && toPub(tagged) !== pubk) return;
           const id = d.slice(CARE_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             byId.delete(id);
@@ -7555,7 +7584,7 @@
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, displayLabel: c.displayLabel || "", type: c.type || "meals", startDate: c.startDate || "", endDate: c.endDate || "", recipient: (c.recipient || "").toLowerCase(), notes: c.notes || "", dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: c.dayMeals && typeof c.dayMeals === "object" ? c.dayMeals : {}, ts: e.created_at });
+            byId.set(id, { id, _by: e.pubkey, displayLabel: c.displayLabel || "", type: c.type || "meals", startDate: c.startDate || "", endDate: c.endDate || "", recipient: (c.recipient || "").toLowerCase(), notes: c.notes || "", dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: c.dayMeals && typeof c.dayMeals === "object" ? c.dayMeals : {}, ts: e.created_at });
             emit();
           } catch {
           }

@@ -23,6 +23,7 @@ const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the grou
 // church/steward/care-team admins; careslot: are member offers to help; careskip: is RECIPIENT-only.
 const MEALS_SETTINGS_D = 'trinityone/meals-settings';
 const CARE_D = 'trinityone/care:';        // a care need — d=care:<id>
+const ROSTER_PFX = 'trinityone/roster:';  // a team roster (people); the meals-admin one names the care-team admins (M2)
 const CARESLOT_D = 'trinityone/careslot:';// a member's offer for one (need,date) — d=careslot:<careId>:<iso>
 const CARESKIP_D = 'trinityone/careskip:';// recipient marks a day they don't need help — d=careskip:<careId>:<iso>
 const CAREAVAIL_D = 'trinityone/careavail:';// a member's "I'm here to help" availability — d=careavail:<churchpub> (one per member per church)
@@ -1134,18 +1135,27 @@ window.Fellowship = {
   subscribeCareNeeds(churchNpub, cb) {
     const pubk = toPub(churchNpub);
     if (!pubk) { cb([]); return () => {}; }
-    const byId = new Map();
-    let eosed = false;   // sticky: don't blank the card with an empty emit before the relay confirms it's really empty (EOSE)
-    const emit = () => { const v = [...byId.values()].sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); if (!eosed && !v.length) return; cb(v); };
+    const byId = new Map();                 // careId -> need (carries _by = author, for the trust filter)
+    const rosterPeople = new Map();         // teamId -> Set(pubkey), from church-signed rosters only
+    let openedBy = 'steward', adminGroupId = '', eosed = false;
+    // SECURITY-AUDIT-2026-07-06 M2: a care need renders under the church banner (recipient / notes / label),
+    // so DON'T trust any doc merely ['church']-tagged — an ordinary member (or a hostile relay) could forge a
+    // phishing "need". Mirror the relay's gate: accept only from the church/steward (_churchVoice), a care-team
+    // admin (a person on the church-signed meals-admin roster), or ANY member when the church's meals-settings
+    // opens needs to members (openedBy==='member'). meals-settings + the admin roster are themselves accepted
+    // only when church-voiced, so a forged settings/roster can't widen the trust. Author-filter at emit time
+    // (with re-emit as settings/roster arrive) so ordering never hides a legitimate need.
+    const careTrusted = (by) => _churchVoice(pubk, { _by: by }) || openedBy === 'member' || (!!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by));
+    const emit = () => { const v = [...byId.values()].filter(n => careTrusted(n._by)).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); if (!eosed && !v.length) return; cb(v); };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
+        // capture the church-signed meals config + admin-team roster so care authors can be verified
+        if (d === MEALS_SETTINGS_D) { if (_churchVoice(pubk, { _by: e.pubkey })) { try { const c = JSON.parse(e.content || '{}'); openedBy = c.openedBy === 'member' ? 'member' : 'steward'; adminGroupId = String(c.adminGroupId || ''); } catch {} emit(); } return; }
+        if (d.startsWith(ROSTER_PFX)) { if (_churchVoice(pubk, { _by: e.pubkey })) { const team = d.slice(ROSTER_PFX.length); const set = new Set(); try { (JSON.parse(e.content || '{}').people || []).forEach(p => { const h = toPub(p && p.pub); if (h) set.add(h); }); } catch {} rosterPeople.set(team, set); emit(); } return; }
         if (!d.startsWith(CARE_D)) return;
-        // accept church-voice (church/steward) or a doc explicitly tagged for this church (a care-team admin's)
-        const tagged = (e.tags.find(t => t[0] === 'church') || [])[1];
-        if (!_churchVoice(pubk, { _by: e.pubkey }) && toPub(tagged) !== pubk) return;
         const id = d.slice(CARE_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, displayLabel: c.displayLabel || '', type: c.type || 'meals', startDate: c.startDate || '', endDate: c.endDate || '', recipient: (c.recipient || '').toLowerCase(), notes: c.notes || '', dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: (c.dayMeals && typeof c.dayMeals === 'object') ? c.dayMeals : {}, ts: e.created_at }); emit(); } catch {}
+        try { const c = JSON.parse(e.content); byId.set(id, { id, _by: e.pubkey, displayLabel: c.displayLabel || '', type: c.type || 'meals', startDate: c.startDate || '', endDate: c.endDate || '', recipient: (c.recipient || '').toLowerCase(), notes: c.notes || '', dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: (c.dayMeals && typeof c.dayMeals === 'object') ? c.dayMeals : {}, ts: e.created_at }); emit(); } catch {}
       },
       onroster() { emit(); },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
