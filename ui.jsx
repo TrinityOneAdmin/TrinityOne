@@ -1,5 +1,8 @@
 // ui.jsx — TrinityOne shared UI primitives. Exports several to window.
-const { useState, useEffect, useRef } = React;
+// Alias the hooks (not bare useState/useEffect/useRef): as a classic script this file's top-level
+// consts are shared globals, so land-grabbing the canonical names would collide with the idiomatic
+// `const { useState } = React;` in any other .jsx and blank the APK. Every other .jsx aliases too.
+const { useState: useU, useEffect: useUE, useRef: useUR } = React;
 
 function cx(...a) { return a.filter(Boolean).join(' '); }
 
@@ -200,9 +203,9 @@ window.ReadPlansTabs = ReadPlansTabs;
 // button (wired in app.jsx) dismisses the topmost layer instead of exiting the app.
 const _backStack = (window.__trinityBackStack = window.__trinityBackStack || []);
 function useBackLayer(open, onClose) {
-  const ref = useRef(onClose);
+  const ref = useUR(onClose);
   ref.current = onClose;
-  useEffect(() => {
+  useUE(() => {
     if (!open) return;
     const entry = { close: () => { try { ref.current && ref.current(); } catch (e) {} } };
     _backStack.push(entry);
@@ -219,8 +222,8 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
   // docked = rendered inside a desktop side panel (e.g. reader study panel): fill the pane, no
   // backdrop/slide/handle, no backstack.
   useBackLayer(open && !docked, onClose);
-  const [mounted, setMounted] = useState(open);
-  useEffect(() => { if (open) setMounted(true); }, [open]);
+  const [mounted, setMounted] = useU(open);
+  useUE(() => { if (open) setMounted(true); }, [open]);
   if (!mounted && !open) return null;
   if (docked) {
     return (
@@ -262,8 +265,8 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
 function Overlay({ open, onClose, children, docked }) {
   // docked = rendered inside a desktop pane (e.g. two-pane chat): fill the pane, no slide/backstack.
   useBackLayer(open && !docked, onClose);
-  const [mounted, setMounted] = useState(open);
-  useEffect(() => { if (open) setMounted(true); }, [open]);
+  const [mounted, setMounted] = useU(open);
+  useUE(() => { if (open) setMounted(true); }, [open]);
   if (!mounted && !open) return null;
   if (docked) {
     return (
