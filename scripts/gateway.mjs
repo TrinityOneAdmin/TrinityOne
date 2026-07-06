@@ -1182,6 +1182,13 @@ function serveStatic(req, res) {
   // mirror are switchable by the operator (the relay can be relay-only, or also host modules and/or the app).
   if (p.startsWith('/modules/')) { if (!SETTINGS.serveModules) { res.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); res.end('module hosting is off on this relay'); return; } }
   else if (!p.startsWith('/relay-app/') && !SETTINGS.serveApp) { res.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); res.end('the web app is not served from this relay'); return; }
+  // SECURITY (audit 2026-07-06, found live-exposed): never serve private subtrees or dotfiles even though
+  // they sit inside ROOT. relay/ holds runtime secrets (admin token, VAPID private key, church.json, the
+  // WHOLE event DB relay.sqlite); android/ios hold signing material; node_modules is bulk; dotfiles cover
+  // .git/.github/.claude/.env. The traversal guard below only stops ESCAPING ROOT — these are inside it.
+  // The web app + control UI stay reachable: 'relay-app' is a distinct path segment from 'relay', and the
+  // APK/module handlers ran above. 404 (not 403) so the endpoint doesn't confirm a file exists.
+  if (p.split('/').some(s => s === 'relay' || s === 'android' || s === 'ios' || s === 'node_modules' || (s && s[0] === '.'))) { res.writeHead(404).end('not found'); return; }
   const file = normalize(join(ROOT, p));
   // path-traversal guard: the resolved path must stay strictly inside ROOT. Normalize ROOT's trailing
   // separator first (it may already carry one), so the boundary is exactly `<root>/` — a sibling like
