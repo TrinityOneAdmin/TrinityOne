@@ -6984,7 +6984,7 @@
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#d": [PIN_D + groupId] }], {
         onevent(e) {
           const cp = window.Fellowship.churchPub;
-          if (cp && e.pubkey !== cp && !e.tags.some((t) => t[0] === "p" && t[1] === cp)) return;
+          if (cp && !_groupEventTrusted(cp, groupId, e.pubkey)) return;
           if (e.created_at < latest) return;
           latest = e.created_at;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
@@ -7022,7 +7022,8 @@
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(HIDE_D)) return;
-          if (e.pubkey !== cp && !e.tags.some((t) => t[0] === "p" && t[1] === cp)) return;
+          const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
+          if (!_groupEventTrusted(cp, gid, e.pubkey)) return;
           hidden.set(d.slice(HIDE_D.length), !(e.tags.some((t) => t[0] === "deleted") || !e.content));
           emit();
         },

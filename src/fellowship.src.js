@@ -835,7 +835,10 @@ window.Fellowship = {
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], '#d': [PIN_D + groupId] }], {
       onevent(e) {
         const cp = window.Fellowship.churchPub;
-        if (cp && e.pubkey !== cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;   // this church's scope
+        // SECURITY-AUDIT-2026-07-06 M1: a pinned message is authoritative church UI, so only the church, a
+        // current roster steward, or an empowered leader OF THIS GROUP may set it — NOT anyone who merely
+        // p-tags the church (a hostile relay could otherwise serve a member-forged pin/phishing notice).
+        if (cp && !_groupEventTrusted(cp, groupId, e.pubkey)) return;
         if (e.created_at < latest) return; latest = e.created_at;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { cb(null); return; }
         try { cb(JSON.parse(e.content)); } catch { cb(null); }
@@ -854,7 +857,11 @@ window.Fellowship = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(HIDE_D)) return;
-        if (e.pubkey !== cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
+        // SECURITY-AUDIT-2026-07-06 M1: hiding (censoring) a message is a moderation act — accept it only from
+        // the church, a roster steward, or an empowered leader of the tagged group; not any p-tagging member.
+        // hideMessage() tags the group id (['t',gid]); if absent (legacy) _groupEventTrusted falls back to church/steward.
+        const gid = (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1];
+        if (!_groupEventTrusted(cp, gid, e.pubkey)) return;
         hidden.set(d.slice(HIDE_D.length), !(e.tags.some(t => t[0] === 'deleted') || !e.content));
         emit();
       },
