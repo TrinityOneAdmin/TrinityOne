@@ -71,7 +71,7 @@
   // the instant path: open the web app with the join context (key minted on-device, name pre-filled, church followed)
   var app = '/?follow=' + encodeURIComponent(follow);
   if (name)  app += '&name=' + encodeURIComponent(name);
-  if (relay) app += '&relay=' + encodeURIComponent(relay);
+  if (relay && /^wss:\/\//i.test(relay)) app += '&relay=' + encodeURIComponent(relay);   // SECURITY-AUDIT-2026-07-06 L9: only forward an ENCRYPTED (wss://) relay from a public join link — never a cleartext/hostile one
 
   if (name)   { try { document.getElementById('pill').textContent = 'Hi, ' + decodeURIComponent(name); } catch(e){} }
   if (church) { try { document.getElementById('head').textContent = 'Join ' + decodeURIComponent(church); } catch(e){} }

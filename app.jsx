@@ -400,7 +400,9 @@ function App() {
       pool.forEach(r => F.addRelay(r));
       // plus any church-specific relay carried in the invite/QR (?relay=wss://…) — e.g. a self-hosted one
       const rm = String(raw || '').match(/[?&]relay=([^&\s]+)/);
-      if (rm) { try { const relay = decodeURIComponent(rm[1]); if (/^wss?:\/\//i.test(relay)) F.addRelay(relay); } catch (e) {} }
+      // SECURITY-AUDIT-2026-07-06 L5: require wss:// (encrypted). A crafted invite carrying ?relay=ws://attacker
+      // would otherwise add a cleartext relay to the member's set → a network MITM reads/injects fellowship traffic.
+      if (rm) { try { const relay = decodeURIComponent(rm[1]); if (/^wss:\/\//i.test(relay)) F.addRelay(relay); } catch (e) {} }
     }
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
