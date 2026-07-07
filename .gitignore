@@ -67,3 +67,4 @@ relay/*.demo-backup*
 reference/TrinityOne.zip
 reference/nas-relay/
 payments-options.html
+relay/blobs/
