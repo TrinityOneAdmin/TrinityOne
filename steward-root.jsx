@@ -21,12 +21,22 @@ window.useStewardIdv = useStewardIdv;
 // makeSub(getObj, method, makeInit) returns such a hook: guarded (a missing engine/method is a no-op),
 // lazy per-instance initial value, re-subscribes on identity change. The handful that don't fit (custom
 // callback, derived, polling, two-effect) stay hand-written below.
-(function () {   // factory scope — keeps makeSub / S / MA / ME out of the shared global scope
+(function () {   // factory scope — keeps makeSub / S / MA / ME / _subCache out of the shared global scope
+// PERF (2026-07-07): each console tab unmounts when you leave it, so a plain useState hook resets to empty and
+// re-fetches from the relay on every navigation — over the Cloudflare tunnel that's a ~0.5s blank-then-reload on
+// every page switch. Keep the last value each subscription delivered in a module-level cache (keyed by method +
+// active identity) so a re-mounted tab paints its last-known data INSTANTLY, then the re-subscribe refreshes it
+// silently in the background. Nothing is lost across navigation; only a genuine change re-renders.
+const _subCache = {};
 function makeSub(getObj, method, makeInit) {
   return function () {
     const idv = useStewardIdv();
-    const [v, setV] = useSt(makeInit);
-    useStE(() => { const o = getObj(); return o && o[method] ? o[method](setV) : undefined; }, [idv]);
+    const key = method + '|' + idv;
+    const [v, setV] = useSt(() => (key in _subCache ? _subCache[key] : makeInit()));   // paint last-known instantly
+    useStE(() => {
+      const o = getObj(); if (!o || !o[method]) return undefined;
+      return o[method]((val) => { _subCache[key] = val; setV(val); });   // cache every delivery, then render
+    }, [idv]);
     return v;
   };
 }
