@@ -5889,6 +5889,26 @@
     if (!sk) throw new Error("no key");
     return finalizeEvent2(authEvent, sk);
   };
+  var _relayEnforces = /* @__PURE__ */ new Map();
+  function _verifyEnforcing(wssUrl) {
+    if (_relayEnforces.has(wssUrl)) return _relayEnforces.get(wssUrl);
+    const p = (async () => {
+      try {
+        const httpUrl = String(wssUrl).replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/+$/, "");
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 6e3);
+        const res = await fetch(httpUrl, { headers: { Accept: "application/nostr+json" }, signal: ctrl.signal });
+        clearTimeout(t);
+        if (!res.ok) return false;
+        const info = await res.json();
+        return !!(info && info.trinityone && info.trinityone.enforces === true);
+      } catch {
+        return false;
+      }
+    })();
+    _relayEnforces.set(wssUrl, p);
+    return p;
+  }
   if (typeof window !== "undefined") {
     window.addEventListener("unhandledrejection", (e) => {
       const m = e && e.reason && (e.reason.message || String(e.reason));
@@ -8048,6 +8068,40 @@
       return evt;
     },
     // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──
+    // FEDERATION Phase 2 — read a church's signed NIP-65 relay-list (kind 10002) and ADOPT the relays it
+    // declares, so a member follows relay moves/additions without ever needing a fresh invite link. Only the
+    // church's OWN signed list is honoured (e.pubkey === cp), and a relay is adopted ONLY if its NIP-11
+    // advertises trinityone.enforces (guardrail: never route gated content to a non-enforcing relay).
+    // Additive + fail-closed: adoption only ever GROWS the read union with verified relays; a bad/unreachable
+    // one is skipped. Content is signature-verified regardless of which relay served it, so this can't forge.
+    subscribeChurchRelays(churchNpub) {
+      const cp = toPub(churchNpub);
+      if (!cp) return () => {
+      };
+      const considered = new Set(window.Fellowship.relays || []);
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [10002], authors: [cp] }], {
+        onevent(e) {
+          if (e.pubkey !== cp) return;
+          for (const t of e.tags || []) {
+            if (t[0] !== "r" || !/^wss:\/\//i.test(t[1] || "")) continue;
+            const u = t[1];
+            if (considered.has(u)) continue;
+            considered.add(u);
+            _verifyEnforcing(u).then((ok) => {
+              if (ok) window.Fellowship.addRelay(u);
+            });
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
     subscribeChurchProfile(churchNpub, onProfile) {
       const pubk = toPub(churchNpub);
       if (!pubk) {

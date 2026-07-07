@@ -167,6 +167,29 @@ pool.automaticallyAuth = () => async (authEvent) => {
   if (!sk) throw new Error('no key');
   return finalizeEvent(authEvent, sk);
 };
+// FEDERATION Phase 2 — enforcement probe. Before ADOPTING a relay a church declares in its signed NIP-65
+// list, confirm the relay actually applies TrinityOne's membership/safeguarding policy by reading its
+// NIP-11 doc and checking `trinityone.enforces`. This is a CAPABILITY check, not the trust anchor — the
+// trust anchor is that the relay came from the church's own SIGNED kind:10002 (a bad relay can't inject
+// itself; a lying relay only gets in if the church itself put it there). Fail-closed: unreachable or
+// unverified → not adopted, so a gated read never lands on a relay that would serve it to anyone.
+const _relayEnforces = new Map();   // wssUrl -> Promise<bool>, cached so we probe each relay once
+function _verifyEnforcing(wssUrl) {
+  if (_relayEnforces.has(wssUrl)) return _relayEnforces.get(wssUrl);
+  const p = (async () => {
+    try {
+      const httpUrl = String(wssUrl).replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/+$/, '');
+      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 6000);   // tolerate a slow tunnel, but bound it
+      const res = await fetch(httpUrl, { headers: { Accept: 'application/nostr+json' }, signal: ctrl.signal });
+      clearTimeout(t);
+      if (!res.ok) return false;
+      const info = await res.json();
+      return !!(info && info.trinityone && info.trinityone.enforces === true);
+    } catch { return false; }
+  })();
+  _relayEnforces.set(wssUrl, p);
+  return p;
+}
 // NIP-42 auth is best-effort: public church reads are NOT auth-gated, so a slow/failed auth handshake
 // (e.g. "auth timed out" over a tunnel) must never surface as an uncaught error or block anything.
 if (typeof window !== 'undefined') {
@@ -1412,6 +1435,28 @@ window.Fellowship = {
   },
 
   // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──
+  // FEDERATION Phase 2 — read a church's signed NIP-65 relay-list (kind 10002) and ADOPT the relays it
+  // declares, so a member follows relay moves/additions without ever needing a fresh invite link. Only the
+  // church's OWN signed list is honoured (e.pubkey === cp), and a relay is adopted ONLY if its NIP-11
+  // advertises trinityone.enforces (guardrail: never route gated content to a non-enforcing relay).
+  // Additive + fail-closed: adoption only ever GROWS the read union with verified relays; a bad/unreachable
+  // one is skipped. Content is signature-verified regardless of which relay served it, so this can't forge.
+  subscribeChurchRelays(churchNpub) {
+    const cp = toPub(churchNpub); if (!cp) return () => {};
+    const considered = new Set(window.Fellowship.relays || []);   // don't re-probe relays we already have
+    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [10002], authors: [cp] }], {
+      onevent(e) {
+        if (e.pubkey !== cp) return;   // only the church's own signed relay-list
+        for (const t of (e.tags || [])) {
+          if (t[0] !== 'r' || !/^wss:\/\//i.test(t[1] || '')) continue;
+          const u = t[1]; if (considered.has(u)) continue; considered.add(u);
+          _verifyEnforcing(u).then(ok => { if (ok) window.Fellowship.addRelay(u); });   // adopt only enforcing relays
+        }
+      },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
   subscribeChurchProfile(churchNpub, onProfile) {
     const pubk = toPub(churchNpub);
     if (!pubk) { onProfile(null); return () => {}; }

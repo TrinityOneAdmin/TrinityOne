@@ -409,10 +409,14 @@ function App() {
     // announce membership so the steward sees this person joined, even if they never post
     if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
-    return window.Fellowship.subscribeChurchProfile(npub, (p) => {
+    const _stopProfile = window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (!p) return;
       setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : c.lnaddr, giving: p.giving != null ? p.giving : c.giving, picture: p.picture != null ? p.picture : c.picture, banner: p.banner != null ? p.banner : c.banner, bannerFade: p.bannerFade != null ? p.bannerFade : c.bannerFade, accent: p.accent != null ? p.accent : c.accent, features: p.features != null ? p.features : c.features, rules: p.rules != null ? p.rules : c.rules, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
     });
+    // FEDERATION Phase 2: also read the church's signed NIP-65 relay-list and adopt the (enforcing) relays it
+    // declares — so relay moves/additions are followed without a new invite link. Additive + fail-closed.
+    const _stopRelays = window.Fellowship.subscribeChurchRelays ? window.Fellowship.subscribeChurchRelays(npub) : () => {};
+    return () => { try { _stopProfile && _stopProfile(); } catch (e) {} try { _stopRelays && _stopRelays(); } catch (e) {} };
   };
   // leave a church: tombstone the membership (steward sees them drop) + stop following locally
   const leaveChurch = (npub) => {
