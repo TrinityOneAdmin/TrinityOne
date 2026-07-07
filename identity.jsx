@@ -306,7 +306,11 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   const [family, setFamily] = useId(false);
   const [name, setName] = useId(identity.name || '');
   const [av, setAv] = useId(identity.avatar);
-  useIdE(() => { if (open) { setEdit(false); setName(identity.name || ''); setAv(identity.avatar); } }, [open, identity]);
+  // seed the form when the sheet OPENS, and refresh it if the profile changes while NOT editing — but never
+  // re-seed mid-edit: an identity update echoing back (relay round-trip / another device / a parent re-render)
+  // would otherwise wipe the name/mark you're in the middle of picking and bounce you back to the profile view.
+  useIdE(() => { if (open) setEdit(false); }, [open]);
+  useIdE(() => { if (open && !edit) { setName(identity.name || ''); setAv(identity.avatar); } }, [open, identity, edit]);
 
   const named = !!(identity.name && identity.name.trim());
   // steward rule: this church asks for a real first + last name (two words)

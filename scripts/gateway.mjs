@@ -1232,12 +1232,21 @@ function serveStatic(req, res) {
   let st; try { st = statSync(file); } catch { res.writeHead(404).end('not found'); return; }
   if (st.isDirectory()) { res.writeHead(404).end('not found'); return; }
   const ext = extname(file).toLowerCase();
+  // HTML: rewrite our OWN local asset URLs to carry the build sha (?v=<sha>) so a deploy is NEVER served
+  // stale by a CDN — each release changes the URL, forcing a fresh fetch. HTML itself isn't CDN-cached, so the
+  // fresh HTML always points at the new URLs (this is what actually defeats a Cloudflare edge cache that
+  // ignores our no-cache header). External (http/data) srcs are left untouched.
+  if (ext === '.html') {
+    let html; try { html = readFileSync(file, 'utf8'); } catch { res.writeHead(404).end('not found'); return; }
+    const v = (BUILD && BUILD.short) || '0';
+    html = html.replace(/\b(src|href)="([^"]+\.(?:m?js|jsx|css))"/g, (m, attr, url) => (/^(https?:|\/\/|data:)/i.test(url) || url.includes('?')) ? m : attr + '="' + url + '?v=' + v + '"');
+    const body = Buffer.from(html);
+    res.writeHead(200, { 'Content-Type': MIME['.html'] || 'text/html', 'Content-Length': body.length, 'Access-Control-Allow-Origin': '*', 'Content-Security-Policy': CSP, 'Cache-Control': 'no-cache', ...SEC_HEADERS });
+    res.end(body); return;
+  }
   const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS };
-  if (ext === '.html') headers['Content-Security-Policy'] = CSP;
-  // app code (our engine bundles + jsx/html/css) changes every release — tell Cloudflare + browsers to
-  // REVALIDATE so a deploy is never served stale from the edge (this is why a manual purge was needed).
-  // no-cache still allows a cheap 304 when unchanged, so stable libs (react/babel .js) don't re-download.
-  if (['.js', '.mjs', '.jsx', '.html', '.css', '.json'].includes(ext)) headers['Cache-Control'] = 'no-cache';
+  // app assets change every release — revalidate (belt-and-braces with the ?v= cache-bust above).
+  if (['.js', '.mjs', '.jsx', '.css', '.json'].includes(ext)) headers['Cache-Control'] = 'no-cache';
   res.writeHead(200, headers);
   createReadStream(file).pipe(res);
 }
