@@ -9578,6 +9578,7 @@ zoo`.split("\n");
   var NOPHOTO_D = "trinityone/nophoto:";
   var GUARDREQ_D = "trinityone/guardreq:";
   var GUARDIANS_D = "trinityone/guardians:";
+  var GUARDNOTICE_D = "trinityone/guardnotice:";
   var JOINPOLICY_D = "trinityone/joinpolicy:";
   var ADMITTED_D = "trinityone/admitted:";
   var STEWARDS_D = "trinityone/stewards:";
@@ -10718,6 +10719,24 @@ zoo`.split("\n");
         if (c && arr.length) clean3[c] = arr;
       }
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean3 }) }, sk));
+    },
+    // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
+    // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
+    // p-tagged to the parent, content NIP-44-ENCRYPTED to them: only that parent can read the child's key + name,
+    // so the parent<->child link never leaks in cleartext (the authoritative map stays the gated guardians: doc).
+    // d keyed by the parent alone, so even the tag doesn't reveal which child. (First parents self-request, so they
+    // already have the child locally — this is only for steward-initiated links.)
+    notifyGuardian(parentPubIn, childPubIn, childName) {
+      if (!sk) return Promise.resolve(null);
+      const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
+      if (!parentPub || !childPub || parentPub === childPub) return Promise.resolve(null);
+      let content;
+      try {
+        content = encrypt3(JSON.stringify({ child: childPub, name: childName || "", church: churchPub }), getConversationKey(sk, parentPub));
+      } catch (e) {
+        return Promise.resolve(null);
+      }
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }, sk));
     },
     // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
     // "require approval", and then a new member is held as a pending request until admitted. The relay

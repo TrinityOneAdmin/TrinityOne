@@ -306,7 +306,11 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   const [family, setFamily] = useId(false);
   const [name, setName] = useId(identity.name || '');
   const [av, setAv] = useId(identity.avatar);
-  useIdE(() => { if (open) { setEdit(false); setName(identity.name || ''); setAv(identity.avatar); } }, [open, identity]);
+  // seed the form when the sheet OPENS, and refresh it if the profile changes while NOT editing — but never
+  // re-seed mid-edit: an identity update echoing back (relay round-trip / another device / a parent re-render)
+  // would otherwise wipe the name/mark you're in the middle of picking and bounce you back to the profile view.
+  useIdE(() => { if (open) setEdit(false); }, [open]);
+  useIdE(() => { if (open && !edit) { setName(identity.name || ''); setAv(identity.avatar); } }, [open, identity, edit]);
 
   const named = !!(identity.name && identity.name.trim());
   // steward rule: this church asks for a real first + last name (two words)
@@ -533,8 +537,13 @@ function FamilySheet({ open, onClose, ctx }) {
   const [err, setErr] = useId('');
   const [made, setMade] = useId(null);          // { childPub, mnemonic, npub, name }
   const guardians = (ctx.safeguard && ctx.safeguard.guardians) || {};
-  const confirmed = (childPub) => !!((guardians[childPub] || []).includes(me));
+  // a link is "done" if the steward initiated it (viaSteward — the notice IS the confirmation) OR the church's
+  // guardians map lists me (my own self-request was confirmed). Only a still-pending SELF-request shows "waiting".
+  const confirmed = (k) => !!(k && (k.viaSteward || (guardians[k.child] || []).includes(me)));
   const refreshKids = () => setKids(F && F.myChildren ? F.myChildren(ctx.church && ctx.church.npub) : []);
+  // a steward-initiated guardian link arrives as an encrypted notice → the engine records the child, then
+  // fires this so it appears here without a reload.
+  useIdE(() => { const f = () => refreshKids(); window.addEventListener('trinity-guardian-added', f); return () => window.removeEventListener('trinity-guardian-added', f); }, []);
   const create = async () => {
     const n = name.trim(); if (!n) { setErr('Enter the child’s name.'); return; }
     setBusy(true); setErr('');
@@ -559,15 +568,17 @@ function FamilySheet({ open, onClose, ctx }) {
           <React.Fragment>
             <div style={{ display: 'flex', gap: 11, padding: 14, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 30%, transparent)', marginBottom: 16 }}>
               <Icon name="shield" size={20} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-              <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>You set up the account and keep its recovery words. Once your steward confirms the link, the account is marked as a child — they’ll only see child-safe groups, and only you and cleared leaders can message them privately.</div>
+              <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>{(kids.length === 0 || kids.some(k => !k.viaSteward))
+                ? 'You set up the account and keep its recovery words. Once your steward confirms the link, the account is marked as a child — they’ll only see child-safe groups, and only you and cleared leaders can message them privately.'
+                : 'Your steward linked you as this child’s parent. You can message them privately and collect them at check-in — they only see child-safe groups, protected by the church.'}</div>
             </div>
             {kids.length ? kids.map(k => (
               <div key={k.child} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 10 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pray" size={20} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 15 }}>{k.name}</div>
-                  <div style={{ fontSize: 12.5, color: confirmed(k.child) ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <Icon name={confirmed(k.child) ? 'check' : 'shield'} size={12} color="currentColor" /> {confirmed(k.child) ? 'Linked & protected' : 'Waiting for steward to confirm'}</div>
+                  <div style={{ fontSize: 12.5, color: confirmed(k) ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <Icon name={confirmed(k) ? 'check' : 'shield'} size={12} color="currentColor" /> {k.viaSteward ? 'Linked by your steward' : confirmed(k) ? 'Linked & protected' : 'Waiting for steward to confirm'}</div>
                 </div>
               </div>
             )) : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>No children set up yet.</div>}

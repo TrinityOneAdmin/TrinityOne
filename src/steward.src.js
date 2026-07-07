@@ -43,6 +43,7 @@ const APPROVED_D = 'trinityone/approved:';  // safeguarding: adults cleared to c
 const NOPHOTO_D = 'trinityone/nophoto:';    // moderation: members whose uploaded photo is suppressed, d=nophoto:<churchpub>
 const GUARDREQ_D = 'trinityone/guardreq:';  // safeguarding v2: a parent's guardian-link request (parent-authored), d=guardreq:<childpub>
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-confirmed parent↔child map, d=guardians:<churchpub>
+const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent NOTICE that they were linked to a child, d=guardnotice:<parentpub>, p-tagged + content NIP-44-encrypted to the parent (the child link never appears in cleartext)
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
 const STEWARDS_D = 'trinityone/stewards:';   // delegated, revocable steward roster (owner-signed), d=stewards:<churchpub>; see STEWARD-ROSTER-DESIGN.md
@@ -859,6 +860,21 @@ window.Steward = {
     const clean = {};
     for (const [c, ps] of Object.entries(links || {})) { const arr = [...new Set((ps || []).filter(Boolean))]; if (c && arr.length) clean[c] = arr; }
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }, sk));
+  },
+  // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
+  // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
+  // p-tagged to the parent, content NIP-44-ENCRYPTED to them: only that parent can read the child's key + name,
+  // so the parent<->child link never leaks in cleartext (the authoritative map stays the gated guardians: doc).
+  // d keyed by the parent alone, so even the tag doesn't reveal which child. (First parents self-request, so they
+  // already have the child locally — this is only for steward-initiated links.)
+  notifyGuardian(parentPubIn, childPubIn, childName) {
+    if (!sk) return Promise.resolve(null);
+    const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
+    if (!parentPub || !childPub || parentPub === childPub) return Promise.resolve(null);
+    let content;
+    try { content = nip44e(JSON.stringify({ child: childPub, name: childName || '', church: churchPub }), nip44ck(sk, parentPub)); }
+    catch (e) { return Promise.resolve(null); }
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }, sk));
   },
 
   // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on

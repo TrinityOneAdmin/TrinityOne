@@ -833,7 +833,7 @@ function ReadScreen({ ctx }) {
 
           {!compare ? (
             <p className={cx('reader-body', !showStrongs && 'hide-strong')}
-              style={{ fontFamily: readFont, fontSize: baseSize, lineHeight: 1.6, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>
+              style={{ fontFamily: readFont, fontSize: baseSize, lineHeight: 1.5, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>
               {verses.map((row) => {
                 const k = keyOf(row.v);
                 return (

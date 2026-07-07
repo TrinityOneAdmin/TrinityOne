@@ -651,6 +651,14 @@ function App() {
     if (!np || !F || !F.subscribeChurchSafeguard) { setSafeguard({ minors: [], approved: [], guardians: {}, isMinor: false }); return; }
     return F.subscribeChurchSafeguard(np, setSafeguard);
   }, [activeChurch, churches, connTick, lazyReady]);
+  // safeguarding: pick up STEWARD-INITIATED guardian links addressed to me (a church-signed, encrypted notice)
+  // so a child a steward linked me to appears in my family view even though I never set it up on this device.
+  useAE(() => {
+    if (!lazyReady) return;
+    const F = window.Fellowship;
+    if (!F || !F.subscribeGuardianNotices) return;
+    return F.subscribeGuardianNotices();
+  }, [connTick, lazyReady]);
   // joining: whether the active church gates joining behind steward approval, and whether I'm still pending
   const [joinState, setJoinState] = useA({ approval: false, isAdmitted: true, isPending: false });
   const joinChurchRef = React.useRef(null);
