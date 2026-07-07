@@ -376,7 +376,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
-          <IconBtn name="chevD" onClick={onClose} />
+          <IconBtn name="chevL" onClick={onClose} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>You</span>
           <IconBtn name="pen" onClick={() => setEdit(true)} />
         </div>
@@ -549,7 +549,7 @@ function FamilySheet({ open, onClose, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
-          <IconBtn name={stage === 'list' ? 'chevD' : 'chevL'} onClick={() => { if (stage === 'list') onClose(); else { setStage('list'); setMade(null); setName(''); setErr(''); } }} />
+          <IconBtn name="chevL" onClick={() => { if (stage === 'list') onClose(); else { setStage('list'); setMade(null); setName(''); setErr(''); } }} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{stage === 'reveal' ? 'Set up the child’s device' : stage === 'name' ? 'Add a child' : 'Children’s accounts'}</span>
           <div style={{ width: 38 }} />
         </div>

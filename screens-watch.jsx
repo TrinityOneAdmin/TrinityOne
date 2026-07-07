@@ -203,7 +203,7 @@ function VideoPlayer({ video, open, onClose, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 14px 8px' }}>
-          <IconBtn name="chevD" onClick={onClose} />
+          <IconBtn name="chevL" onClick={onClose} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>Watch</span>
           <IconBtn name="share" onClick={() => { openExternal(`https://youtu.be/${video.ytId}`); }} />
         </div>

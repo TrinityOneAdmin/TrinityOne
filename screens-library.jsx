@@ -251,7 +251,7 @@ function JournalView({ entry, open, onClose, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
-          <IconBtn name="chevD" onClick={onClose} />
+          <IconBtn name="chevL" onClick={onClose} />
           <IconBtn name="pen" onClick={() => { onClose(); setTimeout(() => ctx && ctx.editJournal(entry), 220); }} />
         </div>
       </div>
@@ -769,7 +769,7 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 18px 10px' }}>
-          <IconBtn name="chevD" onClick={onClose} />
+          <IconBtn name="chevL" onClick={onClose} />
           <div>
             <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, lineHeight: 1.1 }}>{titleFor}</h1>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Download once — stays on your device</div>

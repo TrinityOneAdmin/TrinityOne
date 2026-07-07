@@ -45,7 +45,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, display: 'flex', flexDirection: 'column', height: '100%' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px' }}>
-          <IconBtn name="chevD" onClick={onClose} />
+          <IconBtn name="chevL" onClick={onClose} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Share verse</span>
           <IconBtn name="share" onClick={() => { onClose(); ctx.toast('Card ready to share'); }} />
         </div>
@@ -96,7 +96,7 @@ function DevotionalView({ open, onClose, ctx }) {
         <div style={{ padding: '10px 18px 24px', position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
-              color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={20} color="#fff" /></button>
+              color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={20} color="#fff" /></button>
             <button onClick={() => ctx.openShareSheet({ type: 'devotional', title: d.title, ref: d.ref, series: d.series, excerpt: (d.body && d.body[0]) || '' })}
               style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
               color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="share" size={18} color="#fff" /></button>
