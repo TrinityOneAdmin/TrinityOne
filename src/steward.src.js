@@ -130,11 +130,14 @@ function _relayInfo(wssUrl) {
   const p = (async () => {
     try {
       const httpUrl = String(wssUrl).replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/+$/, '');
-      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 6000);
-      const res = await fetch(httpUrl, { headers: { Accept: 'application/nostr+json' }, signal: ctrl.signal });
-      clearTimeout(t);
-      if (!res.ok) return null;
-      const info = await res.json();
+      // Hard timeout via Promise.race — CapacitorHttp (native iOS/Android) patches fetch and may IGNORE the
+      // AbortController signal, so the race is what actually bounds a hung probe on-device (web honours both).
+      const ctrl = new AbortController(); const to = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 6000);
+      const info = await Promise.race([
+        (async () => { const res = await fetch(httpUrl, { headers: { Accept: 'application/nostr+json' }, signal: ctrl.signal }); return res.ok ? res.json() : null; })(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('relay-info timeout')), 6500)),
+      ]);
+      clearTimeout(to);
       return (info && info.trinityone) ? { ...info.trinityone, name: info.name || '' } : null;
     } catch { return null; }
   })();
