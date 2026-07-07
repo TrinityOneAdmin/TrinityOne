@@ -132,6 +132,19 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 // member-joins on another) makes a screen load partial/empty. So we read church docs from the union of
 // the member's own relays + the canonical pool, fanning the query across all of them.
 function churchRelays() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
+// FEDERATION Phase 4 — decentralise the default. Track the enforcing relays each church declares as its OWN
+// (from its NIP-65 list, non-canonical), so we can read a self-hosted church WITHOUT the shared a8 fallback.
+const _churchRelays = new Map();   // churchPubHex -> Set(own enforcing wss relays)
+// relaysForChurch(cp): the read set for ONE church. If the church declares >=2 enforcing relays of its own it's
+// self-sufficient — drop the a8 fallback FOR THIS CHURCH (a8 no longer sees or gatekeeps its traffic, and it's
+// no longer dependent on a8). Otherwise keep a8 (the pilot, and any church still on the shared relay). Per-church
+// + reversible: dropping a8 for a self-hosted church never affects a church still using it, and a8 stays in code.
+function relaysForChurch(cp) {
+  const own = cp && _churchRelays.get(cp);
+  const global = window.Fellowship.relays || [];
+  if (own && own.size >= 2) return [...new Set([...own, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])];
+  return [...new Set([...global, ...(own ? [...own] : []), ...CANONICAL_RELAYS])];
+}
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
   try { const r = JSON.parse(localStorage.getItem(RELAYS_KEY) || 'null'); if (Array.isArray(r) && r.length) return r; } catch {}
@@ -323,7 +336,7 @@ function _docsHubOpen(hub) {
   const since = _hubSince(hub);
   const filters = [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }];
   if (since) for (const f of filters) f.since = since;
-  const sub = pool.subscribeMany(churchRelays(), filters, {
+  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
     onevent(e) {
       const d = _dtag(e);
       const key = e.pubkey + '|' + d;
@@ -416,7 +429,7 @@ function _memHubOpen(hub) {
   const since = _hubSince(hub);
   const filters = [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }];
   if (since) for (const f of filters) f.since = since;
-  const sub = pool.subscribeMany(churchRelays(), filters, {
+  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
     onevent(e) {
       _hubCursor(hub, e);
       if (e.pubkey === cp) { _memHubSaveSoon(hub); return; }
@@ -1481,8 +1494,13 @@ window.Fellowship = {
         if (e.pubkey !== cp) return;   // only the church's own signed relay-list
         for (const t of (e.tags || [])) {
           if (t[0] !== 'r' || !/^wss:\/\//i.test(t[1] || '')) continue;
-          const u = t[1]; if (considered.has(u)) continue; considered.add(u);
-          _verifyEnforcing(u).then(ok => { if (ok) window.Fellowship.addRelay(u); });   // adopt only enforcing relays
+          const u = t[1];
+          _verifyEnforcing(u).then(ok => {
+            if (!ok) return;
+            // Phase 4: record this church's OWN (non-canonical) enforcing relay for the self-sufficiency check.
+            if (!CANONICAL_RELAYS.includes(u)) { if (!_churchRelays.has(cp)) _churchRelays.set(cp, new Set()); _churchRelays.get(cp).add(u); }
+            if (!considered.has(u)) { considered.add(u); window.Fellowship.addRelay(u); }   // adopt into the read union once
+          });
         }
       },
       oneose() {},
