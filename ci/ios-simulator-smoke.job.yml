@@ -1,0 +1,106 @@
+# iOS Simulator smoke-test job — reference copy (TRACKED).
+#
+# .github/workflows/ is gitignored in this repo, so the live ios.yml is managed on GitHub
+# directly (Actions tab / web editor). This is the smoke-test JOB to paste under 'jobs:' in
+# .github/workflows/ios.yml on GitHub (sibling of the existing 'build' job). It is already
+# applied to the LOCAL .github/workflows/ios.yml on the dev box.
+#
+# It builds for -sdk iphonesimulator (no signing), boots a sim, launches the app, hard-fails
+# on a native crash, and uploads a screenshot + app log. Trigger: Actions -> iOS build ->
+# Run workflow (macOS runner).
+
+jobs:
+    # ──────────────── SIMULATOR SMOKE TEST ────────────────
+    # Actually RUNS the app in an iOS Simulator (no signing needed) — the "does it boot on iOS WebKit"
+    # check that a pure compile can't give you. Exercises the WKWebView + CapacitorHttp path the
+    # federation relay-discovery code uses. Hard-fails on a native crash; uploads a screenshot + app log
+    # so a blank-screen / JS failure (which doesn't crash the native process) can be eyeballed too.
+    simulator-smoke:
+      runs-on: macos-14
+      timeout-minutes: 45
+      steps:
+        - uses: actions/checkout@v4
+  
+        - uses: actions/setup-node@v4
+          with:
+            node-version: 20
+            cache: npm
+  
+        - name: Install dependencies
+          run: npm ci
+  
+        - name: Build the web app into www/
+          run: bash scripts/sync-web.sh
+  
+        - name: Add the iOS platform (gitignored — regenerated each run)
+          run: npx cap add ios
+  
+        - name: Sync web + plugins into the iOS project
+          run: npx cap sync ios
+  
+        - name: Install CocoaPods
+          working-directory: ios/App
+          run: pod install
+  
+        - name: Build for the simulator (no signing needed)
+          run: |
+            set -e
+            xcodebuild \
+              -workspace ios/App/App.xcworkspace \
+              -scheme App -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath "$RUNNER_TEMP/dd" \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+  
+        - name: Boot an iOS simulator
+          run: |
+            set -e
+            UDID=$(xcrun simctl list devices available -j | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);for(const rt of Object.keys(j.devices)){for(const dev of j.devices[rt]){if(dev.isAvailable&&/iPhone/.test(dev.name)){console.log(dev.udid);process.exit(0)}}}process.exit(1)})')
+            echo "Simulator UDID: $UDID"
+            echo "UDID=$UDID" >> "$GITHUB_ENV"
+            xcrun simctl bootstatus "$UDID" -b
+  
+        - name: Install + launch the app
+          run: |
+            set -e
+            APP=$(find "$RUNNER_TEMP/dd/Build/Products" -name "App.app" -type d | head -1)
+            echo "App bundle: $APP"; test -n "$APP"
+            xcrun simctl install "$UDID" "$APP"
+            xcrun simctl launch "$UDID" com.trinityone.app
+            sleep 25
+  
+        - name: Capture logs + screenshot
+          if: always()
+          run: |
+            xcrun simctl spawn "$UDID" log show --style compact --predicate 'process == "App"' --last 120s > "$RUNNER_TEMP/app.log" 2>&1 || true
+            xcrun simctl io "$UDID" screenshot "$RUNNER_TEMP/screen.png" || true
+            echo "----- last 40 log lines -----"; tail -40 "$RUNNER_TEMP/app.log" || true
+  
+        - name: Smoke assertions
+          run: |
+            STATUS=0
+            if xcrun simctl spawn "$UDID" launchctl list 2>/dev/null | grep -q "com.trinityone.app"; then
+              echo "PASS: app process alive after 25s (no boot crash)"
+            else
+              echo "FAIL: app not running (crashed or exited on launch)"; STATUS=1
+            fi
+            CRASH=$(find "$HOME/Library/Logs/DiagnosticReports" -iname "App-*.ips" 2>/dev/null | head -1)
+            if [ -n "$CRASH" ]; then echo "FAIL: crash report found: $CRASH"; cat "$CRASH" 2>/dev/null | head -30; STATUS=1; fi
+            if grep -qiE "WebView loaded|Loading app at capacitor|Capacitor|⚡" "$RUNNER_TEMP/app.log" 2>/dev/null; then
+              echo "PASS: Capacitor WebView booted"
+            else
+              echo "WARN: no explicit WebView-loaded marker in log — eyeball the screenshot artifact"
+            fi
+            if grep -qiE "unhandledrejection|Terminating due to uncaught|EXC_BAD_ACCESS|fatal error" "$RUNNER_TEMP/app.log" 2>/dev/null; then
+              echo "FAIL: fatal/unhandled error in app log"; STATUS=1
+            fi
+            exit $STATUS
+  
+        - name: Upload smoke artifacts (screenshot + log)
+          if: always()
+          uses: actions/upload-artifact@v4
+          with:
+            name: TrinityOne-iOS-simulator-smoke
+            path: |
+              ${{ runner.temp }}/screen.png
+              ${{ runner.temp }}/app.log
+            retention-days: 14
