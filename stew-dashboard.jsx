@@ -2490,6 +2490,8 @@ function DashMembers() {
     if (childPub === parentPub || minorsSet.has(parentPub)) return;   // a parent must be a different, adult account
     window.Steward.setGuardians({ ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] });
     if (!minorsSet.has(childPub)) window.Steward.setMinors([...(sg.minors || []), childPub]);   // a linked child is a minor
+    // notify the newly-linked parent so the child actually shows up in THEIR app (they never set it up locally)
+    if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '');
   };
   const unlinkParent = (childPub, parentPub) => {
     const cur = (guardians[childPub] || []).filter(p => p !== parentPub);

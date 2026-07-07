@@ -19,6 +19,7 @@ function toPub(npubOrHex) {
 const GROUP_D = 'trinityone/group:';
 const CATEGORY_D = 'trinityone/category:';   // church-signed named container that groups belong to (e.g. "Lifegroups")
 const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the group key wrapped to each member
+const GUARDNOTICE_D = 'trinityone/guardnotice:';   // church->parent notice of a steward-made guardian link, p-tagged + NIP-44-encrypted to the parent
 // Meal trains / Care module (optional, per church). meals-settings is church-signed; care: needs come from
 // church/steward/care-team admins; careslot: are member offers to help; careskip: is RECIPIENT-only.
 const MEALS_SETTINGS_D = 'trinityone/meals-settings';
@@ -1000,6 +1001,29 @@ window.Fellowship = {
       },
       oneose() { emit(); },
     });
+  },
+
+  // safeguarding v2: receive a STEWARD-INITIATED guardian link. A parent the steward linked (who never set the
+  // child up locally) gets a church-signed, NIP-44-encrypted notice p-tagged to them — decrypt it, record the
+  // child locally so it appears in their family view, and flip _needAuth so they authenticate to read the
+  // church's confirmed guardians: map. Mirrors the self-request flow, so both kinds of parent end up the same.
+  subscribeGuardianNotices() {
+    if (!pub) return () => {};
+    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#d': [GUARDNOTICE_D + pub] }], {
+      onevent(e) {
+        if (!sk) return;
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d !== GUARDNOTICE_D + pub) return;
+        let dec; try { dec = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch { return; }
+        if (!dec || !dec.child || dec.child === pub) return;
+        if (_loadChildren().some(c => c && c.child === dec.child)) return;   // already known — no-op
+        _saveChildLink({ child: dec.child, name: dec.name || '', churchPub: dec.church || e.pubkey, ts: e.created_at || Math.floor(Date.now() / 1000) });
+        _needAuth = true;   // now a guardian → authenticate to read the church's confirmation
+        try { window.dispatchEvent(new CustomEvent('trinity-guardian-added', { detail: { child: dec.child } })); } catch (x) {}
+      },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
   },
 
   // ── safeguarding v2: a parent creates a child account they own (mints a fresh key, sets the child up

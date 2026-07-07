@@ -115,6 +115,7 @@ const HIDE_D = 'trinityone/hidden:';       // a removed/hidden message — d=hid
 const MINORS_D = 'trinityone/minors:';     // safeguarding: a church's list of minor (child) pubkeys — d=minors:<churchpub>
 const APPROVED_D = 'trinityone/approved:'; // safeguarding: adults cleared to contact youth (mirrors the church's DBS/cleared list) — d=approved:<churchpub>
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-signed child→parents map — d=guardians:<churchpub>; a guardian may always DM their own child
+const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent notice of a steward-made guardian link — d=guardnotice:<parentpub>, p-tagged + NIP-44-encrypted to the parent (child link never in cleartext)
 // (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable, falls to the default member rule)
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
 const ADMITTED_D = 'trinityone/admitted:';   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
@@ -460,6 +461,10 @@ function accept(e) {
     for (const pfx of [MINORS_D, APPROVED_D, GUARDIANS_D]) {
       if (d.startsWith(pfx)) return CHURCH_PUBS.has(e.pubkey) && d.slice(pfx.length) === e.pubkey;
     }
+    // a church->parent guardian-link NOTICE (d=guardnotice:<parentpub>). OWNER-signed only. NOT read-gated
+    // (its content is encrypted to the parent) so the parent receives it WITHOUT auth — it's what prompts
+    // them to authenticate for the gated guardians: map. Explicit rule = exempt from the per-member doc cap.
+    if (d.startsWith(GUARDNOTICE_D)) return CHURCH_PUBS.has(e.pubkey);
     // FINANCE journal — single-writer, relay-ordered, APPEND-ONLY. The seq lives in the (unencrypted) d-tag so
     // the relay can order it without reading the (encrypted) entry; the church is named in a ["church",<cp>] tag.
     if (d.startsWith(FIN_JOURNAL_D)) {

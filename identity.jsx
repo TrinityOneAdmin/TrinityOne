@@ -535,6 +535,9 @@ function FamilySheet({ open, onClose, ctx }) {
   const guardians = (ctx.safeguard && ctx.safeguard.guardians) || {};
   const confirmed = (childPub) => !!((guardians[childPub] || []).includes(me));
   const refreshKids = () => setKids(F && F.myChildren ? F.myChildren(ctx.church && ctx.church.npub) : []);
+  // a steward-initiated guardian link arrives as an encrypted notice → the engine records the child, then
+  // fires this so it appears here without a reload.
+  useIdE(() => { const f = () => refreshKids(); window.addEventListener('trinity-guardian-added', f); return () => window.removeEventListener('trinity-guardian-added', f); }, []);
   const create = async () => {
     const n = name.trim(); if (!n) { setErr('Enter the child’s name.'); return; }
     setBusy(true); setErr('');
