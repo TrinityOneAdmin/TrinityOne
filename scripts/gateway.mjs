@@ -825,6 +825,24 @@ function serveStatic(req, res) {
     }));
     return;
   }
+  // NIP-11 relay information document (FEDERATION-PLAN Phase 1a). Served only to clients that ASK for
+  // it (Accept: application/nostr+json) on the relay path, so normal browser GETs are unaffected. The
+  // `trinityone` block is the capability signal a federating client checks BEFORE routing any gated
+  // content here (risk #1: a generic relay enforces none of our membership/safeguarding policy). This
+  // only ADVERTISES what the relay already does — it changes no read/write behaviour.
+  if (route === '/relay' && /application\/nostr\+json/i.test(req.headers['accept'] || '')) {
+    res.writeHead(200, { 'Content-Type': 'application/nostr+json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    res.end(JSON.stringify({
+      name: 'TrinityOne relay',
+      description: 'A TrinityOne church relay: membership-gated writes, safeguarding auth-gating (NIP-42), multi-church.',
+      software: 'https://github.com/TrinityOneAdmin/TrinityOne',
+      version: BUILD.short,
+      supported_nips: [1, 42],
+      limitation: { restricted_writes: true, max_message_length: 1024 * 1024 },
+      trinityone: { enforces: true, multiChurch: true },   // enforces = this relay applies TrinityOne's write/safeguard policy
+    }));
+    return;
+  }
   // self-host bundle: a fresh tarball of the committed code, so a new relay box can install straight
   // from this funnel instead of the (private) GitHub repo. `git archive` only emits tracked files —
   // relay/ secrets are gitignored, so nothing sensitive ships. Public on purpose (the installer curls it).

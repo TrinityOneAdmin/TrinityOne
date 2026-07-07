@@ -174,6 +174,9 @@ function setKey(mnemonic) {
   window.Steward.churchPub = pub;
   window.Steward.activePub = pub;
   window.Steward.hasKey = true;
+  // FEDERATION-PLAN Phase 1b: publish/refresh the church's NIP-65 relay-list once the key is ready.
+  // Fire-and-forget + deferred so it never blocks unlock; replaceable, so re-running is harmless.
+  try { Promise.resolve().then(() => { try { window.Steward.publishRelayList && window.Steward.publishRelayList(); } catch {} }); } catch {}
 }
 
 // ── console PIN lock: encrypt the church seed at rest with a PIN/passphrase (AES-GCM, PBKDF2). A
@@ -480,6 +483,17 @@ window.Steward = {
     }
     const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', banner: m.banner || '', bannerFade: (typeof m.bannerFade === 'number') ? m.bannerFade : 16, accent: m.accent || '', channel: m.channel || '', audioFeed: m.audioFeed || '', lud16: (m.lud16 || '').trim(), giving: !!m.giving, features: (m.features && typeof m.features === 'object') ? m.features : {}, rules: (m.rules && typeof m.rules === 'object') ? m.rules : {} });
     return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
+  },
+  // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
+  // 10002), WHICH relays carry this church's content — so a member can follow relay moves/additions
+  // without needing a fresh invite link. Purely additive: nothing reads kind:10002 until Phase 2, and it
+  // only lists relays the church already uses (today the public canonical set), so it reveals nothing new.
+  // NOTE: when self-hosted/HIDDEN relays arrive (Phase 4), this MUST become opt-in per church so a hidden
+  // relay isn't advertised (FEDERATION-PLAN risk #4). Signed by the church key only — not a delegated steward.
+  publishRelayList() {
+    if (!sk || actingChurch) return Promise.resolve(null);
+    const tags = relays().map(r => ['r', r]);   // no read/write marker = both (church relays serve + accept)
+    return publish(finalizeEvent({ kind: 10002, created_at: now(), tags, content: '' }, sk));
   },
   publishFund(fund) {
     if (!sk) return Promise.resolve(null);
