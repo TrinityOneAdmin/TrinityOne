@@ -21,6 +21,14 @@ const PORT = Number(process.argv[2] || process.env.PORT || 8090);
 const DB = process.env.RELAY_DB || join(ROOT, 'relay', 'relay-db.json');                 // legacy JSON store (migrated from, once)
 const SQLITE_DB = process.env.RELAY_SQLITE || join(ROOT, 'relay', 'relay.sqlite');       // durable event store
 const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 20000;   // ephemeral budget; raise on a shared/public relay
+// FEDERATION Phase 3a — relay OFFER (opt-in): an operator willing to host OTHER churches sets RELAY_OPEN=1,
+// so this relay advertises itself (in its NIP-11 doc) as accepting new churches. Default OFF: a private/home
+// relay never offers itself, so discovery/auto-pick can't surface it (FEDERATION-PLAN risk #4). operator =
+// the operator's npub (who a church is trusting + can contact); region = a hint for nearest-relay preference.
+const OFFER_OPEN = /^(1|true|yes|on)$/i.test(process.env.RELAY_OPEN || '');
+const OFFER_OPERATOR = (process.env.RELAY_OPERATOR || '').trim();
+const OFFER_REGION = (process.env.RELAY_REGION || '').trim();
+const OFFER_CAP = parseInt(process.env.RELAY_CHURCH_CAP, 10) || 0;   // 0 = no declared cap
 const NONMEMBER_KIND0_CAP = 1000;   // cap stored profiles from non-members (L2: prevent unbounded growth)
 const STEWARDREQ_CAP = 50;          // cap pending steward-requests per church from strangers (audit L1: anti-flood)
 const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs per member — one member can't disk-exhaust the relay with novel d-tags
@@ -839,7 +847,19 @@ function serveStatic(req, res) {
       version: BUILD.short,
       supported_nips: [1, 42],
       limitation: { restricted_writes: true, max_message_length: 1024 * 1024 },
-      trinityone: { enforces: true, multiChurch: true },   // enforces = this relay applies TrinityOne's write/safeguard policy
+      trinityone: {
+        enforces: true, multiChurch: true,   // enforces = this relay applies TrinityOne's write/safeguard policy
+        // OFFER fields (Phase 3a) appear ONLY when the operator opted in via RELAY_OPEN — a private relay omits
+        // them entirely, so discovery/auto-pick never surfaces it. `full` lets a busy relay decline new churches
+        // without going offline. `churches` is a load hint (already exposed unauthenticated in /status counts).
+        ...(OFFER_OPEN ? {
+          open: !(OFFER_CAP && CHURCH_PUBS.size >= OFFER_CAP),
+          full: !!(OFFER_CAP && CHURCH_PUBS.size >= OFFER_CAP),
+          churches: CHURCH_PUBS.size,
+          ...(OFFER_OPERATOR ? { operator: OFFER_OPERATOR } : {}),
+          ...(OFFER_REGION ? { region: OFFER_REGION } : {}),
+        } : {}),
+      },
     }));
     return;
   }
