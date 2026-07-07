@@ -7279,7 +7279,7 @@
           }
           if (!dec || !dec.child || dec.child === pub) return;
           if (_loadChildren().some((c) => c && c.child === dec.child)) return;
-          _saveChildLink({ child: dec.child, name: dec.name || "", churchPub: dec.church || e.pubkey, ts: e.created_at || Math.floor(Date.now() / 1e3) });
+          _saveChildLink({ child: dec.child, name: dec.name || "", churchPub: dec.church || e.pubkey, ts: e.created_at || Math.floor(Date.now() / 1e3), viaSteward: true });
           _needAuth = true;
           try {
             window.dispatchEvent(new CustomEvent("trinity-guardian-added", { detail: { child: dec.child } }));

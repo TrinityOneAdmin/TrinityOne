@@ -1017,7 +1017,9 @@ window.Fellowship = {
         let dec; try { dec = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch { return; }
         if (!dec || !dec.child || dec.child === pub) return;
         if (_loadChildren().some(c => c && c.child === dec.child)) return;   // already known — no-op
-        _saveChildLink({ child: dec.child, name: dec.name || '', churchPub: dec.church || e.pubkey, ts: e.created_at || Math.floor(Date.now() / 1000) });
+        // viaSteward: the steward INITIATED this link, so it's already done — the notice IS the confirmation.
+        // The parent's UI shows it as linked, not "waiting for the steward to confirm" (there's nothing to confirm).
+        _saveChildLink({ child: dec.child, name: dec.name || '', churchPub: dec.church || e.pubkey, ts: e.created_at || Math.floor(Date.now() / 1000), viaSteward: true });
         _needAuth = true;   // now a guardian → authenticate to read the church's confirmation
         try { window.dispatchEvent(new CustomEvent('trinity-guardian-added', { detail: { child: dec.child } })); } catch (x) {}
       },

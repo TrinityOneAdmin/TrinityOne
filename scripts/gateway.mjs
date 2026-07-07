@@ -1234,6 +1234,10 @@ function serveStatic(req, res) {
   const ext = extname(file).toLowerCase();
   const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS };
   if (ext === '.html') headers['Content-Security-Policy'] = CSP;
+  // app code (our engine bundles + jsx/html/css) changes every release — tell Cloudflare + browsers to
+  // REVALIDATE so a deploy is never served stale from the edge (this is why a manual purge was needed).
+  // no-cache still allows a cheap 304 when unchanged, so stable libs (react/babel .js) don't re-download.
+  if (['.js', '.mjs', '.jsx', '.html', '.css', '.json'].includes(ext)) headers['Cache-Control'] = 'no-cache';
   res.writeHead(200, headers);
   createReadStream(file).pipe(res);
 }
