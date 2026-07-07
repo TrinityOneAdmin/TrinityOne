@@ -13,7 +13,7 @@ import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { openStore, matchFilter } from './event-store.mjs';   // durable event storage (node:sqlite) + the canonical read predicate
 import { verifyEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
-import { randomBytes, timingSafeEqual } from 'crypto';
+import { randomBytes, timingSafeEqual, createHash } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
 
 const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
@@ -63,6 +63,40 @@ const BUILD = (() => {
   return { sha, short: sha.slice(0, 7), date };
 })();
 const UPDATE_FLAG = join(ROOT, 'relay', '.update-request');   // the relay can only write under relay/; a root path-unit watches this and runs the update
+// FEDERATION Phase 5 Tier 2 — self-hosted media (Blossom-style content-addressed blobs). A church stores its
+// OWN audio/video here (no YouTube), addressed by its SHA-256. Upload is church/steward-signed (kind 24242);
+// download is member-gated (NIP-98 kind 27235). Blobs live under relay/ (the one dir the relay may write).
+const BLOB_DIR = join(ROOT, 'relay', 'blobs');
+try { mkdirSync(BLOB_DIR, { recursive: true }); } catch {}
+const MAX_BLOB = parseInt(process.env.RELAY_MAX_BLOB, 10) || 200 * 1024 * 1024;   // 200 MB/blob cap (sermons: audio small, video low-bitrate)
+const _blobRe = /^[0-9a-f]{64}$/;
+function _blobOwner(sha) { try { return readFileSync(join(BLOB_DIR, sha + '.church'), 'utf8').trim(); } catch { return ''; } }
+// upload auth: a signed, time-bounded kind-24242 event by the CHURCH key, or a steward of a named church.
+function _blobUploader(req) {
+  const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
+  let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
+  if (!ev || ev.kind !== 24242 || !verifyEvent(ev)) return null;
+  const tag = (k) => (ev.tags.find(t => t[0] === k) || [])[1];
+  if (tag('t') !== 'upload') return null;
+  const exp = parseInt(tag('expiration') || '0', 10); if (!exp || exp < Math.floor(Date.now() / 1000)) return null;   // must expire (anti-replay)
+  const cp = tag('church');
+  if (cp && stewardOf(ev.pubkey, cp)) return { church: cp, want: (tag('x') || '').toLowerCase() };
+  if (CHURCH_PUBS.has(ev.pubkey)) return { church: ev.pubkey, want: (tag('x') || '').toLowerCase() };
+  return null;
+}
+// download gate: a fresh NIP-98 (kind 27235) proof, bound to THIS url, signed by a member of the owning church.
+function _blobMember(req, ownerCp, host, path) {
+  if (!ownerCp || !CHURCH_PUBS.size) return true;   // unconfigured / no owner recorded → open
+  const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return false;
+  let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return false; }
+  if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return false;
+  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) return false;   // fresh (±5 min)
+  const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
+  try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return false; } catch { return false; }   // bound to this relay+path (anti-replay)
+  const p = ev.pubkey;
+  const md = MEMBER_DOCS.get(ownerCp);
+  return p === ownerCp || stewardOf(p, ownerCp) || !!(md && md.has(p));   // church / steward / member of the OWNING church
+}
 
 // ---- signed self-update bundle ----------------------------------------------------------------
 // Security: the self-update downloads /relay-app/bundle.tgz and applies it. To stop a compromised
@@ -1121,6 +1155,49 @@ function serveStatic(req, res) {
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
   // audio (podcast) feed proxy
+  // FEDERATION Phase 5 Tier 2 — self-hosted media blobs (Blossom-style, content-addressed).
+  // Upload: PUT /blob (church/steward-signed kind-24242). Download: GET /blob/<sha256> (member-gated NIP-98).
+  if (route === '/blob' && (req.method === 'PUT' || req.method === 'POST')) {
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+    const who = _blobUploader(req);
+    if (!who) { res.writeHead(401, H); res.end('{"error":"unauthorized: sign a kind-24242 upload auth with the church (or steward) key"}'); return; }
+    const chunks = []; let n = 0, tooBig = false;
+    req.on('data', (c) => { n += c.length; if (n > MAX_BLOB) { tooBig = true; req.destroy(); return; } chunks.push(c); });
+    req.on('end', () => {
+      if (tooBig) { res.writeHead(413, H); res.end('{"error":"blob too large"}'); return; }
+      const buf = Buffer.concat(chunks); if (!buf.length) { res.writeHead(400, H); res.end('{"error":"empty"}'); return; }
+      const sha = createHash('sha256').update(buf).digest('hex');
+      if (who.want && who.want !== sha) { res.writeHead(400, H); res.end('{"error":"hash mismatch (x tag != blob sha256)"}'); return; }
+      try {
+        const tmp = join(BLOB_DIR, sha + '.tmp'); writeFileSync(tmp, buf); renameSync(tmp, join(BLOB_DIR, sha));
+        writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // owner → the download gate
+        const ct = req.headers['content-type'] || ''; if (ct) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
+      } catch (e) { res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
+      res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size: buf.length, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
+    });
+    req.on('error', () => { try { res.writeHead(400, H); res.end('{"error":"read"}'); } catch {} });
+    return;
+  }
+  if (route.startsWith('/blob/') && (req.method === 'GET' || req.method === 'HEAD')) {
+    const sha = route.slice('/blob/'.length).toLowerCase();
+    if (!_blobRe.test(sha)) { res.writeHead(400, { 'Access-Control-Allow-Origin': '*' }); res.end('bad hash'); return; }
+    const file = join(BLOB_DIR, sha); let st; try { st = statSync(file); } catch { res.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); res.end('not found'); return; }
+    const host = (req.headers.host || '').split(',')[0].trim();
+    if (!_blobMember(req, _blobOwner(sha), host, route)) { res.writeHead(401, { 'Access-Control-Allow-Origin': '*', 'WWW-Authenticate': 'Nostr' }); res.end('members only'); return; }
+    let ct = 'application/octet-stream'; try { ct = readFileSync(join(BLOB_DIR, sha + '.type'), 'utf8').trim() || ct; } catch {}
+    const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=31536000, immutable', ...SEC_HEADERS };   // content-addressed → immutable
+    const range = req.headers['range'] && /bytes=(\d*)-(\d*)/.exec(req.headers['range']);   // seek support for audio/video
+    if (range) {
+      const start = range[1] ? parseInt(range[1], 10) : 0; const end = range[2] ? parseInt(range[2], 10) : st.size - 1;
+      if (start > end || end >= st.size) { res.writeHead(416, base); res.end(); return; }
+      res.writeHead(206, { ...base, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
+      if (req.method === 'HEAD') { res.end(); return; }
+      createReadStream(file, { start, end }).pipe(res); return;
+    }
+    res.writeHead(200, { ...base, 'Content-Length': st.size });
+    if (req.method === 'HEAD') { res.end(); return; }
+    createReadStream(file).pipe(res); return;
+  }
   if (route === '/audiofeed') {
     if (!SETTINGS.serveAudio) { res.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); res.end('{"error":"audio off"}'); return; }
     let u = ''; try { u = new URL(req.url, 'http://x').searchParams.get('url') || ''; } catch {}
