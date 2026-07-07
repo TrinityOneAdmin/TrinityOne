@@ -9,8 +9,9 @@ WWW="$ROOT/www"
 rm -rf "$WWW"
 mkdir -p "$WWW/modules" "$WWW/vendor"
 
-# app shell + code + bundled catalogs/snapshots
-cp index.html engine.js *.jsx catalog.json ebible-catalog.json trinity-videos.json web-audio-manifest.json "$WWW/"
+# app shell + code + bundled catalogs/snapshots (the app UI .jsx now live under app/)
+cp index.html engine.js catalog.json ebible-catalog.json trinity-videos.json web-audio-manifest.json "$WWW/"
+cp -r app "$WWW/"
 # PWA assets (manifest + icons are referenced by index.html; sw.js is not registered under Capacitor)
 cp manifest.json sw.js sw-register.js "$WWW/" 2>/dev/null || true
 cp -r icons "$WWW/" 2>/dev/null || true
@@ -25,9 +26,9 @@ rm -f "$WWW"/vendor/library/*.json.gz
 # is unreliable in the Capacitor webview (its native-HTTP patching can break Babel's fetch of the
 # .jsx files -> nothing renders -> solid blank screen). Plain <script> loads avoid all of that.
 echo "transpiling JSX -> JS for the packaged build…"
-for f in "$WWW"/*.jsx; do
+for f in "$WWW"/app/*.jsx; do
   base="$(basename "$f" .jsx)"
-  ./node_modules/.bin/esbuild "$f" --jsx=transform --log-level=error --outfile="$WWW/$base.js"
+  ./node_modules/.bin/esbuild "$f" --jsx=transform --log-level=error --outfile="$WWW/app/$base.js"
   rm "$f"
 done
 # index.html for the packaged build: drop the Babel runtime, point script tags at the transpiled .js
@@ -41,7 +42,7 @@ sed -i \
 # runtime (the packaged HTML is pre-transpiled), the steward console (com.trinityone.steward is its own
 # APK), or the PDF lib (steward finance only). Saves ~1MB uncompressed.
 rm -f "$WWW"/vendor/babel.min.js
-rm -f "$WWW"/stew-*.js "$WWW"/steward-root.js
+rm -f "$WWW"/app/stew-*.js "$WWW"/app/steward-root.js
 rm -f "$WWW"/vendor/steward*.js "$WWW"/vendor/jspdf.umd.min.js
 rm -f "$WWW"/vendor/fonts/f00[123].woff2 "$WWW"/vendor/fonts/f01[0123].woff2   # unused Bricolage Grotesque + Plus Jakarta Sans faces (only Sora + Newsreader are referenced)
 

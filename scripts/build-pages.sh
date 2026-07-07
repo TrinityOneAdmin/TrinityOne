@@ -21,10 +21,10 @@ rm -f  "$OUT"/*.md "$OUT"/package*.json "$OUT"/capacitor.config.* "$OUT"/tsconfi
 # because the marketing/help/preview pages (welcome.html, "help.html", landing-app-today.html)
 # legitimately still load .jsx (+ runtime Babel, or plain like help-data.jsx); those keep a loose CSP.
 echo "transpiling JSX -> JS for the Pages app shells…"
-for f in "$OUT"/*.jsx; do
+for f in "$OUT"/app/*.jsx; do
   [ -e "$f" ] || continue
   base="$(basename "$f" .jsx)"
-  ./node_modules/.bin/esbuild "$f" --jsx=transform --log-level=error --outfile="$OUT/$base.js"
+  ./node_modules/.bin/esbuild "$f" --jsx=transform --log-level=error --outfile="$OUT/app/$base.js"
 done
 # point ONLY the app shells at the transpiled .js and drop the Babel runtime from them
 for html in index.html steward.html; do
@@ -63,7 +63,7 @@ cat > "$OUT/_headers" <<HDR
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   X-Frame-Options: SAMEORIGIN
-/*.jsx
+/app/*.jsx
   Content-Type: text/javascript; charset=utf-8
 HDR
 

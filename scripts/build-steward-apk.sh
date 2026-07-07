@@ -44,17 +44,18 @@ echo "building steward webDir…"
 rm -rf "$WWW"; mkdir -p "$WWW/vendor"
 cp steward.html "$WWW/index.html"
 cp brand.css "$WWW/"
-cp icons.jsx stew-data.jsx stew-console.jsx stew-schedule.jsx stew-templates.jsx \
-   stew-dashboard.jsx stew-finance.jsx stew-manna.jsx stew-meals.jsx stew-relay.jsx stew-extension.jsx stew-phone.jsx stew-custody.jsx \
-   backup.jsx steward-root.jsx "$WWW/"
+mkdir -p "$WWW/app"
+cp app/icons.jsx app/stew-data.jsx app/stew-console.jsx app/stew-schedule.jsx app/stew-templates.jsx \
+   app/stew-dashboard.jsx app/stew-finance.jsx app/stew-manna.jsx app/stew-meals.jsx app/stew-relay.jsx app/stew-extension.jsx app/stew-phone.jsx app/stew-custody.jsx \
+   app/backup.jsx app/steward-root.jsx "$WWW/app/"
 cp -r vendor/fonts "$WWW/vendor/"
 cp vendor/react.production.min.js vendor/react-dom.production.min.js vendor/steward.js vendor/finance-ledger.js vendor/steward-manna.js vendor/steward-meals.js vendor/jsqr.js vendor/jspdf.umd.min.js "$WWW/vendor/"
 
 # pre-transpile JSX -> JS (runtime Babel is unreliable in the Capacitor webview)
 echo "transpiling steward JSX -> JS…"
-for f in "$WWW"/*.jsx; do
+for f in "$WWW"/app/*.jsx; do
   base="$(basename "$f" .jsx)"
-  ./node_modules/.bin/esbuild "$f" --jsx=transform --log-level=error --outfile="$WWW/$base.js"
+  ./node_modules/.bin/esbuild "$f" --jsx=transform --log-level=error --outfile="$WWW/app/$base.js"
   rm "$f"
 done
 sed -i -e '/babel\.min\.js/d' -e 's#<script type="text/babel" src="\([^"]*\)\.jsx">#<script src="\1.js">#g' "$WWW/index.html"

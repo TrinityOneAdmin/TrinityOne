@@ -18,11 +18,11 @@ const CORE = [
   './vendor/fflate.js', './vendor/sqljs/sql-wasm.js', './vendor/sqljs/sql-wasm.wasm',
   './engine.js', './vendor/identity.js', './vendor/fellowship.js', './vendor/mydata.js', './vendor/library/index.js',
   './vendor/fonts/fonts.css',
-  './data.jsx', './icons.jsx', './ui.jsx', './identity-avatar.jsx', './identity.jsx', './identity-extras.jsx',
-  './screens-today.jsx', './screens-read.jsx', './screens-plans.jsx', './screens-library.jsx', './screens-bookreader.jsx',
-  './screens-watch.jsx', './screens-search.jsx', './screens-concordance.jsx', './screens-audio.jsx', './screens-extras.jsx', './screens-giving.jsx',
-  './screens-church.jsx', './screens-serving.jsx', './reminders.jsx', './backup.jsx', './screens-chat.jsx', './screens-onboarding.jsx', './help-illustrations.jsx', './help-data.jsx',
-  './screens-help.jsx', './screens-help-main.jsx', './app.jsx',
+  './app/data.jsx', './app/icons.jsx', './app/ui.jsx', './app/identity-avatar.jsx', './app/identity.jsx', './app/identity-extras.jsx',
+  './app/screens-today.jsx', './app/screens-read.jsx', './app/screens-plans.jsx', './app/screens-library.jsx', './app/screens-bookreader.jsx',
+  './app/screens-watch.jsx', './app/screens-search.jsx', './app/screens-concordance.jsx', './app/screens-audio.jsx', './app/screens-extras.jsx', './app/screens-giving.jsx',
+  './app/screens-church.jsx', './app/screens-serving.jsx', './app/reminders.jsx', './app/backup.jsx', './app/screens-chat.jsx', './app/screens-onboarding.jsx', './app/help-illustrations.jsx', './app/help-data.jsx',
+  './app/screens-help.jsx', './app/screens-help-main.jsx', './app/app.jsx',
   './catalog.json', './manifest.json', './web-audio-manifest.json',
 ];
 
