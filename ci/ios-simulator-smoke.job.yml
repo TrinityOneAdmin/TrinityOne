@@ -2,12 +2,12 @@
 #
 # .github/workflows/ is gitignored in this repo, so the live ios.yml is managed on GitHub
 # directly (Actions tab / web editor). This is the smoke-test JOB to paste under 'jobs:' in
-# .github/workflows/ios.yml on GitHub (sibling of the existing 'build' job). It is already
-# applied to the LOCAL .github/workflows/ios.yml on the dev box.
+# .github/workflows/ios.yml on GitHub (sibling of the existing 'build' job). Already applied
+# to the LOCAL .github/workflows/ios.yml on the dev box. Requires ci/ui-smoke-eval.js (tracked).
 #
-# It builds for -sdk iphonesimulator (no signing), boots a sim, launches the app, hard-fails
-# on a native crash, and uploads a screenshot + app log. Trigger: Actions -> iOS build ->
-# Run workflow (macOS runner).
+# Boots an iOS Simulator, launches the app, HARD-fails on a native crash, runs the UI feature
+# smoke inside the WebView (best-effort via ios-webkit-debug-proxy), and uploads a screenshot
+# + log. Trigger: Actions -> iOS build -> Run workflow (macOS runner).
 
 jobs:
     # ──────────────── SIMULATOR SMOKE TEST ────────────────
@@ -67,6 +67,30 @@ jobs:
             xcrun simctl install "$UDID" "$APP"
             xcrun simctl launch "$UDID" com.trinityone.app
             sleep 25
+  
+        - name: UI feature smoke via WebKit inspector (best-effort)
+          run: |
+            # Runs ci/ui-smoke-eval.js inside the live WebView to confirm the NEW features are present +
+            # the app booted clean — the same check that passes on web/Chromium. Best-effort: iOS WebView
+            # inspection tooling (ios-webkit-debug-proxy) is fragile in CI, so a tooling failure WARNs and
+            # passes (the native boot smoke + screenshot still gate). A successful attach that finds a
+            # missing feature FAILS the job.
+            set +e
+            brew install ios-webkit-debug-proxy >/dev/null 2>&1 || { echo "WARN: ios-webkit-debug-proxy install failed — skipping WebView feature smoke"; exit 0; }
+            ios_webkit_debug_proxy -s "simulator:$UDID" -c null:9221 -F >"$RUNNER_TEMP/iwdp.log" 2>&1 &
+            IWDP=$!; sleep 6
+            WS=$(curl -s --max-time 6 http://localhost:9221/json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const a=JSON.parse(d);const p=(a||[]).find(t=>t.webSocketDebuggerUrl);console.log(p?p.webSocketDebuggerUrl:"")}catch(e){console.log("")}})')
+            if [ -z "$WS" ]; then echo "WARN: no inspectable WebView (proxy attach failed) — relying on native boot smoke + screenshot"; kill $IWDP 2>/dev/null; exit 0; fi
+            node -e '
+              const WebSocket=require("ws"),fs=require("fs");const ws=new WebSocket(process.argv[1]);let id=0;
+              const expr=fs.readFileSync("ci/ui-smoke-eval.js","utf8");
+              ws.on("open",()=>{const i=++id;ws.send(JSON.stringify({id:i,method:"Runtime.evaluate",params:{expression:expr,returnByValue:true}}));ws.on("message",d=>{const m=JSON.parse(d);if(m.id===i){try{const v=JSON.parse(m.result.result.value);console.log("iOS WebView smoke:",JSON.stringify(v));process.exit(v.pass?0:2)}catch(e){console.log("WARN: could not parse smoke result");process.exit(0)}}})});
+              ws.on("error",e=>{console.log("WARN: inspector ws error:",e.message);process.exit(0)});
+              setTimeout(()=>{console.log("WARN: inspector eval timed out");process.exit(0)},15000);
+            ' "$WS"
+            RC=$?; kill $IWDP 2>/dev/null
+            if [ $RC -eq 2 ]; then echo "FAIL: iOS WebView feature smoke — a new feature is missing/unhealthy on iOS"; exit 1; fi
+            exit 0
   
         - name: Capture logs + screenshot
           if: always()
