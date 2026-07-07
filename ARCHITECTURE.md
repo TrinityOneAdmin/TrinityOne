@@ -38,7 +38,7 @@ The clients are **plain HTML + classic `<script>` tags**, not a bundler/ESM app.
 
 The heavier logic lives in **engines**: `src/*.src.js` (and a few `.mjs`) files that *are* ES modules, bundled by esbuild into `vendor/*.js` as a single `window.X` global. So the split is:
 
-- **`.jsx` (root)** — React UI, classic scripts, one shared global scope.
+- **`app/*.jsx`** — React UI, classic scripts, one shared global scope.
 - **`src/*` → `vendor/*.js`** — engines, real modules, exposed as `window.X`.
 
 ## 3. The engines (`window.*`)
@@ -100,9 +100,9 @@ www/             generated member web build (gitignored)
 
 1. **This doc**, then skim `README.md`.
 2. **The data model + security:** `scripts/gateway.mjs` — `accept()` and `canRead()`. Everything hangs off these.
-3. **The member app:** `index.html` (load order) → `app.jsx` (orchestration) → one screen, e.g. `screens-today.jsx`.
+3. **The member app:** `index.html` (load order) → `app/app.jsx` (orchestration) → one screen, e.g. `app/screens-today.jsx`.
 4. **A transport engine:** `src/fellowship.src.js` — how a client subscribes/publishes.
-5. **The console:** `steward.html` → `steward-root.jsx` (the data hooks) → `stew-dashboard.jsx` (the sections).
+5. **The console:** `steward.html` → `app/steward-root.jsx` (the data hooks) → `app/stew-dashboard.jsx` (the sections).
 
 ## 9. Gotchas (save yourself an afternoon)
 
