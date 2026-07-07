@@ -9580,6 +9580,8 @@ zoo`.split("\n");
   var GUARDIANS_D = "trinityone/guardians:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
+  var MEDIAKEY_D = "trinityone/mediakey:";
+  var _mediaKeyHex = null;
   async function _sha256hex(u82) {
     const d = await crypto.subtle.digest("SHA-256", u82);
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -10254,6 +10256,54 @@ zoo`.split("\n");
     removeSermon(id) {
       if (!sk) return Promise.resolve(null);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+    },
+    // Tier 2 encryption: ensure a church media key exists + is wrapped (NIP-44) to every current member, publish
+    // the envelope, and return an AES-GCM encryptor that prepends a random 12-byte IV. Encrypt runs BEFORE upload,
+    // so the host (and any cloud backup) only ever holds ciphertext; only members hold the key to decrypt.
+    async mediaEncryptor(memberPubs) {
+      if (!sk) throw new Error("no key");
+      if (!_mediaKeyHex) _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      const keys = {};
+      const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+      for (const mp of targets) {
+        try {
+          keys[mp] = encrypt3(_mediaKeyHex, getConversationKey(sk, mp));
+        } catch (e) {
+        }
+      }
+      await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      const key = await crypto.subtle.importKey("raw", _unhex(_mediaKeyHex), "AES-GCM", false, ["encrypt"]);
+      return async (bytes) => {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes));
+        const out = new Uint8Array(12 + ct.length);
+        out.set(iv, 0);
+        out.set(ct, 12);
+        return out;
+      };
+    },
+    // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
+    subscribeMediaKey() {
+      if (!pub) return () => {
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }], {
+        onevent(e) {
+          try {
+            const o = JSON.parse(e.content);
+            const mine = o.keys && o.keys[pub];
+            if (mine && sk) _mediaKeyHex = decrypt3(mine, getConversationKey(sk, e.pubkey));
+          } catch (x) {
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
     },
     subscribeSermons(onSermons) {
       if (!pub) {

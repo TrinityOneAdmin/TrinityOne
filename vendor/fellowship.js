@@ -5764,6 +5764,7 @@
   var GROUPKEY_D = "trinityone/groupkey:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
+  var MEDIAKEY_D = "trinityone/mediakey:";
   async function _sha256hex(u82) {
     const d = await crypto.subtle.digest("SHA-256", u82);
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -6476,8 +6477,57 @@
         const got = await _sha256hex(bytes);
         if (got !== opts.expectSha) throw new Error("media integrity failed");
       }
-      if (typeof opts.decrypt === "function") bytes = opts.decrypt(bytes);
+      if (typeof opts.decrypt === "function") bytes = await opts.decrypt(bytes);
       return URL.createObjectURL(new Blob([bytes], { type: opts.mime || res.headers.get("content-type") || "application/octet-stream" }));
+    },
+    // BACKUP/redundancy: fetch a sermon by trying each of its hosts in turn (primary → mirrors → cloud), so one
+    // host being down/offline never loses the media. Content-addressed, so every host serves the identical bytes.
+    async fetchSermon(s, opts) {
+      const hosts = s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : [];
+      if (!hosts.length || !s.sha256) throw new Error("sermon has no host");
+      let lastErr;
+      for (const h of hosts) {
+        try {
+          return await window.Fellowship.fetchBlob(String(h).replace(/\/+$/, "") + "/blob/" + s.sha256, { expectSha: s.sha256, mime: opts && opts.mime || s.mime || "audio/mpeg", decrypt: opts && opts.decrypt });
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr || new Error("all hosts failed");
+    },
+    // Tier 2 encryption: fetch this church's media key (wrapped to me), unwrap it, and return an AES-GCM decryptor
+    // (strips the 12-byte IV). Returns null if there's no key for me — so the UI can say "encrypted, no key yet".
+    async mediaDecryptor(churchNpub) {
+      const cp = toPub(churchNpub);
+      if (!cp) return null;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      if (!sk) return null;
+      let khex = null;
+      try {
+        const evs = await pool.querySync(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], "#d": [MEDIAKEY_D + cp] }]);
+        for (const e of evs || []) {
+          if (e.pubkey !== cp) continue;
+          try {
+            const o = JSON.parse(e.content);
+            const mine = o.keys && o.keys[pub];
+            if (mine) khex = decrypt(mine, getConversationKey(sk, cp));
+          } catch {
+          }
+        }
+      } catch {
+      }
+      if (!khex) return null;
+      const key = await crypto.subtle.importKey("raw", _unhex(khex), "AES-GCM", false, ["decrypt"]);
+      return async (bytes) => {
+        const iv = bytes.slice(0, 12);
+        const ct = bytes.slice(12);
+        return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct));
+      };
     },
     // resolve a church reference → npub. A bare npub / invite link returns as-is; a NIP-05 "nice name"
     // ("@yourchurch" or "name@host") is looked up via the relay's /.well-known/nostr.json

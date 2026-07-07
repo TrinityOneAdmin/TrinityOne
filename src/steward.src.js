@@ -45,6 +45,8 @@ const GUARDREQ_D = 'trinityone/guardreq:';  // safeguarding v2: a parent's guard
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-confirmed parent↔child map, d=guardians:<churchpub>
 const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent NOTICE that they were linked to a child, d=guardnotice:<parentpub>, p-tagged + content NIP-44-encrypted to the parent (the child link never appears in cleartext)
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a self-hosted media item referencing a content-addressed blob (sha256 + host)
+const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
+let _mediaKeyHex = null;                       // this device's cached copy of the church media key
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
@@ -587,6 +589,27 @@ window.Steward = {
   removeSermon(id) {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));
+  },
+  // Tier 2 encryption: ensure a church media key exists + is wrapped (NIP-44) to every current member, publish
+  // the envelope, and return an AES-GCM encryptor that prepends a random 12-byte IV. Encrypt runs BEFORE upload,
+  // so the host (and any cloud backup) only ever holds ciphertext; only members hold the key to decrypt.
+  async mediaEncryptor(memberPubs) {
+    if (!sk) throw new Error('no key');
+    if (!_mediaKeyHex) _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+    const keys = {}; const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+    for (const mp of targets) { try { keys[mp] = nip44e(_mediaKeyHex, nip44ck(sk, mp)); } catch (e) {} }
+    await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
+    return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };
+  },
+  // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
+  subscribeMediaKey() {
+    if (!pub) return () => {};
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [MEDIAKEY_D + pub] }], {
+      onevent(e) { try { const o = JSON.parse(e.content); const mine = o.keys && o.keys[pub]; if (mine && sk) _mediaKeyHex = nip44d(mine, nip44ck(sk, e.pubkey)); } catch (x) {} },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
   },
   subscribeSermons(onSermons) {
     if (!pub) { onSermons([]); return () => {}; }

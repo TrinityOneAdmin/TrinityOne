@@ -3208,16 +3208,20 @@ function DashMediaPanel({ church }) {
   const saveAud = () => { window.Steward.publishProfile({ audioFeed: aud.trim() }); setAudSaved(true); setTimeout(() => setAudSaved(false), 1700); };
   // Phase 5 Tier 2 — self-hosted sermons (the church's OWN audio, members-only, no YouTube/RSS)
   const [sermons, setSermons] = React.useState([]);
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const [encOn, setEncOn] = React.useState(false);
   React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(setSermons) : undefined), []);
+  React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
   const fileRef = React.useRef(null);
   const [upBusy, setUpBusy] = React.useState(false); const [upMsg, setUpMsg] = React.useState('');
   const onFile = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
-    setUpBusy(true); setUpMsg('Uploading ' + f.name + '…');
+    setUpBusy(true); setUpMsg((encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
     try {
-      const b = await window.Steward.uploadBlob(f);
+      const encFn = (encOn && window.Steward.mediaEncryptor) ? await window.Steward.mediaEncryptor(members.map(m => m.pubkey).filter(Boolean)) : undefined;
+      const b = await window.Steward.uploadBlob(f, encFn);
       await window.Steward.publishSermon({ title: f.name.replace(/\.[^.]+$/, ''), sha256: b.sha256, host: b.host, mime: b.mime, size: b.size, enc: b.enc });
-      setUpMsg('✓ Uploaded “' + f.name + '”');
+      setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : ''));
     } catch (err) { setUpMsg('✗ ' + (err.message || 'Upload failed')); }
     setUpBusy(false); setTimeout(() => setUpMsg(''), 3500);
   };
@@ -3250,8 +3254,12 @@ function DashMediaPanel({ church }) {
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{fmtSize(s.size || 0)}{s.enc ? ' · encrypted' : ''}</div></div>
           <button onClick={() => window.Steward.removeSermon(s.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
         </div>))}</div> : null}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)', margin: '0 0 10px', cursor: 'pointer', lineHeight: 1.4 }}>
+        <input type="checkbox" checked={encOn} onChange={e => setEncOn(e.target.checked)} style={{ flexShrink: 0 }} />
+        <span><b>Encrypt</b> — only your members can decrypt it (protects it from the host and any cloud backup)</span>
+      </label>
       <input ref={fileRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={onFile} />
-      <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="#fff" /> {upBusy ? 'Uploading…' : 'Upload a sermon'}</button>
+      <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="#fff" /> {upBusy ? 'Working…' : 'Upload a sermon'}</button>
       {upMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 8 }}>{upMsg}</div> : null}
     </Panel>
   );

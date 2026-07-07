@@ -140,7 +140,7 @@ function ListenScreen({ open, onClose, ctx }) {
 
   const chName = (data && data.channel && data.channel.name) || 'Sermons';
   // self-hosted sermons render as episodes too, but have no direct url — the blob is fetched (gated) on play.
-  const sermonEps = sermons.map(s => ({ id: s.id, title: s.title, published: s.ts ? new Date(s.ts * 1000).toISOString() : '', _sermon: true, sha256: s.sha256, host: (s.hosts && s.hosts[0]) || s.host, mime: s.mime, enc: s.enc, size: s.size }));
+  const sermonEps = sermons.map(s => ({ id: s.id, title: s.title, published: s.ts ? new Date(s.ts * 1000).toISOString() : '', _sermon: true, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []), mime: s.mime, enc: s.enc, size: s.size }));
   const episodes = [...sermonEps, ...((data && data.episodes) || [])];
   const trackOf = (ep) => ({ id: ep.id, title: ep.title, subtitle: [lsnPubDate(ep.published), chName].filter(Boolean).join(' · '), src: ep.audio, image: ep.image, album: chName });
   const curId = audio.track && audio.track.id;
@@ -149,12 +149,12 @@ function ListenScreen({ open, onClose, ctx }) {
   const pos = { t: audio.t, d: audio.d };
   const playEp = async (ep) => {
     if (ep._sermon) {   // Tier 2: fetch the member-gated blob (NIP-98), verify its sha256, then play it
-      if (!ep.host || !ep.sha256) { ctx.toast('This sermon is unavailable'); return; }
-      if (ep.enc) { ctx.toast('This sermon is encrypted — update needed to play it'); return; }
+      if (!ep.hosts || !ep.hosts.length || !ep.sha256) { ctx.toast('This sermon is unavailable'); return; }
       setLoadingId(ep.id);
       try {
-        const url = String(ep.host).replace(/\/+$/, '') + '/blob/' + ep.sha256;
-        const src = await FS.fetchBlob(url, { expectSha: ep.sha256, mime: ep.mime || 'audio/mpeg' });
+        const dec = ep.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(churchNpub) : null;   // Tier 2: church media key
+        if (ep.enc && !dec) { ctx.toast('This encrypted sermon needs the church media key'); setLoadingId(null); return; }
+        const src = await FS.fetchSermon({ sha256: ep.sha256, hosts: ep.hosts, mime: ep.mime, enc: ep.enc }, { mime: ep.mime || 'audio/mpeg', decrypt: dec });
         window.TrinityAudio.play({ id: ep.id, title: ep.title, subtitle: chName, src, image: ep.image, album: chName });
       } catch (e) { ctx.toast('Couldn’t load: ' + (e.message || 'error')); }
       setLoadingId(null); return;
