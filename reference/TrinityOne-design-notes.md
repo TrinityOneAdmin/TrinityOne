@@ -6,7 +6,7 @@ Source: `reference/TrinityOne-handoff.zip` (Claude Designer). Older handoffs liv
 ## Brand identity — "Halo"
 - **Logo (Halo):** one ring with three breaks (unity + trinity) and a single gold spark
   at centre; also reads as the "O" in *One*. Chosen concept = `D · Halo` (see
-  `reference/D _ Halo.png`). SVG = three arcs (`a1/a2/a3`) + a centre `circle` spark.
+  `reference/halo.png`). SVG = three arcs (`a1/a2/a3`) + a centre `circle` spark.
 - **Wordmark:** `TRINITY` (ink) + `ONE` (clay). **Tagline:** *Read · Gather · Share*.
 - **Tokens:** the app's runtime tokens are unchanged from ours (same `.lumen`/`.trinity`
   CSS vars). `brand.css` in the handoff is a fuller "Halo" design-language token set used

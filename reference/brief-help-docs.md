@@ -9,7 +9,7 @@ and provided — **your job is the layout, visual treatment, navigation, and acc
   safety meaning. If you think a point needs different wording for clarity, flag it.
 - **Brand:** "Halo" design language (warm cream/clay editorial; Bricolage Grotesque display,
   Newsreader serif, Plus Jakarta Sans UI; tokens `--paper/--ink/--clay/--gold/--sage`). See
-  `reference/D _ Halo.png`, `reference/TrinityOne-design-notes.md`.
+  `reference/halo.png`, `reference/TrinityOne-design-notes.md`.
 
 ## The #1 constraint: elderly, non-technical readers
 Design for someone in their 70s–80s who finds most apps confusing. This drives everything:

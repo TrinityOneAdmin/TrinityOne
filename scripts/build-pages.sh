@@ -18,7 +18,7 @@ rm -f  "$OUT"/*.md "$OUT"/package*.json "$OUT"/capacitor.config.* "$OUT"/tsconfi
 
 # ── Pre-transpile JSX -> JS so the APP shells (index.html, steward.html) need NO runtime Babel and no
 # injected inline scripts — that's what lets us serve them a strict CSP. We keep the .jsx files too,
-# because the marketing/help/preview pages (welcome.html, "TrinityOne Help.html", landing-app-today.html)
+# because the marketing/help/preview pages (welcome.html, "help.html", landing-app-today.html)
 # legitimately still load .jsx (+ runtime Babel, or plain like help-data.jsx); those keep a loose CSP.
 echo "transpiling JSX -> JS for the Pages app shells…"
 for f in "$OUT"/*.jsx; do

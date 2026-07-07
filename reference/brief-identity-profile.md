@@ -63,7 +63,7 @@ Recommend a direction + show ~8–12 avatar options in your pick.
 
 ## Reference
 - Working app + tokens: `/mnt/storage/projects/TrinityOne` (engine.js, app.jsx, screens-*.jsx).
-- Brand: `reference/D _ Halo.png`, `reference/TrinityOne-design-notes.md`, latest handoff in
+- Brand: `reference/halo.png`, `reference/TrinityOne-design-notes.md`, latest handoff in
   `reference/TrinityOne-handoff.zip`.
 - Existing identity UI to evolve: the Chat-tab "tap to manage" sheet (`NostrSheet` in
   `screens-chat.jsx`).

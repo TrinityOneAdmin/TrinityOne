@@ -53,5 +53,5 @@ Proposed flow (refine as you see fit), with clear progress/orientation throughou
 ## Reference
 - Existing components to reuse/extend: `identity.jsx` (`IdentityOnboarding`), `identity-avatar.jsx`
   (`AvatarPicker`), `screens-help-main.jsx` (`BackupWalkthrough`, `BackupNudge`).
-- Brand: `reference/D _ Halo.png`, `reference/TrinityOne-design-notes.md`.
+- Brand: `reference/halo.png`, `reference/TrinityOne-design-notes.md`.
 - A working basis already exists in-app (`screens-onboarding.jsx`) — your design supersedes it.
