@@ -3211,15 +3211,15 @@ function DashMediaPanel({ church }) {
   return (
     <Panel title="Video & audio">
       <div style={lbl}>Video channel · Watch tab</div>
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Your church’s <b>YouTube</b> or <b>Rumble</b> channel — videos appear in members’ Watch tab, auto-updated.</div>
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Your church’s <b>YouTube</b> or <b>Rumble</b> channel — or an <b>unlisted YouTube playlist</b> (not publicly searchable — a private set only your members see). Videos appear in members’ Watch tab, auto-updated.</div>
       <div style={{ display: 'flex', gap: 9 }}>
-        <input value={vid} onChange={e => setVid(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveVid(); }} spellCheck={false} autoCapitalize="none" placeholder="youtube.com/@yourchurch · rumble.com/c/yourchurch" style={inp} />
+        <input value={vid} onChange={e => setVid(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveVid(); }} spellCheck={false} autoCapitalize="none" placeholder="youtube.com/@yourchurch · youtube.com/playlist?list=… · rumble.com/c/…" style={inp} />
         <button onClick={saveVid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={vidSaved ? 'check' : 'send'} size={15} color="#fff" /> {vidSaved ? 'Saved' : 'Save'}</button>
       </div>
       {church.channel ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.channel}</span></div> : null}
       <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
       <div style={lbl}>Audio / podcast · Listen tab</div>
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A <b>podcast RSS feed</b> (sermons, devotionals) — episodes stream in the Listen tab. Most hosts (Buzzsprout, Podbean, Apple, Spotify for Podcasters) give an RSS link.</div>
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A <b>podcast RSS feed</b> (sermons, devotionals) — episodes stream in the Listen tab. Most hosts (Buzzsprout, Podbean, Apple, Spotify for Podcasters) give an RSS link. An <b>unlisted / private feed URL works too</b> — keep the link unguessable and it stays members-only.</div>
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={aud} onChange={e => setAud(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveAud(); }} spellCheck={false} autoCapitalize="none" placeholder="https://feeds.yourhost.com/yourchurch.xml" style={inp} />
         <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="#fff" /> {audSaved ? 'Saved' : 'Save'}</button>

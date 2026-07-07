@@ -660,7 +660,23 @@ async function fetchText(url) {
   }
   throw new Error('too many redirects');
 }
+function _ytVideos(xml) {   // parse a YouTube RSS (channel OR playlist) into our video list
+  const videos = [];
+  for (const e of xml.split('<entry>').slice(1)) {
+    const vid = (e.match(/<yt:videoId>([^<]+)</) || [])[1]; if (!vid) continue;
+    videos.push({ id: vid, ytId: vid, title: decodeXml((e.match(/<title>([^<]+)</) || [])[1] || ''), published: (e.match(/<published>([^<]+)</) || [])[1] || '', thumb: 'https://i.ytimg.com/vi/' + vid + '/hqdefault.jpg' });
+  }
+  return videos;
+}
 async function resolveYouTube(input) {
+  // FEDERATION Phase 5 Tier 1 — PLAYLIST support (incl. UNLISTED). YouTube's playlist RSS is keyed by
+  // playlist_id, and an unlisted playlist is reachable BY ID — so a church can point at an unlisted playlist
+  // (not publicly searchable / not on their channel) and its videos surface here, without any self-hosting.
+  const playlistId = (input.match(/[?&]list=([\w-]+)/) || input.match(/^((?:PL|UU|OL|FL|RD|LL)[\w-]+)$/) || [])[1] || null;
+  if (playlistId) {
+    const xml = await fetchText('https://www.youtube.com/feeds/videos.xml?playlist_id=' + playlistId);
+    return { channel: { name: decodeXml((xml.match(/<title>([^<]+)<\/title>/) || [])[1] || 'Playlist'), url: 'https://www.youtube.com/playlist?list=' + playlistId, platform: 'youtube', playlist: playlistId }, videos: _ytVideos(xml) };
+  }
   let channelId = (input.match(/channel\/(UC[\w-]+)/) || input.match(/^(UC[\w-]+)$/) || [])[1] || null;
   if (!channelId) {
     let pageUrl = input;
@@ -672,12 +688,7 @@ async function resolveYouTube(input) {
   if (!channelId) throw new Error('could not resolve YouTube channel');
   const xml = await fetchText('https://www.youtube.com/feeds/videos.xml?channel_id=' + channelId);
   const chName = decodeXml((xml.match(/<title>([^<]+)<\/title>/) || [])[1] || 'Channel');
-  const videos = [];
-  for (const e of xml.split('<entry>').slice(1)) {
-    const vid = (e.match(/<yt:videoId>([^<]+)</) || [])[1]; if (!vid) continue;
-    videos.push({ id: vid, ytId: vid, title: decodeXml((e.match(/<title>([^<]+)</) || [])[1] || ''), published: (e.match(/<published>([^<]+)</) || [])[1] || '', thumb: 'https://i.ytimg.com/vi/' + vid + '/hqdefault.jpg' });
-  }
-  return { channel: { name: chName, url: 'https://www.youtube.com/channel/' + channelId, platform: 'youtube' }, videos };
+  return { channel: { name: chName, url: 'https://www.youtube.com/channel/' + channelId, platform: 'youtube' }, videos: _ytVideos(xml) };
 }
 async function resolveRumble(input) {
   // Rumble has no clean public feed; best-effort scrape of the channel page for video links.
@@ -690,7 +701,7 @@ async function resolveRumble(input) {
 async function getFeed(url) {
   const cached = feedCache.get(url); if (cached && Date.now() - cached.ts < FEED_TTL) return cached.data;
   let data;
-  if (/youtu\.?be|youtube\.com/.test(url) || /^@[\w.\-]+$/.test(url) || /^UC[\w-]+$/.test(url)) data = await resolveYouTube(url);
+  if (/youtu\.?be|youtube\.com/.test(url) || /^@[\w.\-]+$/.test(url) || /^UC[\w-]+$/.test(url) || /^(?:PL|UU|OL|FL|RD|LL)[\w-]+$/.test(url)) data = await resolveYouTube(url);   // Phase 5: bare channel OR playlist id
   else if (/rumble\.com/.test(url)) data = await resolveRumble(url);
   else data = { channel: { url, platform: 'link' }, videos: [] };
   boundCache(feedCache); feedCache.set(url, { ts: Date.now(), data });
