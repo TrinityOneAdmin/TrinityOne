@@ -5877,7 +5877,9 @@
   var pool = new SimplePool();
   var sk = null;
   var pub = null;
+  var _needAuth = false;
   pool.automaticallyAuth = () => async (authEvent) => {
+    if (!_needAuth) throw new Error("nip42: auth declined \u2014 no gated resource for this member");
     if (!sk) {
       try {
         await window.Fellowship.ready;
@@ -7135,6 +7137,7 @@
             const c = JSON.parse(e.content);
             byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey });
             _noteGroupLeaders(pubk, id, c, e.pubkey);
+            if (!_needAuth && pub && c.visibility === "invite" && Array.isArray(c.members) && c.members.some((p) => toPub(p) === pub)) _needAuth = true;
             emit();
           } catch {
           }

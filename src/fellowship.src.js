@@ -150,9 +150,19 @@ function profile(pub) {
 
 const pool = new SimplePool();
 let sk = null, pub = null;
-// NIP-42: when a relay challenges, prove our pubkey by signing the auth event with our key — so the
-// relay serves us the invite-only groups we belong to. No effect on relays that never challenge.
+// SECURITY-AUDIT-2026-07-06 M3: true once we know we belong to an invite-only group — the only reason a member
+// needs to prove their key to the relay. Set from the (public) group defs; never proactively otherwise.
+let _needAuth = false;
+// NIP-42: when a relay challenges, prove our pubkey by signing the auth event with our key — so the relay serves
+// us the invite-only groups we belong to. But do NOT prove it proactively: a signed auth cryptographically links
+// this connection to our pubkey, deanonymising us to a hostile/compromised relay operator or a network observer.
+// So DECLINE the challenge unless we actually need a gated read (_needAuth). A plain member reading only public
+// church content never authenticates → stays anonymous to the relay infrastructure. This changes nothing for
+// humans in the church (names/handles/photos are public, no auth) and nothing for child safety (the relay
+// ENFORCES the adult↔minor DM block server-side regardless; only the client's pre-hide of the Message button
+// needs the minors list, and members who are in invite groups still auth and get it).
 pool.automaticallyAuth = () => async (authEvent) => {
+  if (!_needAuth) throw new Error('nip42: auth declined — no gated resource for this member');
   if (!sk) { try { await window.Fellowship.ready; } catch {} }
   if (!sk) throw new Error('no key');
   return finalizeEvent(authEvent, sk);
@@ -929,7 +939,14 @@ window.Fellowship = {
         if (!d.startsWith(GROUP_D)) return;
         const id = d.slice(GROUP_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); _noteGroupLeaders(pubk, id, c, e.pubkey); emit(); } catch {}
+        try {
+          const c = JSON.parse(e.content); byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey }); _noteGroupLeaders(pubk, id, c, e.pubkey);
+          // SECURITY-AUDIT-2026-07-06 M3: we belong to an invite-only group → we legitimately need NIP-42 auth to
+          // read it, so enable it. (Membership is checked against MY pubkey so an invite group I'm NOT in — whose
+          // public def I can still see — does not opt me into deanonymising auth.)
+          if (!_needAuth && pub && c.visibility === 'invite' && Array.isArray(c.members) && c.members.some(p => toPub(p) === pub)) _needAuth = true;
+          emit();
+        } catch {}
       },
       onroster() { emit(); },   // the church-signed steward roster arrived/changed — re-filter
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
