@@ -1003,10 +1003,22 @@ function useStewNarrow(bp = 760) {
   return n;
 }
 
+// Live group subtitle (2026-07-07): replaces the old stored `sub` text, which on some churches carried stale
+// SAMPLE-DATA counts ("31 members · 2 stewards") baked in at setup and never updated. Compute from live relay
+// data: invite-only groups show their allowlist size, teams their roster size, open groups the church size
+// (everyone can join), broadcasts just "Broadcast". Recomputes on every render so it's always current.
+function groupLiveSub(g, memberCount, rosters) {
+  const n = (x) => x + (x === 1 ? ' member' : ' members');
+  if (g.kind === 'broadcast') return 'Broadcast';
+  if (g.kind === 'team') { const c = ((rosters || []).find(r => r.team === g.id) || { people: [] }).people.length; return c ? n(c) : 'Team'; }
+  if (g.visibility === 'invite') return n(Array.isArray(g.members) ? g.members.length : 0) + ' · invite-only';
+  return n(memberCount || 0);   // open group: every church member can join
+}
 function DashOverview({ onTab, onNewPost, onSettings }) {
   const goSettings = onSettings || ((s) => onTab('settings'));   // deep-links a settings sub-tab when available
   const groups = window.useStewardGroups();   // real chat groups (the focus)
   const members = window.useStewardMembers(); // real members (joined and/or active)
+  const rosters = window.useStewardRosters ? window.useStewardRosters() : [];   // team rosters, for live team counts
   const relays = window.useStewardRelays();   // real relay status
   const stats = window.useStewardStats();     // real footprint + announcement counts
   const activity = window.useStewardActivity(); // real recent-events feed
@@ -1061,7 +1073,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
         {groups.map(g => (
           <button key={g.id} onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g }))} title="Open chat" style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'none', border: 'none', borderRadius: 11, padding: '6px 8px', margin: '0 -8px', cursor: 'pointer', fontFamily: 'var(--font-ui)', transition: 'background .12s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'} onMouseLeave={e => e.currentTarget.style.background = 'none'}>
             <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'var(--surface-2)', color: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={g.kind === 'broadcast' ? 'send' : 'chat'} size={18} color="currentColor" /></div>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{g.sub || (g.kind === 'broadcast' ? 'Broadcast' : 'Group')}</div></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{groupLiveSub(g, members.length, rosters)}</div></div>
             {g.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             <Icon name="chat" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} />
           </button>
@@ -1597,7 +1609,7 @@ function DashGroups() {
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
-  const items = all.map(g => ({ ...g, ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
+  const items = all.map(g => ({ ...g, sub: groupLiveSub(g, members.length, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   // type filter for the list — only surfaces when there's more than one type to choose between
   const groupFilters = (() => {
     const f = [];
