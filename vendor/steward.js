@@ -9579,6 +9579,11 @@ zoo`.split("\n");
   var GUARDREQ_D = "trinityone/guardreq:";
   var GUARDIANS_D = "trinityone/guardians:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
+  var SERMON_D = "trinityone/sermon:";
+  async function _sha256hex(u82) {
+    const d = await crypto.subtle.digest("SHA-256", u82);
+    return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
   var JOINPOLICY_D = "trinityone/joinpolicy:";
   var ADMITTED_D = "trinityone/admitted:";
   var STEWARDS_D = "trinityone/stewards:";
@@ -9690,6 +9695,10 @@ zoo`.split("\n");
       if (r && r !== own && !out.includes(r)) out.push(r);
     }
     return out;
+  }
+  function _blobBase() {
+    const r = ownRelay();
+    return r.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "");
   }
   var _relayInfoCache = /* @__PURE__ */ new Map();
   function _relayInfo(wssUrl) {
@@ -10217,6 +10226,71 @@ zoo`.split("\n");
     removeFund(id) {
       if (!sk) return Promise.resolve(null);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", FUND_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+    },
+    // ---- Phase 5 Tier 2: self-hosted media (sermons). Upload a file to the church's own blob store, then
+    // publish a signed sermon doc referencing it by sha256 — no YouTube, members-only. `encrypt` (a bytes->bytes
+    // fn) is applied BEFORE hashing/upload so the host only ever holds ciphertext (used for the sensitive /
+    // cloud-backup case). Returns { sha256, size, host, mime, enc }.
+    async uploadBlob(file, encrypt4) {
+      if (!sk) throw new Error("no key");
+      let bytes = new Uint8Array(await file.arrayBuffer());
+      const enc = typeof encrypt4 === "function";
+      if (enc) bytes = encrypt4(bytes);
+      const sha = await _sha256hex(bytes);
+      const base = _blobBase();
+      const auth = finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]], content: "upload" }, sk);
+      const res = await fetch(base + "/blob", { method: "PUT", headers: { Authorization: "Nostr " + btoa(JSON.stringify(auth)), "Content-Type": enc ? "application/octet-stream" : file.type || "application/octet-stream" }, body: bytes });
+      if (!res.ok) throw new Error("upload failed (" + res.status + ")");
+      const j = await res.json();
+      return { sha256: j.sha256, size: j.size, host: base, mime: enc ? "" : file.type || j.type || "", enc };
+    },
+    // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
+    publishSermon(s) {
+      if (!sk) return Promise.resolve(null);
+      const id = s.id || "sermon" + Date.now();
+      const content = JSON.stringify({ id, title: s.title || "Sermon", sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : [s.host], mime: s.mime || "", size: s.size || 0, ts: now(), enc: s.enc || void 0, series: s.series || void 0 });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET]], content })).then(() => ({ id, ...JSON.parse(content) }));
+    },
+    removeSermon(id) {
+      if (!sk) return Promise.resolve(null);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+    },
+    subscribeSermons(onSermons) {
+      if (!pub) {
+        onSermons([]);
+        return () => {
+        };
+      }
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => onSermons([...byId.entries()].filter(([, s]) => s).map(([, s]) => s).sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(SERMON_D)) return;
+          if ((e.tags.find((t) => t[0] === "deleted") || [])[1]) {
+            byId.set(d, null);
+            emit();
+            return;
+          }
+          try {
+            const s = JSON.parse(e.content);
+            if (s && s.sha256) {
+              byId.set(d, { ...s, at: e.created_at });
+              emit();
+            }
+          } catch {
+          }
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
     },
     // Post a kind-1 message into a group as the church. MUST carry ['p', churchPub] — the member's
     // subscribeGroup scopes by it, so without it the post is invisible to members (was the bug).

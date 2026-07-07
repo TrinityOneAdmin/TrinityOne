@@ -20,6 +20,8 @@ const GROUP_D = 'trinityone/group:';
 const CATEGORY_D = 'trinityone/category:';   // church-signed named container that groups belong to (e.g. "Lifegroups")
 const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the group key wrapped to each member
 const GUARDNOTICE_D = 'trinityone/guardnotice:';   // church->parent notice of a steward-made guardian link, p-tagged + NIP-44-encrypted to the parent
+const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a church-signed self-hosted media item — references a content-addressed blob by sha256 + host(s)
+async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 // Meal trains / Care module (optional, per church). meals-settings is church-signed; care: needs come from
 // church/steward/care-team admins; careslot: are member offers to help; careskip: is RECIPIENT-only.
 const MEALS_SETTINGS_D = 'trinityone/meals-settings';
@@ -526,6 +528,34 @@ window.Fellowship = {
   gatewayBase() {
     const r = (window.Fellowship.relays || [])[0] || '';
     try { const u = new URL(r); return (u.protocol === 'wss:' ? 'https:' : 'http:') + '//' + u.host; } catch { return ''; }
+  },
+  // Phase 5 Tier 2: this church's SELF-HOSTED media items (sermons) — church-signed docs referencing a
+  // content-addressed blob by sha256 + host(s). Read via the church's OWN relays (Phase 4-aware).
+  subscribeSermons(churchNpub, onSermons) {
+    const cp = toPub(churchNpub); if (!cp) { onSermons([]); return () => {}; }
+    const byId = new Map();
+    const emit = () => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], '#t': [NET] }], {
+      onevent(e) {
+        if (e.pubkey !== cp) return; const d = _dtag(e); if (!d.startsWith(SERMON_D)) return;
+        try { const s = JSON.parse(e.content); if (s && s.sha256) { byId.set(d, { ...s, at: e.created_at }); emit(); } } catch {}
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // fetch a member-gated blob: sign a NIP-98 proof bound to the URL, download it, VERIFY the sha256 (content-
+  // addressing = tamper-evident), optionally decrypt, and return an object URL the <audio>/<video> can play.
+  async fetchBlob(url, opts) {
+    opts = opts || {};
+    if (!sk) { try { await window.Fellowship.ready; } catch {} }
+    const auth = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', 'GET']], content: '' }, sk);
+    const res = await fetch(url, { headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) } });
+    if (!res.ok) throw new Error('media ' + res.status);
+    let bytes = new Uint8Array(await res.arrayBuffer());
+    if (opts.expectSha) { const got = await _sha256hex(bytes); if (got !== opts.expectSha) throw new Error('media integrity failed'); }
+    if (typeof opts.decrypt === 'function') bytes = opts.decrypt(bytes);   // Tier 2 encryption hook
+    return URL.createObjectURL(new Blob([bytes], { type: opts.mime || res.headers.get('content-type') || 'application/octet-stream' }));
   },
 
   // resolve a church reference → npub. A bare npub / invite link returns as-is; a NIP-05 "nice name"

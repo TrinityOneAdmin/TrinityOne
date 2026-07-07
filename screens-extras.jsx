@@ -119,6 +119,9 @@ function ListenScreen({ open, onClose, ctx }) {
   const [loading, setLoading] = useX(false);
   const audio = useTrinityAudio();         // persistent player state — survives closing this screen
   const FS = window.Fellowship;
+  const [sermons, setSermons] = useX([]);   // Tier 2: self-hosted sermons (church-signed, member-gated blobs)
+  const [loadingId, setLoadingId] = useX(null);
+  const churchNpub = ctx.church && ctx.church.npub;
 
   React.useEffect(() => {
     if (!open || !audioFeed) { if (!audioFeed) setData({ episodes: [] }); return; }
@@ -130,15 +133,35 @@ function ListenScreen({ open, onClose, ctx }) {
       .catch(() => setData({ episodes: [] }))
       .then(() => setLoading(false));
   }, [open, audioFeed]);
+  React.useEffect(() => {
+    if (!open || !churchNpub || !FS || !FS.subscribeSermons) { setSermons([]); return; }
+    return FS.subscribeSermons(churchNpub, setSermons);
+  }, [open, churchNpub]);
 
-  const episodes = (data && data.episodes) || [];
   const chName = (data && data.channel && data.channel.name) || 'Sermons';
+  // self-hosted sermons render as episodes too, but have no direct url — the blob is fetched (gated) on play.
+  const sermonEps = sermons.map(s => ({ id: s.id, title: s.title, published: s.ts ? new Date(s.ts * 1000).toISOString() : '', _sermon: true, sha256: s.sha256, host: (s.hosts && s.hosts[0]) || s.host, mime: s.mime, enc: s.enc, size: s.size }));
+  const episodes = [...sermonEps, ...((data && data.episodes) || [])];
   const trackOf = (ep) => ({ id: ep.id, title: ep.title, subtitle: [lsnPubDate(ep.published), chName].filter(Boolean).join(' · '), src: ep.audio, image: ep.image, album: chName });
   const curId = audio.track && audio.track.id;
   const cur = episodes.find(e => e.id === curId) || null;
   const playing = audio.playing;
   const pos = { t: audio.t, d: audio.d };
-  const playEp = (ep) => { if (!ep.audio) { ctx.toast('That episode has no audio'); return; } window.TrinityAudio.play(trackOf(ep), episodes.map(trackOf)); };
+  const playEp = async (ep) => {
+    if (ep._sermon) {   // Tier 2: fetch the member-gated blob (NIP-98), verify its sha256, then play it
+      if (!ep.host || !ep.sha256) { ctx.toast('This sermon is unavailable'); return; }
+      if (ep.enc) { ctx.toast('This sermon is encrypted — update needed to play it'); return; }
+      setLoadingId(ep.id);
+      try {
+        const url = String(ep.host).replace(/\/+$/, '') + '/blob/' + ep.sha256;
+        const src = await FS.fetchBlob(url, { expectSha: ep.sha256, mime: ep.mime || 'audio/mpeg' });
+        window.TrinityAudio.play({ id: ep.id, title: ep.title, subtitle: chName, src, image: ep.image, album: chName });
+      } catch (e) { ctx.toast('Couldn’t load: ' + (e.message || 'error')); }
+      setLoadingId(null); return;
+    }
+    if (!ep.audio) { ctx.toast('That episode has no audio'); return; }
+    window.TrinityAudio.play(trackOf(ep), episodes.filter(x => !x._sermon).map(trackOf));
+  };
   const toggle = () => window.TrinityAudio.toggle();
   const seek = (delta) => window.TrinityAudio.seek(delta);
   const onBar = (e) => { const r = e.currentTarget.getBoundingClientRect(); window.TrinityAudio.seekTo((e.clientX - r.left) / r.width); };
@@ -212,9 +235,11 @@ function ListenScreen({ open, onClose, ctx }) {
                     <div style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: ep.image ? `center/cover url(${ep.image})` : 'color-mix(in oklab, var(--clay) 15%, var(--surface))', color: 'var(--clay)' }}>{!ep.image ? <Icon name={isCur && playing ? 'pause' : 'play'} size={20} color="var(--clay)" /> : null}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{ep.title}</div>
-                      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{[lsnPubDate(ep.published), ep.duration].filter(Boolean).join(' · ')}</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{[lsnPubDate(ep.published), ep.duration, ep._sermon ? 'Self-hosted · members only' : null].filter(Boolean).join(' · ')}</div>
                     </div>
-                    <Icon name={isCur && playing ? 'pause' : 'play'} size={18} color="var(--clay)" style={{ flexShrink: 0 }} />
+                    {loadingId === ep.id
+                      ? <div style={{ width: 18, height: 18, flexShrink: 0, borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+                      : <Icon name={isCur && playing ? 'pause' : 'play'} size={18} color="var(--clay)" style={{ flexShrink: 0 }} />}
                   </button>
                 );
               })}

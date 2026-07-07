@@ -3206,6 +3206,22 @@ function DashMediaPanel({ church }) {
   React.useEffect(() => { setAud(church.audioFeed || ''); }, [church.audioFeed]);
   const saveVid = () => { window.Steward.publishProfile({ channel: vid.trim() }); setVidSaved(true); setTimeout(() => setVidSaved(false), 1700); };
   const saveAud = () => { window.Steward.publishProfile({ audioFeed: aud.trim() }); setAudSaved(true); setTimeout(() => setAudSaved(false), 1700); };
+  // Phase 5 Tier 2 — self-hosted sermons (the church's OWN audio, members-only, no YouTube/RSS)
+  const [sermons, setSermons] = React.useState([]);
+  React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(setSermons) : undefined), []);
+  const fileRef = React.useRef(null);
+  const [upBusy, setUpBusy] = React.useState(false); const [upMsg, setUpMsg] = React.useState('');
+  const onFile = async (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
+    setUpBusy(true); setUpMsg('Uploading ' + f.name + '…');
+    try {
+      const b = await window.Steward.uploadBlob(f);
+      await window.Steward.publishSermon({ title: f.name.replace(/\.[^.]+$/, ''), sha256: b.sha256, host: b.host, mime: b.mime, size: b.size, enc: b.enc });
+      setUpMsg('✓ Uploaded “' + f.name + '”');
+    } catch (err) { setUpMsg('✗ ' + (err.message || 'Upload failed')); }
+    setUpBusy(false); setTimeout(() => setUpMsg(''), 3500);
+  };
+  const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
   const inp = { flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' };
   return (
@@ -3225,6 +3241,18 @@ function DashMediaPanel({ church }) {
         <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="#fff" /> {audSaved ? 'Saved' : 'Save'}</button>
       </div>
       {church.audioFeed ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.audioFeed}</span></div> : null}
+      <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
+      <div style={lbl}>Self-hosted sermons · Listen tab</div>
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Upload the church’s <b>own audio</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Great over a thin connection.</div>
+      {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 10 }}>{sermons.map(s => (
+        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <Icon name="headphones" size={16} color="var(--sage)" />
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{fmtSize(s.size || 0)}{s.enc ? ' · encrypted' : ''}</div></div>
+          <button onClick={() => window.Steward.removeSermon(s.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
+        </div>))}</div> : null}
+      <input ref={fileRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={onFile} />
+      <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="#fff" /> {upBusy ? 'Uploading…' : 'Upload a sermon'}</button>
+      {upMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 8 }}>{upMsg}</div> : null}
     </Panel>
   );
 }
