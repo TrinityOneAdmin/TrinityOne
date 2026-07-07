@@ -448,6 +448,11 @@ async function deriveFromIdentity() {
   sk = privateKeyFromSeedWords(mnemonic);
   pub = getPublicKey(sk);
   window.Fellowship.myPubkey = pub;
+  // SECURITY-AUDIT-2026-07-06 M3 (guardian fix): a member who set up a child account is a GUARDIAN and must be
+  // able to read the church-signed guardians: doc — how they learn the steward CONFIRMED the parent↔child link.
+  // That read is safeguarding-gated (needs NIP-42 auth), so a guardian legitimately needs to authenticate even
+  // if they're in no invite-only group. Without this, M3's decline left the confirmation stuck as "pending".
+  if (_loadChildren().length) _needAuth = true;
   // group-key envelopes can replay from the persisted docs buffer BEFORE the signing key exists —
   // re-unwrap them now that sk/pub are known, so invite-group decryption never needs a reload.
   for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); } }
@@ -1020,6 +1025,7 @@ window.Fellowship = {
     const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub, parentName: myName, childName: name }) }, sk);
     for (const e of [k0, join, req]) { try { await Promise.any(pool.publish(window.Fellowship.relays, e)); } catch (err) { console.warn('[fellowship] child setup publish failed', err); } }
     _saveChildLink({ child: childPub, name, churchPub: cp, ts });     // remember locally so the parent sees their children
+    _needAuth = true;   // M3: now a guardian — must NIP-42-auth to read the church's confirmation of this link (connTick reconnects with auth)
     return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name };
   },
   // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]

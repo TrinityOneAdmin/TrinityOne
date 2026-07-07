@@ -6325,6 +6325,7 @@
     sk = privateKeyFromSeedWords(mnemonic);
     pub = getPublicKey2(sk);
     window.Fellowship.myPubkey = pub;
+    if (_loadChildren().length) _needAuth = true;
     for (const hub of _docsHubs.values()) {
       for (const e of hub.buf.values()) {
         const d = _dtag(e);
@@ -7287,6 +7288,7 @@
         }
       }
       _saveChildLink({ child: childPub, name, churchPub: cp, ts });
+      _needAuth = true;
       return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name };
     },
     // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
