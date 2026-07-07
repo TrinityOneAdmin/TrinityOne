@@ -451,18 +451,17 @@ function App() {
       try { const u = new URL(location.href); ['invite', 'follow', 'relay', 'name'].forEach(k => u.searchParams.delete(k)); const q = u.searchParams.toString(); history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + u.hash); } catch (e) {}
       // a steward invite hands the recipient a ready-made anonymous identity — adopt it first, then join
       if (inviteParam && window.TrinityIdentity && window.TrinityIdentity.importMnemonic) {
-        // SECURITY-AUDIT-2026-06-24 L8: an `?invite=<seed>` URL carries a BIP-39 mnemonic in cleartext.
-        // For a fresh user this is the designed onboarding path. But if the user ALREADY has an identity,
-        // following the link silently REPLACES their current key with one whose seed the link's author
-        // also knows — total impersonation. Confirm before overwriting an existing identity.
+        // SECURITY-AUDIT-2026-07-06 L4: a seed-carrying `?invite=` is now ONLY the guardian→child handoff — a
+        // parent setting up an account they OWN on the child's device. (Friend invites are follow-only join links
+        // that mint the joiner's own key.) Adopting a handed key is deliberate, so CONFIRM in BOTH cases — so a
+        // crafted link can never silently take over a device, whether replacing an existing identity OR seeding a
+        // fresh phone. This closes the old gap where a fresh device adopted an invite seed with no prompt.
         const _ID = window.TrinityIdentity;
         const _curNpub = (_ID && ((_ID.current && _ID.current.npub) || _ID.npub)) || '';
-        if (_curNpub) {
-          const _msg = 'This invite link will REPLACE your current TrinityOne identity with a new one.\n\n'
-            + 'Current: ' + _curNpub.slice(0, 18) + '…\n\n'
-            + 'Only continue if a TRUSTED STEWARD gave you this link. If you don\'t recognise it, cancel — the new identity\'s key may already be known to the link\'s author.\n\nContinue?';
-          if (!window.confirm(_msg)) { return; }   // bail the entire follow+name flow too
-        }
+        const _msg = _curNpub
+          ? ('This link will REPLACE your current TrinityOne identity with a different one.\n\nCurrent: ' + _curNpub.slice(0, 18) + '…\n\nOnly continue if someone you trust gave you this link to set up a specific account (e.g. a parent setting up a child’s account). Otherwise cancel.\n\nContinue?')
+          : ('This link sets up a TrinityOne account that someone ELSE created — its key is known to whoever made the link (this is how a parent sets up a child’s account). Only continue if you were handed this link directly and trust them.\n\nIf you just want to join a church, cancel and use a normal join link instead.\n\nContinue?');
+        if (!window.confirm(_msg)) { return; }   // bail the entire follow+name flow too
         const before = (window.Fellowship && window.Fellowship.myPubkey) || '';
         try {
           await window.TrinityIdentity.importMnemonic(_inviteSeed);

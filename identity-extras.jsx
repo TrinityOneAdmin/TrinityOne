@@ -288,32 +288,38 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
 }
 window.CommunitySecuritySheet = CommunitySecuritySheet;
 
-// ════════ Steward invite ════════
-// Builds a real, scannable invite: <base>/?invite=<fresh-identity>&follow=<church>&relay=<relay>.
-// Scanning it (any camera or the in-app scanner) opens TrinityOne, adopts the ready-made anonymous
-// identity, and joins the church — one scan, no email/phone.
-function inviteUrlFor(mnemonic, ctx) {
+// ════════ Invite links ════════
+// The APK / local dev run on a localhost origin (capacitor://localhost, http://localhost) that no one else
+// can reach — so invite links must use the public app URL, not this device's origin.
+function _inviteBase() {
   const o = (typeof location !== 'undefined' && location.origin) || '';
-  // the APK / local dev run on a localhost origin (capacitor://localhost, http://localhost) that no one
-  // else can reach — so invite links must use the public app URL, not this device's origin.
   const usable = /^https:\/\//i.test(o) && !/localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\./i.test(o);
-  const base = usable ? o : 'https://app.trinityone.church';
-  // carry the church's real relay (a TrinityOne community node), not one derived from this origin
-  const F = window.Fellowship;
-  const relay = (F && F.CANONICAL_RELAY) || 'wss://app.trinityone.church/relay';
-  const np = (ctx.church && /^npub1[0-9a-z]+$/.test(ctx.church.npub || '')) ? ctx.church.npub : '';
-  return base + '/?invite=' + encodeURIComponent(mnemonic) + (np ? '&follow=' + np : '') + '&relay=' + encodeURIComponent(relay);
+  return usable ? o : 'https://app.trinityone.church';
+}
+function _inviteRelay() { const F = window.Fellowship; return (F && F.CANONICAL_RELAY) || 'wss://app.trinityone.church/relay'; }
+function _inviteChurchNp(ctx) { return (ctx.church && /^npub1[0-9a-z]+$/.test(ctx.church.npub || '')) ? ctx.church.npub : ''; }
+
+// SECURITY-AUDIT-2026-07-06 L4: a FRIEND invite is just a "join my church" link — it carries NO identity.
+// The person who opens it mints their OWN key on-device and follows the church (and, if the church requires
+// approval, is held pending until a steward admits them — like any other member). This removes the old flow
+// where the inviter minted the invitee's seed and therefore knew their key.
+function joinLinkFor(ctx) {
+  const np = _inviteChurchNp(ctx);
+  return _inviteBase() + '/?follow=' + np + '&relay=' + encodeURIComponent(_inviteRelay());
+}
+// The seed-carrying invite is now used ONLY for the guardian→child handoff (safeguarding v2): the parent OWNS
+// the child account they set up and hands its key to the child's device. Kept for that path; the receiving
+// device confirms before adopting (app.jsx), so a crafted link can't silently take over a fresh phone.
+function inviteUrlFor(mnemonic, ctx) {
+  const np = _inviteChurchNp(ctx);
+  return _inviteBase() + '/?invite=' + encodeURIComponent(mnemonic) + (np ? '&follow=' + np : '') + '&relay=' + encodeURIComponent(_inviteRelay());
 }
 
 function InviteSheet({ open, onClose, identity, ctx }) {
-  // generate a REAL invite (a fresh anonymous key for someone to import) when the sheet opens
-  const [invite, setInvite] = useIx(null);
-  useIxE(() => {
-    const ID = window.TrinityIdentity;
-    if (open && ID && ID.makeInvite) setInvite(ID.makeInvite()); else if (open) setInvite(null);
-  }, [open]);
-  const url = invite ? inviteUrlFor(invite.mnemonic, ctx) : '';
-  const qrSvg = (invite && window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(url) : '';
+  // L4: a friend invite is a JOIN LINK — no identity handed over. They open it, their app mints its own key,
+  // and they follow the church (held pending until a steward admits them if approval is required).
+  const url = joinLinkFor(ctx);
+  const qrSvg = (window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(url) : '';
   const shareInvite = async () => {
     if (!url) return;
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
@@ -327,21 +333,15 @@ function InviteSheet({ open, onClose, identity, ctx }) {
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="84%" z={60}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>Steward invite</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>Invite a member</div>
         <IconBtn name="x" onClick={onClose} />
       </div>
       <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '4px 0 18px', textWrap: 'pretty' }}>
-        Have a new member scan this to join {(ctx.church && ctx.church.name) || 'your church'} — no email or phone needed.</p>
+        Have them scan this (or share the link) to join {(ctx.church && ctx.church.name) || 'your church'}. They set up their own private key on their phone — no email or phone number needed.</p>
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
         <div style={{ padding: 16, borderRadius: 22, background: '#fff', boxShadow: 'var(--shadow-lg)', width: 196, height: 196, boxSizing: 'border-box', display: 'flex' }}
           dangerouslySetInnerHTML={{ __html: qrSvg }} />
       </div>
-      {invite ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, justifyContent: 'center', marginBottom: 16 }}>
-          <Avatar handle={invite.profile.handle} color={invite.profile.color} size={26} />
-          <span style={{ fontSize: 13, color: 'var(--ink-3)' }}>They’ll join as <b style={{ color: 'var(--ink-2)' }}>{invite.profile.handle}</b></span>
-        </div>
-      ) : null}
       <button onClick={shareInvite} style={{ width: '100%', padding: 15, borderRadius: 15, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
         <Icon name="share" size={17} color="#fff" /> Share invite link</button>
     </BottomSheet>

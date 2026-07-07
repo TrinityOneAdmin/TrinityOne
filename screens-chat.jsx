@@ -66,7 +66,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   useCE(() => {
     if (!open) return;
     setPane(initialPane || 'main'); setWords(null); setRestoreText('');
-    setInvite(initialPane === 'invite' && ID && ID.makeInvite ? ID.makeInvite() : null);
+    setInvite(null);   // L4: friend invites no longer mint an identity — the invite pane shows a join link (joinLinkFor)
     setNameInput((FS && FS.myProfile && FS.myProfile.name) || '');
     setAvInput(myAvatar(id));
   }, [open]);
@@ -96,7 +96,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
     try { await ID.importMnemonic(restoreText); ctx.toast('Identity restored'); setPane('main'); }
     catch (e) { ctx.toast(e.message || 'Invalid recovery phrase'); }
   };
-  const startInvite = () => { if (ID && ID.makeInvite) setInvite(ID.makeInvite()); setPane('invite'); };
+  const startInvite = () => setPane('invite');   // L4: no identity minted — the pane renders a join link
   const copyText = (t, msg) => { if (navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {}); ctx.toast(msg); };
 
   const Header = ({ title, back }) => (
@@ -145,7 +145,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
           {rowBtn('pen', 'Display name', myName(id) === id.handle ? 'Choose a name your church sees' : myName(id), () => setPane('profile'))}
           {rowBtn('key', 'Recovery phrase', 'Back up your 12 words — your only way to restore', () => setPane('recovery'))}
           {rowBtn('refresh', 'Restore an identity', 'Paste a 12-word phrase from another device', () => setPane('restore'))}
-          {rowBtn('qr', 'Invite a member', 'Hand someone a ready-made anonymous identity', startInvite, 'var(--clay)')}
+          {rowBtn('qr', 'Invite a member', 'Share a link to join your church', startInvite, 'var(--clay)')}
         </div>
         <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 9px' }}>RELAYS</div>
         {relayList === null ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '4px 2px 8px' }}>Checking…</div> : null}
@@ -215,19 +215,15 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
         <button disabled={!restoreText.trim()} onClick={doRestore} style={{ ...primaryBtn(), opacity: restoreText.trim() ? 1 : .5 }}><Icon name="refresh" size={18} color="#fff" /> Restore identity</button>
       </React.Fragment>}
 
-      {pane === 'invite' && invite && <React.Fragment>
+      {pane === 'invite' && <React.Fragment>
         <Header title="Invite a member" back />
-        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '2px 0 14px' }}>A fresh anonymous identity for someone to import. They scan this (or paste the phrase) under <b style={{ color: 'var(--ink)' }}>Restore an identity</b>. This is <b>not</b> your own key.</p>
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+        {/* SECURITY-AUDIT-2026-07-06 L4: a friend invite is a JOIN LINK, not a handed-over identity. */}
+        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '2px 0 14px' }}>Share this so a friend can join {(ctx.church && ctx.church.name) || 'your church'}. They open it, set up their <b>own</b> private key on their phone, and follow the church — you approve them in Members if you require it.</p>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
           <div style={{ background: '#fff', padding: 12, borderRadius: 18, boxShadow: 'var(--shadow)', width: 196, height: 196 }}
-            dangerouslySetInnerHTML={{ __html: ID.qrSVG(invite.mnemonic) }} />
+            dangerouslySetInnerHTML={{ __html: ID.qrSVG(joinLinkFor(ctx)) }} />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, justifyContent: 'center', marginBottom: 14 }}>
-          <Avatar handle={invite.profile.handle} color={invite.profile.color} size={28} />
-          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{invite.profile.handle}</span>
-        </div>
-        <button onClick={() => copyText(invite.mnemonic, 'Invite phrase copied')} style={miniBtn()}><Icon name="copy" size={15} /> Copy phrase to share</button>
-        <button onClick={startInvite} style={{ ...miniBtn(), marginTop: 9 }}><Icon name="refresh" size={15} /> Generate another</button>
+        <button onClick={() => copyText(joinLinkFor(ctx), 'Invite link copied')} style={miniBtn()}><Icon name="copy" size={15} /> Copy invite link</button>
       </React.Fragment>}
     </BottomSheet>
   );
