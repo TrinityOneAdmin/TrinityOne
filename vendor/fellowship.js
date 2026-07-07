@@ -5889,9 +5889,9 @@
     if (!sk) throw new Error("no key");
     return finalizeEvent2(authEvent, sk);
   };
-  var _relayEnforces = /* @__PURE__ */ new Map();
-  function _verifyEnforcing(wssUrl) {
-    if (_relayEnforces.has(wssUrl)) return _relayEnforces.get(wssUrl);
+  var _relayInfoCache = /* @__PURE__ */ new Map();
+  function _relayInfo(wssUrl) {
+    if (_relayInfoCache.has(wssUrl)) return _relayInfoCache.get(wssUrl);
     const p = (async () => {
       try {
         const httpUrl = String(wssUrl).replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/+$/, "");
@@ -5899,15 +5899,18 @@
         const t = setTimeout(() => ctrl.abort(), 6e3);
         const res = await fetch(httpUrl, { headers: { Accept: "application/nostr+json" }, signal: ctrl.signal });
         clearTimeout(t);
-        if (!res.ok) return false;
+        if (!res.ok) return null;
         const info = await res.json();
-        return !!(info && info.trinityone && info.trinityone.enforces === true);
+        return info && info.trinityone ? { ...info.trinityone, name: info.name || "" } : null;
       } catch {
-        return false;
+        return null;
       }
     })();
-    _relayEnforces.set(wssUrl, p);
+    _relayInfoCache.set(wssUrl, p);
     return p;
+  }
+  function _verifyEnforcing(wssUrl) {
+    return _relayInfo(wssUrl).then((t) => !!(t && t.enforces === true));
   }
   if (typeof window !== "undefined") {
     window.addEventListener("unhandledrejection", (e) => {
@@ -8101,6 +8104,48 @@
         } catch {
         }
       };
+    },
+    // FEDERATION Phase 3b — discover relays that have OFFERED to host new churches. Probe a seed set (any
+    // configured discovery relays + the canonical pool + relays we already use), read each one's NIP-11, and
+    // return only those advertising trinityone.enforces && open && !full. Reachability + the enforces/open
+    // flags are all verified here, so a caller only ever sees live, enforcing, accepting relays. Ranked:
+    // region match first (nearest), then lightest load. A church with no discovery seed just gets [] (safe).
+    async discoverRelayOffers(opts) {
+      const region = opts && opts.region;
+      const seed = [.../* @__PURE__ */ new Set([...window.Fellowship.discoverySeed || [], ...window.Fellowship.CANONICAL_RELAYS || [], ...window.Fellowship.relays || []])];
+      const probed = await Promise.all(seed.map(async (url) => {
+        const t = await _relayInfo(url);
+        if (t && t.enforces === true && t.open === true && !t.full) {
+          return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "" };
+        }
+        return null;
+      }));
+      const offers = probed.filter(Boolean);
+      offers.sort((a, b) => {
+        if (region) {
+          const ra = a.region === region ? 0 : 1, rb = b.region === region ? 0 : 1;
+          if (ra !== rb) return ra - rb;
+        }
+        return (a.churches || 0) - (b.churches || 0);
+      });
+      return offers;
+    },
+    // Auto-pick N relays (default 2 = primary + backup) from ranked offers, preferring DIFFERENT operators so a
+    // backup is real redundancy (one operator down ≠ church down). Backfills same-operator only if nothing else.
+    pickRelays(offers, n) {
+      n = n || 2;
+      const picked = [], ops = /* @__PURE__ */ new Set();
+      for (const o of offers || []) {
+        if (picked.length >= n) break;
+        if (o.operator && ops.has(o.operator)) continue;
+        picked.push(o);
+        if (o.operator) ops.add(o.operator);
+      }
+      if (picked.length < n) for (const o of offers || []) {
+        if (picked.length >= n) break;
+        if (!picked.includes(o)) picked.push(o);
+      }
+      return picked;
     },
     subscribeChurchProfile(churchNpub, onProfile) {
       const pubk = toPub(churchNpub);
