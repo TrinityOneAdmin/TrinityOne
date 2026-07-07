@@ -1828,6 +1828,18 @@ function DashRelaysCard() {
     if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); return; }
     setDraft(''); setErr('');
   };
+  // FEDERATION Phase 3c — auto-find open relays (primary + backup) that have offered to host new churches.
+  const [finding, setFinding] = React.useState(false);
+  const [findMsg, setFindMsg] = React.useState('');
+  const autoFind = async () => {
+    setFinding(true); setFindMsg('');
+    try {
+      const picks = window.Steward.autoPickRelays ? await window.Steward.autoPickRelays(2) : [];
+      if (picks && picks.length) setFindMsg('✓ Added ' + picks.length + ' relay' + (picks.length > 1 ? 's' : '') + ' for backup: ' + picks.map(p => p.name || p.url).join(', '));
+      else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
+    } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
+    setFinding(false);
+  };
   const [regOpen, setRegOpen] = React.useState(false);
   const [regToken, setRegToken] = React.useState('');
   const [regMsg, setRegMsg] = React.useState('');
@@ -1870,6 +1882,8 @@ function DashRelaysCard() {
             <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Add relay</button>
           </div>
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+          <button onClick={autoFind} disabled={finding} className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
+          {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
         </div>
         {/* register this church with the relay's write policy — fixes "Changes weren't saved: different church" */}
         <div style={{ marginTop: 12 }}>

@@ -9690,6 +9690,59 @@ zoo`.split("\n");
     }
     return out;
   }
+  var _relayInfoCache = /* @__PURE__ */ new Map();
+  function _relayInfo(wssUrl) {
+    if (_relayInfoCache.has(wssUrl)) return _relayInfoCache.get(wssUrl);
+    const p = (async () => {
+      try {
+        const httpUrl = String(wssUrl).replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/+$/, "");
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 6e3);
+        const res = await fetch(httpUrl, { headers: { Accept: "application/nostr+json" }, signal: ctrl.signal });
+        clearTimeout(t);
+        if (!res.ok) return null;
+        const info = await res.json();
+        return info && info.trinityone ? { ...info.trinityone, name: info.name || "" } : null;
+      } catch {
+        return null;
+      }
+    })();
+    _relayInfoCache.set(wssUrl, p);
+    return p;
+  }
+  var _discoverySeed = [];
+  async function discoverRelayOffers(seedExtra, region) {
+    const seed = [.../* @__PURE__ */ new Set([...seedExtra || [], ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
+    const probed = await Promise.all(seed.map(async (url) => {
+      const t = await _relayInfo(url);
+      if (t && t.enforces === true && t.open === true && !t.full) return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "" };
+      return null;
+    }));
+    const offers = probed.filter(Boolean);
+    offers.sort((a, b) => {
+      if (region) {
+        const ra = a.region === region ? 0 : 1, rb = b.region === region ? 0 : 1;
+        if (ra !== rb) return ra - rb;
+      }
+      return (a.churches || 0) - (b.churches || 0);
+    });
+    return offers;
+  }
+  function pickRelays(offers, n) {
+    n = n || 2;
+    const picked = [], ops = /* @__PURE__ */ new Set();
+    for (const o of offers || []) {
+      if (picked.length >= n) break;
+      if (o.operator && ops.has(o.operator)) continue;
+      picked.push(o);
+      if (o.operator) ops.add(o.operator);
+    }
+    if (picked.length < n) for (const o of offers || []) {
+      if (picked.length >= n) break;
+      if (!picked.includes(o)) picked.push(o);
+    }
+    return picked;
+  }
   var pool = new SimplePool();
   function _b64ToU8(base642) {
     const pad2 = "=".repeat((4 - base642.length % 4) % 4);
@@ -11873,6 +11926,36 @@ zoo`.split("\n");
       lsSet(RELAYS_LS, JSON.stringify(next));
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return true;
+    },
+    // FEDERATION Phase 3c — list relays that have OFFERED to host new churches (enforcing + open + live).
+    discoverRelayOffers(region) {
+      return discoverRelayOffers(null, region);
+    },
+    // set/extend the bootstrap discovery seed (discovery-only relays to probe for offers).
+    setDiscoverySeed(urls) {
+      _discoverySeed = [...new Set((urls || []).map((u) => normRelay(u)).filter(Boolean))];
+      return _discoverySeed;
+    },
+    // Auto-find + adopt up to n open relays (default 2 = primary + backup, different operators), then re-publish
+    // the church's NIP-65 list so members discover them. Additive: only adds relays not already configured.
+    // Returns the picked offers (or [] when nothing is open — e.g. the pilot, where it's a safe no-op).
+    async autoPickRelays(n) {
+      const offers = await discoverRelayOffers(null, null);
+      const have = new Set(relays());
+      const picks = pickRelays(offers.filter((o) => !have.has(o.url)), n || 2);
+      for (const p of picks) {
+        try {
+          window.Steward.addRelay(p.url);
+        } catch (e) {
+        }
+      }
+      if (picks.length) {
+        try {
+          await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null);
+        } catch (e) {
+        }
+      }
+      return picks;
     },
     // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms }]
     relayStatus() {

@@ -122,6 +122,49 @@ function relays() {
   for (const r of extraRelays()) { if (r && r !== own && !out.includes(r)) out.push(r); }
   return out;
 }
+// FEDERATION Phase 3 — relay discovery for the steward console (mirrors the member engine). Probe a relay's
+// NIP-11 doc for its trinityone capability/offer block; cached so each relay is probed once. Fail-closed.
+const _relayInfoCache = new Map();
+function _relayInfo(wssUrl) {
+  if (_relayInfoCache.has(wssUrl)) return _relayInfoCache.get(wssUrl);
+  const p = (async () => {
+    try {
+      const httpUrl = String(wssUrl).replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/+$/, '');
+      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch(httpUrl, { headers: { Accept: 'application/nostr+json' }, signal: ctrl.signal });
+      clearTimeout(t);
+      if (!res.ok) return null;
+      const info = await res.json();
+      return (info && info.trinityone) ? { ...info.trinityone, name: info.name || '' } : null;
+    } catch { return null; }
+  })();
+  _relayInfoCache.set(wssUrl, p);
+  return p;
+}
+// find relays that OFFERED to host new churches: enforcing + open + not full + reachable. Ranked region-first,
+// then lightest load. Empty when nothing is open (e.g. the pilot today, where a8 doesn't advertise an offer).
+// bootstrap discovery seed: relays to PROBE for offers that a new church doesn't already know. Kept small +
+// extensible (setDiscoverySeed) and discovery-only — it never carries church content, so it's not a central
+// point (FEDERATION-PLAN guardrail). Empty on the pilot (a8 isn't offering), so auto-pick is a safe no-op.
+let _discoverySeed = [];
+async function discoverRelayOffers(seedExtra, region) {
+  const seed = [...new Set([...(seedExtra || []), ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
+  const probed = await Promise.all(seed.map(async (url) => {
+    const t = await _relayInfo(url);
+    if (t && t.enforces === true && t.open === true && !t.full) return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '' };
+    return null;
+  }));
+  const offers = probed.filter(Boolean);
+  offers.sort((a, b) => { if (region) { const ra = a.region === region ? 0 : 1, rb = b.region === region ? 0 : 1; if (ra !== rb) return ra - rb; } return (a.churches || 0) - (b.churches || 0); });
+  return offers;
+}
+// auto-pick primary + backup, preferring DIFFERENT operators so a backup is real redundancy.
+function pickRelays(offers, n) {
+  n = n || 2; const picked = [], ops = new Set();
+  for (const o of (offers || [])) { if (picked.length >= n) break; if (o.operator && ops.has(o.operator)) continue; picked.push(o); if (o.operator) ops.add(o.operator); }
+  if (picked.length < n) for (const o of (offers || [])) { if (picked.length >= n) break; if (!picked.includes(o)) picked.push(o); }
+  return picked;
+}
 
 const pool = new SimplePool();
 // decode a base64url VAPID key to the Uint8Array the Push API wants
@@ -1528,6 +1571,21 @@ window.Steward = {
     lsSet(RELAYS_LS, JSON.stringify(next));
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return true;
+  },
+  // FEDERATION Phase 3c — list relays that have OFFERED to host new churches (enforcing + open + live).
+  discoverRelayOffers(region) { return discoverRelayOffers(null, region); },
+  // set/extend the bootstrap discovery seed (discovery-only relays to probe for offers).
+  setDiscoverySeed(urls) { _discoverySeed = [...new Set((urls || []).map(u => normRelay(u)).filter(Boolean))]; return _discoverySeed; },
+  // Auto-find + adopt up to n open relays (default 2 = primary + backup, different operators), then re-publish
+  // the church's NIP-65 list so members discover them. Additive: only adds relays not already configured.
+  // Returns the picked offers (or [] when nothing is open — e.g. the pilot, where it's a safe no-op).
+  async autoPickRelays(n) {
+    const offers = await discoverRelayOffers(null, null);
+    const have = new Set(relays());
+    const picks = pickRelays(offers.filter(o => !have.has(o.url)), n || 2);
+    for (const p of picks) { try { window.Steward.addRelay(p.url); } catch (e) {} }
+    if (picks.length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
+    return picks;
   },
   // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms }]
   relayStatus() {
