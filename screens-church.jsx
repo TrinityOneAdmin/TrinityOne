@@ -86,12 +86,13 @@ function ChurchPill({ ctx }) {
   // with a brand banner: a wide header image with the badge + name overlaid (the church's identity).
   const banner = safeImgUrl(c.banner);   // SECURITY-AUDIT-2026-07-06 H2: only a data: URI, never a remote beacon URL
   if (banner) {
-    const bf = (typeof c.bannerFade === 'number') ? Math.max(0, Math.min(60, c.bannerFade)) : 16;   // steward-set fade %; default 16 = the original look
+    const bf = (typeof c.bannerFade === 'number') ? Math.max(0, Math.min(80, c.bannerFade)) : 16;   // steward-set fade %; default 16 = the original look (cap 80 matches the console slider)
     const bmask = bf > 0 ? `linear-gradient(to bottom, #000 ${100 - bf}%, transparent)` : 'none';
     return (
       <button onClick={ctx.openChurchSwitcher} style={{
         position: 'relative', display: 'block', width: '100%',
-        overflow: 'hidden', cursor: 'pointer', textAlign: 'left',   // no boxShadow: full-bleed banner shouldn't carry a fine edge line
+        overflow: 'hidden', cursor: 'pointer', textAlign: 'left',
+        border: 'none', background: 'transparent', padding: 0, margin: 0, appearance: 'none', WebkitAppearance: 'none',   // full-bleed banner: no default button border/background/padding (that was the faint frame)
         aspectRatio: '3 / 1',
       }}>
         {/* image + legibility scrim on a MASKED layer — the steward's fade blends THIS into the page.

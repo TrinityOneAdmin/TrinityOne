@@ -3657,7 +3657,7 @@ function DashBrandingPanel({ church }) {
           <div style={lbl}>Banner fade</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>How softly the bottom of the banner blends into the page.</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <input type="range" min="0" max="50" step="2" value={fade} onChange={e => onFade(Number(e.target.value))} style={{ flex: 1, accentColor: acc }} />
+            <input type="range" min="0" max="80" step="2" value={fade} onChange={e => onFade(Number(e.target.value))} style={{ flex: 1, accentColor: acc }} />
             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-2)', minWidth: 52, textAlign: 'right' }}>{fade === 0 ? 'None' : fade + '%'}</span>
           </div>
         </div>
