@@ -143,7 +143,7 @@ function useStewardChurch() {
   // any instance that receives the kind-0 broadcasts it, so every view stays in sync even if this
   // instance's own relay sub mounted before the church's relays were ready.
   useStE(() => { const f = (e) => { if (e.detail) setP(e.detail); }; window.addEventListener('steward-profile', f); return () => window.removeEventListener('steward-profile', f); }, [idv]);
-  return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', channel: (p && p.channel) || '', audioFeed: (p && p.audioFeed) || '', lud16: (p && p.lud16) || '', giving: !!(p && p.giving), picture: (p && p.picture) || '', banner: (p && p.banner) || '', accent: (p && p.accent) || '', features: (p && p.features) || {}, rules: (p && p.rules) || {}, npub: window.Steward.npub || '', isNetwork: window.Steward.isViewingNetwork ? window.Steward.isViewingNetwork() : false };
+  return { name: (p && p.name) || '', nip05: (p && p.nip05) || '', channel: (p && p.channel) || '', audioFeed: (p && p.audioFeed) || '', lud16: (p && p.lud16) || '', giving: !!(p && p.giving), picture: (p && p.picture) || '', banner: (p && p.banner) || '', bannerFade: (p && typeof p.bannerFade === 'number') ? p.bannerFade : undefined, accent: (p && p.accent) || '', features: (p && p.features) || {}, rules: (p && p.rules) || {}, npub: window.Steward.npub || '', isNetwork: window.Steward.isViewingNetwork ? window.Steward.isViewingNetwork() : false };
 }
 window.useStewardChurch = useStewardChurch;
 

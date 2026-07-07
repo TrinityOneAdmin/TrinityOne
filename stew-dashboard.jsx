@@ -3603,11 +3603,15 @@ function DashBrandingPanel({ church }) {
   const [busy, setBusy] = React.useState(false);
   const [accent, setAccentState] = React.useState(church.accent || '');
   const saveTimer = React.useRef(null);
-  React.useEffect(() => { setAccentState(church.accent || ''); }, [church.accent]);
+  // PERF/BUGFIX 2026-07-07: useStewardChurch resets the profile to {} on mount and re-fetches over the ~0.5s
+  // Cloudflare tunnel, so church.accent/bannerFade go transiently undefined. Only sync the control from a
+  // DEFINED value — never snap back to the default on that transient — otherwise a saved fade (persisted fine on
+  // the relay) visibly reverts to 16 after you set it. Clearing (accent → '') is a defined value, so it still syncs.
+  React.useEffect(() => { if (church.accent !== undefined) setAccentState(church.accent || ''); }, [church.accent]);
   const [cropFile, setCropFile] = React.useState(null);
   const [fade, setFadeState] = React.useState(typeof church.bannerFade === 'number' ? church.bannerFade : 16);
   const fadeTimer = React.useRef(null);
-  React.useEffect(() => { setFadeState(typeof church.bannerFade === 'number' ? church.bannerFade : 16); }, [church.bannerFade]);
+  React.useEffect(() => { if (typeof church.bannerFade === 'number') setFadeState(church.bannerFade); }, [church.bannerFade]);
   const onFade = (v) => { setFadeState(v); if (fadeTimer.current) clearTimeout(fadeTimer.current); fadeTimer.current = setTimeout(() => window.Steward.publishProfile({ bannerFade: v }), 400); };
   const onPickBanner = (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) setCropFile(f); };
   const saveBanner = async (uri) => { setCropFile(null); setBusy(true); try { await Promise.resolve(window.Steward.publishProfile({ banner: uri })); } catch (e) {} setBusy(false); };
