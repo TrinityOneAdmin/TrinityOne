@@ -81,16 +81,35 @@ function ChannelAvatar({ ch, size = 56 }) {
     fontFamily: 'var(--font-display)', fontSize: size * 0.4 }}>{(ch.name || '?')[0]}</div>;
 }
 
+// a self-hosted sermon row (audio or video) — the church's own, relay-hosted media
+function SermonRow({ s, loading, onClick }) {
+  const isVideo = String(s.mime || '').startsWith('video');
+  const sz = s.size > 1048576 ? (s.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round((s.size || 0) / 1024)) + ' KB';
+  return (
+    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, width: '100%', textAlign: 'left', cursor: 'pointer', borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)' }}>
+      <div style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 15%, var(--surface))' }}><Icon name={isVideo ? 'play' : 'headphones'} size={20} color="var(--clay)" /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{s.title}</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{[isVideo ? 'Video' : 'Audio', sz, s.enc ? 'members only' : null].filter(Boolean).join(' · ')}</div>
+      </div>
+      {loading
+        ? <div style={{ width: 18, height: 18, flexShrink: 0, borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+        : <Icon name="play" size={18} color="var(--clay)" style={{ flexShrink: 0 }} />}
+    </button>
+  );
+}
+
 function WatchView({ ctx }) {
   const [data, setData] = useW(null);
-  const [paste, setPaste] = useW('');
-  const [vidSermons, setVidSermons] = useW([]);   // Tier 2: self-hosted VIDEO sermons (mime video/*)
+  const [sermons, setSermons] = useW([]);   // Tier 2: ALL self-hosted sermons (audio + video) — the church's own media
+  const [loadingId, setLoadingId] = useW(null);
   const channelUrl = (ctx.church && ctx.church.channel) || '';
   const churchNpub = ctx.church && ctx.church.npub;
+  const chName = (ctx.church && ctx.church.name) || 'your church';
   React.useEffect(() => {
     const FS = window.Fellowship;
-    if (!churchNpub || !FS || !FS.subscribeSermons) { setVidSermons([]); return; }
-    return FS.subscribeSermons(churchNpub, (list) => setVidSermons(list.filter(s => String(s.mime || '').startsWith('video'))));
+    if (!churchNpub || !FS || !FS.subscribeSermons) { setSermons([]); return; }
+    return FS.subscribeSermons(churchNpub, setSermons);
   }, [churchNpub]);
   React.useEffect(() => {
     let alive = true; setData(null);
@@ -106,32 +125,22 @@ function WatchView({ ctx }) {
     return () => { alive = false; };
   }, [channelUrl]);
 
-  const add = () => {
-    const id = parseYT(paste);
-    if (!id) { ctx.toast('Paste a valid YouTube link'); return; }
-    ctx.openVideo({ id: 'paste-' + id, title: 'Your video', ytId: id, thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-      published: '', desc: 'Added from a YouTube link.' });
-    setPaste('');
+  // play a self-hosted sermon: video opens the player; audio plays in the persistent mini-player
+  const playSelf = async (s) => {
+    const isVideo = String(s.mime || '').startsWith('video');
+    const hosts = (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []);
+    if (!hosts.length || !s.sha256) { ctx.toast('This sermon is unavailable'); return; }
+    if (isVideo) { ctx.openVideo({ id: s.id, title: s.title, _sermon: true, sha256: s.sha256, hosts, mime: s.mime, enc: s.enc, published: s.ts ? new Date(s.ts * 1000).toISOString() : '' }); return; }
+    setLoadingId(s.id);
+    try {
+      const FS = window.Fellowship;
+      const dec = s.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(churchNpub) : null;
+      if (s.enc && !dec) { ctx.toast('This encrypted sermon needs the church media key'); setLoadingId(null); return; }
+      const src = await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
+      window.TrinityAudio.play({ id: s.id, title: s.title, subtitle: chName, src, album: chName });
+    } catch (e) { ctx.toast('Couldn’t load: ' + (e.message || 'error')); }
+    setLoadingId(null);
   };
-
-  // the "paste a YouTube link" box — shown whether or not a channel/feed is configured, so a member
-  // can always loop in their own video.
-  const pasteBox = (
-    <div style={{ marginTop: 24, padding: 16, borderRadius: 20, background: 'var(--surface-2)', border: '1px dashed color-mix(in oklab, var(--clay) 40%, var(--line))' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <Icon name="plus" size={17} color="var(--clay)" stroke={2.4} />
-        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>Loop in a video</span>
-      </div>
-      <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.4 }}>Paste any YouTube link and it plays right here.</p>
-      <div style={{ display: 'flex', gap: 9 }}>
-        <input value={paste} onChange={e => setPaste(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }}
-          placeholder="youtube.com/watch?v=…" style={{ flex: 1, minWidth: 0, height: 44, padding: '0 14px', borderRadius: 13,
-          border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
-        <button onClick={add} style={{ border: 'none', background: 'var(--clay)', color: '#fff', padding: '0 18px', borderRadius: 13,
-          fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', flexShrink: 0 }}>Add</button>
-      </div>
-    </div>
-  );
 
   if (!data) {
     return (
@@ -142,58 +151,62 @@ function WatchView({ ctx }) {
   }
 
   const ch = data.channel || null;
-  // self-hosted video sermons render alongside the channel feed (they play from a member-gated blob, not YouTube)
-  const sermonVids = vidSermons.map(s => ({ id: s.id, title: s.title, _sermon: true, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []), mime: s.mime, enc: s.enc, published: s.ts ? new Date(s.ts * 1000).toISOString() : '', desc: 'Self-hosted · members only' }));
-  const videos = [...sermonVids, ...(data.videos || [])];
+  const ytVideos = data.videos || [];
+  const hasChurch = sermons.length > 0;
+  const hasYT = ytVideos.length > 0;
 
-  // no channel feed yet — invite the member to add their own
-  if (!videos.length) {
+  if (!hasChurch && !hasYT) {
     return (
       <div style={{ animation: 'trinityFade .4s ease both' }}>
-        <div style={{ textAlign: 'center', padding: '28px 16px 6px', color: 'var(--ink-3)' }}>
+        <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--ink-3)' }}>
           <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}><Icon name="play" size={26} /></div>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>No videos yet</div>
-          <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>Paste a YouTube link below to watch it here, or your church will add their videos.</p>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>Nothing to watch yet</div>
+          <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>Your church’s sermons and videos will appear here.</p>
         </div>
-        {pasteBox}
       </div>
     );
   }
 
-  const featured = videos[0];
-  const rest = videos.slice(1);
+  const ytFeatured = hasYT ? ytVideos[0] : null;
+  const ytRest = hasYT ? ytVideos.slice(1) : [];
 
   return (
     <div style={{ animation: 'trinityFade .4s ease both' }}>
-      {/* channel header — only when a channel is configured */}
-      {ch ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
-          <ChannelAvatar ch={ch} size={56} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.15 }}>{ch.name}</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{ch.handle} · YouTube</div>
+      {/* GROUP 1 — the church's own, relay-hosted sermons (audio + video) */}
+      {hasChurch ? (
+        <React.Fragment>
+          <SectionLabel>From {chName}</SectionLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: hasYT ? 28 : 0 }}>
+            {sermons.map(s => <SermonRow key={s.id} s={s} loading={loadingId === s.id} onClick={() => playSelf(s)} />)}
           </div>
-          {ch.url ? <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)',
-            padding: '9px 15px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', flexShrink: 0 }}>
-            Channel
-          </button> : null}
-        </div>
+        </React.Fragment>
       ) : null}
 
-      {/* featured (latest) */}
-      <div onClick={() => ctx.openVideo(featured)} style={{ cursor: 'pointer', marginBottom: 22 }}>
-        <VideoPoster v={featured} h={196} />
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, lineHeight: 1.22, marginTop: 11 }}>{featured.title}</div>
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3 }}>{[ch && ch.name, fmtDate(featured.published)].filter(Boolean).join(' · ')}</div>
-      </div>
-
-      {/* list */}
-      <SectionLabel>Latest</SectionLabel>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {rest.map(v => <VideoRow key={v.id} v={v} onClick={() => ctx.openVideo(v)} />)}
-      </div>
-
-      {pasteBox}
+      {/* GROUP 2 — the church's YouTube / Rumble channel */}
+      {hasYT ? (
+        <React.Fragment>
+          {ch ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <ChannelAvatar ch={ch} size={44} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.15 }}>{ch.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{ch.handle} · YouTube</div>
+              </div>
+              {ch.url ? <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)', padding: '8px 14px', borderRadius: 999, fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', flexShrink: 0 }}>Channel</button> : null}
+            </div>
+          ) : <SectionLabel>Videos</SectionLabel>}
+          {ytFeatured ? (
+            <div onClick={() => ctx.openVideo(ytFeatured)} style={{ cursor: 'pointer', marginBottom: 18 }}>
+              <VideoPoster v={ytFeatured} h={196} />
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, lineHeight: 1.22, marginTop: 11 }}>{ytFeatured.title}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3 }}>{[ch && ch.name, fmtDate(ytFeatured.published)].filter(Boolean).join(' · ')}</div>
+            </div>
+          ) : null}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {ytRest.map(v => <VideoRow key={v.id} v={v} onClick={() => ctx.openVideo(v)} />)}
+          </div>
+        </React.Fragment>
+      ) : null}
     </div>
   );
 }

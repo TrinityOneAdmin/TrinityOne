@@ -597,7 +597,9 @@ window.Steward = {
       const mb = String(m || '').trim().replace(/\/+$/, ''); if (!mb || mb === primary) continue;
       try { await put(mb); hosts.push(mb); } catch (e) {}
     }
-    return { sha256: j.sha256, size: j.size, host: primary, hosts, mime: enc ? '' : (file.type || j.type || ''), enc };
+    // keep the REAL type in the sermon doc (for Listen/Watch routing) even when encrypted — the type isn't
+    // secret, only the content is (the blob is still stored opaque as application/octet-stream on the host).
+    return { sha256: j.sha256, size: j.size, host: primary, hosts, mime: (file.type || j.type || ''), enc };
   },
   // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
   publishSermon(s) {

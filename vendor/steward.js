@@ -10283,7 +10283,7 @@ zoo`.split("\n");
         } catch (e) {
         }
       }
-      return { sha256: j.sha256, size: j.size, host: primary, hosts, mime: enc ? "" : file.type || j.type || "", enc };
+      return { sha256: j.sha256, size: j.size, host: primary, hosts, mime: file.type || j.type || "", enc };
     },
     // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
     publishSermon(s) {
