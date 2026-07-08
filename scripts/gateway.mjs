@@ -1383,13 +1383,17 @@ function serveStatic(req, res) {
   // The web app + control UI stay reachable: 'relay-app' is a distinct path segment from 'relay', and the
   // APK/module handlers ran above. 404 (not 403) so the endpoint doesn't confirm a file exists.
   if (p.split('/').some(s => s === 'relay' || s === 'android' || s === 'ios' || s === 'node_modules' || (s && s[0] === '.'))) { res.writeHead(404).end('not found'); return; }
-  const file = normalize(join(ROOT, p));
+  let file = normalize(join(ROOT, p));
   // path-traversal guard: the resolved path must stay strictly inside ROOT. Normalize ROOT's trailing
   // separator first (it may already carry one), so the boundary is exactly `<root>/` — a sibling like
   // `<root>-evil` can't satisfy it, and the trailing-slash double-up doesn't reject valid files.
   const rootBase = ROOT.replace(/[/\\]+$/, '');
   if (file !== rootBase && !file.startsWith(rootBase + sep)) { res.writeHead(403).end('forbidden'); return; }
-  let st; try { st = statSync(file); } catch { res.writeHead(404).end('not found'); return; }
+  let st; try { st = statSync(file); } catch {
+    // extensionless clean URLs (e.g. the church join link /join → join.html) serve a .html sibling before 404-ing
+    if (!extname(p) && p !== '/') { try { const alt = file + '.html'; const ast = statSync(alt); if (ast.isFile()) { file = alt; st = ast; } } catch {} }
+    if (!st) { res.writeHead(404).end('not found'); return; }
+  }
   if (st.isDirectory()) { res.writeHead(404).end('not found'); return; }
   const ext = extname(file).toLowerCase();
   // HTML: rewrite our OWN local asset URLs to carry the build sha (?v=<sha>) so a deploy is NEVER served

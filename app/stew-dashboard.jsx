@@ -204,6 +204,12 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [relayBusy, setRelayBusy] = React.useState(false);
   const phrase = (() => { try { return window.Steward.exportMnemonic() || ''; } catch { return ''; } })();
   const npub = church.npub || window.Steward.npub || '';
+  // backup check: after they tick "written down", make them re-type 3 of the 12 words before continuing
+  const words = phrase ? phrase.trim().split(/\s+/) : [];
+  const challenge = words.length >= 12 ? [2, 6, 10] : [];   // words #3, #7, #11
+  const [vw, setVw] = React.useState(['', '', '']);
+  const verified = challenge.length === 3 && challenge.every((pos, i) => vw[i].trim().toLowerCase() === (words[pos] || '').toLowerCase());
+  const canContinue = !phrase || (saved && verified);
   const doRegister = async () => {
     if (!relayToken.trim()) return;
     setRelayBusy(true); setRelayMsg('Connecting…');
@@ -236,7 +242,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       footer={<React.Fragment>
         <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
-        <button onClick={() => { if (saved || !phrase) next(); }} disabled={!saved && !!phrase} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (saved || !phrase) ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
+        <button onClick={() => { if (canContinue) next(); }} disabled={!canContinue} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: canContinue ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
       </React.Fragment>}>
       <div style={lbl}>RECOVERY PHRASE — 12 WORDS</div>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 14.5, lineHeight: 1.8, wordSpacing: 3, color: 'var(--ink)', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', borderRadius: 12, padding: '14px 16px' }}>{phrase || 'No recovery phrase available for this key.'}</div>
@@ -249,9 +255,28 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
         I’ve written these 12 words on paper and stored them safely
       </label>
-      ) : (
+      ) : null}
+      {phrase && saved ? (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', marginBottom: 8, lineHeight: 1.5 }}>Quick check — type these three from your written list to confirm:</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {challenge.map((pos, i) => {
+              const ok = !!vw[i] && vw[i].trim().toLowerCase() === (words[pos] || '').toLowerCase();
+              return (
+                <div key={pos} style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700, marginBottom: 4 }}>WORD #{pos + 1}</div>
+                  <input value={vw[i]} onChange={e => setVw(a => a.map((x, j) => (j === i ? e.target.value : x)))} autoComplete="off" spellCheck={false} autoCapitalize="none" style={{ ...fld, height: 42, fontWeight: 400, borderColor: ok ? 'var(--sage)' : 'var(--line)' }} />
+                </div>
+              );
+            })}
+          </div>
+          {verified ? <div style={{ fontSize: 12.5, color: 'var(--sage)', marginTop: 7, fontWeight: 600 }}>✓ Got them — your church is safely backed up.</div>
+            : vw.some(x => x.trim()) ? <div style={{ fontSize: 12.5, color: 'var(--clay)', marginTop: 7 }}>Not quite — check your written list.</div> : null}
+        </div>
+      ) : null}
+      {!phrase ? (
       <div style={{ marginTop: 12, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>This key was imported, so its recovery phrase isn’t shown here — keep the copy you set up with somewhere safe. You can continue.</div>
-      )}
+      ) : null}
       <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
         {!relayOpen ? (
           <button onClick={() => setRelayOpen(true)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', padding: 0 }}>Running your own relay? Connect it →</button>
