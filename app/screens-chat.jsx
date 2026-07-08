@@ -599,11 +599,11 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) 
   );
 }
 
-function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove }) {
+function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
-  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove };
+  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent };
   const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
 
   if (m.kind === 'verse') {
@@ -754,14 +754,21 @@ function Row({ me, m, children, ctx, mod }) {
         <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{m.when}</span>
       </div> : null}
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start' }}>
+        {M.replyParent ? (
+          <div style={{ maxWidth: 260, marginBottom: 4, padding: '5px 10px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--clay)', fontSize: 12, lineHeight: 1.3 }}>
+            <div style={{ fontWeight: 700, color: 'var(--ink-3)' }}>{M.replyParent.me ? 'You' : (window.Fellowship && window.Fellowship.displayFor ? window.Fellowship.displayFor(M.replyParent.pubkey).handle : 'Someone')}</div>
+            <div style={{ color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{shareTextOf(M.replyParent) || '…'}</div>
+          </div>
+        ) : null}
         {children}
-        {M.canModerate ? (
+        {(M.onReply || M.canModerate) ? (
           <React.Fragment>
-            <button onClick={M.onOpenMenu} title="Moderate" style={{ position: 'absolute', top: -6, [me ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 22, height: 22, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={14} /></button>
+            <button onClick={M.onOpenMenu} title="Message actions" style={{ position: 'absolute', top: -6, [me ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 22, height: 22, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={14} /></button>
             {M.menuOpen ? (
               <div style={{ position: 'absolute', top: 18, [me ? 'left' : 'right']: -26, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <button onClick={M.isPinned ? M.onUnpin : M.onPin} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="var(--gold)" /> {M.isPinned ? 'Unpin message' : 'Pin message'}</button>
-                <button onClick={M.onRemove} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button>
+                {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
+                {M.canModerate ? <button onClick={M.isPinned ? M.onUnpin : M.onPin} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="var(--gold)" /> {M.isPinned ? 'Unpin message' : 'Pin message'}</button> : null}
+                {M.canModerate ? <button onClick={M.onRemove} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button> : null}
               </div>
             ) : null}
           </React.Fragment>
@@ -790,7 +797,9 @@ function searchableText(e) {
 function evtToMsg(e) {
   const me = e.pubkey === window.Fellowship.myPubkey;
   const kTag = (e.tags.find(t => t[0] === 'k') || [])[1];
-  const base = { id: e.id, me, pubkey: e.pubkey, when: fmtClock(e.created_at), _ts: e.created_at };
+  // NIP-10: a reply carries an 'e' tag pointing at the message it answers (marked 'reply', else the first e-tag)
+  const replyTo = (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || e.tags.find(t => t[0] === 'e') || [])[1] || null;
+  const base = { id: e.id, me, pubkey: e.pubkey, when: fmtClock(e.created_at), _ts: e.created_at, replyTo };
   if (kTag === 'verse') { try { return { ...base, kind: 'verse', verse: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'devotional') { try { return { ...base, kind: 'devotional', card: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'note') { try { return { ...base, kind: 'note', card: JSON.parse(e.content) }; } catch {} }
@@ -878,6 +887,7 @@ function GroupEventComposer({ group, ctx, onClose }) {
 function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
+  const [replyTo, setReplyTo] = useC(null);      // the message being replied to (or null)
   const [prayerOn, setPrayerOn] = useC(false);   // flag this message as a prayer request (always available)
   const [pollOpen, setPollOpen] = useC(false);   // compact poll composer open?
   const [pollQ, setPollQ] = useC('');
@@ -929,11 +939,14 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   if (!group) return null;
 
   const send = (extra) => {
+    // NIP-10 reply markers, when this message answers another
+    const rtags = replyTo ? [['e', replyTo.id, '', 'reply'], ['p', replyTo.pubkey]] : [];
     if (window.Fellowship) {                        // publish over Nostr; relay echoes it back to our sub
-      if (extra.kind === 'verse') window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse']]);
-      else if (extra.kind === 'prayer') window.Fellowship.publishMessage(group.id, extra.text, [['k', 'prayer']]);
-      else if (extra.kind === 'poll') window.Fellowship.publishMessage(group.id, JSON.stringify({ question: extra.question, options: extra.options }), [['k', 'poll']]);
-      else window.Fellowship.publishMessage(group.id, extra.text);
+      if (extra.kind === 'verse') window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse'], ...rtags]);
+      else if (extra.kind === 'prayer') window.Fellowship.publishMessage(group.id, extra.text, [['k', 'prayer'], ...rtags]);
+      else if (extra.kind === 'poll') window.Fellowship.publishMessage(group.id, JSON.stringify({ question: extra.question, options: extra.options }), [['k', 'poll'], ...rtags]);
+      else window.Fellowship.publishMessage(group.id, extra.text, rtags);
+      if (replyTo) setReplyTo(null);
       return;
     }
     const base = { id: 'me-' + Date.now(), me: true, handle: id.handle, color: id.color, when: 'now' };
@@ -966,6 +979,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const doRemove = (m) => { window.Fellowship.hideMessage(churchNpub, group.id, m.id); setMenuFor(null); ctx.toast('Message removed'); };
   const hideSet = hidden || new Set();
   const visibleMsgs = msgs.filter(m => !hideSet.has(m.id));
+  const msgById = {}; msgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents by id
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -1041,6 +1055,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           live={!!window.Fellowship}
           canModerate={canModerate} isPinned={!!(pin && pin.msgId === m.id)}
           menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
+          onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
           onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />)}
       </div>
 
@@ -1073,6 +1088,16 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
               {pollOpts.length < 5 ? <button onClick={() => setPollOpts(prev => [...prev, ''])} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)', padding: 0 }}>+ Add option</button> : null}
               <button onClick={sendPoll} disabled={!pollQ.trim() || pollOpts.filter(o => o.trim()).length < 2} style={{ marginLeft: 'auto', border: 'none', borderRadius: 10, padding: '8px 14px', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', opacity: (pollQ.trim() && pollOpts.filter(o => o.trim()).length >= 2) ? 1 : 0.5 }}>Post poll</button>
             </div>
+          </div>
+        ) : null}
+        {replyTo ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', marginBottom: 8, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--clay)' }}>
+            <Icon name="reply" size={15} color="var(--clay)" style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.3 }}>
+              <div style={{ fontWeight: 700, color: 'var(--ink-2)' }}>Replying to {replyTo.me ? 'yourself' : (window.Fellowship && window.Fellowship.displayFor ? window.Fellowship.displayFor(replyTo.pubkey).handle : 'message')}</div>
+              <div style={{ color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shareTextOf(replyTo) || '…'}</div>
+            </div>
+            <button onClick={() => setReplyTo(null)} title="Cancel reply" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 2 }}><Icon name="x" size={16} /></button>
           </div>
         ) : null}
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>

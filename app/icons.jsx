@@ -40,6 +40,7 @@ function Icon({ name, size = 22, stroke = 1.8, fill = false, style = {}, color =
     search: <><circle cx="11" cy="11" r="7" {...p} /><path d="m20 20-3.5-3.5" {...p} /></>,
     chevR: <><path d="m9 5 7 7-7 7" {...p} /></>,
     chevL: <><path d="m15 5-7 7 7 7" {...p} /></>,
+    reply: <><path d="M9 14 4 9l5-5" {...p} /><path d="M4 9h11a5 5 0 0 1 5 5v3" {...p} /></>,
     chevD: <><path d="m5 9 7 7 7-7" {...p} /></>,
     chevU: <><path d="m5 15 7-7 7 7" {...p} /></>,
     x: <><path d="m6 6 12 12M18 6 6 18" {...p} /></>,
