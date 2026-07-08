@@ -346,7 +346,7 @@ function ChatScreen({ ctx }) {
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
           <span style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{g.kind}</span>
-          {g.members != null ? ` · ${g.members} members` : (g.sub ? ` · ${g.sub}` : '')}
+          {g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : (g.sub ? ` · ${g.sub}` : '')}
         </div>
       </div>
     </div>
@@ -478,7 +478,7 @@ function ChatScreen({ ctx }) {
               <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent), flexShrink: 0 }}><Icon name={g.prayer ? 'pray' : 'chat'} size={22} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{hi(g.name)}</div>
-                <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{g.kind}{g.members != null ? ` · ${g.members} members` : ''}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{g.kind}{g.members ? ` · ${g.members} member${g.members === 1 ? '' : 's'}` : ''}</div>
               </div>
               <Icon name="chevR" size={17} color="var(--ink-3)" />
             </div>
