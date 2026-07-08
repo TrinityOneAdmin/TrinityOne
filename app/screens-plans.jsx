@@ -257,16 +257,16 @@ function PlansScreen({ ctx }) {
         );
         return (
           <React.Fragment>
-            {/* each devotional series folds into a collapsible group so a long series doesn't overwhelm */}
-            {groups.map(g => (
-              <CollapsibleSection key={g.name} label={g.name} count={g.items.length} defaultOpen={groups.length === 1}>
-                <div style={grid}>{g.items.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}</div>
-              </CollapsibleSection>
-            ))}
-            {singles.length ? (
+            {/* the series you'd continue leads as a hero (progress + read-ticks + an expandable list); any other
+                series are compact 'Continue →' cards, so a long list stays tidy without losing where you were (U1) */}
+            {groups[0] ? <DevoSeriesHero group={groups[0]} ctx={ctx} /> : null}
+            {(groups.length > 1 || singles.length) ? (
               <React.Fragment>
-                {groups.length ? <SectionLabel>More devotionals</SectionLabel> : null}
-                <div style={grid}>{singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}</div>
+                <SectionLabel>{groups[0] ? 'More' : 'Devotionals'}</SectionLabel>
+                <div style={grid}>
+                  {groups.slice(1).map(g => <DevoSeriesCard key={g.name} group={g} ctx={ctx} />)}
+                  {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
+                </div>
               </React.Fragment>
             ) : null}
           </React.Fragment>

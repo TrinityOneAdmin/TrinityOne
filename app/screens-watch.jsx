@@ -103,13 +103,15 @@ function WatchView({ ctx }) {
   const [data, setData] = useW(null);
   const [sermons, setSermons] = useW([]);   // Tier 2: ALL self-hosted sermons (audio + video) — the church's own media
   const [loadingId, setLoadingId] = useW(null);
+  const [sermonsReady, setSermonsReady] = useW(false);   // U8: tell "still loading" apart from "genuinely none" so the empty state can't flash on a slow relay
   const channelUrl = (ctx.church && ctx.church.channel) || '';
   const churchNpub = ctx.church && ctx.church.npub;
   const chName = (ctx.church && ctx.church.name) || 'your church';
   React.useEffect(() => {
+    setSermonsReady(false);
     const FS = window.Fellowship;
-    if (!churchNpub || !FS || !FS.subscribeSermons) { setSermons([]); return; }
-    return FS.subscribeSermons(churchNpub, setSermons);
+    if (!churchNpub || !FS || !FS.subscribeSermons) { setSermons([]); setSermonsReady(true); return; }
+    return FS.subscribeSermons(churchNpub, (l) => { setSermons(l); setSermonsReady(true); });
   }, [churchNpub]);
   React.useEffect(() => {
     let alive = true; setData(null);
@@ -142,7 +144,7 @@ function WatchView({ ctx }) {
     setLoadingId(null);
   };
 
-  if (!data) {
+  if (!data || !sermonsReady) {   // U8: wait for BOTH the channel feed AND the sermons sub before deciding it's empty
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 50, color: 'var(--ink-3)', gap: 14 }}>
         <div style={{ width: 24, height: 24, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
@@ -153,6 +155,11 @@ function WatchView({ ctx }) {
   const ch = data.channel || null;
   const ytVideos = data.videos || [];
   const hasChurch = sermons.length > 0;
+  // U7: audio lives in a "Watch" tab, so a listener wouldn't look here. When a church has both, split the group
+  // into a "Listen" (audio) and a "Watch" (video) sub-head so audio is findable; homogeneous groups need no split.
+  const audioSermons = sermons.filter(s => !String(s.mime || '').startsWith('video'));
+  const videoSermons = sermons.filter(s => String(s.mime || '').startsWith('video'));
+  const bothTypes = audioSermons.length > 0 && videoSermons.length > 0;
   const hasYT = ytVideos.length > 0;
 
   if (!hasChurch && !hasYT) {
@@ -176,9 +183,22 @@ function WatchView({ ctx }) {
       {hasChurch ? (
         <React.Fragment>
           <SectionLabel>From {chName}</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: hasYT ? 28 : 0 }}>
-            {sermons.map(s => <SermonRow key={s.id} s={s} loading={loadingId === s.id} onClick={() => playSelf(s)} />)}
-          </div>
+          {audioSermons.length ? (
+            <React.Fragment>
+              {bothTypes ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', textTransform: 'uppercase', margin: '0 2px 8px' }}><Icon name="headphones" size={13} color="var(--ink-3)" /> Listen</div> : null}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: (videoSermons.length || hasYT) ? 22 : 0 }}>
+                {audioSermons.map(s => <SermonRow key={s.id} s={s} loading={loadingId === s.id} onClick={() => playSelf(s)} />)}
+              </div>
+            </React.Fragment>
+          ) : null}
+          {videoSermons.length ? (
+            <React.Fragment>
+              {bothTypes ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', textTransform: 'uppercase', margin: '0 2px 8px' }}><Icon name="play" size={13} color="var(--ink-3)" /> Watch</div> : null}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: hasYT ? 28 : 0 }}>
+                {videoSermons.map(s => <SermonRow key={s.id} s={s} loading={loadingId === s.id} onClick={() => playSelf(s)} />)}
+              </div>
+            </React.Fragment>
+          ) : null}
         </React.Fragment>
       ) : null}
 
