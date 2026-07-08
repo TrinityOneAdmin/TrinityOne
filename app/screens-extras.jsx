@@ -11,7 +11,7 @@ function relTimeNotif(ts) {
   return Math.floor(s / 86400) + 'd';
 }
 
-const NOTIF_ICON = { message: 'chat', prayer: 'pray', giving: 'bolt', amen: 'heart', notice: 'bell', plan: 'plans', network: 'globe', devotional: 'read', event: 'calendar' };
+const NOTIF_ICON = { message: 'chat', prayer: 'pray', giving: 'bolt', amen: 'heart', notice: 'bell', plan: 'plans', network: 'globe', devotional: 'read', event: 'calendar', sermon: 'play' };
 const NOTIF_ACCENT = { network: 'var(--clay)', notice: 'var(--clay)', devotional: 'var(--sage)', plan: 'var(--gold)', event: 'var(--clay)' };
 
 function NotificationsScreen({ open, onClose, ctx }) {
@@ -21,6 +21,7 @@ function NotificationsScreen({ open, onClose, ctx }) {
   // mark seen when this screen opens
   React.useEffect(() => { if (open && ctx.markNetSeen) ctx.markNetSeen(); }, [open]);
   const onRowClick = (n) => {
+    if (n.sermon && ctx.playSermon) { onClose(); ctx.playSermon(n.sermon); return; }
     if (n.devo) { onClose(); ctx.openChurchDevo(n.devo); return; }
     if (n.go === 'plans') { onClose(); ctx.openPlans && ctx.openPlans(); return; }
     if (n.go === 'event' && n.event) { onClose(); ctx.openEvent ? ctx.openEvent(n.event) : (ctx.openServing && ctx.openServing()); return; }

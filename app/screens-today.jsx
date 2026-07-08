@@ -457,6 +457,24 @@ function TodayScreen({ ctx }) {
 
       {/* Practical care / meal trains now lives in its own tab inside Serving & events (not on Today) */}
 
+      {/* Featured sermon — a steward pinned it; tap to play (audio → mini-player, video → player) */}
+      {ctx.pinnedSermon && ctx.pinnedSermon.sha256 ? (
+        <div onClick={() => ctx.playSermon(ctx.pinnedSermon)} style={{
+          display: 'flex', alignItems: 'center', gap: 14, padding: 15, borderRadius: 20, cursor: 'pointer', marginBottom: 22,
+          background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow-lg)',
+          position: 'relative', overflow: 'hidden', animation: 'trinityFade .5s ease both',
+        }}>
+          <div style={{ position: 'absolute', right: -18, bottom: -22, opacity: .16 }}><Icon name={String(ctx.pinnedSermon.mime || '').startsWith('video') ? 'play' : 'headphones'} size={100} color="#fff" /></div>
+          <div style={{ width: 46, height: 46, borderRadius: 13, background: 'rgba(255,255,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Icon name="play" size={22} color="#fff" />
+          </div>
+          <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+            <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', opacity: .9 }}>New sermon</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700, lineHeight: 1.2, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ctx.pinnedSermon.title}</div>
+          </div>
+        </div>
+      ) : null}
+
       {/* Continue reading */}
       <SectionLabel>Continue reading</SectionLabel>
       <div onClick={() => ctx.openReader()} style={{

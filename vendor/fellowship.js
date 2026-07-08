@@ -5765,6 +5765,7 @@
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
   var MEDIAKEY_D = "trinityone/mediakey:";
+  var PINSERMON_D = "trinityone/pinsermon:";
   async function _sha256hex(u82) {
     const d = await crypto.subtle.digest("SHA-256", u82);
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -6450,6 +6451,38 @@
         },
         oneose() {
           emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // the church's currently-featured/pinned sermon (or null) — drives a Today card + a notification.
+    subscribePinnedSermon(churchNpub, onPinned) {
+      const cp = toPub(churchNpub);
+      if (!cp) {
+        onPinned(null);
+        return () => {
+        };
+      }
+      const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], "#d": [PINSERMON_D + cp] }], {
+        onevent(e) {
+          if (e.pubkey !== cp) return;
+          if ((e.tags.find((t) => t[0] === "deleted") || [])[1]) {
+            onPinned(null);
+            return;
+          }
+          try {
+            const p = JSON.parse(e.content);
+            onPinned(p && p.sha256 ? { ...p, at: e.created_at } : null);
+          } catch {
+            onPinned(null);
+          }
+        },
+        oneose() {
         }
       });
       return () => {

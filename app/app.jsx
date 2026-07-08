@@ -541,6 +541,13 @@ function App() {
     setChurchDevos(lsGet('trinityone.devos.' + np, []));   // paint instantly from cache so the devotional card doesn't pop in mid-load
     return window.Fellowship.subscribeChurchDevotionals(np, d => { setChurchDevos(d); lsSet('trinityone.devos.' + np, d); });
   }, [activeChurch, churches, connTick]);
+  // the church's featured/pinned sermon (a steward pushes it) → a Today card + a notification
+  const [pinnedSermon, setPinnedSermon] = useA(null);
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    if (!np || !(window.Fellowship && window.Fellowship.subscribePinnedSermon)) { setPinnedSermon(null); return; }
+    return window.Fellowship.subscribePinnedSermon(np, setPinnedSermon);
+  }, [activeChurch, churches, connTick]);
   // ── Care / Meal trains: open needs the church shared that a member can sign up to help with ──
   const [careSettings, setCareSettings] = useA({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' });
   const [careNeeds, setCareNeeds] = useA([]);
@@ -776,6 +783,7 @@ function App() {
     netAnnouncements.forEach(a => out.push({ id: 'net:' + a.id, kind: 'network', group: a._network || 'Network', text: a.text, ts: a.ts, detail: true }));
     broadcastMsgs.forEach(m => out.push({ id: 'bc:' + m.id, kind: 'notice', group: _churchNameFor, text: m.text, ts: m.ts, groupObj: churchGroups.find(g => g.id === m.gid) || null }));
     churchDevos.forEach(d => out.push({ id: 'devo:' + d.id, kind: 'devotional', group: _churchNameFor, text: 'Shared a devotional · ' + (d.title || ''), ts: d.ts, devo: d }));
+    if (pinnedSermon && pinnedSermon.sha256) out.push({ id: 'sermon:' + pinnedSermon.id, kind: 'sermon', group: _churchNameFor, text: 'New sermon · ' + (pinnedSermon.title || ''), ts: pinnedSermon.ts || pinnedSermon.at, sermon: pinnedSermon });
     churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: _churchNameFor, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
     churchEvents.forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
     return out.filter(n => n.ts && (_nowSec - n.ts) < NOTIF_WINDOW).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
@@ -1026,6 +1034,21 @@ function App() {
     },
     openJournal: (j) => setJournal(j),
     openVideo: (v) => setVideo(v),
+    pinnedSermon,   // the church's featured sermon (or null) → Today card
+    playSermon: async (s) => {   // play a self-hosted sermon from a Today card / notification (audio → mini-player, video → player)
+      const FS = window.Fellowship;
+      const hosts = (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []);
+      const cname = (churches.find(c => c.id === activeChurch) || {}).name || 'Your church';
+      if (!hosts.length || !s.sha256 || !FS) { toast('This sermon is unavailable'); return; }
+      if (String(s.mime || '').startsWith('video')) { setVideo({ id: s.id, title: s.title, _sermon: true, sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }); return; }
+      try {
+        const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+        const dec = s.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(np) : null;
+        if (s.enc && !dec) { toast('This encrypted sermon needs the church media key'); return; }
+        const src = await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
+        window.TrinityAudio.play({ id: s.id, title: s.title, subtitle: cname, src, album: cname });
+      } catch (e) { toast('Couldn’t load: ' + (e.message || 'error')); }
+    },
     openWord: (id) => setWordOv(id),
     openConcordance: () => setConcord(true),
     openAllUses: (id) => setAllUses(id),

@@ -22,6 +22,7 @@ const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the grou
 const GUARDNOTICE_D = 'trinityone/guardnotice:';   // church->parent notice of a steward-made guardian link, p-tagged + NIP-44-encrypted to the parent
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a church-signed self-hosted media item — references a content-addressed blob by sha256 + host(s)
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: per-church AES-GCM media key, wrapped (NIP-44) to each member
+const PINSERMON_D = 'trinityone/pinsermon:';   // the church's currently-featured sermon → Today card + notification
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 // Meal trains / Care module (optional, per church). meals-settings is church-signed; care: needs come from
 // church/steward/care-team admins; careslot: are member offers to help; careskip: is RECIPIENT-only.
@@ -542,6 +543,19 @@ window.Fellowship = {
         try { const s = JSON.parse(e.content); if (s && s.sha256) { byId.set(d, { ...s, at: e.created_at }); emit(); } } catch {}
       },
       oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // the church's currently-featured/pinned sermon (or null) — drives a Today card + a notification.
+  subscribePinnedSermon(churchNpub, onPinned) {
+    const cp = toPub(churchNpub); if (!cp) { onPinned(null); return () => {}; }
+    const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], '#d': [PINSERMON_D + cp] }], {
+      onevent(e) {
+        if (e.pubkey !== cp) return;
+        if ((e.tags.find(t => t[0] === 'deleted') || [])[1]) { onPinned(null); return; }
+        try { const p = JSON.parse(e.content); onPinned(p && p.sha256 ? { ...p, at: e.created_at } : null); } catch { onPinned(null); }
+      },
+      oneose() {},
     });
     return () => { try { sub.close(); } catch {} };
   },

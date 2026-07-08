@@ -9580,6 +9580,7 @@ zoo`.split("\n");
   var GUARDIANS_D = "trinityone/guardians:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
+  var PINSERMON_D = "trinityone/pinsermon:";
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
   async function _sha256hex(u82) {
@@ -10295,6 +10296,44 @@ zoo`.split("\n");
     removeSermon(id) {
       if (!sk) return Promise.resolve(null);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+    },
+    // Pin/feature a sermon → members get a Today card + a notification. One per church (addressable → replaces).
+    pinSermon(s) {
+      if (!sk) return Promise.resolve(null);
+      const content = JSON.stringify({ id: s.id, title: s.title || "Sermon", sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : [], mime: s.mime || "", enc: s.enc || void 0, ts: now() });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PINSERMON_D + pub], ["t", NET]], content }));
+    },
+    unpinSermon() {
+      if (!sk) return Promise.resolve(null);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PINSERMON_D + pub], ["t", NET], ["deleted", "1"]], content: "" }));
+    },
+    subscribePinnedSermon(onPinned) {
+      if (!pub) {
+        onPinned(null);
+        return () => {
+        };
+      }
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [PINSERMON_D + pub] }], {
+        onevent(e) {
+          if ((e.tags.find((t) => t[0] === "deleted") || [])[1]) {
+            onPinned(null);
+            return;
+          }
+          try {
+            onPinned({ ...JSON.parse(e.content), at: e.created_at });
+          } catch {
+            onPinned(null);
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
     },
     // Tier 2 encryption: ensure a church media key exists + is wrapped (NIP-44) to every current member, publish
     // the envelope, and return an AES-GCM encryptor that prepends a random 12-byte IV. Encrypt runs BEFORE upload,
