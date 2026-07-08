@@ -2,8 +2,16 @@
 
 Documentation, organised. For the codebase map, start with [`ARCHITECTURE.md`](../ARCHITECTURE.md) at the repo root.
 
+## 👋 New here? Start with these
+- [`guides/GETTING-STARTED.md`](guides/GETTING-STARTED.md) — **joining a church** or **setting up your church** in ~15 minutes
+- [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — symptom → fix, for members, stewards, and relay operators
+- [`guides/RELAY-SETUP.md`](guides/RELAY-SETUP.md) — **connecting your church to a relay**: shared → adopt one → run your own (with domain + media storage controls)
+
 ## Guides — how to use / run it
-- [`guides/STEWARD-GUIDE.md`](guides/STEWARD-GUIDE.md) — running a church from the steward console
+- [`guides/GETTING-STARTED.md`](guides/GETTING-STARTED.md) — the onboarding path for members and stewards
+- [`guides/RELAY-SETUP.md`](guides/RELAY-SETUP.md) — relays explained, from the shared relay to running your own
+- [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — common problems and their fixes
+- [`guides/STEWARD-GUIDE.md`](guides/STEWARD-GUIDE.md) — running a church from the steward console (the full reference)
 - [`guides/STEWARDS-AND-HANDOFF-EXPLAINED.md`](guides/STEWARDS-AND-HANDOFF-EXPLAINED.md) — delegated stewards + handing off a church without handing over the key
 
 ## Design — product & module specs

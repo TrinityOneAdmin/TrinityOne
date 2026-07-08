@@ -6,6 +6,8 @@ TrinityOne is an **offline-first Bible app** and a **private community for a chu
 
 **License:** [AGPL-3.0](LICENSE) · **Status:** pilot, in active development · **Platforms:** web (PWA), Android (APK), iOS (PWA)
 
+**New here?** → [Getting started](docs/guides/GETTING-STARTED.md) (join or set up a church) · [Connecting a relay](docs/guides/RELAY-SETUP.md) · [Troubleshooting](docs/guides/TROUBLESHOOTING.md) · [all docs](docs/README.md)
+
 ## Why
 
 Most church software makes a congregation a tenant on someone else's platform — charged for the tools, mined for data, and locked in. TrinityOne is the alternative: the church holds its own key, can run its own relay, and can walk away with all of its data at any time. *Owned by the church, captured by no one.*
