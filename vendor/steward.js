@@ -10240,10 +10240,19 @@ zoo`.split("\n");
     // publish a signed sermon doc referencing it by sha256 — no YouTube, members-only. `encrypt` (a bytes->bytes
     // fn) is applied BEFORE hashing/upload so the host only ever holds ciphertext (used for the sensitive /
     // cloud-backup case). Returns { sha256, size, host, mime, enc }.
-    // the https origins of this church's relays (each relay = a media host = relay + blob store), primary first —
-    // used to auto-suggest backup copy hosts: mirror to the church's OTHER relays for redundancy.
+    // https origins of this church's DISTINCT media hosts (each relay = relay + blob store), primary first — used
+    // to auto-suggest backup copy hosts. Excludes the shared canonical FALLBACK relays (aliases/routes to the same
+    // primary box), so a backup is only suggested when the church runs a genuinely separate relay.
     mediaHosts() {
-      return [...new Set(relays().map((r) => String(r).replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "")))];
+      const base = (r) => String(r).replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "");
+      const canon = new Set(CANONICAL_RELAYS.map(base));
+      const primary = base(ownRelay());
+      const out = [primary];
+      for (const r of relays()) {
+        const b = base(r);
+        if (b !== primary && !canon.has(b)) out.push(b);
+      }
+      return [...new Set(out)];
     },
     async uploadBlob(file, encrypt4, mirrors) {
       if (!sk) throw new Error("no key");
