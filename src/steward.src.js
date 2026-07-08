@@ -567,6 +567,9 @@ window.Steward = {
   // publish a signed sermon doc referencing it by sha256 — no YouTube, members-only. `encrypt` (a bytes->bytes
   // fn) is applied BEFORE hashing/upload so the host only ever holds ciphertext (used for the sensitive /
   // cloud-backup case). Returns { sha256, size, host, mime, enc }.
+  // the https origins of this church's relays (each relay = a media host = relay + blob store), primary first —
+  // used to auto-suggest backup copy hosts: mirror to the church's OTHER relays for redundancy.
+  mediaHosts() { return [...new Set(relays().map(r => String(r).replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/i, '')))]; },
   async uploadBlob(file, encrypt, mirrors) {
     if (!sk) throw new Error('no key');
     let bytes = new Uint8Array(await file.arrayBuffer());
