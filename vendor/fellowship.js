@@ -6469,10 +6469,19 @@
         } catch {
         }
       }
-      const auth = finalizeEvent2({ kind: 27235, created_at: Math.floor(Date.now() / 1e3), tags: [["u", url], ["method", "GET"]], content: "" }, sk);
-      const res = await fetch(url, { headers: { Authorization: "Nostr " + btoa(JSON.stringify(auth)) } });
+      const native = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+      const furl = native ? url + (url.indexOf("?") >= 0 ? "&" : "?") + "b64=1" : url;
+      const auth = finalizeEvent2({ kind: 27235, created_at: Math.floor(Date.now() / 1e3), tags: [["u", furl], ["method", "GET"]], content: "" }, sk);
+      const res = await fetch(furl, { headers: { Authorization: "Nostr " + btoa(JSON.stringify(auth)) } });
       if (!res.ok) throw new Error("media " + res.status);
-      let bytes = new Uint8Array(await res.arrayBuffer());
+      let bytes;
+      if (native) {
+        const b = atob(await res.text());
+        bytes = new Uint8Array(b.length);
+        for (let i3 = 0; i3 < b.length; i3++) bytes[i3] = b.charCodeAt(i3);
+      } else {
+        bytes = new Uint8Array(await res.arrayBuffer());
+      }
       if (opts.expectSha) {
         const got = await _sha256hex(bytes);
         if (got !== opts.expectSha) throw new Error("media integrity failed");

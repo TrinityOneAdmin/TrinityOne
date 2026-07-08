@@ -60,6 +60,8 @@ const _srev = {};    // groupId -> envelope revision (bumped on rotate)
 const _senvTs = {};  // groupId -> latest envelope created_at (ignore stale/out-of-order)
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
 const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
+const _b64 = (u8) => { let s = ''; const c = 0x8000; for (let i = 0; i < u8.length; i += c) s += String.fromCharCode.apply(null, u8.subarray(i, i + c)); return btoa(s); };   // Uint8Array -> base64 (chunked, stack-safe)
+const _isNative = () => !!(typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 // the church unwraps its OWN entry from a key envelope (it wraps the key to itself too), and caches it
 function stewIngestKey(e) {
   const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(GROUPKEY_D)) return;
@@ -574,7 +576,9 @@ window.Steward = {
     const ctype = enc ? 'application/octet-stream' : (file.type || 'application/octet-stream');
     // one signed, host-agnostic kind-24242 upload auth, reused to PUT the SAME blob to the primary + each backup.
     const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]], content: 'upload' }, sk)));
-    const put = async (b) => { const r = await fetch(b + '/blob', { method: 'PUT', headers: { Authorization: authHdr, 'Content-Type': ctype }, body: bytes }); if (!r.ok) throw new Error(b + ' ' + r.status); return r.json(); };
+    // native (CapacitorHttp) mangles a raw binary PUT body → send base64 text + a marker the gateway decodes; web sends raw bytes
+    const native = _isNative(); const body = native ? _b64(bytes) : bytes;
+    const put = async (b) => { const h = { Authorization: authHdr, 'Content-Type': ctype }; if (native) h['X-Blob-B64'] = '1'; const r = await fetch(b + '/blob', { method: 'PUT', headers: h, body }); if (!r.ok) throw new Error(b + ' ' + r.status); return r.json(); };
     const primary = _blobBase();
     const j = await put(primary);   // the primary must succeed
     const hosts = [primary];

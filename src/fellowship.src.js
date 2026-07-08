@@ -550,10 +550,15 @@ window.Fellowship = {
   async fetchBlob(url, opts) {
     opts = opts || {};
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
-    const auth = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', 'GET']], content: '' }, sk);
-    const res = await fetch(url, { headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) } });
+    // native (CapacitorHttp) mangles a binary response body → ask for base64 text and decode it; web streams raw bytes
+    const native = !!(typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    const furl = native ? (url + (url.indexOf('?') >= 0 ? '&' : '?') + 'b64=1') : url;   // pathname (what the NIP-98 gate checks) is unchanged by the query
+    const auth = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', furl], ['method', 'GET']], content: '' }, sk);
+    const res = await fetch(furl, { headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) } });
     if (!res.ok) throw new Error('media ' + res.status);
-    let bytes = new Uint8Array(await res.arrayBuffer());
+    let bytes;
+    if (native) { const b = atob(await res.text()); bytes = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) bytes[i] = b.charCodeAt(i); }
+    else { bytes = new Uint8Array(await res.arrayBuffer()); }
     if (opts.expectSha) { const got = await _sha256hex(bytes); if (got !== opts.expectSha) throw new Error('media integrity failed'); }
     if (typeof opts.decrypt === 'function') bytes = await opts.decrypt(bytes);   // Tier 2 encryption hook (async-capable)
     return URL.createObjectURL(new Blob([bytes], { type: opts.mime || res.headers.get('content-type') || 'application/octet-stream' }));

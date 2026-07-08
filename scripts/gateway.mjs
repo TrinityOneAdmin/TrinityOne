@@ -1172,15 +1172,18 @@ function serveStatic(req, res) {
     req.on('data', (c) => { n += c.length; if (n > MAX_BLOB) { tooBig = true; req.destroy(); return; } chunks.push(c); });
     req.on('end', () => {
       if (tooBig) { res.writeHead(413, H); res.end('{"error":"blob too large"}'); return; }
-      const buf = Buffer.concat(chunks); if (!buf.length) { res.writeHead(400, H); res.end('{"error":"empty"}'); return; }
-      const sha = createHash('sha256').update(buf).digest('hex');
+      let data = Buffer.concat(chunks);
+      // native clients send base64 text (CapacitorHttp mangles a raw binary body) — decode back to the real bytes
+      if (req.headers['x-blob-b64']) { try { data = Buffer.from(data.toString('latin1'), 'base64'); } catch { data = Buffer.alloc(0); } }
+      if (!data.length) { res.writeHead(400, H); res.end('{"error":"empty"}'); return; }
+      const sha = createHash('sha256').update(data).digest('hex');
       if (who.want && who.want !== sha) { res.writeHead(400, H); res.end('{"error":"hash mismatch (x tag != blob sha256)"}'); return; }
       try {
-        const tmp = join(BLOB_DIR, sha + '.tmp'); writeFileSync(tmp, buf); renameSync(tmp, join(BLOB_DIR, sha));
+        const tmp = join(BLOB_DIR, sha + '.tmp'); writeFileSync(tmp, data); renameSync(tmp, join(BLOB_DIR, sha));
         writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // owner → the download gate
-        const ct = req.headers['content-type'] || ''; if (ct) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
+        const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
       } catch (e) { res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
-      res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size: buf.length, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
+      res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size: data.length, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
     });
     req.on('error', () => { try { res.writeHead(400, H); res.end('{"error":"read"}'); } catch {} });
     return;
@@ -1193,6 +1196,11 @@ function serveStatic(req, res) {
     if (!_blobMember(req, _blobOwner(sha), host, route)) { res.writeHead(401, { 'Access-Control-Allow-Origin': '*', 'WWW-Authenticate': 'Nostr' }); res.end('members only'); return; }
     let ct = 'application/octet-stream'; try { ct = readFileSync(join(BLOB_DIR, sha + '.type'), 'utf8').trim() || ct; } catch {}
     const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=31536000, immutable', ...SEC_HEADERS };   // content-addressed → immutable
+    if (/[?&]b64/.test(req.url || '')) {   // native download: CapacitorHttp mangles a binary response body → serve base64 text, the client decodes
+      if (req.method === 'HEAD') { res.writeHead(200, { ...base, 'Content-Type': 'text/plain; charset=ascii', 'X-Blob-B64': '1' }); res.end(); return; }
+      try { const s = readFileSync(file).toString('base64'); res.writeHead(200, { ...base, 'Content-Type': 'text/plain; charset=ascii', 'Content-Length': Buffer.byteLength(s), 'X-Blob-B64': '1' }); res.end(s); } catch { res.writeHead(500, base); res.end(); }
+      return;
+    }
     const range = req.headers['range'] && /bytes=(\d*)-(\d*)/.exec(req.headers['range']);   // seek support for audio/video
     if (range) {
       const start = range[1] ? parseInt(range[1], 10) : 0; const end = range[2] ? parseInt(range[2], 10) : st.size - 1;

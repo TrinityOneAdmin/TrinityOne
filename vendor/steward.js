@@ -9598,6 +9598,13 @@ zoo`.split("\n");
   var _senvTs = {};
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
   var _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
+  var _b64 = (u82) => {
+    let s = "";
+    const c = 32768;
+    for (let i3 = 0; i3 < u82.length; i3 += c) s += String.fromCharCode.apply(null, u82.subarray(i3, i3 + c));
+    return btoa(s);
+  };
+  var _isNative = () => !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   function stewIngestKey(e) {
     const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
     if (!d.startsWith(GROUPKEY_D)) return;
@@ -10241,8 +10248,12 @@ zoo`.split("\n");
       const sha = await _sha256hex(bytes);
       const ctype = enc ? "application/octet-stream" : file.type || "application/octet-stream";
       const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]], content: "upload" }, sk)));
+      const native = _isNative();
+      const body = native ? _b64(bytes) : bytes;
       const put = async (b) => {
-        const r = await fetch(b + "/blob", { method: "PUT", headers: { Authorization: authHdr, "Content-Type": ctype }, body: bytes });
+        const h = { Authorization: authHdr, "Content-Type": ctype };
+        if (native) h["X-Blob-B64"] = "1";
+        const r = await fetch(b + "/blob", { method: "PUT", headers: h, body });
         if (!r.ok) throw new Error(b + " " + r.status);
         return r.json();
       };
