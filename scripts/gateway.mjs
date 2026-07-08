@@ -6,7 +6,7 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync, readdirSync } from 'fs';
 import { extname, normalize, join, sep } from 'path';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
@@ -71,6 +71,14 @@ try { mkdirSync(BLOB_DIR, { recursive: true }); } catch {}
 const MAX_BLOB = parseInt(process.env.RELAY_MAX_BLOB, 10) || 200 * 1024 * 1024;   // 200 MB/blob cap (sermons: audio small, video low-bitrate)
 const _blobRe = /^[0-9a-f]{64}$/;
 function _blobOwner(sha) { try { return readFileSync(join(BLOB_DIR, sha + '.church'), 'utf8').trim(); } catch { return ''; } }
+// Operator storage controls (public/shared relays): a relay operator can DISABLE media hosting entirely, or
+// cap total / per-church media bytes, so many churches sharing one node can't exhaust its disk. (Docs/events
+// are already bounded by MEMBER_DOC_CAP + ephemeral retention; this is the equivalent for blobs.)
+const MEDIA_OFF = /^(1|true|yes|on)$/i.test(process.env.RELAY_MEDIA_OFF || '');   // relay stays a relay, refuses all /blob uploads
+const MEDIA_CAP = parseInt(process.env.RELAY_MEDIA_CAP, 10) || 0;                 // global media byte cap (0 = unlimited)
+const CHURCH_MEDIA_CAP = parseInt(process.env.RELAY_CHURCH_MEDIA_CAP, 10) || 0;   // per-church media byte cap (0 = unlimited)
+const _mediaBytesByChurch = new Map(); let _mediaBytesTotal = 0;   // usage, scanned from disk at boot + updated on upload
+(() => { try { for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } _mediaBytesTotal += sz; const o = _blobOwner(f); if (o) _mediaBytesByChurch.set(o, (_mediaBytesByChurch.get(o) || 0) + sz); } } catch {} })();
 // upload auth: a signed, time-bounded kind-24242 event by the CHURCH key, or a steward of a named church.
 function _blobUploader(req) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
@@ -899,6 +907,7 @@ function serveStatic(req, res) {
       limitation: { restricted_writes: true, max_message_length: 1024 * 1024 },
       trinityone: {
         enforces: true, multiChurch: true,   // enforces = this relay applies TrinityOne's write/safeguard policy
+        media: !MEDIA_OFF,                    // does this relay host self-hosted media (blobs)? — the client hides the upload UI when false
         // OFFER fields (Phase 3a) appear ONLY when the operator opted in via RELAY_OPEN — a private relay omits
         // them entirely, so discovery/auto-pick never surfaces it. `full` lets a busy relay decline new churches
         // without going offline. `churches` is a load hint (already exposed unauthenticated in /status counts).
@@ -906,6 +915,8 @@ function serveStatic(req, res) {
           open: !(OFFER_CAP && CHURCH_PUBS.size >= OFFER_CAP),
           full: !!(OFFER_CAP && CHURCH_PUBS.size >= OFFER_CAP),
           churches: CHURCH_PUBS.size,
+          ...(MEDIA_CAP ? { mediaCap: MEDIA_CAP, mediaUsed: _mediaBytesTotal } : {}),   // capacity hint for church discovery / auto-pick
+          ...(CHURCH_MEDIA_CAP ? { churchMediaCap: CHURCH_MEDIA_CAP } : {}),
           ...(OFFER_OPERATOR ? { operator: OFFER_OPERATOR } : {}),
           ...(OFFER_REGION ? { region: OFFER_REGION } : {}),
         } : {}),
@@ -1166,6 +1177,7 @@ function serveStatic(req, res) {
   // Upload: PUT /blob (church/steward-signed kind-24242). Download: GET /blob/<sha256> (member-gated NIP-98).
   if (route === '/blob' && (req.method === 'PUT' || req.method === 'POST')) {
     const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+    if (MEDIA_OFF) { res.writeHead(403, H); res.end('{"error":"this relay hosts no media (relay-only)"}'); return; }   // operator disabled media
     const who = _blobUploader(req);
     if (!who) { res.writeHead(401, H); res.end('{"error":"unauthorized: sign a kind-24242 upload auth with the church (or steward) key"}'); return; }
     const chunks = []; let n = 0, tooBig = false;
@@ -1178,11 +1190,17 @@ function serveStatic(req, res) {
       if (!data.length) { res.writeHead(400, H); res.end('{"error":"empty"}'); return; }
       const sha = createHash('sha256').update(data).digest('hex');
       if (who.want && who.want !== sha) { res.writeHead(400, H); res.end('{"error":"hash mismatch (x tag != blob sha256)"}'); return; }
+      const isNew = !existsSync(join(BLOB_DIR, sha));   // content-addressed: a re-upload of an existing blob adds no new bytes (don't re-charge quota)
+      if (isNew) {
+        if (MEDIA_CAP && _mediaBytesTotal + data.length > MEDIA_CAP) { res.writeHead(507, H); res.end('{"error":"this relay\'s media storage is full"}'); return; }
+        if (CHURCH_MEDIA_CAP && (_mediaBytesByChurch.get(who.church) || 0) + data.length > CHURCH_MEDIA_CAP) { res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
+      }
       try {
         const tmp = join(BLOB_DIR, sha + '.tmp'); writeFileSync(tmp, data); renameSync(tmp, join(BLOB_DIR, sha));
         writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // owner → the download gate
         const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
       } catch (e) { res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
+      if (isNew) { _mediaBytesTotal += data.length; _mediaBytesByChurch.set(who.church, (_mediaBytesByChurch.get(who.church) || 0) + data.length); }   // account the new bytes
       res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size: data.length, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
     });
     req.on('error', () => { try { res.writeHead(400, H); res.end('{"error":"read"}'); } catch {} });
