@@ -726,6 +726,7 @@ function shareTextOf(m) {
   if (m.text) return m.text;
   if (m.kind === 'verse' && m.verse) return '“' + m.verse.text + '” — ' + m.verse.ref + (m.verse.version ? ' (' + m.verse.version + ')' : '');
   if (m.card) return [m.card.title, m.card.ref, m.card.text].filter(Boolean).join('\n');
+  if (m.kind === 'poll' && m.poll) return '📊 ' + (m.poll.question || 'Poll');
   return '';
 }
 function Row({ me, m, children, ctx, mod }) {
@@ -756,7 +757,7 @@ function Row({ me, m, children, ctx, mod }) {
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start' }}>
         {M.replyParent ? (
           <div style={{ maxWidth: 260, marginBottom: 4, padding: '5px 10px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--clay)', fontSize: 12, lineHeight: 1.3 }}>
-            <div style={{ fontWeight: 700, color: 'var(--ink-3)' }}>{M.replyParent.me ? 'You' : (window.Fellowship && window.Fellowship.displayFor ? window.Fellowship.displayFor(M.replyParent.pubkey).handle : 'Someone')}</div>
+            <div style={{ fontWeight: 700, color: 'var(--ink-3)' }}>{M.replyParent.me ? 'You' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(M.replyParent.pubkey).handle) || 'someone')}</div>
             <div style={{ color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{shareTextOf(M.replyParent) || '…'}</div>
           </div>
         ) : m.replyTo ? (
@@ -769,7 +770,7 @@ function Row({ me, m, children, ctx, mod }) {
         {children}
         {(M.onReply || M.canModerate || M.onDelete) ? (
           <React.Fragment>
-            <button onClick={M.onOpenMenu} title="Message actions" style={{ position: 'absolute', top: -6, [me ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 22, height: 22, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={14} /></button>
+            <button onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" style={{ position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
             {M.menuOpen ? (
               <div style={{ position: 'absolute', top: 18, [me ? 'left' : 'right']: -26, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
@@ -926,7 +927,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         if (window.Fellowship.requestProfiles) window.Fellowship.requestProfiles([e.pubkey]);
         setMsgs(prev => {
           if (seen.has(e.id)) return prev; seen.add(e.id);
-          return [...prev, evtToMsg(e)].sort((a, b) => (a._ts || 0) - (b._ts || 0));
+          const nm = evtToMsg(e);
+          // P3: live messages arrive newest-first — just append (no sort). Only an out-of-order backfill re-sorts.
+          if (!prev.length || (nm._ts || 0) >= (prev[prev.length - 1]._ts || 0)) return [...prev, nm];
+          const next = [...prev, nm]; next.sort((a, b) => (a._ts || 0) - (b._ts || 0)); return next;
         });
       };
       setPin(null); setHidden(null); setMenuFor(null);
@@ -992,6 +996,18 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const hideSet = hidden || new Set();
   const visibleMsgs = msgs.filter(m => !hideSet.has(m.id));
   const msgById = {}; visibleMsgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents from the VISIBLE set only — a hidden/deleted parent must not leak back through a quote (audit U3)
+  // perf #2: memoize the rendered bubbles so a composer keystroke (draft state) doesn't re-render the whole
+  // thread. Recompute only when message / reaction / menu / pin / picker state actually changes — NOT on draft.
+  const bubbles = React.useMemo(() => visibleMsgs.map(m => <Bubble key={m.id} m={m} ctx={ctx}
+    summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
+    pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}
+    live={!!window.Fellowship}
+    canModerate={canModerate} isPinned={!!(pin && pin.msgId === m.id)}
+    menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
+    onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
+    onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
+    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />),
+    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate]);   // eslint-disable-line
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -1061,15 +1077,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             </div>
           </div>
         ) : null}
-        {visibleMsgs.map(m => <Bubble key={m.id} m={m} ctx={ctx}
-          summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
-          pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}
-          live={!!window.Fellowship}
-          canModerate={canModerate} isPinned={!!(pin && pin.msgId === m.id)}
-          menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
-          onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
-          onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
-          onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />)}
+        {bubbles}
       </div>
 
       <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
@@ -1107,7 +1115,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', marginBottom: 8, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--clay)' }}>
             <Icon name="reply" size={15} color="var(--clay)" style={{ flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.3 }}>
-              <div style={{ fontWeight: 700, color: 'var(--ink-2)' }}>Replying to {replyTo.me ? 'yourself' : (window.Fellowship && window.Fellowship.displayFor ? window.Fellowship.displayFor(replyTo.pubkey).handle : 'message')}</div>
+              <div style={{ fontWeight: 700, color: 'var(--ink-2)' }}>Replying to {replyTo.me ? 'yourself' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(replyTo.pubkey).handle) || 'someone')}</div>
               <div style={{ color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shareTextOf(replyTo) || '…'}</div>
             </div>
             <button onClick={() => setReplyTo(null)} title="Cancel reply" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 2 }}><Icon name="x" size={16} /></button>

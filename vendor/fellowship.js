@@ -5944,6 +5944,32 @@
   }
   var profiles = {};
   var pendingProfiles = /* @__PURE__ */ new Set();
+  var _profQueue = /* @__PURE__ */ new Set();
+  var _profTimer = null;
+  function _flushProfiles() {
+    _profTimer = null;
+    const authors = [..._profQueue];
+    _profQueue.clear();
+    if (!authors.length) return;
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors }], {
+      onevent(e) {
+        try {
+          const m = JSON.parse(e.content);
+          profiles[e.pubkey] = { name: m.name || m.display_name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
+          saveProfiles();
+          window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
+        } catch {
+        }
+      },
+      oneose() {
+        authors.forEach((pk) => pendingProfiles.delete(pk));
+        try {
+          sub.close();
+        } catch {
+        }
+      }
+    });
+  }
   var PROFILE_KEY = "trinityone.profile";
   var PROFILES_KEY = "trinityone.profiles";
   try {
@@ -6869,25 +6895,11 @@
     requestProfiles(pubkeys) {
       const need = [...new Set(pubkeys)].filter((pk) => pk && !pendingProfiles.has(pk) && (!(pk in profiles) || !(profiles[pk] && profiles[pk].name)));
       if (!need.length) return;
-      need.forEach((pk) => pendingProfiles.add(pk));
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: need }], {
-        onevent(e) {
-          try {
-            const m = JSON.parse(e.content);
-            profiles[e.pubkey] = { name: m.name || m.display_name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
-            saveProfiles();
-            window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
-          } catch {
-          }
-        },
-        oneose() {
-          need.forEach((pk) => pendingProfiles.delete(pk));
-          try {
-            sub.close();
-          } catch {
-          }
-        }
+      need.forEach((pk) => {
+        pendingProfiles.add(pk);
+        _profQueue.add(pk);
       });
+      if (!_profTimer) _profTimer = setTimeout(_flushProfiles, 250);
     },
     // publish a message to a group (kind 1, tagged with the network + group ids)
     async publishMessage(groupId, content, extraTags = []) {

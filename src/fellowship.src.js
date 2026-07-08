@@ -225,6 +225,26 @@ if (typeof window !== 'undefined') {
 // names/handles show INSTANTLY on the next load (chat, the People directory) instead of resolving fresh.
 const profiles = {};
 const pendingProfiles = new Set();
+// P4: coalesce per-message profile lookups into ONE kind-0 sub. Firing a separate sub per unknown chat author
+// (as a 200-message backfill does) can approach the relay's 64-sub-per-connection cap — the "names blank" failure.
+const _profQueue = new Set();
+let _profTimer = null;
+function _flushProfiles() {
+  _profTimer = null;
+  const authors = [..._profQueue]; _profQueue.clear();
+  if (!authors.length) return;
+  const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors }], {
+    onevent(e) {
+      try {
+        const m = JSON.parse(e.content);
+        profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
+        saveProfiles();
+        window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } }));
+      } catch {}
+    },
+    oneose() { authors.forEach(pk => pendingProfiles.delete(pk)); try { sub.close(); } catch {} },
+  });
+}
 const PROFILE_KEY = 'trinityone.profile';   // own display name (public; ok in localStorage)
 const PROFILES_KEY = 'trinityone.profiles'; // cache of OTHER people's resolved profiles
 try { const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || '{}'); if (c && typeof c === 'object') Object.assign(profiles, c); } catch {}
@@ -792,21 +812,12 @@ window.Fellowship = {
 
   // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
   requestProfiles(pubkeys) {
-    // refetch when unknown, or cached-without-a-name (so a member who later picks a name updates)
+    // refetch when unknown, or cached-without-a-name (so a member who later picks a name updates). Queue the
+    // needed pubkeys and flush them as ONE kind-0 sub after a short window — a backfill burst becomes one sub.
     const need = [...new Set(pubkeys)].filter(pk => pk && !pendingProfiles.has(pk) && (!(pk in profiles) || !(profiles[pk] && profiles[pk].name)));
     if (!need.length) return;
-    need.forEach(pk => pendingProfiles.add(pk));
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: need }], {
-      onevent(e) {
-        try {
-          const m = JSON.parse(e.content);
-          profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
-          saveProfiles();
-          window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } }));
-        } catch {}
-      },
-      oneose() { need.forEach(pk => pendingProfiles.delete(pk)); try { sub.close(); } catch {} },
-    });
+    need.forEach(pk => { pendingProfiles.add(pk); _profQueue.add(pk); });
+    if (!_profTimer) _profTimer = setTimeout(_flushProfiles, 250);   // fixed window (don't reset) so a steady stream still flushes promptly
   },
 
   // publish a message to a group (kind 1, tagged with the network + group ids)
