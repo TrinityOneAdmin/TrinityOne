@@ -950,19 +950,29 @@ window.Fellowship = {
 
   // live subscription to a group's messages; returns an unsubscribe fn
   subscribeGroup(groupId, onEvent) {
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], '#t': [groupId], limit: 200 }], {
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1, 5], '#t': [groupId], limit: 200 }], {
       onevent(e) {
         // belt-and-suspenders: only deliver events actually tagged for this group
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
         // and only this church's messages (when scoped) — avoids cross-church group-id collisions
         const cp = window.Fellowship.churchPub;
         if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
+        if (e.kind === 5) { try { onEvent(e); } catch (err) { console.error(err); } return; }   // NIP-09 deletion — pass through raw (no content to decrypt)
         const dec = _decEvt(cp, e); if (!dec) return;   // encrypted + I'm not a member (no key) → don't show
         try { onEvent(dec); } catch (err) { console.error(err); }
       },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  // NIP-09: retract one of MY OWN messages. The relay verifies self-authorship before deleting, and echoes
+  // the kind-5 so every open client drops it live. Tagged to the group so it rides the group subscription.
+  async deleteOwnMessage(groupId, msgId) {
+    if (!sk) await window.Fellowship.ready;
+    const churchTag = window.Fellowship.churchPub ? [['p', window.Fellowship.churchPub]] : [];
+    const evt = finalizeEvent({ kind: 5, created_at: Math.floor(Date.now() / 1000), tags: [['e', msgId], ['t', NET], ['t', groupId], ...churchTag], content: '' }, sk);
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] deleteOwnMessage failed', e); return null; }
+    return evt;
   },
 
   // ── moderation: pinned message + removed (hidden) messages (read-only on the member side) ──

@@ -60,6 +60,7 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   const qByRepl = db.prepare('SELECT id, created_at FROM events WHERE repl = ?');
   const qById   = db.prepare('SELECT 1 FROM events WHERE id = ?');
   const delById = db.prepare('DELETE FROM events WHERE id = ?');
+  const qAuthorById = db.prepare('SELECT pubkey FROM events WHERE id = ?');
   const ins     = db.prepare('INSERT OR REPLACE INTO events (id,pubkey,kind,created_at,dtag,church,repl,structured,raw) VALUES (?,?,?,?,?,?,?,?,?)');
   const qCount  = db.prepare('SELECT COUNT(*) AS n FROM events');
   const qOverBudget      = db.prepare('SELECT church, COUNT(*) AS n FROM events WHERE structured = 0 GROUP BY church HAVING n > ?');
@@ -107,6 +108,10 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
 
   function count() { return qCount.get().n; }
 
+  // NIP-09 support: the author of a stored event (or null), and a hard delete by id.
+  function authorOf(id) { const r = qAuthorById.get(id); return r ? r.pubkey : null; }
+  function del(id) { try { return delById.run(id).changes > 0; } catch { return false; } }
+
   // retention (per-church fairness): every structured (replaceable/addressable) doc is kept forever; each
   // church — including the '' shared bucket for unattributed DMs/reactions — keeps only its newest
   // `maxEvents` EPHEMERAL events (chat/DMs/reactions). So a chatty church can't age out a quiet church's
@@ -139,5 +144,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
-  return { db, put, query, count, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, count, authorOf, del, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }

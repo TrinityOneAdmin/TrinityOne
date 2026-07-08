@@ -517,7 +517,14 @@ function App() {
     if (!lazyReady) return;
     const c = churches.find(x => x.id === activeChurch);
     if (!c || !c.npub || !(window.Fellowship && window.Fellowship.subscribeChurchMemberCount)) return;
-    return window.Fellowship.subscribeChurchMemberCount(c.npub, (n) => setChurches(cs => cs.map(x => x.id === activeChurch ? { ...x, members: n } : x)));
+    // Only bump `churches` when the count ACTUALLY changed — returning a fresh array on every roster tick
+    // re-ran all ~9 church-doc effects keyed on `churches` (a teardown/reopen storm). On the slower web build
+    // that churn raced the Care-settings delivery and lost, so the Care tab never appeared there (fine on APK).
+    return window.Fellowship.subscribeChurchMemberCount(c.npub, (n) => setChurches(cs => {
+      const cur = cs.find(x => x.id === activeChurch);
+      if (!cur || cur.members === n) return cs;   // unchanged → same reference → no effect churn
+      return cs.map(x => x.id === activeChurch ? { ...x, members: n } : x);
+    }));
   }, [activeChurch, connTick, lazyReady]);
   // prefetch the People directory at app load (not when the screen opens) so it's ready before the
   // member taps "People" — the roster streams in the background while they read elsewhere.

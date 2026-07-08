@@ -1484,6 +1484,10 @@ wss.on('connection', ws => {
       if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, true, 'have newer'])); return; }
       if (putRes === 'duplicate') { ws.send(JSON.stringify(['OK', evt.id, true, 'duplicate'])); return; }
       if (++_putsSinceCull >= 256) { _putsSinceCull = 0; store.cull(); }   // E6: throttle the GROUP BY cull off the per-event hot path (was every stored event)
+      // NIP-09: a kind-5 deletes the AUTHOR'S OWN referenced events only — authorOf() gates it to self, so a
+      // member can retract their message but never delete someone else's. The kind-5 also broadcasts below, so
+      // connected clients drop the message live; store.del makes it stay gone on reload/backfill.
+      if (evt.kind === 5) for (const t of evt.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === evt.pubkey) store.del(t[1]); }
       maybePush(evt);   // notify the targeted member if this is a serving request
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
       maybePushMessage(evt);   // notify on a new DM (recipient) or church announcement (members)

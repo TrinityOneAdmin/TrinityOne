@@ -599,11 +599,11 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) 
   );
 }
 
-function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent }) {
+function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
-  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent };
+  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete };
   const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
 
   if (m.kind === 'verse') {
@@ -761,7 +761,7 @@ function Row({ me, m, children, ctx, mod }) {
           </div>
         ) : null}
         {children}
-        {(M.onReply || M.canModerate) ? (
+        {(M.onReply || M.canModerate || M.onDelete) ? (
           <React.Fragment>
             <button onClick={M.onOpenMenu} title="Message actions" style={{ position: 'absolute', top: -6, [me ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 22, height: 22, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={14} /></button>
             {M.menuOpen ? (
@@ -769,6 +769,7 @@ function Row({ me, m, children, ctx, mod }) {
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
                 {M.canModerate ? <button onClick={M.isPinned ? M.onUnpin : M.onPin} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="var(--gold)" /> {M.isPinned ? 'Unpin message' : 'Pin message'}</button> : null}
                 {M.canModerate ? <button onClick={M.onRemove} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button> : null}
+                {M.onDelete ? <button onClick={M.onDelete} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Delete</button> : null}
               </div>
             ) : null}
           </React.Fragment>
@@ -910,6 +911,12 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       setMsgs([]); setReactions({}); setPickerFor(null);
       const seen = new Set();
       const add = (e) => {
+        if (e.kind === 5) {   // NIP-09 deletion — drop the deleter's OWN referenced messages (client mirrors the relay's self-only rule)
+          seen.add(e.id);
+          const del = new Set(e.tags.filter(t => t[0] === 'e').map(t => t[1]));
+          if (del.size) setMsgs(prev => prev.filter(m => !(del.has(m.id) && m.pubkey === e.pubkey)));
+          return;
+        }
         if (window.Fellowship.requestProfiles) window.Fellowship.requestProfiles([e.pubkey]);
         setMsgs(prev => {
           if (seen.has(e.id)) return prev; seen.add(e.id);
@@ -978,7 +985,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const doRemove = (m) => { window.Fellowship.hideMessage(churchNpub, group.id, m.id); setMenuFor(null); ctx.toast('Message removed'); };
   const hideSet = hidden || new Set();
   const visibleMsgs = msgs.filter(m => !hideSet.has(m.id));
-  const msgById = {}; msgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents by id
+  const msgById = {}; visibleMsgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents from the VISIBLE set only — a hidden/deleted parent must not leak back through a quote (audit U3)
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -1055,6 +1062,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           canModerate={canModerate} isPinned={!!(pin && pin.msgId === m.id)}
           menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
           onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
+          onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
           onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />)}
       </div>
 
