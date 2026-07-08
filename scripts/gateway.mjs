@@ -78,7 +78,10 @@ const MEDIA_OFF = /^(1|true|yes|on)$/i.test(process.env.RELAY_MEDIA_OFF || ''); 
 const MEDIA_CAP = parseInt(process.env.RELAY_MEDIA_CAP, 10) || 0;                 // global media byte cap (0 = unlimited)
 const CHURCH_MEDIA_CAP = parseInt(process.env.RELAY_CHURCH_MEDIA_CAP, 10) || 0;   // per-church media byte cap (0 = unlimited)
 const _mediaBytesByChurch = new Map(); let _mediaBytesTotal = 0;   // usage, scanned from disk at boot + updated on upload
-(() => { try { for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } _mediaBytesTotal += sz; const o = _blobOwner(f); if (o) _mediaBytesByChurch.set(o, (_mediaBytesByChurch.get(o) || 0) + sz); } } catch {} })();
+// P7: tally media usage AFTER the relay starts listening (was a synchronous statSync-per-blob walk blocking boot
+// on a media-heavy box). SET the totals from the disk scan (authoritative) rather than accumulate, so any upload
+// that lands during the brief window isn't double-counted — the scan already sees it on disk.
+setTimeout(() => { try { let total = 0; const by = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) by.set(o, (by.get(o) || 0) + sz); } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); } catch {} }, 0);
 // upload auth: a signed, time-bounded kind-24242 event by the CHURCH key, or a steward of a named church.
 function _blobUploader(req) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
@@ -546,7 +549,10 @@ function accept(e) {
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
       if (isMember) return true;                               // a known member asking to help: always
       if (store.query({ kinds: [30078], authors: [e.pubkey], '#d': [d], limit: 1 }).length) return true;   // updating their own pending request
-      let pend = 0; for (const x of store.query({ kinds: [30078], '#d': [d], limit: 1000000 })) { if (!MEMBERS.has(x.pubkey)) pend++; }   // else cap strangers' pending requests for this church
+      // P5: bounded scan + early break — was an unbounded limit:1_000_000 fetch on every stranger request
+      // (a cheap-request → full-table-scan amplifier). Mirror the M6 kind-0 fix: cap the rows and stop at the cap.
+      let pend = 0;
+      for (const x of store.query({ kinds: [30078], '#d': [d], limit: STEWARDREQ_CAP + MEMBERS.size + 8 })) { if (!MEMBERS.has(x.pubkey) && ++pend >= STEWARDREQ_CAP) break; }
       return pend < STEWARDREQ_CAP;
     }
     // Meal trains / Care module (optional, per-church) — must precede the generic member fallback:
@@ -1202,8 +1208,9 @@ function serveStatic(req, res) {
         if (CHURCH_MEDIA_CAP && (_mediaBytesByChurch.get(who.church) || 0) + data.length > CHURCH_MEDIA_CAP) { res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
       }
       try {
-        const tmp = join(BLOB_DIR, sha + '.tmp'); writeFileSync(tmp, data); renameSync(tmp, join(BLOB_DIR, sha));
-        writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // owner → the download gate
+        const tmp = join(BLOB_DIR, sha + '.tmp'); writeFileSync(tmp, data);
+        writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // S4: write the owner sidecar BEFORE the blob is reachable — a failed sidecar must never leave a blob servable with no download gate (fail-open)
+        renameSync(tmp, join(BLOB_DIR, sha));                          // now publish the blob into place (its gate already exists)
         const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
       } catch (e) { res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
       if (isNew) { _mediaBytesTotal += data.length; _mediaBytesByChurch.set(who.church, (_mediaBytesByChurch.get(who.church) || 0) + data.length); }   // account the new bytes
