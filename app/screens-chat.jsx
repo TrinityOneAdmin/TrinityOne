@@ -959,7 +959,6 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     send({ kind: 'poll', question: q, options: opts.slice(0, 5) });
     setPollQ(''); setPollOpts(['', '']); setPollOpen(false);
   };
-  const shareVerse = () => { send({ kind: 'verse', verse: { ...window.TrinityData.VOTD } }); ctx.toast('Verse shared'); };
   const myPub = window.Fellowship && window.Fellowship.myPubkey;
   const summaryFor = (tid) => {
     const reactors = reactions[tid]; if (!reactors) return [];
@@ -1101,8 +1100,6 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           </div>
         ) : null}
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
-          <button onClick={shareVerse} title="Share a verse" style={{ width: 44, height: 44, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Icon name="sparkle" size={20} /></button>
           <button onClick={() => setPollOpen(v => !v)} title="Create a poll" style={{ width: 44, height: 44, borderRadius: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: pollOpen ? '1px solid var(--clay)' : '1px solid var(--line)', background: pollOpen ? 'color-mix(in oklab, var(--clay) 14%, var(--surface))' : 'var(--surface-2)', color: 'var(--clay)' }}>
             <Icon name="sliders" size={20} /></button>
           <button onClick={() => setPrayerOn(v => !v)} title="Mark as a prayer request" style={{ width: 44, height: 44, borderRadius: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
