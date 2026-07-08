@@ -759,6 +759,12 @@ function Row({ me, m, children, ctx, mod }) {
             <div style={{ fontWeight: 700, color: 'var(--ink-3)' }}>{M.replyParent.me ? 'You' : (window.Fellowship && window.Fellowship.displayFor ? window.Fellowship.displayFor(M.replyParent.pubkey).handle : 'Someone')}</div>
             <div style={{ color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{shareTextOf(M.replyParent) || '…'}</div>
           </div>
+        ) : m.replyTo ? (
+          // it IS a reply, but the parent isn't in the loaded window (thin pipe) or was hidden/deleted — keep the
+          // reply context without leaking any content (audit U2 + U3)
+          <div style={{ maxWidth: 260, marginBottom: 4, padding: '5px 10px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--line)', fontSize: 12, lineHeight: 1.3, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <Icon name="reply" size={12} color="var(--ink-3)" /><span style={{ fontStyle: 'italic' }}>replying to an earlier message</span>
+          </div>
         ) : null}
         {children}
         {(M.onReply || M.canModerate || M.onDelete) ? (

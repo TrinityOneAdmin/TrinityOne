@@ -302,7 +302,7 @@ function App() {
   const [bootReady, setBootReady] = useA(false);   // true once the church's core data has arrived — holds the splash until the cards are ready
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
-    onboardParam === '1' || (!lsGet('trinityone.onboarded', false) && (!deepLinked || !!followParam || !!inviteParam))   // a follow/invite link IS the moment a NEW member sets up — show the wizard (an already-onboarded profile still skips it)
+    onboardParam === '1' || (!lsGet('trinityone.onboarded', false) && (!deepLinked || !!followParam))   // a FOLLOW link is the moment a NEW member sets up → show the wizard. An INVITE link (guardian→child) adopts a parent-owned, already-named identity, so it must NOT re-onboard. An already-onboarded profile always skips it.
   );
   // identity surfaces (ProfileSheet hub + the focused sheets)
   const [profile, setProfile] = useA(idParam === 'profile');
@@ -441,6 +441,7 @@ function App() {
     const beat = () => { F.announceMembership(np); try { localStorage.setItem('trinityone.hb:' + np, String(Date.now())); } catch {} };
     if (F.ready && F.ready.then) F.ready.then(beat).catch(() => {}); else beat();
   }, [activeChurch]);
+  const pendingFollowRef = React.useRef(null);   // S2: a follow link opened before onboarding — defer the join+announce until the wizard completes (consent-first)
   useAE(() => {
     if (!inviteParam && !followParam) return;
     let cleanup;
@@ -476,7 +477,13 @@ function App() {
         } catch (e) {}
       }
       const src = (followParam || '') + _search;   // captured before the scrub — still carries ?relay= etc. for followChurch
-      if (/npub1[0-9a-z]{20,}/.test(src)) { const off = followChurch(src); if (typeof off === 'function') cleanup = off; }
+      if (/npub1[0-9a-z]{20,}/.test(src)) {
+        // S2: on a not-yet-onboarded device a PLAIN follow link defers its join+announce until the wizard
+        // completes — so opening a link never publishes a membership doc before the person consents/names.
+        // (An invite link already adopted a consented, parent-owned identity above, so it joins now.)
+        if (followParam && !inviteParam && !lsGet('trinityone.onboarded', false)) pendingFollowRef.current = src;
+        else { const off = followChurch(src); if (typeof off === 'function') cleanup = off; }
+      }
       // a bulk-invite slip carries the person's name (?name=) so the steward's directory shows it without
       // anyone typing. Set it ONLY for a fresh scanner with no name yet — never overwrite an existing name.
       if (_nameP) {
@@ -1377,8 +1384,8 @@ function App() {
 
         {showSplash ? <Splash onDone={() => setShowSplash(false)} ready={bootReady} /> : null}
         {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity}
-          onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); promptFollowChurch(); }}
-          onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); promptFollowChurch(); }} /> : null}
+          onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }}
+          onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }} /> : null}
       </PhoneFrame>
     </div>
   );

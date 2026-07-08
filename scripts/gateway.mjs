@@ -102,8 +102,13 @@ function _blobMember(req, ownerCp, host, path) {
   const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
   try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return false; } catch { return false; }   // bound to this relay+path (anti-replay)
   const p = ev.pubkey;
+  // SECURITY-AUDIT: gate to an EFFECTIVE member of the owning church — mirror rebuildMembers()/H1, not the raw
+  // MEMBER_DOCS join set (which still holds blocked + unapproved-pending pubkeys). Otherwise a BANNED member, or
+  // a stranger who self-joined an approval-gated church but was never admitted, keeps downloading members-only media.
   const md = MEMBER_DOCS.get(ownerCp);
-  return p === ownerCp || stewardOf(p, ownerCp) || !!(md && md.has(p));   // church / steward / member of the OWNING church
+  const gated = REQUIRE_APPROVAL.has(ownerCp), admitted = ADMITTED_BY.get(ownerCp);
+  const effectiveMember = !!(md && md.has(p)) && !BLOCKED.has(p) && (!gated || !!(admitted && admitted.has(p)));
+  return p === ownerCp || stewardOf(p, ownerCp) || effectiveMember;   // church / steward / effective member of the OWNING church
 }
 
 // ---- signed self-update bundle ----------------------------------------------------------------
