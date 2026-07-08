@@ -953,8 +953,6 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight;
   }, [msgs, open]);
 
-  if (!group) return null;
-
   const send = (extra) => {
     // NIP-10 reply markers, when this message answers another
     const rtags = replyTo ? [['e', replyTo.id, '', 'reply'], ['p', replyTo.pubkey]] : [];
@@ -1008,6 +1006,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
     onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />),
     [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate]);   // eslint-disable-line
+  if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
   const todayIso = new Date().toISOString().slice(0, 10);
