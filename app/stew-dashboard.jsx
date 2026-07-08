@@ -2015,8 +2015,10 @@ function DashPlans() {
     </div>
   );
   return (
-    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
+    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%' }}>
       {creating ? <NewPlanModal onClose={() => setCreating(false)} /> : null}
+      {/* single scroll container so a long drafts list can't push the library off the bottom */}
+      <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 }}>
       <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
           {planDrafts.length > 0 ? <button onClick={() => { if (confirm(`Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="#fff" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}
@@ -2026,12 +2028,13 @@ function DashPlans() {
           ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>No plans shared yet — make your own with “New plan”, or pick one from the library below.</div>
           : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{shared.map(p => <PlanRow key={p.id} p={p} isShared />)}</div>}
       </Panel>
-      <Panel scroll title="Plan library" style={{ flex: 1, minHeight: 0 }}>
+      <Panel title="Plan library">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 14 }}>Share a reading plan and the whole church sees it in their app — members start it and track their own progress.</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {available.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Every plan is shared.</div> : available.map(p => <PlanRow key={p.id} p={p} />)}
         </div>
       </Panel>
+      </div>
     </div>
   );
 }

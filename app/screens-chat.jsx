@@ -287,7 +287,9 @@ function ChatScreen({ ctx }) {
     ? realGroups
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
         .filter(g => !iAmMinor || g.childsafe)
-        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category }))
+        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category,
+          // member count: invite groups carry an explicit list; public groups are church-wide, so show the church's count (never a bare "0")
+          members: g.visibility === 'invite' ? (Array.isArray(g.members) ? g.members.length : 0) : (((ctx.church && ctx.church.members) || 0) || null) }))
     : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id));
   const notJoined = !(ctx.church && ctx.church.npub);   // hasn't joined a real church yet
   const teamGroups = churchGroups.filter(g => g.team);
@@ -476,7 +478,7 @@ function ChatScreen({ ctx }) {
               <div style={{ width: 42, height: 42, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(g.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(g.accent), flexShrink: 0 }}><Icon name={g.prayer ? 'pray' : 'chat'} size={22} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{hi(g.name)}</div>
-                <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{g.kind} · {g.members} members</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{g.kind}{g.members != null ? ` · ${g.members} members` : ''}</div>
               </div>
               <Icon name="chevR" size={17} color="var(--ink-3)" />
             </div>

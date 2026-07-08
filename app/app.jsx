@@ -302,7 +302,7 @@ function App() {
   const [bootReady, setBootReady] = useA(false);   // true once the church's core data has arrived — holds the splash until the cards are ready
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
-    onboardParam === '1' || (!deepLinked && !lsGet('trinityone.onboarded', false))
+    onboardParam === '1' || (!lsGet('trinityone.onboarded', false) && (!deepLinked || !!followParam || !!inviteParam))   // a follow/invite link IS the moment a NEW member sets up — show the wizard (an already-onboarded profile still skips it)
   );
   // identity surfaces (ProfileSheet hub + the focused sheets)
   const [profile, setProfile] = useA(idParam === 'profile');

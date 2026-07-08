@@ -142,9 +142,23 @@ function PlanCard({ p, ctx, onClick, corner }) {
   );
 }
 
+// a titled section that collapses — used to fold long plan/devotional-series groups so the list isn't overwhelming
+function CollapsibleSection({ label, count, defaultOpen = true, children }) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  return (
+    <React.Fragment>
+      <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 2px 0', margin: '0 0 12px', fontFamily: 'var(--font-ui)', color: 'var(--ink-3)' }}>
+        <Icon name="chevR" size={14} color="var(--ink-3)" style={{ transition: 'transform .18s ease', transform: open ? 'rotate(90deg)' : 'none' }} />
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase' }}>{label}{count != null ? ` · ${count}` : ''}</span>
+      </button>
+      {open ? children : null}
+    </React.Fragment>
+  );
+}
+
 function PlansScreen({ ctx }) {
   const D = window.TrinityData;
-  const [tab, setTab] = useP('mine');                  // 'mine' | 'browse'
+  const [tab, setTab] = useP('mine');                  // 'mine' | 'devos' | 'browse'
   const [discoverOpen, setDiscoverOpen] = useP(false);   // collapse the Discover-plans grid in Browse
   const churchPlans = ctx.churchPlans || [];           // plans the church's steward shared
   const churchName = (ctx.church && ctx.church.name) || 'your church';
@@ -186,15 +200,10 @@ function PlansScreen({ ctx }) {
       <h1 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'trinityFade .5s ease both' }}>Reading Plans</h1>
       <p style={{ margin: '0 0 20px', color: 'var(--ink-2)', fontSize: 14.5, lineHeight: 1.4 }}>A little every day. Pick a path and let it carry you.</p>
 
-      <div style={seg}>{segBtn('mine', 'My Plans')}{segBtn('browse', 'Browse')}</div>
+      <div style={seg}>{segBtn('mine', 'My Plans')}{segBtn('devos', 'Devotionals')}{segBtn('browse', 'Browse')}</div>
 
-      {tab === 'mine' ? (() => {
-        const devo = (ctx.churchDevos || []).length ? groupDevosBySeries(ctx.churchDevos) : { groups: [], singles: [] };
-        return (
+      {tab === 'mine' ? (
         <React.Fragment>
-          {/* church devotional series — always pinned to the top */}
-          {devo.groups.length ? <div style={{ marginBottom: 8 }}>{devo.groups.map(g => <DevoSeriesHero key={g.name} group={g} ctx={ctx} />)}</div> : null}
-
           {featured ? (
             <div onClick={() => ctx.openPlan(featured)} style={{
               borderRadius: 24, padding: 20, cursor: 'pointer', marginBottom: 24, position: 'relative', overflow: 'hidden',
@@ -237,37 +246,39 @@ function PlansScreen({ ctx }) {
             </div>
           ) : null}
 
-          {devo.singles.length ? (
-            <React.Fragment>
-              <SectionLabel>Devotionals from {churchName}</SectionLabel>
-              <div style={{ ...grid, animationDelay: '.1s' }}>
-                {devo.singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
-              </div>
-            </React.Fragment>
-          ) : null}
         </React.Fragment>
+      ) : tab === 'devos' ? (() => {
+        const { groups, singles } = (ctx.churchDevos || []).length ? groupDevosBySeries(ctx.churchDevos) : { groups: [], singles: [] };
+        if (!groups.length && !singles.length) return (
+          <div style={{ textAlign: 'center', padding: '30px 16px 28px', color: 'var(--ink-2)', animation: 'trinityFade .5s ease both' }}>
+            <Icon name="sun" size={40} stroke={1.4} color="var(--ink-3)" />
+            <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 270, margin: '10px auto 0' }}>No devotionals yet. When {churchName} shares a reflection, it’ll show up here.</p>
+          </div>
+        );
+        return (
+          <React.Fragment>
+            {/* each devotional series folds into a collapsible group so a long series doesn't overwhelm */}
+            {groups.map(g => (
+              <CollapsibleSection key={g.name} label={g.name} count={g.items.length} defaultOpen={groups.length === 1}>
+                <div style={grid}>{g.items.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}</div>
+              </CollapsibleSection>
+            ))}
+            {singles.length ? (
+              <React.Fragment>
+                {groups.length ? <SectionLabel>More devotionals</SectionLabel> : null}
+                <div style={grid}>{singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}</div>
+              </React.Fragment>
+            ) : null}
+          </React.Fragment>
         );
       })() : (
         <React.Fragment>
-          {(ctx.churchDevos || []).length ? (() => {
-            const { groups, singles } = groupDevosBySeries(ctx.churchDevos);
-            return (
-              <React.Fragment>
-                <SectionLabel>{churchName} devotionals</SectionLabel>
-                <div style={grid}>
-                  {groups.map(g => <DevoSeriesCard key={g.name} group={g} ctx={ctx} />)}
-                  {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
-                </div>
-              </React.Fragment>
-            );
-          })() : null}
           {churchPlans.length ? (
-            <React.Fragment>
-              <SectionLabel>Plans from {churchName}</SectionLabel>
+            <CollapsibleSection label={`Plans from ${churchName}`} count={churchPlans.length} defaultOpen={churchPlans.length <= 6}>
               <div style={grid}>
                 {churchPlans.map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, inMine(p))} />)}
               </div>
-            </React.Fragment>
+            </CollapsibleSection>
           ) : null}
           <SectionLabel>Discover plans</SectionLabel>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'trinityFade .5s ease .1s both' }}>
