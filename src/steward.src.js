@@ -565,18 +565,24 @@ window.Steward = {
   // publish a signed sermon doc referencing it by sha256 — no YouTube, members-only. `encrypt` (a bytes->bytes
   // fn) is applied BEFORE hashing/upload so the host only ever holds ciphertext (used for the sensitive /
   // cloud-backup case). Returns { sha256, size, host, mime, enc }.
-  async uploadBlob(file, encrypt) {
+  async uploadBlob(file, encrypt, mirrors) {
     if (!sk) throw new Error('no key');
     let bytes = new Uint8Array(await file.arrayBuffer());
     const enc = typeof encrypt === 'function';
     if (enc) bytes = encrypt(bytes);
     const sha = await _sha256hex(bytes);
-    const base = _blobBase();
-    const auth = finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]], content: 'upload' }, sk);
-    const res = await fetch(base + '/blob', { method: 'PUT', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': enc ? 'application/octet-stream' : (file.type || 'application/octet-stream') }, body: bytes });
-    if (!res.ok) throw new Error('upload failed (' + res.status + ')');
-    const j = await res.json();
-    return { sha256: j.sha256, size: j.size, host: base, mime: enc ? '' : (file.type || j.type || ''), enc };
+    const ctype = enc ? 'application/octet-stream' : (file.type || 'application/octet-stream');
+    // one signed, host-agnostic kind-24242 upload auth, reused to PUT the SAME blob to the primary + each backup.
+    const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]], content: 'upload' }, sk)));
+    const put = async (b) => { const r = await fetch(b + '/blob', { method: 'PUT', headers: { Authorization: authHdr, 'Content-Type': ctype }, body: bytes }); if (!r.ok) throw new Error(b + ' ' + r.status); return r.json(); };
+    const primary = _blobBase();
+    const j = await put(primary);   // the primary must succeed
+    const hosts = [primary];
+    for (const m of (mirrors || [])) {   // BACKUP: mirror to each extra host best-effort (a 2nd relay / cloud Blossom); content-addressed so bytes are identical everywhere
+      const mb = String(m || '').trim().replace(/\/+$/, ''); if (!mb || mb === primary) continue;
+      try { await put(mb); hosts.push(mb); } catch (e) {}
+    }
+    return { sha256: j.sha256, size: j.size, host: primary, hosts, mime: enc ? '' : (file.type || j.type || ''), enc };
   },
   // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
   publishSermon(s) {

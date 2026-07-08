@@ -84,7 +84,14 @@ function ChannelAvatar({ ch, size = 56 }) {
 function WatchView({ ctx }) {
   const [data, setData] = useW(null);
   const [paste, setPaste] = useW('');
+  const [vidSermons, setVidSermons] = useW([]);   // Tier 2: self-hosted VIDEO sermons (mime video/*)
   const channelUrl = (ctx.church && ctx.church.channel) || '';
+  const churchNpub = ctx.church && ctx.church.npub;
+  React.useEffect(() => {
+    const FS = window.Fellowship;
+    if (!churchNpub || !FS || !FS.subscribeSermons) { setVidSermons([]); return; }
+    return FS.subscribeSermons(churchNpub, (list) => setVidSermons(list.filter(s => String(s.mime || '').startsWith('video'))));
+  }, [churchNpub]);
   React.useEffect(() => {
     let alive = true; setData(null);
     const done = (d) => { if (alive) setData(d || { channel: null, videos: [] }); };
@@ -135,7 +142,9 @@ function WatchView({ ctx }) {
   }
 
   const ch = data.channel || null;
-  const videos = data.videos || [];
+  // self-hosted video sermons render alongside the channel feed (they play from a member-gated blob, not YouTube)
+  const sermonVids = vidSermons.map(s => ({ id: s.id, title: s.title, _sermon: true, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []), mime: s.mime, enc: s.enc, published: s.ts ? new Date(s.ts * 1000).toISOString() : '', desc: 'Self-hosted · members only' }));
+  const videos = [...sermonVids, ...(data.videos || [])];
 
   // no channel feed yet — invite the member to add their own
   if (!videos.length) {
@@ -193,8 +202,23 @@ function WatchView({ ctx }) {
 function VideoPlayer({ video, open, onClose, ctx }) {
   const [liveId, setLiveId] = useW(null);
   const [data, setData] = useW(null);
+  const [selfSrc, setSelfSrc] = useW(null);   // Tier 2: object URL for a self-hosted (member-gated) video blob
+  const [selfErr, setSelfErr] = useW('');
   React.useEffect(() => { if (open) window.Bible.getVideos().then(setData); }, [open]);
   React.useEffect(() => { if (open) setLiveId(video && video.ytId ? video.ytId : null); }, [open, video]);
+  React.useEffect(() => {
+    if (!open || !video || !video._sermon) { setSelfSrc(null); setSelfErr(''); return; }
+    let url = null, alive = true; const FS = window.Fellowship; setSelfErr('');
+    (async () => {
+      try {
+        const dec = video.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(ctx.church && ctx.church.npub) : null;
+        if (video.enc && !dec) { if (alive) setSelfErr('This encrypted video needs the church media key'); return; }
+        url = await FS.fetchSermon({ sha256: video.sha256, hosts: video.hosts, mime: video.mime, enc: video.enc }, { mime: video.mime || 'video/mp4', decrypt: dec });
+        if (alive) setSelfSrc(url); else URL.revokeObjectURL(url);
+      } catch (e) { if (alive) setSelfErr('Couldn’t load this video'); }
+    })();
+    return () => { alive = false; if (url) URL.revokeObjectURL(url); };
+  }, [open, video]);
   if (!video) return null;
   const ch = (data && data.channel) || {};
   const more = ((data && data.videos) || []).filter(v => v.id !== video.id).slice(0, 4);
@@ -205,13 +229,19 @@ function VideoPlayer({ video, open, onClose, ctx }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 14px 8px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>Watch</span>
-          <IconBtn name="share" onClick={() => { openExternal(`https://youtu.be/${video.ytId}`); }} />
+          {video._sermon ? <div style={{ width: 40 }} /> : <IconBtn name="share" onClick={() => { openExternal(`https://youtu.be/${video.ytId}`); }} />}
         </div>
       </div>
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', paddingBottom: 30 }}>
         {/* video frame */}
         <div style={{ margin: '0 14px', borderRadius: 18, overflow: 'hidden', background: '#000', aspectRatio: '16/9', position: 'relative' }}>
-          {liveId ? (
+          {video._sermon ? (
+            selfSrc
+              ? <video src={selfSrc} controls autoPlay playsInline style={{ width: '100%', height: '100%', display: 'block', background: '#000' }} />
+              : <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, textAlign: 'center', padding: 20 }}>
+                  {selfErr ? <><Icon name="alert" size={22} color="#fff" />{selfErr}</> : <><div style={{ width: 26, height: 26, borderRadius: 999, border: '2.5px solid rgba(255,255,255,.3)', borderTopColor: '#fff', animation: 'trinitySpin .8s linear infinite' }} />Loading…</>}
+                </div>
+          ) : liveId ? (
             <iframe title="video" width="100%" height="100%" style={{ border: 'none', display: 'block' }}
               src={`https://www.youtube-nocookie.com/embed/${liveId}?autoplay=1&rel=0&modestbranding=1`}
               allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen />

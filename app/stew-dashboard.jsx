@@ -3210,6 +3210,7 @@ function DashMediaPanel({ church }) {
   const [sermons, setSermons] = React.useState([]);
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const [encOn, setEncOn] = React.useState(false);
+  const [mirrorHosts, setMirrorHosts] = React.useState('');   // optional backup copies (comma-separated host URLs)
   React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(setSermons) : undefined), []);
   React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
   const fileRef = React.useRef(null);
@@ -3219,9 +3220,11 @@ function DashMediaPanel({ church }) {
     setUpBusy(true); setUpMsg((encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
     try {
       const encFn = (encOn && window.Steward.mediaEncryptor) ? await window.Steward.mediaEncryptor(members.map(m => m.pubkey).filter(Boolean)) : undefined;
-      const b = await window.Steward.uploadBlob(f, encFn);
-      await window.Steward.publishSermon({ title: f.name.replace(/\.[^.]+$/, ''), sha256: b.sha256, host: b.host, mime: b.mime, size: b.size, enc: b.enc });
-      setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : ''));
+      const mirrors = mirrorHosts.split(',').map(s => s.trim()).filter(Boolean);
+      const b = await window.Steward.uploadBlob(f, encFn, mirrors);
+      await window.Steward.publishSermon({ title: f.name.replace(/\.[^.]+$/, ''), sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
+      const backups = (b.hosts || []).length - 1;
+      setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
     } catch (err) { setUpMsg('✗ ' + (err.message || 'Upload failed')); }
     setUpBusy(false); setTimeout(() => setUpMsg(''), 3500);
   };
@@ -3246,11 +3249,11 @@ function DashMediaPanel({ church }) {
       </div>
       {church.audioFeed ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.audioFeed}</span></div> : null}
       <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
-      <div style={lbl}>Self-hosted sermons · Listen tab</div>
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Upload the church’s <b>own audio</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Great over a thin connection.</div>
+      <div style={lbl}>Self-hosted sermons · Listen &amp; Watch</div>
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Audio appears in <b>Listen</b>, video in <b>Watch</b>. Great over a thin connection.</div>
       {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 10 }}>{sermons.map(s => (
         <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          <Icon name="headphones" size={16} color="var(--sage)" />
+          <Icon name={String(s.mime || '').startsWith('video') ? 'play' : 'headphones'} size={16} color="var(--sage)" />
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{fmtSize(s.size || 0)}{s.enc ? ' · encrypted' : ''}</div></div>
           <button onClick={() => window.Steward.removeSermon(s.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
         </div>))}</div> : null}
@@ -3258,8 +3261,11 @@ function DashMediaPanel({ church }) {
         <input type="checkbox" checked={encOn} onChange={e => setEncOn(e.target.checked)} style={{ flexShrink: 0 }} />
         <span><b>Encrypt</b> — only your members can decrypt it (protects it from the host and any cloud backup)</span>
       </label>
-      <input ref={fileRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={onFile} />
-      <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="#fff" /> {upBusy ? 'Working…' : 'Upload a sermon'}</button>
+      <input value={mirrorHosts} onChange={e => setMirrorHosts(e.target.value)} placeholder="Backup copy host(s) — optional, comma-separated"
+        title="Mirror each upload to another media host (a 2nd relay or a cloud Blossom server) for redundancy. Content-addressed, so playback fails over automatically."
+        style={{ width: '100%', boxSizing: 'border-box', height: 38, padding: '0 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 12.5, color: 'var(--ink)', margin: '0 0 10px', fontFamily: 'var(--font-ui)' }} />
+      <input ref={fileRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={onFile} />
+      <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="#fff" /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
       {upMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 8 }}>{upMsg}</div> : null}
     </Panel>
   );
