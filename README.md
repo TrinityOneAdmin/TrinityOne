@@ -39,6 +39,25 @@ Plain `index.html` + `*.jsx`, transpiled in-browser by Babel for dev and **pre-t
 
 The **relay** (`scripts/gateway.mjs`) is a small Node service: a NIP-01 relay + static host + web-push, with a **church-scoped write policy** — every event is signature-verified, membership-gated, and safeguarding-enforced server-side, so a tampered client can't bypass the rules.
 
+## Repository layout
+
+Because there's no bundler, **the web app *is* the file tree** — the gateway serves these files directly at their URLs (`join.html` → the join page, `steward.html` → the church console, `welcome-simple.html` → the marketing home). So the repo root looks busy, but it's the running site, not clutter.
+
+| Path | What's there |
+|------|--------------|
+| `index.html`, `steward.html`, `*.html` | the served web pages — member app, church console, and the marketing/landing pages |
+| `app/` | the member-app UI, as classic `*.jsx` (transpiled in-browser for dev, pre-built for prod — no bundler) |
+| `src/` → `vendor/` | the engines (`identity`, `fellowship`, `steward`), esbuild-bundled into `vendor/` |
+| `relay/` · `relay-app/` | the gateway/relay service + its one-line self-host installer and admin panel |
+| `scripts/` | build, deploy, and sync tooling — `gateway.mjs` is the relay + static host + web-push |
+| `modules/` | downloadable Bibles & commentaries, fetched on demand (deliberately **not** shipped inside the APK) |
+| `assets/` · `icons/` · `brand.css` | fonts, images, and shared styling |
+| `android/` | the Capacitor wrapper that produces the Android APK |
+| `docs/` | human documentation — guides, design specs, ops runbooks |
+| `reference/` | internal working material — the roadmap (`SPINE.md`), briefs, and design notes |
+
+For the deep version — how the pieces talk and where to start reading — see **[`ARCHITECTURE.md`](ARCHITECTURE.md)**.
+
 ## Run it (dev)
 
 ```bash
