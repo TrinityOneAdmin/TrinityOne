@@ -10237,7 +10237,7 @@ zoo`.split("\n");
       if (!sk) throw new Error("no key");
       let bytes = new Uint8Array(await file.arrayBuffer());
       const enc = typeof encrypt4 === "function";
-      if (enc) bytes = encrypt4(bytes);
+      if (enc) bytes = await encrypt4(bytes);
       const sha = await _sha256hex(bytes);
       const ctype = enc ? "application/octet-stream" : file.type || "application/octet-stream";
       const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]], content: "upload" }, sk)));

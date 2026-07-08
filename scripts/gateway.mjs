@@ -1156,6 +1156,13 @@ function serveStatic(req, res) {
   }
   // audio (podcast) feed proxy
   // FEDERATION Phase 5 Tier 2 — self-hosted media blobs (Blossom-style, content-addressed).
+  // CORS preflight: uploads mirror to a BACKUP host (different origin) and members fetch from it, so the
+  // Authorization header requires an OPTIONS preflight that permits cross-origin PUT/GET.
+  if ((route === '/blob' || route.startsWith('/blob/')) && req.method === 'OPTIONS') {
+    const h = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, PUT, POST, HEAD, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Max-Age': '86400', 'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges' };
+    if (req.headers['access-control-request-private-network']) h['Access-Control-Allow-Private-Network'] = 'true';   // permit a backup host on a more-private network (PNA)
+    res.writeHead(204, h); res.end(); return;
+  }
   // Upload: PUT /blob (church/steward-signed kind-24242). Download: GET /blob/<sha256> (member-gated NIP-98).
   if (route === '/blob' && (req.method === 'PUT' || req.method === 'POST')) {
     const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };

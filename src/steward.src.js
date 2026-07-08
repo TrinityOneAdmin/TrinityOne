@@ -569,7 +569,7 @@ window.Steward = {
     if (!sk) throw new Error('no key');
     let bytes = new Uint8Array(await file.arrayBuffer());
     const enc = typeof encrypt === 'function';
-    if (enc) bytes = encrypt(bytes);
+    if (enc) bytes = await encrypt(bytes);   // the media encryptor is async (crypto.subtle) — must await, or bytes is a Promise
     const sha = await _sha256hex(bytes);
     const ctype = enc ? 'application/octet-stream' : (file.type || 'application/octet-stream');
     // one signed, host-agnostic kind-24242 upload auth, reused to PUT the SAME blob to the primary + each backup.
