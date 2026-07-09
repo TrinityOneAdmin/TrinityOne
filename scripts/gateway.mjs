@@ -164,7 +164,11 @@ const BUNDLE_CACHE_DIR = join(ROOT, 'relay', '.bundle-cache'); // per-HEAD cache
 // as before, and signed verification only kicks in once a key is present). Cheap on the hot path: if the
 // files for this sha already exist, we return immediately without spawning anything.
 function ensureSignedBundle() {
-  const sha = BUILD.sha && !BUILD.sha.startsWith('$Format') ? BUILD.sha : 'HEAD';
+  // Key the cache by the LIVE git HEAD, not the sha read at startup — so a new commit auto-invalidates the cache
+  // and the next pull rebuilds. Without this the release host froze on its startup sha and every deploy needed a
+  // manual `rm relay/.bundle-cache/*` (the "clear .bundle-cache to deploy" gotcha). Falls back to BUILD.sha/HEAD.
+  let sha = BUILD.sha && !BUILD.sha.startsWith('$Format') ? BUILD.sha : 'HEAD';
+  try { const g = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }); if (g.status === 0 && g.stdout && g.stdout.trim()) sha = g.stdout.trim(); } catch {}
   const tgz = join(BUNDLE_CACHE_DIR, sha + '.tgz');
   const sig = join(BUNDLE_CACHE_DIR, sha + '.tgz.sig');
   if (existsSync(tgz)) return { tgz, sig: existsSync(sig) ? sig : null, sha };
