@@ -2948,16 +2948,16 @@
   }
   function calcOffsets(n, window2, wOpts) {
     const { windowSize, mask, maxNumber, shiftBy } = wOpts;
-    let wbits = Number(n & mask);
+    let wbits2 = Number(n & mask);
     let nextN = n >> shiftBy;
-    if (wbits > windowSize) {
-      wbits -= maxNumber;
+    if (wbits2 > windowSize) {
+      wbits2 -= maxNumber;
       nextN += _1n3;
     }
     const offsetStart = window2 * windowSize;
-    const offset = offsetStart + Math.abs(wbits) - 1;
-    const isZero = wbits === 0;
-    const isNeg = wbits < 0;
+    const offset = offsetStart + Math.abs(wbits2) - 1;
+    const isZero = wbits2 === 0;
+    const isNeg = wbits2 < 0;
     const isNegF = window2 % 2 !== 0;
     const offsetF = offsetStart;
     return { nextN, offset, isZero, isNeg, isNegF, offsetF };
@@ -3139,8 +3139,8 @@
     }
     const Fp = createField(CURVE.p, curveOpts.Fp, FpFnLE);
     const Fn2 = createField(CURVE.n, curveOpts.Fn, FpFnLE);
-    const _b = type === "weierstrass" ? "b" : "d";
-    const params = ["Gx", "Gy", "a", _b];
+    const _b2 = type === "weierstrass" ? "b" : "d";
+    const params = ["Gx", "Gy", "a", _b2];
     for (const p of params) {
       if (!Fp.isValid(CURVE[p]))
         throw new Error(`CURVE.${p} must be valid field element of CURVE.Fp`);
@@ -3423,8 +3423,8 @@
         try {
           y = Fp.sqrt(y2);
         } catch (sqrtError) {
-          const err = sqrtError instanceof Error ? ": " + sqrtError.message : "";
-          throw new Error("bad point: is not on curve, sqrt error" + err);
+          const err2 = sqrtError instanceof Error ? ": " + sqrtError.message : "";
+          throw new Error("bad point: is not on curve, sqrt error" + err2);
         }
         assertCompressionIsSupported();
         const evenY = Fp.isOdd(y);
@@ -4331,7 +4331,7 @@
         const valid = schnorr.verify(hexToBytes(event.sig), hexToBytes(hash), hexToBytes(event.pubkey));
         event[verifiedSymbol] = valid;
         return valid;
-      } catch (err) {
+      } catch (err2) {
         event[verifiedSymbol] = false;
         return false;
       }
@@ -4485,7 +4485,7 @@
       this.reconnectTimeoutHandle = setTimeout(async () => {
         try {
           await this.connect();
-        } catch (err) {
+        } catch (err2) {
         }
       }, backoff);
     }
@@ -4526,9 +4526,9 @@
         }
         try {
           this.ws = new this._WebSocket(this.url);
-        } catch (err) {
+        } catch (err2) {
           clearTimeout(connectionTimeoutHandle);
-          reject(err);
+          reject(err2);
           return;
         }
         this.ws.onopen = () => {
@@ -4599,8 +4599,8 @@
               eoseTimeout: this.pingTimeout + 1e3
             }
           );
-        } catch (err) {
-          reject(err);
+        } catch (err2) {
+          reject(err2);
         }
       });
     }
@@ -4642,8 +4642,8 @@
           }, this.publishTimeout);
           this.openEventPublishes.set(evt.id, { resolve, reject, timeout });
           this.send('["AUTH",' + JSON.stringify(evt) + "]");
-        } catch (err) {
-          console.warn("subscribe auth function failed:", err);
+        } catch (err2) {
+          console.warn("subscribe auth function failed:", err2);
         }
       });
       return this.authPromise;
@@ -4794,9 +4794,9 @@
           case "AUTH": {
             this.challenge = data[1];
             if (this.onauth) {
-              this.auth(this.onauth).catch((err) => {
-                if (!(err instanceof SendingOnClosedConnection)) {
-                  throw err;
+              this.auth(this.onauth).catch((err2) => {
+                if (!(err2 instanceof SendingOnClosedConnection)) {
+                  throw err2;
                 }
               });
             }
@@ -4808,12 +4808,12 @@
             return;
           }
         }
-      } catch (err) {
+      } catch (err2) {
         try {
           const [_, __, event] = JSON.parse(json);
-          console.warn(`[nostr] relay ${this.url} error processing message:`, err, event);
+          console.warn(`[nostr] relay ${this.url} error processing message:`, err2, event);
         } catch (_) {
-          console.warn(`[nostr] relay ${this.url} error processing message:`, err);
+          console.warn(`[nostr] relay ${this.url} error processing message:`, err2);
         }
         return;
       }
@@ -4869,10 +4869,10 @@
       if (!this.closed && this.relay.connected) {
         try {
           this.relay.send('["CLOSE",' + JSON.stringify(this.id) + "]");
-        } catch (err) {
-          if (err instanceof SendingOnClosedConnection) {
+        } catch (err2) {
+          if (err2 instanceof SendingOnClosedConnection) {
           } else {
-            throw err;
+            throw err2;
           }
         }
         this.closed = true;
@@ -4939,9 +4939,9 @@
           timeout: params?.connectionTimeout,
           abort: params?.abort
         });
-      } catch (err) {
+      } catch (err2) {
         this.relays.delete(url);
-        throw err;
+        throw err2;
       }
       return relay;
     }
@@ -5032,9 +5032,9 @@
               connectionTimeout: this.maxWaitForConnection < (params.maxWait || 0) ? Math.max(params.maxWait * 0.8, params.maxWait - 1e3) : this.maxWaitForConnection,
               abort: params.abort
             });
-          } catch (err) {
+          } catch (err2) {
             this.onRelayConnectionFailure?.(url);
-            handleClose(i22, err?.message || String(err));
+            handleClose(i22, err2?.message || String(err2));
             return;
           }
           this.onRelayConnectionSuccess?.(url);
@@ -5054,8 +5054,8 @@
                     eoseTimeout: params.maxWait,
                     abort: params.abort
                   });
-                }).catch((err) => {
-                  handleClose(i22, `auth was required and attempted, but failed with: ${err}`);
+                }).catch((err2) => {
+                  handleClose(i22, `auth was required and attempted, but failed with: ${err2}`);
                 });
               } else {
                 handleClose(i22, reason);
@@ -5128,16 +5128,16 @@
             connectionTimeout: this.maxWaitForConnection < (params?.maxWait || 0) ? Math.max(params.maxWait * 0.8, params.maxWait - 1e3) : this.maxWaitForConnection,
             abort: params?.abort
           });
-        } catch (err) {
+        } catch (err2) {
           this.onRelayConnectionFailure?.(url);
-          return String("connection failure: " + String(err));
+          return String("connection failure: " + String(err2));
         }
-        return r.publish(event).catch(async (err) => {
-          if (err instanceof Error && err.message.startsWith("auth-required: ") && params?.onauth) {
+        return r.publish(event).catch(async (err2) => {
+          if (err2 instanceof Error && err2.message.startsWith("auth-required: ") && params?.onauth) {
             await r.auth(params.onauth);
             return r.publish(event);
           }
-          throw err;
+          throw err2;
         }).then((reason) => {
           if (this.trackRelays) {
             let set = this.seenOn.get(event.id);
@@ -5241,7 +5241,7 @@
         const valid = schnorr.verify(hexToBytes(event.sig), hexToBytes(hash), hexToBytes(event.pubkey));
         event[verifiedSymbol2] = valid;
         return valid;
-      } catch (err) {
+      } catch (err2) {
         event[verifiedSymbol2] = false;
         return false;
       }
@@ -8125,7 +8125,7 @@ zoo`.split("\n");
           opt.publicKey = added.toBytes(true);
         }
         return new _HDKey(opt);
-      } catch (err) {
+      } catch (err2) {
         return this.deriveChild(index + 1);
       }
     }
@@ -9555,15 +9555,724 @@ zoo`.split("\n");
 
   // src/steward.src.js
   var import_qrcode_generator = __toESM(require_qrcode());
-  async function _sealToChurch(plaintext, churchPubHex) {
+
+  // node_modules/fflate/esm/browser.js
+  var u82 = Uint8Array;
+  var u16 = Uint16Array;
+  var i32 = Int32Array;
+  var fleb = new u82([
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    5,
+    0,
+    /* unused */
+    0,
+    0,
+    /* impossible */
+    0
+  ]);
+  var fdeb = new u82([
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2,
+    3,
+    3,
+    4,
+    4,
+    5,
+    5,
+    6,
+    6,
+    7,
+    7,
+    8,
+    8,
+    9,
+    9,
+    10,
+    10,
+    11,
+    11,
+    12,
+    12,
+    13,
+    13,
+    /* unused */
+    0,
+    0
+  ]);
+  var clim = new u82([16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]);
+  var freb = function(eb, start) {
+    var b = new u16(31);
+    for (var i3 = 0; i3 < 31; ++i3) {
+      b[i3] = start += 1 << eb[i3 - 1];
+    }
+    var r = new i32(b[30]);
+    for (var i3 = 1; i3 < 30; ++i3) {
+      for (var j = b[i3]; j < b[i3 + 1]; ++j) {
+        r[j] = j - b[i3] << 5 | i3;
+      }
+    }
+    return { b, r };
+  };
+  var _a = freb(fleb, 2);
+  var fl = _a.b;
+  var revfl = _a.r;
+  fl[28] = 258, revfl[258] = 28;
+  var _b = freb(fdeb, 0);
+  var fd = _b.b;
+  var revfd = _b.r;
+  var rev = new u16(32768);
+  for (i3 = 0; i3 < 32768; ++i3) {
+    x = (i3 & 43690) >> 1 | (i3 & 21845) << 1;
+    x = (x & 52428) >> 2 | (x & 13107) << 2;
+    x = (x & 61680) >> 4 | (x & 3855) << 4;
+    rev[i3] = ((x & 65280) >> 8 | (x & 255) << 8) >> 1;
+  }
+  var x;
+  var i3;
+  var hMap = (function(cd, mb, r) {
+    var s = cd.length;
+    var i3 = 0;
+    var l = new u16(mb);
+    for (; i3 < s; ++i3) {
+      if (cd[i3])
+        ++l[cd[i3] - 1];
+    }
+    var le = new u16(mb);
+    for (i3 = 1; i3 < mb; ++i3) {
+      le[i3] = le[i3 - 1] + l[i3 - 1] << 1;
+    }
+    var co;
+    if (r) {
+      co = new u16(1 << mb);
+      var rvb = 15 - mb;
+      for (i3 = 0; i3 < s; ++i3) {
+        if (cd[i3]) {
+          var sv = i3 << 4 | cd[i3];
+          var r_1 = mb - cd[i3];
+          var v = le[cd[i3] - 1]++ << r_1;
+          for (var m = v | (1 << r_1) - 1; v <= m; ++v) {
+            co[rev[v] >> rvb] = sv;
+          }
+        }
+      }
+    } else {
+      co = new u16(s);
+      for (i3 = 0; i3 < s; ++i3) {
+        if (cd[i3]) {
+          co[i3] = rev[le[cd[i3] - 1]++] >> 15 - cd[i3];
+        }
+      }
+    }
+    return co;
+  });
+  var flt = new u82(288);
+  for (i3 = 0; i3 < 144; ++i3)
+    flt[i3] = 8;
+  var i3;
+  for (i3 = 144; i3 < 256; ++i3)
+    flt[i3] = 9;
+  var i3;
+  for (i3 = 256; i3 < 280; ++i3)
+    flt[i3] = 7;
+  var i3;
+  for (i3 = 280; i3 < 288; ++i3)
+    flt[i3] = 8;
+  var i3;
+  var fdt = new u82(32);
+  for (i3 = 0; i3 < 32; ++i3)
+    fdt[i3] = 5;
+  var i3;
+  var flm = /* @__PURE__ */ hMap(flt, 9, 0);
+  var fdm = /* @__PURE__ */ hMap(fdt, 5, 0);
+  var shft = function(p) {
+    return (p + 7) / 8 | 0;
+  };
+  var slc = function(v, s, e) {
+    if (s == null || s < 0)
+      s = 0;
+    if (e == null || e > v.length)
+      e = v.length;
+    return new u82(v.subarray(s, e));
+  };
+  var ec = [
+    "unexpected EOF",
+    "invalid block type",
+    "invalid length/literal",
+    "invalid distance",
+    "stream finished",
+    "no stream handler",
+    ,
+    // determined by compression function
+    "no callback",
+    "invalid UTF-8 data",
+    "extra field too long",
+    "date not in range 1980-2099",
+    "filename too long",
+    "stream finishing",
+    "invalid zip data"
+    // determined by unknown compression method
+  ];
+  var err = function(ind, msg, nt) {
+    var e = new Error(msg || ec[ind]);
+    e.code = ind;
+    if (Error.captureStackTrace)
+      Error.captureStackTrace(e, err);
+    if (!nt)
+      throw e;
+    return e;
+  };
+  var wbits = function(d, p, v) {
+    v <<= p & 7;
+    var o = p / 8 | 0;
+    d[o] |= v;
+    d[o + 1] |= v >> 8;
+  };
+  var wbits16 = function(d, p, v) {
+    v <<= p & 7;
+    var o = p / 8 | 0;
+    d[o] |= v;
+    d[o + 1] |= v >> 8;
+    d[o + 2] |= v >> 16;
+  };
+  var hTree = function(d, mb) {
+    var t = [];
+    for (var i3 = 0; i3 < d.length; ++i3) {
+      if (d[i3])
+        t.push({ s: i3, f: d[i3] });
+    }
+    var s = t.length;
+    var t2 = t.slice();
+    if (!s)
+      return { t: et, l: 0 };
+    if (s == 1) {
+      var v = new u82(t[0].s + 1);
+      v[t[0].s] = 1;
+      return { t: v, l: 1 };
+    }
+    t.sort(function(a, b) {
+      return a.f - b.f;
+    });
+    t.push({ s: -1, f: 25001 });
+    var l = t[0], r = t[1], i0 = 0, i1 = 1, i22 = 2;
+    t[0] = { s: -1, f: l.f + r.f, l, r };
+    while (i1 != s - 1) {
+      l = t[t[i0].f < t[i22].f ? i0++ : i22++];
+      r = t[i0 != i1 && t[i0].f < t[i22].f ? i0++ : i22++];
+      t[i1++] = { s: -1, f: l.f + r.f, l, r };
+    }
+    var maxSym = t2[0].s;
+    for (var i3 = 1; i3 < s; ++i3) {
+      if (t2[i3].s > maxSym)
+        maxSym = t2[i3].s;
+    }
+    var tr = new u16(maxSym + 1);
+    var mbt = ln(t[i1 - 1], tr, 0);
+    if (mbt > mb) {
+      var i3 = 0, dt = 0;
+      var lft = mbt - mb, cst = 1 << lft;
+      t2.sort(function(a, b) {
+        return tr[b.s] - tr[a.s] || a.f - b.f;
+      });
+      for (; i3 < s; ++i3) {
+        var i2_1 = t2[i3].s;
+        if (tr[i2_1] > mb) {
+          dt += cst - (1 << mbt - tr[i2_1]);
+          tr[i2_1] = mb;
+        } else
+          break;
+      }
+      dt >>= lft;
+      while (dt > 0) {
+        var i2_2 = t2[i3].s;
+        if (tr[i2_2] < mb)
+          dt -= 1 << mb - tr[i2_2]++ - 1;
+        else
+          ++i3;
+      }
+      for (; i3 >= 0 && dt; --i3) {
+        var i2_3 = t2[i3].s;
+        if (tr[i2_3] == mb) {
+          --tr[i2_3];
+          ++dt;
+        }
+      }
+      mbt = mb;
+    }
+    return { t: new u82(tr), l: mbt };
+  };
+  var ln = function(n, l, d) {
+    return n.s == -1 ? Math.max(ln(n.l, l, d + 1), ln(n.r, l, d + 1)) : l[n.s] = d;
+  };
+  var lc = function(c) {
+    var s = c.length;
+    while (s && !c[--s])
+      ;
+    var cl = new u16(++s);
+    var cli = 0, cln = c[0], cls = 1;
+    var w = function(v) {
+      cl[cli++] = v;
+    };
+    for (var i3 = 1; i3 <= s; ++i3) {
+      if (c[i3] == cln && i3 != s)
+        ++cls;
+      else {
+        if (!cln && cls > 2) {
+          for (; cls > 138; cls -= 138)
+            w(32754);
+          if (cls > 2) {
+            w(cls > 10 ? cls - 11 << 5 | 28690 : cls - 3 << 5 | 12305);
+            cls = 0;
+          }
+        } else if (cls > 3) {
+          w(cln), --cls;
+          for (; cls > 6; cls -= 6)
+            w(8304);
+          if (cls > 2)
+            w(cls - 3 << 5 | 8208), cls = 0;
+        }
+        while (cls--)
+          w(cln);
+        cls = 1;
+        cln = c[i3];
+      }
+    }
+    return { c: cl.subarray(0, cli), n: s };
+  };
+  var clen = function(cf, cl) {
+    var l = 0;
+    for (var i3 = 0; i3 < cl.length; ++i3)
+      l += cf[i3] * cl[i3];
+    return l;
+  };
+  var wfblk = function(out, pos, dat) {
+    var s = dat.length;
+    var o = shft(pos + 2);
+    out[o] = s & 255;
+    out[o + 1] = s >> 8;
+    out[o + 2] = out[o] ^ 255;
+    out[o + 3] = out[o + 1] ^ 255;
+    for (var i3 = 0; i3 < s; ++i3)
+      out[o + i3 + 4] = dat[i3];
+    return (o + 4 + s) * 8;
+  };
+  var wblk = function(dat, out, final, syms, lf, df, eb, li, bs, bl, p) {
+    wbits(out, p++, final);
+    ++lf[256];
+    var _a2 = hTree(lf, 15), dlt = _a2.t, mlb = _a2.l;
+    var _b2 = hTree(df, 15), ddt = _b2.t, mdb = _b2.l;
+    var _c = lc(dlt), lclt = _c.c, nlc = _c.n;
+    var _d = lc(ddt), lcdt = _d.c, ndc = _d.n;
+    var lcfreq = new u16(19);
+    for (var i3 = 0; i3 < lclt.length; ++i3)
+      ++lcfreq[lclt[i3] & 31];
+    for (var i3 = 0; i3 < lcdt.length; ++i3)
+      ++lcfreq[lcdt[i3] & 31];
+    var _e = hTree(lcfreq, 7), lct = _e.t, mlcb = _e.l;
+    var nlcc = 19;
+    for (; nlcc > 4 && !lct[clim[nlcc - 1]]; --nlcc)
+      ;
+    var flen = bl + 5 << 3;
+    var ftlen = clen(lf, flt) + clen(df, fdt) + eb;
+    var dtlen = clen(lf, dlt) + clen(df, ddt) + eb + 14 + 3 * nlcc + clen(lcfreq, lct) + 2 * lcfreq[16] + 3 * lcfreq[17] + 7 * lcfreq[18];
+    if (bs >= 0 && flen <= ftlen && flen <= dtlen)
+      return wfblk(out, p, dat.subarray(bs, bs + bl));
+    var lm, ll, dm, dl;
+    wbits(out, p, 1 + (dtlen < ftlen)), p += 2;
+    if (dtlen < ftlen) {
+      lm = hMap(dlt, mlb, 0), ll = dlt, dm = hMap(ddt, mdb, 0), dl = ddt;
+      var llm = hMap(lct, mlcb, 0);
+      wbits(out, p, nlc - 257);
+      wbits(out, p + 5, ndc - 1);
+      wbits(out, p + 10, nlcc - 4);
+      p += 14;
+      for (var i3 = 0; i3 < nlcc; ++i3)
+        wbits(out, p + 3 * i3, lct[clim[i3]]);
+      p += 3 * nlcc;
+      var lcts = [lclt, lcdt];
+      for (var it = 0; it < 2; ++it) {
+        var clct = lcts[it];
+        for (var i3 = 0; i3 < clct.length; ++i3) {
+          var len = clct[i3] & 31;
+          wbits(out, p, llm[len]), p += lct[len];
+          if (len > 15)
+            wbits(out, p, clct[i3] >> 5 & 127), p += clct[i3] >> 12;
+        }
+      }
+    } else {
+      lm = flm, ll = flt, dm = fdm, dl = fdt;
+    }
+    for (var i3 = 0; i3 < li; ++i3) {
+      var sym = syms[i3];
+      if (sym > 255) {
+        var len = sym >> 18 & 31;
+        wbits16(out, p, lm[len + 257]), p += ll[len + 257];
+        if (len > 7)
+          wbits(out, p, sym >> 23 & 31), p += fleb[len];
+        var dst = sym & 31;
+        wbits16(out, p, dm[dst]), p += dl[dst];
+        if (dst > 3)
+          wbits16(out, p, sym >> 5 & 8191), p += fdeb[dst];
+      } else {
+        wbits16(out, p, lm[sym]), p += ll[sym];
+      }
+    }
+    wbits16(out, p, lm[256]);
+    return p + ll[256];
+  };
+  var deo = /* @__PURE__ */ new i32([65540, 131080, 131088, 131104, 262176, 1048704, 1048832, 2114560, 2117632]);
+  var et = /* @__PURE__ */ new u82(0);
+  var dflt = function(dat, lvl, plvl, pre, post, st) {
+    var s = st.z || dat.length;
+    var o = new u82(pre + s + 5 * (1 + Math.ceil(s / 7e3)) + post);
+    var w = o.subarray(pre, o.length - post);
+    var lst = st.l;
+    var pos = (st.r || 0) & 7;
+    if (lvl) {
+      if (pos)
+        w[0] = st.r >> 3;
+      var opt = deo[lvl - 1];
+      var n = opt >> 13, c = opt & 8191;
+      var msk_1 = (1 << plvl) - 1;
+      var prev = st.p || new u16(32768), head = st.h || new u16(msk_1 + 1);
+      var bs1_1 = Math.ceil(plvl / 3), bs2_1 = 2 * bs1_1;
+      var hsh = function(i4) {
+        return (dat[i4] ^ dat[i4 + 1] << bs1_1 ^ dat[i4 + 2] << bs2_1) & msk_1;
+      };
+      var syms = new i32(25e3);
+      var lf = new u16(288), df = new u16(32);
+      var lc_1 = 0, eb = 0, i3 = st.i || 0, li = 0, wi = st.w || 0, bs = 0;
+      for (; i3 + 2 < s; ++i3) {
+        var hv = hsh(i3);
+        var imod = i3 & 32767, pimod = head[hv];
+        prev[imod] = pimod;
+        head[hv] = imod;
+        if (wi <= i3) {
+          var rem = s - i3;
+          if ((lc_1 > 7e3 || li > 24576) && (rem > 423 || !lst)) {
+            pos = wblk(dat, w, 0, syms, lf, df, eb, li, bs, i3 - bs, pos);
+            li = lc_1 = eb = 0, bs = i3;
+            for (var j = 0; j < 286; ++j)
+              lf[j] = 0;
+            for (var j = 0; j < 30; ++j)
+              df[j] = 0;
+          }
+          var l = 2, d = 0, ch_1 = c, dif = imod - pimod & 32767;
+          if (rem > 2 && hv == hsh(i3 - dif)) {
+            var maxn = Math.min(n, rem) - 1;
+            var maxd = Math.min(32767, i3);
+            var ml = Math.min(258, rem);
+            while (dif <= maxd && --ch_1 && imod != pimod) {
+              if (dat[i3 + l] == dat[i3 + l - dif]) {
+                var nl = 0;
+                for (; nl < ml && dat[i3 + nl] == dat[i3 + nl - dif]; ++nl)
+                  ;
+                if (nl > l) {
+                  l = nl, d = dif;
+                  if (nl > maxn)
+                    break;
+                  var mmd = Math.min(dif, nl - 2);
+                  var md = 0;
+                  for (var j = 0; j < mmd; ++j) {
+                    var ti = i3 - dif + j & 32767;
+                    var pti = prev[ti];
+                    var cd = ti - pti & 32767;
+                    if (cd > md)
+                      md = cd, pimod = ti;
+                  }
+                }
+              }
+              imod = pimod, pimod = prev[imod];
+              dif += imod - pimod & 32767;
+            }
+          }
+          if (d) {
+            syms[li++] = 268435456 | revfl[l] << 18 | revfd[d];
+            var lin = revfl[l] & 31, din = revfd[d] & 31;
+            eb += fleb[lin] + fdeb[din];
+            ++lf[257 + lin];
+            ++df[din];
+            wi = i3 + l;
+            ++lc_1;
+          } else {
+            syms[li++] = dat[i3];
+            ++lf[dat[i3]];
+          }
+        }
+      }
+      for (i3 = Math.max(i3, wi); i3 < s; ++i3) {
+        syms[li++] = dat[i3];
+        ++lf[dat[i3]];
+      }
+      pos = wblk(dat, w, lst, syms, lf, df, eb, li, bs, i3 - bs, pos);
+      if (!lst) {
+        st.r = pos & 7 | w[pos / 8 | 0] << 3;
+        pos -= 7;
+        st.h = head, st.p = prev, st.i = i3, st.w = wi;
+      }
+    } else {
+      for (var i3 = st.w || 0; i3 < s + lst; i3 += 65535) {
+        var e = i3 + 65535;
+        if (e >= s) {
+          w[pos / 8 | 0] = lst;
+          e = s;
+        }
+        pos = wfblk(w, pos + 1, dat.subarray(i3, e));
+      }
+      st.i = s;
+    }
+    return slc(o, 0, pre + shft(pos) + post);
+  };
+  var crct = /* @__PURE__ */ (function() {
+    var t = new Int32Array(256);
+    for (var i3 = 0; i3 < 256; ++i3) {
+      var c = i3, k = 9;
+      while (--k)
+        c = (c & 1 && -306674912) ^ c >>> 1;
+      t[i3] = c;
+    }
+    return t;
+  })();
+  var crc = function() {
+    var c = -1;
+    return {
+      p: function(d) {
+        var cr = c;
+        for (var i3 = 0; i3 < d.length; ++i3)
+          cr = crct[cr & 255 ^ d[i3]] ^ cr >>> 8;
+        c = cr;
+      },
+      d: function() {
+        return ~c;
+      }
+    };
+  };
+  var dopt = function(dat, opt, pre, post, st) {
+    if (!st) {
+      st = { l: 1 };
+      if (opt.dictionary) {
+        var dict = opt.dictionary.subarray(-32768);
+        var newDat = new u82(dict.length + dat.length);
+        newDat.set(dict);
+        newDat.set(dat, dict.length);
+        dat = newDat;
+        st.w = dict.length;
+      }
+    }
+    return dflt(dat, opt.level == null ? 6 : opt.level, opt.mem == null ? st.l ? Math.ceil(Math.max(8, Math.min(13, Math.log(dat.length))) * 1.5) : 20 : 12 + opt.mem, pre, post, st);
+  };
+  var mrg = function(a, b) {
+    var o = {};
+    for (var k in a)
+      o[k] = a[k];
+    for (var k in b)
+      o[k] = b[k];
+    return o;
+  };
+  var wbytes = function(d, b, v) {
+    for (; v; ++b)
+      d[b] = v, v >>>= 8;
+  };
+  function deflateSync(data, opts) {
+    return dopt(data, opts || {}, 0, 0);
+  }
+  var fltn = function(d, p, t, o) {
+    for (var k in d) {
+      var val = d[k], n = p + k, op = o;
+      if (Array.isArray(val))
+        op = mrg(o, val[1]), val = val[0];
+      if (ArrayBuffer.isView(val))
+        t[n] = [val, op];
+      else {
+        t[n += "/"] = [new u82(0), op];
+        fltn(val, n, t, o);
+      }
+    }
+  };
+  var te = typeof TextEncoder != "undefined" && /* @__PURE__ */ new TextEncoder();
+  var td = typeof TextDecoder != "undefined" && /* @__PURE__ */ new TextDecoder();
+  var tds = 0;
+  try {
+    td.decode(et, { stream: true });
+    tds = 1;
+  } catch (e) {
+  }
+  function strToU8(str, latin1) {
+    if (latin1) {
+      var ar_1 = new u82(str.length);
+      for (var i3 = 0; i3 < str.length; ++i3)
+        ar_1[i3] = str.charCodeAt(i3);
+      return ar_1;
+    }
+    if (te)
+      return te.encode(str);
+    var l = str.length;
+    var ar = new u82(str.length + (str.length >> 1));
+    var ai = 0;
+    var w = function(v) {
+      ar[ai++] = v;
+    };
+    for (var i3 = 0; i3 < l; ++i3) {
+      if (ai + 5 > ar.length) {
+        var n = new u82(ai + 8 + (l - i3 << 1));
+        n.set(ar);
+        ar = n;
+      }
+      var c = str.charCodeAt(i3);
+      if (c < 128 || latin1)
+        w(c);
+      else if (c < 2048)
+        w(192 | c >> 6), w(128 | c & 63);
+      else if (c > 55295 && c < 57344)
+        c = 65536 + (c & 1023 << 10) | str.charCodeAt(++i3) & 1023, w(240 | c >> 18), w(128 | c >> 12 & 63), w(128 | c >> 6 & 63), w(128 | c & 63);
+      else
+        w(224 | c >> 12), w(128 | c >> 6 & 63), w(128 | c & 63);
+    }
+    return slc(ar, 0, ai);
+  }
+  var exfl = function(ex) {
+    var le = 0;
+    if (ex) {
+      for (var k in ex) {
+        var l = ex[k].length;
+        if (l > 65535)
+          err(9);
+        le += l + 4;
+      }
+    }
+    return le;
+  };
+  var wzh = function(d, b, f, fn, u, c, ce, co) {
+    var fl2 = fn.length, ex = f.extra, col = co && co.length;
+    var exl = exfl(ex);
+    wbytes(d, b, ce != null ? 33639248 : 67324752), b += 4;
+    if (ce != null)
+      d[b++] = 20, d[b++] = f.os;
+    d[b] = 20, b += 2;
+    d[b++] = f.flag << 1 | (c < 0 && 8), d[b++] = u && 8;
+    d[b++] = f.compression & 255, d[b++] = f.compression >> 8;
+    var dt = new Date(f.mtime == null ? Date.now() : f.mtime), y = dt.getFullYear() - 1980;
+    if (y < 0 || y > 119)
+      err(10);
+    wbytes(d, b, y << 25 | dt.getMonth() + 1 << 21 | dt.getDate() << 16 | dt.getHours() << 11 | dt.getMinutes() << 5 | dt.getSeconds() >> 1), b += 4;
+    if (c != -1) {
+      wbytes(d, b, f.crc);
+      wbytes(d, b + 4, c < 0 ? -c - 2 : c);
+      wbytes(d, b + 8, f.size);
+    }
+    wbytes(d, b + 12, fl2);
+    wbytes(d, b + 14, exl), b += 16;
+    if (ce != null) {
+      wbytes(d, b, col);
+      wbytes(d, b + 6, f.attrs);
+      wbytes(d, b + 10, ce), b += 14;
+    }
+    d.set(fn, b);
+    b += fl2;
+    if (exl) {
+      for (var k in ex) {
+        var exf = ex[k], l = exf.length;
+        wbytes(d, b, +k);
+        wbytes(d, b + 2, l);
+        d.set(exf, b + 4), b += 4 + l;
+      }
+    }
+    if (col)
+      d.set(co, b), b += col;
+    return b;
+  };
+  var wzf = function(o, b, c, d, e) {
+    wbytes(o, b, 101010256);
+    wbytes(o, b + 8, c);
+    wbytes(o, b + 10, c);
+    wbytes(o, b + 12, d);
+    wbytes(o, b + 16, e);
+  };
+  function zipSync(data, opts) {
+    if (!opts)
+      opts = {};
+    var r = {};
+    var files = [];
+    fltn(data, "", r, opts);
+    var o = 0;
+    var tot = 0;
+    for (var fn in r) {
+      var _a2 = r[fn], file = _a2[0], p = _a2[1];
+      var compression = p.level == 0 ? 0 : 8;
+      var f = strToU8(fn), s = f.length;
+      var com = p.comment, m = com && strToU8(com), ms = m && m.length;
+      var exl = exfl(p.extra);
+      if (s > 65535)
+        err(11);
+      var d = compression ? deflateSync(file, p) : file, l = d.length;
+      var c = crc();
+      c.p(file);
+      files.push(mrg(p, {
+        size: file.length,
+        crc: c.d(),
+        c: d,
+        f,
+        m,
+        u: s != fn.length || m && com.length != ms,
+        o,
+        compression
+      }));
+      o += 30 + s + exl + l;
+      tot += 76 + 2 * (s + exl) + (ms || 0) + l;
+    }
+    var out = new u82(tot + 22), oe = o, cdl = tot - o;
+    for (var i3 = 0; i3 < files.length; ++i3) {
+      var f = files[i3];
+      wzh(out, f.o, f, f.f, f.u, f.c.length);
+      var badd = 30 + f.f.length + exfl(f.extra);
+      out.set(f.c, f.o + badd);
+      wzh(out, o, f, f.f, f.u, f.c.length, f.o, f.m), o += 16 + badd + (f.m ? f.m.length : 0);
+    }
+    wzf(out, o, files.length, cdl, oe);
+    return out;
+  }
+
+  // src/steward.src.js
+  async function _sealToChurch(bytes, churchPubHex, fmt) {
     if (!(globalThis.crypto && globalThis.crypto.subtle)) throw new Error("This browser can\u2019t encrypt \u2014 turn encryption off to export, or use the app.");
     const esk = generateSecretKey2();
     const epk = getPublicKey2(esk);
     const convKey = getConversationKey(esk, churchPubHex);
     const key = await crypto.subtle.importKey("raw", convKey, "AES-GCM", false, ["encrypt"]);
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext)));
-    return JSON.stringify({ trinityone_backup: "encrypted-v1", alg: "nip44-ecdh-secp256k1+aes-256-gcm", epk, iv: _b64(iv), ct: _b64(ct) });
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes));
+    return JSON.stringify({ trinityone_backup: "encrypted-v1", alg: "nip44-ecdh-secp256k1+aes-256-gcm", fmt: fmt || "jsonl", epk, iv: _b64(iv), ct: _b64(ct) });
   }
   async function _openBackup(envelope) {
     if (!sk) throw new Error("No church key on this device");
@@ -9571,8 +10280,11 @@ zoo`.split("\n");
     if (!e || e.trinityone_backup !== "encrypted-v1") throw new Error("Not an encrypted TrinityOne backup");
     const convKey = getConversationKey(sk, e.epk);
     const key = await crypto.subtle.importKey("raw", convKey, "AES-GCM", false, ["decrypt"]);
-    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct));
-    return new TextDecoder().decode(pt);
+    const pt = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct)));
+    return { bytes: pt, fmt: e.fmt || "jsonl" };
+  }
+  function _nip98(url) {
+    return "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "GET"], ["church", pub]], content: "" }, sk)));
   }
   var NET = "trinityone";
   var KEY_LS = "trinityone.steward.church-key";
@@ -9602,8 +10314,8 @@ zoo`.split("\n");
   var PINSERMON_D = "trinityone/pinsermon:";
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
-  async function _sha256hex(u82) {
-    const d = await crypto.subtle.digest("SHA-256", u82);
+  async function _sha256hex(u83) {
+    const d = await crypto.subtle.digest("SHA-256", u83);
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
   }
   var JOINPOLICY_D = "trinityone/joinpolicy:";
@@ -9618,10 +10330,10 @@ zoo`.split("\n");
   var _senvTs = {};
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
   var _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
-  var _b64 = (u82) => {
+  var _b64 = (u83) => {
     let s = "";
     const c = 32768;
-    for (let i3 = 0; i3 < u82.length; i3 += c) s += String.fromCharCode.apply(null, u82.subarray(i3, i3 + c));
+    for (let i3 = 0; i3 < u83.length; i3 += c) s += String.fromCharCode.apply(null, u83.subarray(i3, i3 + c));
     return btoa(s);
   };
   var _isNative = () => !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -9863,7 +10575,7 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
-  var b64e = (u82) => btoa(String.fromCharCode(...u82));
+  var b64e = (u83) => btoa(String.fromCharCode(...u83));
   var b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
   var PIN_ITER = 6e5;
   var PIN_ITER_LEGACY = 21e4;
@@ -10051,20 +10763,53 @@ zoo`.split("\n");
     // this church. Restore = importAll() the events back into a relay. Returns { text, count, filename, encrypted }.
     // encrypt (default true): seal the archive to the church key so the file is safe to keep/store anywhere — see
     // _sealToChurch. The steward can turn it OFF for a plain-readable JSONL (it's their data). Throws on failure.
-    async exportChurchData({ encrypt: encrypt4 = true } = {}) {
+    async exportChurchData({ encrypt: encrypt4 = true, includeMedia = true } = {}) {
       if (!sk || !pub) throw new Error("No church key on this device");
-      const url = _blobBase() + "/export";
-      const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "GET"], ["church", pub]], content: "" }, sk);
-      const r = await fetch(url, { headers: { Authorization: "Nostr " + btoa(JSON.stringify(auth)) } });
-      if (!r.ok) throw new Error("Backup failed \u2014 the relay returned " + r.status);
-      const plaintext = await r.text();
-      const count = Math.max(0, plaintext.split("\n").filter(Boolean).length - 1);
-      const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-      if (encrypt4) return { text: await _sealToChurch(plaintext, pub), count, filename: "trinityone-backup-" + date + ".tone-backup.json", encrypted: true };
-      return { text: plaintext, count, filename: "trinityone-backup-" + date + ".jsonl", encrypted: false };
+      const base = _blobBase(), date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+      const er = await fetch(base + "/export", { headers: { Authorization: _nip98(base + "/export") } });
+      if (!er.ok) throw new Error("Backup failed \u2014 the relay returned " + er.status);
+      const events = await er.text();
+      const count = Math.max(0, events.split("\n").filter(Boolean).length - 1);
+      let payload, fmt = "jsonl", mediaCount = 0;
+      if (includeMedia) {
+        let man = { blobs: [] };
+        try {
+          const mr = await fetch(base + "/export-media", { headers: { Authorization: _nip98(base + "/export-media") } });
+          if (mr.ok) man = await mr.json();
+        } catch {
+        }
+        if (man.blobs && man.blobs.length) {
+          const files = { "manifest.json": strToU8(JSON.stringify({ format: "trinityone-church-backup", version: 2, church: pub, events: count, media: man.blobs.length, exportedAt: now() })), "events.jsonl": strToU8(events) };
+          for (const b of man.blobs) {
+            const br = await fetch(base + "/blob/" + b.sha, { headers: { Authorization: _nip98(base + "/blob/" + b.sha) } });
+            if (!br.ok) throw new Error("Backup failed pulling media (" + String(b.sha).slice(0, 8) + "\u2026) \u2014 " + br.status);
+            files["blobs/" + b.sha] = new Uint8Array(await br.arrayBuffer());
+          }
+          payload = zipSync(files, { level: 0 });
+          fmt = "zip";
+          mediaCount = man.blobs.length;
+        }
+      }
+      if (!payload) payload = strToU8(events);
+      if (encrypt4) return { data: await _sealToChurch(payload, pub, fmt), binary: false, mime: "application/json", filename: "trinityone-backup-" + date + ".tone-backup.json", count, media: mediaCount, encrypted: true };
+      if (fmt === "zip") return { data: payload, binary: true, mime: "application/zip", filename: "trinityone-backup-" + date + ".zip", count, media: mediaCount, encrypted: false };
+      return { data: events, binary: false, mime: "application/x-ndjson", filename: "trinityone-backup-" + date + ".jsonl", count, media: 0, encrypted: false };
     },
-    // decrypt an encrypted backup envelope with THIS device's church key — the restore/verify counterpart of the
-    // encrypt-on-export above. Returns the original JSONL text. (Restore-into-relay UI is a later phase.)
+    // media size for the pre-backup guard: records + total blob bytes this relay holds for the church.
+    async mediaSize() {
+      if (!sk || !pub) return { count: 0, bytes: 0 };
+      const url = _blobBase() + "/export-media";
+      try {
+        const r = await fetch(url, { headers: { Authorization: _nip98(url) } });
+        if (!r.ok) return { count: 0, bytes: 0 };
+        const m = await r.json();
+        return { count: (m.blobs || []).length, bytes: m.totalBytes || 0 };
+      } catch {
+        return { count: 0, bytes: 0 };
+      }
+    },
+    // decrypt an encrypted backup envelope with THIS device's church key -> { bytes, fmt }. The restore/verify
+    // counterpart of encrypt-on-export; fmt is 'jsonl' (events) or 'zip' (events + media). (Restore UI = Stage 3.)
     async decryptBackup(envelope) {
       return _openBackup(envelope);
     },
@@ -10795,8 +11540,8 @@ zoo`.split("\n");
         _srev[groupId] = (_srev[groupId] || 0) + 1;
       }
       _skeys[groupId] = key;
-      const rev = _srev[groupId] || 1;
-      _srev[groupId] = rev;
+      const rev2 = _srev[groupId] || 1;
+      _srev[groupId] = rev2;
       const keys = {};
       for (const pk of recips) {
         try {
@@ -10805,7 +11550,7 @@ zoo`.split("\n");
         }
       }
       _senvTs[groupId] = now();
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content: JSON.stringify({ rev, keys }) }, churchSk));
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content: JSON.stringify({ rev: rev2, keys }) }, churchSk));
     },
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----

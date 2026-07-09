@@ -3859,24 +3859,36 @@ function DashBackup() {
   const setFrequency = (f) => { setFreq(f); try { localStorage.setItem('trinityone.backupRemind', f); } catch {} };
   const [encrypt, setEncrypt] = React.useState(() => { try { return localStorage.getItem('trinityone.backupEncrypt') !== '0'; } catch { return true; } });
   const setEncryptPref = (v) => { setEncrypt(v); try { localStorage.setItem('trinityone.backupEncrypt', v ? '1' : '0'); } catch {} };
+  const [includeMedia, setIncludeMedia] = React.useState(() => { try { return localStorage.getItem('trinityone.backupMedia') !== '0'; } catch { return true; } });
+  const setMediaPref = (v) => { setIncludeMedia(v); try { localStorage.setItem('trinityone.backupMedia', v ? '1' : '0'); } catch {} };
+  const [media, setMedia] = React.useState(null);   // { count, bytes } — for the include-media toggle + size guard
+  React.useEffect(() => { let ok = true; (async () => { try { const m = await window.Steward.mediaSize(); if (ok) setMedia(m); } catch {} })(); return () => { ok = false; }; }, []);
+  const fmtBytes = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB';
   const windowDays = { weekly: 7, monthly: 30, off: Infinity };
   const overdue = freq !== 'off' && (Date.now() / 1000 - last) > windowDays[freq] * 86400;
   const doBackup = async () => {
     setBusy(true); setMsg(null);
     try {
-      const { text, count, filename, encrypted } = await window.Steward.exportChurchData({ encrypt });
+      const { data, binary, mime, count, filename, encrypted, media: mediaCount } = await window.Steward.exportChurchData({ encrypt, includeMedia });
+      const mediaBit = mediaCount ? ' + ' + mediaCount + ' media file' + (mediaCount > 1 ? 's' : '') : '';
       const P = window.Capacitor && window.Capacitor.Plugins;
       if (P && P.Filesystem && P.Share) {   // native: write to cache then hand to the OS share sheet (save/send anywhere)
-        const res = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'Cache', encoding: 'utf8' });
-        await P.Share.share({ title: 'TrinityOne church backup', text: count + ' records' + (encrypted ? ' — encrypted; only your church key can open it.' : ' — keep this file somewhere safe.'), files: [res.uri] });
-      } else {   // web: a plain file download
-        const blob = new Blob([text], { type: encrypted ? 'application/json' : 'application/x-ndjson' });
+        let res;
+        if (binary) {   // zip bytes -> base64 for Filesystem (no encoding = base64)
+          let bin = ''; const CH = 0x8000; for (let i = 0; i < data.length; i += CH) bin += String.fromCharCode.apply(null, data.subarray(i, Math.min(i + CH, data.length)));
+          res = await P.Filesystem.writeFile({ path: filename, data: btoa(bin), directory: 'Cache' });
+        } else {
+          res = await P.Filesystem.writeFile({ path: filename, data, directory: 'Cache', encoding: 'utf8' });
+        }
+        await P.Share.share({ title: 'TrinityOne church backup', text: count + ' records' + mediaBit + (encrypted ? ' — encrypted; only your church key can open it.' : ' — keep this file somewhere safe.'), files: [res.uri] });
+      } else {   // web: a file download (Blob accepts string or Uint8Array)
+        const blob = new Blob([data], { type: mime });
         const url = URL.createObjectURL(blob); const a = document.createElement('a');
         a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 3000);
       }
       const ts = Math.floor(Date.now() / 1000); setLast(ts); try { localStorage.setItem('trinityone.lastBackupAt', String(ts)); } catch {}
-      setMsg({ ok: true, text: 'Saved ' + count + ' records' + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') });
+      setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') });
     } catch (e) { setMsg({ ok: false, text: e.message || 'Backup failed' }); }
     setBusy(false);
   };
@@ -3897,6 +3909,15 @@ function DashBackup() {
           {!encrypt ? <span style={{ display: 'block', marginTop: 5, color: 'var(--gold)', fontWeight: 600 }}>⚠ Off: anyone who gets the file can read your members’ names and messages.</span> : null}
         </span>
       </label>
+      {media && media.count > 0 ? (
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '0 0 14px', cursor: 'pointer' }}>
+          <input type="checkbox" checked={includeMedia} onChange={(e) => setMediaPref(e.target.checked)} style={{ marginTop: 2, width: 16, height: 16, accentColor: 'var(--clay)', flexShrink: 0 }} />
+          <span style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+            <b>Include media</b> — your {media.count} uploaded file{media.count > 1 ? 's' : ''} ({fmtBytes(media.bytes)}) go in too, so a restore brings back everything, not just the text.
+            {includeMedia && media.bytes > 250 * 1024 * 1024 ? <span style={{ display: 'block', marginTop: 5, color: 'var(--gold)', fontWeight: 600 }}>⚠ That’s large — this backup may take a while and use a lot of memory. Turn it off for a quick records-only copy.</span> : null}
+          </span>
+        </label>
+      ) : null}
       <button onClick={doBackup} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '11px 16px', fontSize: 14 }}><Icon name="share" size={16} color="#fff" /> {busy ? 'Backing up…' : 'Back up church data'}</button>
       {msg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: msg.ok ? 'var(--sage)' : 'var(--clay)' }}>{msg.ok ? '✓ ' : '✗ '}{msg.text}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>Last backup: {last ? new Date(last * 1000).toLocaleDateString() : 'never'}</div>

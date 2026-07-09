@@ -941,6 +941,18 @@ function serveStatic(req, res) {
     res.end();
     return;
   }
+  // backup media manifest: the sha256 + size of every blob this relay holds for the caller's church, so the
+  // steward can pull them into a COMPLETE archive (events + media) client-side. Same NIP-98 gate as /export;
+  // the bytes themselves come from GET /blob/<sha> (the church key passes _blobMember for its own blobs).
+  if (route === '/export-media') {
+    const cp = _exportAuth(req, req.headers['host'] || '', route);
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    const blobs = [];
+    try { for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; if (_blobOwner(f) !== cp) continue; let size = 0; try { size = statSync(join(BLOB_DIR, f)).size; } catch { continue; } blobs.push({ sha: f, size }); } } catch {}
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    res.end(JSON.stringify({ church: cp, blobs, totalBytes: blobs.reduce((a, b) => a + b.size, 0) }));
+    return;
+  }
   // NIP-11 relay information document (FEDERATION-PLAN Phase 1a). Served only to clients that ASK for
   // it (Accept: application/nostr+json) on the relay path, so normal browser GETs are unaffected. The
   // `trinityone` block is the capability signal a federating client checks BEFORE routing any gated
