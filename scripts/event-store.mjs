@@ -112,6 +112,12 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   function authorOf(id) { const r = qAuthorById.get(id); return r ? r.pubkey : null; }
   function del(id) { try { return delById.run(id).changes > 0; } catch { return false; } }
 
+  // Backup: every stored event this relay holds for one church, oldest-first, as parsed objects. `cp` is the
+  // gateway-resolved owning church (the `church` column). The caller decides what to serialise (JSONL) + how to
+  // gate access. Restore is just importAll() of these events back into a store.
+  const qExportChurch = db.prepare('SELECT raw FROM events WHERE church = ? ORDER BY created_at ASC');
+  function exportChurch(cp) { const out = []; for (const r of qExportChurch.all(cp)) { try { out.push(JSON.parse(r.raw)); } catch {} } return out; }
+
   // retention (per-church fairness): every structured (replaceable/addressable) doc is kept forever; each
   // church — including the '' shared bucket for unattributed DMs/reactions — keeps only its newest
   // `maxEvents` EPHEMERAL events (chat/DMs/reactions). So a chatty church can't age out a quiet church's
@@ -144,5 +150,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
-  return { db, put, query, count, authorOf, del, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, count, authorOf, del, exportChurch, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }

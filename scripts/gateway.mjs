@@ -114,6 +114,19 @@ function _blobMember(req, ownerCp, host, path) {
   return p === ownerCp || stewardOf(p, ownerCp) || effectiveMember;   // church / steward / effective member of the OWNING church
 }
 
+// backup export gate: a fresh NIP-98 (kind 27235) proof bound to THIS url, signed by the church key OR one of
+// its stewards. Returns the authorised church pubkey (cp) or null — only they may pull a church's full corpus.
+function _exportAuth(req, host, path) {
+  const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
+  let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
+  if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
+  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) return null;   // fresh (±5 min, anti-replay)
+  const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
+  try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
+  const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || (CHURCH_PUBS.has(ev.pubkey) ? ev.pubkey : '');
+  return cp && (ev.pubkey === cp || stewardOf(ev.pubkey, cp)) ? cp : null;   // the church key, or a steward of that church
+}
+
 // ---- signed self-update bundle ----------------------------------------------------------------
 // Security: the self-update downloads /relay-app/bundle.tgz and applies it. To stop a compromised
 // origin/DNS/TLS pushing a malicious bundle, the release host SIGNS the bundle with an Ed25519
@@ -914,6 +927,18 @@ function serveStatic(req, res) {
       counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: store.count(), connections: wss ? wss.clients.size : 0 },
       serves: { app: SETTINGS.serveApp, modules: SETTINGS.serveModules, audio: SETTINGS.serveAudio },   // what this relay also hosts (toggleable in the control dashboard)
     }));
+    return;
+  }
+  // church-data backup: stream every event this relay holds for the caller's church as JSONL (a self-verifying,
+  // importAll()-restorable archive). NIP-98-authed to the church key or a steward of that church.
+  if (route === '/export') {
+    const cp = _exportAuth(req, req.headers['host'] || '', route);
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized: needs a fresh NIP-98 proof signed by the church key or a steward, bound to this URL'); return; }
+    const events = store.exportChurch(cp);
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Content-Disposition': 'attachment; filename="trinityone-church-backup.jsonl"', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    res.write(JSON.stringify({ _manifest: { format: 'trinityone-church-backup', version: 1, church: cp, exportedAt: Math.floor(Date.now() / 1000), events: events.length, relay: ORIGIN } }) + '\n');
+    for (const e of events) res.write(JSON.stringify(e) + '\n');
+    res.end();
     return;
   }
   // NIP-11 relay information document (FEDERATION-PLAN Phase 1a). Served only to clients that ASK for

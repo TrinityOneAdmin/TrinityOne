@@ -3850,6 +3850,59 @@ function PinModal({ action, onClose }) {
   );
 }
 
+// Phase 1 backup: save the church's complete corpus to a file (native share sheet / web download) + a reminder cadence.
+function DashBackup() {
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);   // { ok, text }
+  const [last, setLast] = React.useState(() => { try { return Number(localStorage.getItem('trinityone.lastBackupAt') || 0); } catch { return 0; } });
+  const [freq, setFreq] = React.useState(() => { try { return localStorage.getItem('trinityone.backupRemind') || 'monthly'; } catch { return 'monthly'; } });
+  const setFrequency = (f) => { setFreq(f); try { localStorage.setItem('trinityone.backupRemind', f); } catch {} };
+  const windowDays = { weekly: 7, monthly: 30, off: Infinity };
+  const overdue = freq !== 'off' && (Date.now() / 1000 - last) > windowDays[freq] * 86400;
+  const doBackup = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const { text, count, filename } = await window.Steward.exportChurchData();
+      const P = window.Capacitor && window.Capacitor.Plugins;
+      if (P && P.Filesystem && P.Share) {   // native: write to cache then hand to the OS share sheet (save/send anywhere)
+        const res = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'Cache', encoding: 'utf8' });
+        await P.Share.share({ title: 'TrinityOne church backup', text: count + ' records — keep this file somewhere safe.', files: [res.uri] });
+      } else {   // web: a plain file download
+        const blob = new Blob([text], { type: 'application/x-ndjson' });
+        const url = URL.createObjectURL(blob); const a = document.createElement('a');
+        a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+      }
+      const ts = Math.floor(Date.now() / 1000); setLast(ts); try { localStorage.setItem('trinityone.lastBackupAt', String(ts)); } catch {}
+      setMsg({ ok: true, text: 'Saved a copy of ' + count + ' records.' });
+    } catch (e) { setMsg({ ok: false, text: e.message || 'Backup failed' }); }
+    setBusy(false);
+  };
+  const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
+  return (
+    <Panel title="Backup &amp; data">
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Save a complete copy of your church’s data — messages, groups, plans, records — to a file you keep. It’s <b>your</b> church’s data; this is how you always hold your own copy, even if a relay is ever lost.</div>
+      {overdue ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 34%, var(--line))' }}>
+          <Icon name="clock" size={17} color="var(--gold)" />
+          <span style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 600 }}>{last ? 'It’s been a while since your last backup.' : 'You haven’t backed up yet.'} Worth saving a fresh copy.</span>
+        </div>
+      ) : null}
+      <button onClick={doBackup} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '11px 16px', fontSize: 14 }}><Icon name="share" size={16} color="#fff" /> {busy ? 'Backing up…' : 'Back up church data'}</button>
+      {msg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: msg.ok ? 'var(--sage)' : 'var(--clay)' }}>{msg.ok ? '✓ ' : '✗ '}{msg.text}</div> : null}
+      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>Last backup: {last ? new Date(last * 1000).toLocaleDateString() : 'never'}</div>
+      <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Remind me to back up</div>
+        <div style={seg}>
+          {[['off', 'Off'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(([k, label]) => (
+            <button key={k} onClick={() => setFrequency(k)} style={{ padding: '8px 15px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: freq === k ? 'var(--clay)' : 'transparent', color: freq === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
+          ))}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;   // re-render when the active identity changes
   const delegated = !!(window.Steward.isDelegated && window.Steward.isDelegated());   // acting as a steward of a church we don't own
@@ -3946,6 +3999,8 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       <DashBrandingPanel church={church} />
 
       <DashMediaPanel church={church} />
+
+      <DashBackup />
       </React.Fragment> : null}
 
       {section === 'features' ? <React.Fragment>

@@ -10027,6 +10027,19 @@ zoo`.split("\n");
     exportMnemonic() {
       return currentMnemonic || lsGet(KEY_LS);
     },
+    // Backup (Phase 1): pull the church's COMPLETE corpus from its relay as a self-verifying JSONL archive. A
+    // fresh NIP-98 proof signed by the church key authorises the pull; the relay streams every event it holds for
+    // this church. Restore = importAll() the events back into a relay. Returns { text, count, filename } or throws.
+    async exportChurchData() {
+      if (!sk || !pub) throw new Error("No church key on this device");
+      const url = _blobBase() + "/export";
+      const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "GET"], ["church", pub]], content: "" }, sk);
+      const r = await fetch(url, { headers: { Authorization: "Nostr " + btoa(JSON.stringify(auth)) } });
+      if (!r.ok) throw new Error("Backup failed \u2014 the relay returned " + r.status);
+      const text = await r.text();
+      const count = Math.max(0, text.split("\n").filter(Boolean).length - 1);
+      return { text, count, filename: "trinityone-backup-" + (/* @__PURE__ */ new Date()).toISOString().slice(0, 10) + ".jsonl" };
+    },
     // restore/import a church key from its 12-word recovery phrase (replaces the current key on this device)
     restoreKey(mnemonic) {
       const m = (mnemonic || "").trim().toLowerCase().replace(/\s+/g, " ");
