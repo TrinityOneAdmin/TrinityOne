@@ -283,14 +283,14 @@ function ChatScreen({ ctx }) {
   // invite-only groups are hidden unless I'm on their member list (the relay also enforces posting).
   const myPub = window.Fellowship && window.Fellowship.myPubkey;
   const iAmMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);   // safeguarding: a child sees only child-safe groups
-  const churchGroups = realGroups.length
+  const churchGroups = React.useMemo(() => realGroups.length   // P8: don't re-map the group list on every render (e.g. member-count ticks) — only when its inputs change
     ? realGroups
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
         .filter(g => !iAmMinor || g.childsafe)
         .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category,
           // member count: invite groups carry an explicit list; public groups are church-wide, so show the church's count (never a bare "0")
           members: g.visibility === 'invite' ? (Array.isArray(g.members) ? g.members.length : 0) : (((ctx.church && ctx.church.members) || 0) || null) }))
-    : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id));
+    : D.GROUPS.filter(g => g.church === (ctx.church && ctx.church.id)), [realGroups, myPub, iAmMinor, ctx.church]);   // eslint-disable-line
   const notJoined = !(ctx.church && ctx.church.npub);   // hasn't joined a real church yet
   const teamGroups = churchGroups.filter(g => g.team);
   const plainGroups = churchGroups.filter(g => !g.team);
