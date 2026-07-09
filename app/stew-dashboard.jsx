@@ -3857,24 +3857,26 @@ function DashBackup() {
   const [last, setLast] = React.useState(() => { try { return Number(localStorage.getItem('trinityone.lastBackupAt') || 0); } catch { return 0; } });
   const [freq, setFreq] = React.useState(() => { try { return localStorage.getItem('trinityone.backupRemind') || 'monthly'; } catch { return 'monthly'; } });
   const setFrequency = (f) => { setFreq(f); try { localStorage.setItem('trinityone.backupRemind', f); } catch {} };
+  const [encrypt, setEncrypt] = React.useState(() => { try { return localStorage.getItem('trinityone.backupEncrypt') !== '0'; } catch { return true; } });
+  const setEncryptPref = (v) => { setEncrypt(v); try { localStorage.setItem('trinityone.backupEncrypt', v ? '1' : '0'); } catch {} };
   const windowDays = { weekly: 7, monthly: 30, off: Infinity };
   const overdue = freq !== 'off' && (Date.now() / 1000 - last) > windowDays[freq] * 86400;
   const doBackup = async () => {
     setBusy(true); setMsg(null);
     try {
-      const { text, count, filename } = await window.Steward.exportChurchData();
+      const { text, count, filename, encrypted } = await window.Steward.exportChurchData({ encrypt });
       const P = window.Capacitor && window.Capacitor.Plugins;
       if (P && P.Filesystem && P.Share) {   // native: write to cache then hand to the OS share sheet (save/send anywhere)
         const res = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'Cache', encoding: 'utf8' });
-        await P.Share.share({ title: 'TrinityOne church backup', text: count + ' records — keep this file somewhere safe.', files: [res.uri] });
+        await P.Share.share({ title: 'TrinityOne church backup', text: count + ' records' + (encrypted ? ' — encrypted; only your church key can open it.' : ' — keep this file somewhere safe.'), files: [res.uri] });
       } else {   // web: a plain file download
-        const blob = new Blob([text], { type: 'application/x-ndjson' });
+        const blob = new Blob([text], { type: encrypted ? 'application/json' : 'application/x-ndjson' });
         const url = URL.createObjectURL(blob); const a = document.createElement('a');
         a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 3000);
       }
       const ts = Math.floor(Date.now() / 1000); setLast(ts); try { localStorage.setItem('trinityone.lastBackupAt', String(ts)); } catch {}
-      setMsg({ ok: true, text: 'Saved a copy of ' + count + ' records.' });
+      setMsg({ ok: true, text: 'Saved ' + count + ' records' + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') });
     } catch (e) { setMsg({ ok: false, text: e.message || 'Backup failed' }); }
     setBusy(false);
   };
@@ -3888,6 +3890,13 @@ function DashBackup() {
           <span style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 600 }}>{last ? 'It’s been a while since your last backup.' : 'You haven’t backed up yet.'} Worth saving a fresh copy.</span>
         </div>
       ) : null}
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '4px 0 14px', cursor: 'pointer' }}>
+        <input type="checkbox" checked={encrypt} onChange={(e) => setEncryptPref(e.target.checked)} style={{ marginTop: 2, width: 16, height: 16, accentColor: 'var(--clay)', flexShrink: 0 }} />
+        <span style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+          <b>Encrypt with your church key</b> — the file can only be opened with your church’s recovery phrase, so your members’ names and messages stay private even if it’s lost or kept in the cloud.
+          {!encrypt ? <span style={{ display: 'block', marginTop: 5, color: 'var(--gold)', fontWeight: 600 }}>⚠ Off: anyone who gets the file can read your members’ names and messages.</span> : null}
+        </span>
+      </label>
       <button onClick={doBackup} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '11px 16px', fontSize: 14 }}><Icon name="share" size={16} color="#fff" /> {busy ? 'Backing up…' : 'Back up church data'}</button>
       {msg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: msg.ok ? 'var(--sage)' : 'var(--clay)' }}>{msg.ok ? '✓ ' : '✗ '}{msg.text}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>Last backup: {last ? new Date(last * 1000).toLocaleDateString() : 'never'}</div>

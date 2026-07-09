@@ -13,12 +13,39 @@
 // and reads the church's own published events back (so the dashboard shows real data, and members'
 // app can read the same church profile + funds).
 import { SimplePool } from 'nostr-tools/pool';
-import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
+import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import qrcode from 'qrcode-generator';
+
+// ---- backup encryption: seal an export to the CHURCH KEY, so only the church private key can open it ----
+// Hybrid ECIES: a throwaway ephemeral key does an ECDH (via NIP-44's key agreement) with the church PUBLIC
+// key, yielding a one-time 256-bit secret used to AES-256-GCM the whole archive. The ephemeral PUBLIC key
+// rides in the envelope; the church-key holder re-derives the same secret (ECDH is symmetric) to decrypt.
+// No passphrase, no PIN — a leaked/seized/cloud-stored file is opaque to anyone without the church's private
+// key (which the owner already safeguards via the 12-word recovery phrase). See exportChurchData / _openBackup.
+// (base64 helpers _b64 / _b64ToU8 are defined below and used at call time.)
+async function _sealToChurch(plaintext, churchPubHex) {
+  if (!(globalThis.crypto && globalThis.crypto.subtle)) throw new Error('This browser can’t encrypt — turn encryption off to export, or use the app.');
+  const esk = generateSecretKey();                                  // throwaway ephemeral key — never stored
+  const epk = getPublicKey(esk);
+  const convKey = nip44ck(esk, churchPubHex);                       // ECDH(ephemeral, church) -> 32-byte shared secret
+  const key = await crypto.subtle.importKey('raw', convKey, 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext)));
+  return JSON.stringify({ trinityone_backup: 'encrypted-v1', alg: 'nip44-ecdh-secp256k1+aes-256-gcm', epk, iv: _b64(iv), ct: _b64(ct) });
+}
+async function _openBackup(envelope) {                               // church-key holder decrypts (restore + round-trip check)
+  if (!sk) throw new Error('No church key on this device');
+  const e = (typeof envelope === 'string') ? JSON.parse(envelope) : envelope;
+  if (!e || e.trinityone_backup !== 'encrypted-v1') throw new Error('Not an encrypted TrinityOne backup');
+  const convKey = nip44ck(sk, e.epk);                                // ECDH is symmetric: (church, ephemeral) == (ephemeral, church)
+  const key = await crypto.subtle.importKey('raw', convKey, 'AES-GCM', false, ['decrypt']);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct));
+  return new TextDecoder().decode(pt);
+}
 
 const NET = 'trinityone';
 const KEY_LS = 'trinityone.steward.church-key';     // localStorage seed (pilot)
@@ -416,17 +443,24 @@ window.Steward = {
   exportMnemonic() { return currentMnemonic || lsGet(KEY_LS); },
   // Backup (Phase 1): pull the church's COMPLETE corpus from its relay as a self-verifying JSONL archive. A
   // fresh NIP-98 proof signed by the church key authorises the pull; the relay streams every event it holds for
-  // this church. Restore = importAll() the events back into a relay. Returns { text, count, filename } or throws.
-  async exportChurchData() {
+  // this church. Restore = importAll() the events back into a relay. Returns { text, count, filename, encrypted }.
+  // encrypt (default true): seal the archive to the church key so the file is safe to keep/store anywhere — see
+  // _sealToChurch. The steward can turn it OFF for a plain-readable JSONL (it's their data). Throws on failure.
+  async exportChurchData({ encrypt = true } = {}) {
     if (!sk || !pub) throw new Error('No church key on this device');
     const url = _blobBase() + '/export';
     const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'GET'], ['church', pub]], content: '' }, sk);
     const r = await fetch(url, { headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) } });
     if (!r.ok) throw new Error('Backup failed — the relay returned ' + r.status);
-    const text = await r.text();
-    const count = Math.max(0, text.split('\n').filter(Boolean).length - 1);   // events (minus the manifest line)
-    return { text, count, filename: 'trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.jsonl' };
+    const plaintext = await r.text();
+    const count = Math.max(0, plaintext.split('\n').filter(Boolean).length - 1);   // events (minus the manifest line)
+    const date = new Date().toISOString().slice(0, 10);
+    if (encrypt) return { text: await _sealToChurch(plaintext, pub), count, filename: 'trinityone-backup-' + date + '.tone-backup.json', encrypted: true };
+    return { text: plaintext, count, filename: 'trinityone-backup-' + date + '.jsonl', encrypted: false };
   },
+  // decrypt an encrypted backup envelope with THIS device's church key — the restore/verify counterpart of the
+  // encrypt-on-export above. Returns the original JSONL text. (Restore-into-relay UI is a later phase.)
+  async decryptBackup(envelope) { return _openBackup(envelope); },
   // restore/import a church key from its 12-word recovery phrase (replaces the current key on this device)
   restoreKey(mnemonic) {
     const m = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');

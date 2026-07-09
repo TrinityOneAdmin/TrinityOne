@@ -9555,6 +9555,25 @@ zoo`.split("\n");
 
   // src/steward.src.js
   var import_qrcode_generator = __toESM(require_qrcode());
+  async function _sealToChurch(plaintext, churchPubHex) {
+    if (!(globalThis.crypto && globalThis.crypto.subtle)) throw new Error("This browser can\u2019t encrypt \u2014 turn encryption off to export, or use the app.");
+    const esk = generateSecretKey2();
+    const epk = getPublicKey2(esk);
+    const convKey = getConversationKey(esk, churchPubHex);
+    const key = await crypto.subtle.importKey("raw", convKey, "AES-GCM", false, ["encrypt"]);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext)));
+    return JSON.stringify({ trinityone_backup: "encrypted-v1", alg: "nip44-ecdh-secp256k1+aes-256-gcm", epk, iv: _b64(iv), ct: _b64(ct) });
+  }
+  async function _openBackup(envelope) {
+    if (!sk) throw new Error("No church key on this device");
+    const e = typeof envelope === "string" ? JSON.parse(envelope) : envelope;
+    if (!e || e.trinityone_backup !== "encrypted-v1") throw new Error("Not an encrypted TrinityOne backup");
+    const convKey = getConversationKey(sk, e.epk);
+    const key = await crypto.subtle.importKey("raw", convKey, "AES-GCM", false, ["decrypt"]);
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct));
+    return new TextDecoder().decode(pt);
+  }
   var NET = "trinityone";
   var KEY_LS = "trinityone.steward.church-key";
   var FUND_D = "trinityone/fund:";
@@ -10029,16 +10048,25 @@ zoo`.split("\n");
     },
     // Backup (Phase 1): pull the church's COMPLETE corpus from its relay as a self-verifying JSONL archive. A
     // fresh NIP-98 proof signed by the church key authorises the pull; the relay streams every event it holds for
-    // this church. Restore = importAll() the events back into a relay. Returns { text, count, filename } or throws.
-    async exportChurchData() {
+    // this church. Restore = importAll() the events back into a relay. Returns { text, count, filename, encrypted }.
+    // encrypt (default true): seal the archive to the church key so the file is safe to keep/store anywhere — see
+    // _sealToChurch. The steward can turn it OFF for a plain-readable JSONL (it's their data). Throws on failure.
+    async exportChurchData({ encrypt: encrypt4 = true } = {}) {
       if (!sk || !pub) throw new Error("No church key on this device");
       const url = _blobBase() + "/export";
       const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "GET"], ["church", pub]], content: "" }, sk);
       const r = await fetch(url, { headers: { Authorization: "Nostr " + btoa(JSON.stringify(auth)) } });
       if (!r.ok) throw new Error("Backup failed \u2014 the relay returned " + r.status);
-      const text = await r.text();
-      const count = Math.max(0, text.split("\n").filter(Boolean).length - 1);
-      return { text, count, filename: "trinityone-backup-" + (/* @__PURE__ */ new Date()).toISOString().slice(0, 10) + ".jsonl" };
+      const plaintext = await r.text();
+      const count = Math.max(0, plaintext.split("\n").filter(Boolean).length - 1);
+      const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+      if (encrypt4) return { text: await _sealToChurch(plaintext, pub), count, filename: "trinityone-backup-" + date + ".tone-backup.json", encrypted: true };
+      return { text: plaintext, count, filename: "trinityone-backup-" + date + ".jsonl", encrypted: false };
+    },
+    // decrypt an encrypted backup envelope with THIS device's church key — the restore/verify counterpart of the
+    // encrypt-on-export above. Returns the original JSONL text. (Restore-into-relay UI is a later phase.)
+    async decryptBackup(envelope) {
+      return _openBackup(envelope);
     },
     // restore/import a church key from its 12-word recovery phrase (replaces the current key on this device)
     restoreKey(mnemonic) {
