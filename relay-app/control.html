@@ -110,6 +110,11 @@
       <div class="muted" style="margin:4px 0 9px; font-size:13px">Pull the latest member + steward APK from the build source, so the website's “Download the APK” buttons serve the current build.</div>
       <button class="btn-clay" id="fetchApk">Fetch latest APK</button>
     </div>
+    <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)">
+      <div class="row"><span class="k">Relay sync</span><span class="v" id="syncMsg" style="font-weight:600">—</span></div>
+      <div class="muted" style="margin:4px 0 9px; font-size:13px">Pull the latest from this church's other relays now. They also sync on their own every few minutes — this is just to catch up immediately (e.g. after bringing a node back online).</div>
+      <button class="btn-clay" id="syncNow">Sync now</button>
+    </div>
   </div>
 
   <div class="card" id="subsCard" style="display:none">

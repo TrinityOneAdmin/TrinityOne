@@ -195,6 +195,15 @@
       m.textContent = '✓ ' + ok.join(', ') + (bad.length ? ' · ✗ ' + bad.join('; ') : '');
     } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
   });
+  document.getElementById('syncNow')?.addEventListener('click', async () => {
+    const m = document.getElementById('syncMsg'); m.style.color = 'var(--ink-3)'; m.textContent = 'syncing…';
+    try {
+      const r = await fetch('/sync-now', { method: 'POST', headers: authHeaders() });
+      const s = await r.json();
+      if (!r.ok || !s.ok) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + (s.error || 'failed'); return; }
+      m.style.color = 'var(--sage)'; m.textContent = s.imported ? '✓ pulled ' + s.imported + ' new' : '✓ already up to date';
+    } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
+  });
   // on load, show the latest available APK version in the fetch area (so you can see which build is current)
   fetch('/apk-latest.json?t=' + Date.now()).then(r => r.json()).then(m => { const el = document.getElementById('apkMsg'); if (el && m && m.versionName) el.textContent = 'latest: ' + m.versionName + ' (' + m.versionCode + ')'; }).catch(() => {});
   document.getElementById('dlSubs')?.addEventListener('click', () => {
