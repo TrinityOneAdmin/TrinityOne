@@ -1848,6 +1848,16 @@ function DashRelaysCard() {
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
   const [draft, setDraft] = React.useState('');
   const [err, setErr] = React.useState('');
+  const [syncBusy, setSyncBusy] = React.useState(false);
+  const [syncMsg, setSyncMsg] = React.useState(null);
+  const [syncable, setSyncable] = React.useState(null);   // how many of the church's relays are TrinityOne relays (can sync)
+  React.useEffect(() => { let ok = true; (async () => { try { const ids = await window.Steward.relayIdentities(); if (ok) setSyncable(ids.filter((r) => r.pubkey).length); } catch {} })(); return () => { ok = false; }; }, []);
+  const doSync = async (on) => {
+    setSyncBusy(true); setSyncMsg(null);
+    try { const r = on ? await window.Steward.syncEnable() : await window.Steward.syncDisable(); setSyncMsg({ ok: true, text: on ? '✓ Sync on — your ' + r.relays + ' relays will keep each other in step.' : 'Sync turned off.' }); }
+    catch (e) { setSyncMsg({ ok: false, text: e.message || 'Couldn’t update sync.' }); }
+    setSyncBusy(false);
+  };
   const addRelay = () => {
     const r = window.Steward.addRelay && window.Steward.addRelay(draft);
     if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); return; }
@@ -1924,6 +1934,18 @@ function DashRelaysCard() {
               {regMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: regMsg[0] === '✓' ? 'var(--sage)' : regMsg[0] === '✗' ? 'var(--clay)' : 'var(--ink-3)' }}>{regMsg}</div> : null}
             </div>
           )}
+        </div>
+        {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Keep your relays in sync</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {syncable != null ? (syncable >= 2 ? <b>{syncable} of your relays can sync.</b> : 'Add a second relay your church runs to switch this on — public relays (nos.lol etc.) stay publish-only, so gated content never leaves your own infrastructure.') : 'Checking…'}</div>
+          {syncable != null && syncable >= 2 ? (
+            <div style={{ display: 'flex', gap: 9 }}>
+              <button onClick={() => doSync(true)} disabled={syncBusy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13 }}>{syncBusy ? 'Saving…' : 'Turn on sync'}</button>
+              <button onClick={() => doSync(false)} disabled={syncBusy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>Turn off</button>
+            </div>
+          ) : null}
+          {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage)' : 'var(--clay)' }}>{syncMsg.text}</div> : null}
         </div>
         <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
           <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church hosts its own relay — every message, group, and member lives on infrastructure you control. Members reach it wherever you serve the app.</div>

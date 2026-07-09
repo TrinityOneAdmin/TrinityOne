@@ -11100,6 +11100,40 @@ zoo`.split("\n");
     async decryptBackup(envelope) {
       return _openBackup(envelope);
     },
+    // resync: which of the church's relays are TrinityOne relays (expose a relayPub via /status) and thus can be
+    // kept in sync. Generic public relays (nos.lol etc.) have no relayPub — they're publish-only, never trusted
+    // with the gated corpus. Returns [{ url, base, pubkey, name, online }] for the UI + syncEnable().
+    async relayIdentities() {
+      const out = [];
+      for (const u of relays()) {
+        let base = String(u).replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
+        base = base.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+        let s = null;
+        try {
+          s = await (await fetch(base + "/status", { cache: "no-store" })).json();
+        } catch {
+        }
+        out.push({ url: u, base, pubkey: s && s.relayPub || "", name: "", online: !!s });
+      }
+      return out;
+    },
+    // resync: publish the church's TRUSTED-RELAYS doc (kind-30078 d=trinityone/relays) — the relays authorised to
+    // exchange the FULL corpus with each other. Only TrinityOne relays go in (a trusted relay re-enforces the gate);
+    // the church key signs it, so the same authority that gatekeeps writes decides who syncs. Returns { relays }.
+    async syncEnable() {
+      if (!sk || !pub) throw new Error("No church key on this device");
+      const ids = await window.Steward.relayIdentities();
+      const trusted = ids.filter((r) => r.pubkey).map((r) => ({ pubkey: r.pubkey, url: r.base }));
+      if (trusted.length < 2) throw new Error("Sync needs at least two TrinityOne relays \u2014 add another the church runs.");
+      await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }, sk));
+      return { relays: trusted.length };
+    },
+    // resync: turn cross-relay sync OFF — publish an empty trusted-relays list (relays stop exchanging the corpus).
+    async syncDisable() {
+      if (!sk || !pub) throw new Error("No church key on this device");
+      await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }, sk));
+      return { relays: 0 };
+    },
     // RESTORE / CLONE: read a backup file (encrypted envelope, plaintext zip, or plaintext jsonl), decrypt with the
     // church key if sealed, then import into a relay — THIS one (default) or `relayUrl` (clone onto another relay).
     // Events go to POST /import (which registers the church on a fresh relay); media blobs re-upload via PUT /blob.
