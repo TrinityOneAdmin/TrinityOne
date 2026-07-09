@@ -169,7 +169,7 @@ function WizShell({ step, title, sub, children, footer }) {
     <div style={{ position: 'absolute', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 42%, transparent)', backdropFilter: 'blur(4px)', animation: 'lumenFade .18s ease both' }}>
       <div className="no-scrollbar" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ padding: '26px 28px 0' }}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4, 5].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '-.4px' }}>{title}</div>
           {sub ? <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 0' }}>{sub}</div> : null}
           <div style={{ marginTop: 18 }}>{children}</div>
@@ -195,6 +195,9 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   ];
   const [picks, setPicks] = React.useState(() => new Set(['whole', 'prayer']));
   const toggle = (id) => setPicks(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  // step 4 — regular meetings (the church's rhythm) → recurring calendar events, pre-filled with sensible defaults
+  const [meetings, setMeetings] = React.useState([{ title: 'Sunday Service', day: 0, time: '10:00', recur: 'weekly' }, { title: 'Midweek', day: 3, time: '19:30', recur: 'weekly' }]);
+  const saveMeetings = async () => { const valid = meetings.filter(m => m.title.trim()); if (valid.length) { setBusy(true); for (const m of valid) await Promise.resolve(window.Steward.publishMeeting({ title: m.title.trim(), day: m.day, time: m.time, recur: m.recur })); setBusy(false); } next(); };
   // step 1 — key backup + optional relay registration
   const [saved, setSaved] = React.useState(false);
   const [keyCopied, setKeyCopied] = React.useState(false);
@@ -329,6 +332,32 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       <div style={lbl}>FIRST TEAM (OPTIONAL)</div>
       <input value={teamName} onChange={e => setTeamName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveTeam(); }} placeholder="e.g. Welcome Team" style={fld} />
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.5 }}>You’ll add who’s on the team and build the schedule from the Rota tab.</div>
+    </WizShell>
+  );
+
+  if (step === 4) return (
+    <WizShell step={step} title="Your regular meetings" sub="Set your weekly rhythm — Sunday service, midweek, and so on. These fill the calendar automatically, so members always see what’s on. Edit any time from the Calendar."
+      footer={<React.Fragment>
+        <button onClick={() => setStep(3)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        <div style={{ flex: 1 }} />
+        <button onClick={saveMeetings} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{meetings.some(m => m.title.trim()) ? `Add ${meetings.filter(m => m.title.trim()).length} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="#fff" /></button>
+      </React.Fragment>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {meetings.map((m, i) => (
+          <div key={i} style={{ padding: '12px 13px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input value={m.title} onChange={e => setMeetings(a => a.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))} placeholder="Meeting name" style={{ ...fld, height: 40, fontSize: 14, flex: 1 }} />
+              <button onClick={() => setMeetings(a => a.filter((_, j) => j !== i))} title="Remove this meeting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={15} color="currentColor" /></button>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select value={m.day} onChange={e => setMeetings(a => a.map((x, j) => (j === i ? { ...x, day: +e.target.value } : x)))} style={{ ...fld, height: 40, fontSize: 13.5, flex: 1, padding: '0 8px', fontWeight: 600 }}>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, di) => <option key={di} value={di}>{d}</option>)}</select>
+              <input type="time" value={m.time} onChange={e => setMeetings(a => a.map((x, j) => (j === i ? { ...x, time: e.target.value } : x)))} style={{ ...fld, height: 40, fontSize: 13.5, flex: 1, padding: '0 8px' }} />
+              <select value={m.recur} onChange={e => setMeetings(a => a.map((x, j) => (j === i ? { ...x, recur: e.target.value } : x)))} style={{ ...fld, height: 40, fontSize: 13.5, flex: 1.2, padding: '0 8px', fontWeight: 600 }}><option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option></select>
+            </div>
+          </div>
+        ))}
+        <button onClick={() => setMeetings(a => [...a, { title: '', day: 0, time: '10:00', recur: 'weekly' }])} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13.5, justifyContent: 'center' }}><Icon name="plus" size={15} color="currentColor" /> Add another meeting</button>
+      </div>
     </WizShell>
   );
 

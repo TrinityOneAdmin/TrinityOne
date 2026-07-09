@@ -1524,7 +1524,7 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now());
     const groupId = ev.groupId || '';
-    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId });
+    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null) });
     const tags = [['d', EVENT_D + id], ['t', NET]];
     if (groupId) tags.push(['t', groupId]);   // lets a group's chat filter to its own events
     if (actingChurch) tags.push(['p', actingChurch]);   // delegated steward: p-tag the church so members' group view shows it
@@ -1535,7 +1535,10 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
-  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent }), onEvents); },
+  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day }), onEvents); },
+  // publish a recurring meeting (the church's rhythm): a normal event with recur + day-of-week, expanded into
+  // occurrences client-side by expandEvents(). `m` = { id?, title, day (0-6), time, where?, recur, from? (anchor) }.
+  publishMeeting(m) { return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || '', date: m.from || new Date().toISOString().slice(0, 10), recur: m.recur || 'weekly', day: m.day, accent: m.accent || 'var(--clay)' }); },
   // a single group's upcoming events (for the group chat window) — the church's own + its stewards' (church-tagged)
   subscribeGroupEvents(groupId, onEvents) {
     const byId = new Map();

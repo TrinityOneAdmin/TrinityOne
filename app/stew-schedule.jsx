@@ -698,7 +698,9 @@ function SchEventModal({ day, onClose }) {
 function DashCalendar() {
   const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;   // stack on phones
   const services = window.useStewardServices();
-  const events = window.useStewardEvents();
+  const rawEvents = window.useStewardEvents();
+  // expand recurring meetings (the church's rhythm) into concrete dated occurrences so they populate the calendar
+  const events = window.expandEvents ? window.expandEvents(rawEvents, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 120) : rawEvents;
   const rotas = window.useStewardRotas();
   const rosters = window.useStewardRosters();
   const teams = window.useStewardGroups().filter(g => g.kind === 'team');

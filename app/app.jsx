@@ -1116,7 +1116,7 @@ function App() {
     openChurchDevo: (d) => setOpenDevo(d),
     // serving & events (church's own + aggregated from its network)
     servPending, servConfirmed, servDeclined, servNext, myRosterTeams,
-    churchEvents: (() => { const seen = new Set(churchEvents.map(e => e.id).filter(Boolean)); return [...churchEvents, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; })(),
+    churchEvents: (() => { const seen = new Set(churchEvents.map(e => e.id).filter(Boolean)); const all = [...churchEvents, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
     myRsvps,
     netAnnouncements, netUnread, markNetSeen, notifications,
     churchRotas, churchRosters, churchServices, churchRunsheets, churchGroups,
