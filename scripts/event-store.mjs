@@ -117,6 +117,10 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // gate access. Restore is just importAll() of these events back into a store.
   const qExportChurch = db.prepare('SELECT raw FROM events WHERE church = ? ORDER BY created_at ASC');
   function exportChurch(cp) { const out = []; for (const r of qExportChurch.all(cp)) { try { out.push(JSON.parse(r.raw)); } catch {} } return out; }
+  // relay resync: a church's events at/after `since` (created_at), oldest-first. Queries the church COLUMN directly
+  // (like exportChurch) — NOT via a #church filter, which matchFilter would wrongly narrow to tag-carrying events.
+  const qExportChurchSince = db.prepare('SELECT raw FROM events WHERE church = ? AND created_at >= ? ORDER BY created_at ASC');
+  function exportChurchSince(cp, since) { const out = []; for (const r of qExportChurchSince.all(cp, since || 0)) { try { out.push(JSON.parse(r.raw)); } catch {} } return out; }
 
   // retention (per-church fairness): every structured (replaceable/addressable) doc is kept forever; each
   // church — including the '' shared bucket for unattributed DMs/reactions — keeps only its newest
@@ -150,5 +154,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
-  return { db, put, query, count, authorOf, del, exportChurch, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, count, authorOf, del, exportChurch, exportChurchSince, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }

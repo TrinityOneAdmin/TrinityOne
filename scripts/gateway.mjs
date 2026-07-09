@@ -11,7 +11,7 @@ import { extname, normalize, join, sep } from 'path';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { openStore, matchFilter } from './event-store.mjs';   // durable event storage (node:sqlite) + the canonical read predicate
-import { verifyEvent } from 'nostr-tools/pure';
+import { verifyEvent, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
 import { randomBytes, timingSafeEqual, createHash } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
@@ -127,6 +127,23 @@ function _exportAuth(req, host, path) {
   const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || (CHURCH_PUBS.has(ev.pubkey) ? ev.pubkey : '');
   return cp && (ev.pubkey === cp || stewardOf(ev.pubkey, cp)) ? cp : null;   // the church key, or a steward of that church
 }
+// resync gate: a fresh NIP-98 proof bound to /sync, signed by a relay the church TRUSTS (its pubkey is in the
+// church-signed trusted-relays doc) — or by the church key / a steward. Only they receive the FULL corpus (incl.
+// safeguarding-gated cleartext), because a trusted relay re-enforces canRead() when it serves members. Returns cp.
+function _syncAuth(req, host, path) {
+  const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
+  let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
+  if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
+  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) return null;
+  const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
+  try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
+  const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || '';
+  if (!cp) return null;
+  const trusted = TRUSTED_RELAYS.get(cp);
+  if (trusted && trusted.has(ev.pubkey)) return cp;              // a relay the church authorised -> full corpus
+  if (ev.pubkey === cp || stewardOf(ev.pubkey, cp)) return cp;   // the church key / a steward
+  return null;
+}
 
 // ---- signed self-update bundle ----------------------------------------------------------------
 // Security: the self-update downloads /relay-app/bundle.tgz and applies it. To stop a compromised
@@ -187,6 +204,7 @@ const ROSTER_D = 'trinityone/roster:', SERVICE_D = 'trinityone/service:', EVENT_
 const FIN_JOURNAL_D = 'finance/journal:';   // church-book double-entry journal entry — d=finance/journal:<seq>, ["church",<cp>], single-writer & append-only
 const ROOM_D = 'trinityone/room:', BOOKING_D = 'trinityone/booking:';   // shared room calendar (church-only writes)
 const RUNSHEET_D = 'trinityone/runsheet:';   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
+const RELAYS_D = 'trinityone/relays';   // the church's trusted-relays list (resync): d=trinityone/relays, church-signed, content=[{pubkey,url}]
 const NETWORK_D = 'trinityone/network:';   // the church declares it belongs to a network (the network's pubkey)
 const BLOCKED_D = 'trinityone/blocked:';   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
 const PIN_D = 'trinityone/pin:';           // a group's pinned message — d=pin:<groupId> (one per group)
@@ -232,6 +250,15 @@ const ADMIN_FILE = join(ROOT, 'relay', 'admin.json');
 let ADMIN_TOKEN = '';
 try { ADMIN_TOKEN = JSON.parse(readFileSync(ADMIN_FILE, 'utf8')).token || ''; } catch {}
 if (!ADMIN_TOKEN) { ADMIN_TOKEN = randomBytes(24).toString('base64url'); try { writeFileSync(ADMIN_FILE, JSON.stringify({ token: ADMIN_TOKEN }), { mode: 0o600 }); } catch {} }
+// Relay identity (for resync): this relay's own Nostr keypair. It proves WHICH relay is asking when it pulls a
+// peer for a church's full corpus — a church authorises specific relay pubkeys as its trusted infrastructure
+// (see TRUSTED_RELAYS), the same church key that gatekeeps writes. Generated once, stored 0600 (gitignored).
+const RELAY_KEY_FILE = join(ROOT, 'relay', 'relay-key.json');
+let RELAY_SK = null, RELAY_PUB = '';
+try { const k = JSON.parse(readFileSync(RELAY_KEY_FILE, 'utf8')); if (k && k.sk && k.pub) { RELAY_SK = Uint8Array.from(Buffer.from(k.sk, 'hex')); RELAY_PUB = k.pub; } } catch {}
+if (!RELAY_SK || !RELAY_PUB) { RELAY_SK = generateSecretKey(); RELAY_PUB = getPublicKey(RELAY_SK); try { writeFileSync(RELAY_KEY_FILE, JSON.stringify({ sk: Buffer.from(RELAY_SK).toString('hex'), pub: RELAY_PUB }), { mode: 0o600 }); } catch {} }
+// a relay-signed NIP-98 (kind-27235) proof bound to url+method+church — how this relay authenticates to a peer's /sync.
+function relayProof(url, method, cp) { return 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', method], ['church', cp]], content: '' }, RELAY_SK))).toString('base64'); }
 function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
 // Always require the admin token. Do NOT trust loopback: the relay runs behind the Tailscale Funnel /
 // cloudflared, which proxy from 127.0.0.1, so a public request is indistinguishable from a local one.
@@ -239,6 +266,11 @@ function adminOK(req) { const t = reqToken(req); if (!t || !ADMIN_TOKEN) return 
 const STARTED_AT = Date.now();
 const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined, minus blocked, minus unapproved (when a church gates joining). Rebuilt by rebuildMembers().
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
+const TRUSTED_RELAYS = new Map(); // churchpub -> Set(relay pubkeys the church authorised as trusted infra — may pull the FULL corpus)
+const PEER_URLS = new Map();      // churchpub -> Set(relay URLs to sync this church WITH, from the same church-signed doc)
+const SYNC_CURSOR_FILE = join(ROOT, 'relay', 'sync-cursors.json');   // { "<cp>@<peerUrl>": lastCreatedAt } — resumable, idempotent
+let SYNC_CURSORS = {}; try { SYNC_CURSORS = JSON.parse(readFileSync(SYNC_CURSOR_FILE, 'utf8')) || {}; } catch {}
+const SYNC_OVERLAP = 600;   // re-pull a 10-min window before the cursor each time, so an event that arrived out-of-order isn't missed
 const GROUP_CHURCH = new Map();  // groupId -> owning church/network pubkey — per-church retention attribution for chat
 const MEMBER_CHURCH = new Map(); // member pubkey -> a church they belong to — attributes their DMs/reactions to a church
 const REQUIRE_APPROVAL = new Set(); // churchpubs whose joins need steward approval (default: open join)
@@ -429,6 +461,11 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(NETWORK_D) && CHURCH_PUBS.has(e.pubkey)) {   // a church joined/left a network
     const np = d.slice(NETWORK_D.length); if (removed) NETWORKS.delete(np); else NETWORKS.add(np);
+  }
+  else if (d === RELAYS_D && CHURCH_PUBS.has(e.pubkey)) {   // the church's trusted-relays list (resync peers + full-corpus authorisation)
+    const cp = e.pubkey; const pubs = new Set(), urls = new Set();
+    if (!removed) { let list = []; try { list = JSON.parse(e.content); } catch {} for (const r of (Array.isArray(list) ? list : [])) { if (r && r.pubkey) pubs.add(String(r.pubkey)); if (r && r.url) urls.add(String(r.url)); } }
+    TRUSTED_RELAYS.set(cp, pubs); PEER_URLS.set(cp, urls);
   }
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, namedChurch(e)))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
@@ -927,6 +964,7 @@ function serveStatic(req, res) {
     res.end(JSON.stringify({
       ok: true, port: PORT, uptimeMs: Date.now() - STARTED_AT,
       version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN,   // for the dashboard's update check
+      relayPub: RELAY_PUB,   // this relay's identity pubkey — a church authorises it as a trusted sync peer
       writePolicy: CHURCH_PUBS.size > 0,
       // church npubs/names are intentionally NOT exposed here (unauthenticated) — the dashboard reads
       // the list from the token-gated /config; /status carries only non-sensitive counts.
@@ -957,6 +995,27 @@ function serveStatic(req, res) {
     try { for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; if (_blobOwner(f) !== cp) continue; let size = 0; try { size = statSync(join(BLOB_DIR, f)).size; } catch { continue; } blobs.push({ sha: f, size }); } } catch {}
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.end(JSON.stringify({ church: cp, blobs, totalBytes: blobs.reduce((a, b) => a + b.size, 0) }));
+    return;
+  }
+  // relay resync (pull side): stream this church's events at/after ?since to a TRUSTED peer relay (or the church
+  // key / steward). Because a trusted relay re-enforces the read-gate for its own members, serving the FULL corpus
+  // — including safeguarding-gated cleartext — is safe. The peer imports + advances its cursor. See syncAllChurches().
+  if (route === '/sync' && req.method === 'GET') {
+    const cp = _syncAuth(req, req.headers['host'] || '', '/sync');
+    const q = new URL(req.url, 'http://x').searchParams;
+    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    const since = parseInt(q.get('since') || '0', 10) || 0;
+    const events = store.exportChurchSince(cp, since);
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    for (const e of events) res.write(JSON.stringify(e) + '\n');
+    res.end();
+    return;
+  }
+  // "Force sync now" from the control dashboard (admin-token gated): pull every church's trusted peers immediately.
+  if (route === '/sync-now' && req.method === 'POST') {
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    runSync().then((n) => { res.writeHead(200, H); res.end(JSON.stringify({ ok: true, imported: n })); }).catch(() => { res.writeHead(500, H); res.end('{"error":"sync failed"}'); });
     return;
   }
   // RESTORE / CLONE (the import engine): take a church's backup (decrypted JSONL of signed events, streamed by the
@@ -1529,6 +1588,48 @@ hydrateMaps();
 // now that group→church / member→church maps are built, attribute any events stored without a church
 // (migrated chat, or pre-map writes) so per-church retention buckets them correctly
 if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) console.log(`[relay] attributed ${r} events to a church (per-church retention)`); }
+
+// ── relay resync (pull-since-cursor): converge each church with the trusted peer relays it authorised ──────────
+// Pull a peer's /sync for a church since our cursor, verify + store new events (dedup by ID for free), apply kind-5
+// deletions (or a deleted message resurrects), advance the cursor. Idempotent + resumable; overlap window catches
+// out-of-order arrivals. Because IDs are content hashes, arrival order is irrelevant — the set converges.
+async function syncChurchFromPeer(cp, peerBase) {
+  const key = cp + '@' + peerBase;
+  const since = Math.max(0, (SYNC_CURSORS[key] || 0) - SYNC_OVERLAP);
+  const url = peerBase + '/sync?church=' + encodeURIComponent(cp) + '&since=' + since;
+  let body;
+  try { const r = await fetch(url, { headers: { Authorization: relayProof(url, 'GET', cp) } }); if (!r.ok) return { ok: false, status: r.status }; body = await readCapped(r, MAX_IMPORT); }
+  catch { return { ok: false }; }
+  let maxTs = SYNC_CURSORS[key] || 0, imported = 0;
+  for (const line of body.split('\n')) {
+    const s = line.trim(); if (!s) continue;
+    let e; try { e = JSON.parse(s); } catch { continue; }
+    if (!e || !e.id || !e.sig || !verifyEvent(e)) continue;   // integrity: never store an unverifiable event
+    const put = store.put(e, cp);
+    if (put === 'stored') { imported++; note(e); if (e.kind === 5) for (const t of e.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === e.pubkey) store.del(t[1]); } }   // apply deletions, as the live path does
+    if ((e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
+  }
+  SYNC_CURSORS[key] = maxTs; try { writeFileSync(SYNC_CURSOR_FILE, JSON.stringify(SYNC_CURSORS)); } catch {}
+  return { ok: true, imported };
+}
+async function syncAllChurches() {
+  if (!CHURCH_PUBS.size) return 0;
+  let self = ''; try { self = ORIGIN ? new URL(ORIGIN).host : ''; } catch {}
+  let total = 0;
+  for (const cp of CHURCH_PUBS) {
+    const peers = PEER_URLS.get(cp); if (!peers || !peers.size) continue;
+    for (const peer of peers) {
+      const base = String(peer).replace(/^ws/i, 'http').replace(/\/+$/, '');
+      try { if (self && new URL(base).host === self) continue; } catch { continue; }   // never sync from self
+      try { const r = await syncChurchFromPeer(cp, base); if (r.ok && r.imported) { total += r.imported; console.log(`[sync] +${r.imported} from ${base} for church ${cp.slice(0, 8)}`); } } catch {}
+    }
+  }
+  return total;
+}
+let _syncing = false;
+async function runSync() { if (_syncing) return 0; _syncing = true; try { return await syncAllChurches(); } finally { _syncing = false; } }
+function scheduleSync() { const ms = (300 + Math.floor(Math.random() * 120)) * 1000; setTimeout(() => { runSync().finally(scheduleSync); }, ms); }   // ~5–7 min, jittered
+if (process.env.RELAY_SYNC !== '0') setTimeout(() => { runSync().finally(scheduleSync); }, 20000);   // first pass ~20s after boot (let it settle)
 function scheduleSave() {}   // no-op: SQLite persists synchronously (WAL); kept so existing call sites are harmless
 // matchFilter is imported from event-store.mjs (single source of truth, also used by the SQL read path)
 const matchAny = (evt, filters) => filters.some(f => matchFilter(evt, f));
