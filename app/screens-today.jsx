@@ -272,6 +272,9 @@ function TodayScreen({ ctx }) {
   // U6: the pinned-sermon card can be dismissed (per sermon id, persisted) and stops saying "New" once it ages,
   // so it doesn't hold the prime Today slot forever. A newly-pinned sermon (different id) reappears.
   const [sermonSeen, setSermonSeen] = React.useState(() => { try { return localStorage.getItem('trinityone.sermon-seen') || ''; } catch { return ''; } });
+  // Verse of the day can be minimised to a compact bar (preference persists); tap the bar to reopen it.
+  const [votdMin, setVotdMin] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-min') === '1'; } catch { return false; } });
+  const toggleVotd = () => setVotdMin(v => { const nv = !v; try { localStorage.setItem('trinityone.votd-min', nv ? '1' : '0'); } catch {} return nv; });
 
   // real date + time-of-day greeting
   const now = new Date();
@@ -425,7 +428,14 @@ function TodayScreen({ ctx }) {
         </div>
       )}
 
-      {/* Verse of the day — hero (below the care + serving cards) */}
+      {/* Verse of the day — minimisable hero (below the care + serving cards) */}
+      {votdMin ? (
+        <div onClick={toggleVotd} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
+          <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Verse of the day · {votd.ref}</div>
+          <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+        </div>
+      ) : (
       <div onClick={() => ctx.openShareSheet(votd)} style={{
         position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
         background: 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
@@ -438,8 +448,11 @@ function TodayScreen({ ctx }) {
           <Icon name="sun" size={180} stroke={1.2} color="#fff" />
         </div>
         <div style={{ position: 'relative' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .92 }}>
-            <Icon name="sparkle" size={15} stroke={2} /> Verse of the day
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 7 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .92 }}>
+              <Icon name="sparkle" size={15} stroke={2} /> Verse of the day
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); toggleVotd(); }} aria-label="Minimise" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevU" size={16} color="#fff" /></button>
           </div>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
             “{votd.text}”
@@ -457,6 +470,7 @@ function TodayScreen({ ctx }) {
           </div>
         </div>
       </div>
+      )}
 
       {/* Practical care / meal trains now lives in its own tab inside Serving & events (not on Today) */}
 
