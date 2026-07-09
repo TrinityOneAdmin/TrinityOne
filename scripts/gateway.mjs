@@ -69,6 +69,7 @@ const UPDATE_FLAG = join(ROOT, 'relay', '.update-request');   // the relay can o
 const BLOB_DIR = join(ROOT, 'relay', 'blobs');
 try { mkdirSync(BLOB_DIR, { recursive: true }); } catch {}
 const MAX_BLOB = parseInt(process.env.RELAY_MAX_BLOB, 10) || 200 * 1024 * 1024;   // 200 MB/blob cap (sermons: audio small, video low-bitrate)
+const MAX_IMPORT = parseInt(process.env.RELAY_MAX_IMPORT, 10) || 256 * 1024 * 1024;   // restore/clone: cap the events JSONL body (blobs come separately via PUT /blob)
 const _blobRe = /^[0-9a-f]{64}$/;
 function _blobOwner(sha) { try { return readFileSync(join(BLOB_DIR, sha + '.church'), 'utf8').trim(); } catch { return ''; } }
 // Operator storage controls (public/shared relays): a relay operator can DISABLE media hosting entirely, or
@@ -412,6 +413,11 @@ function resolveChurch(e) {
   const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
   return MEMBER_CHURCH.get(e.pubkey) || '';
 }
+// (re)build all in-memory church/member/group/care maps from the stored kind-30078 structure docs, oldest-first.
+// Run at startup and after a restore/clone import so the imported church's membership + groups take effect at once.
+function hydrateMaps() { if (!CHURCH_PUBS.size) return; for (const e of store.query({ kinds: [30078], limit: 1000000 }).sort((a, b) => (a.created_at || 0) - (b.created_at || 0))) note(e); }
+// persist the current church allow-list to church.json (so a clone-registered church survives a relay restart).
+function persistChurches() { try { const churches = [...CHURCH_PUBS].map(h => ({ npub: npubEncode(h), name: CHURCH_NAMES.get(h) || '' })); const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE); } catch {} }
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (!CHURCH_PUBS.size || e.kind !== 30078) return;
   const d = dtag(e), removed = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
@@ -953,6 +959,36 @@ function serveStatic(req, res) {
     res.end(JSON.stringify({ church: cp, blobs, totalBytes: blobs.reduce((a, b) => a + b.size, 0) }));
     return;
   }
+  // RESTORE / CLONE (the import engine): take a church's backup (decrypted JSONL of signed events, streamed by the
+  // client) and import it — bootstrapping a fresh relay or repopulating one after loss. NIP-98-authed to the church
+  // key (which may also REGISTER a not-yet-known church here — same trust as self-registration) or a steward of an
+  // already-known church. Every event is signature-verified before it's stored, so a compromised file can't inject
+  // forgeries; the church key vouches for attributing them to cp. Media blobs restore separately via PUT /blob.
+  if (route === '/import' && req.method === 'POST') {
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+    const cp = _exportAuth(req, req.headers['host'] || '', route);
+    if (!cp) { res.writeHead(401, H); res.end('{"error":"unauthorized: a fresh NIP-98 proof by the church key (or a steward) bound to /import"}'); return; }
+    const chunks = []; let n = 0, tooBig = false;
+    req.on('data', (c) => { n += c.length; if (n > MAX_IMPORT) { tooBig = true; req.destroy(); return; } chunks.push(c); });
+    req.on('end', () => {
+      if (tooBig) { res.writeHead(413, H); res.end('{"error":"import too large"}'); return; }
+      const fresh = !CHURCH_PUBS.has(cp);
+      if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
+      let imported = 0, duplicates = 0, invalid = 0;
+      for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {
+        const s = line.trim(); if (!s) continue;
+        let e; try { e = JSON.parse(s); } catch { invalid++; continue; }
+        if (e && e._manifest) continue;                              // the archive's manifest header line
+        if (!e || !e.id || !e.sig || !verifyEvent(e)) { invalid++; continue; }   // integrity: only signature-valid events
+        const r = store.put(e, cp);                                  // attribute to the authed church
+        if (r === 'stored') imported++; else duplicates++;
+      }
+      hydrateMaps();   // rebuild membership/groups/care from the imported structure docs so the church is live at once
+      store.cull();
+      res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, invalid }));
+    });
+    return;
+  }
   // NIP-11 relay information document (FEDERATION-PLAN Phase 1a). Served only to clients that ASK for
   // it (Accept: application/nostr+json) on the relay path, so normal browser GETs are unaffected. The
   // `trinityone` block is the capability signal a federating client checks BEFORE routing any gated
@@ -1489,7 +1525,7 @@ if (store.count() === 0 && existsSync(DB)) {
 store.cull();
 let _putsSinceCull = 0;   // E6: cull runs every 256 stored events (or startup), not on every single one
 // rebuild member/broadcast/care state from the structured (kind-30078) docs, oldest-first as before
-if (CHURCH_PUBS.size) for (const e of store.query({ kinds: [30078], limit: 1000000 }).sort((a, b) => (a.created_at || 0) - (b.created_at || 0))) note(e);
+hydrateMaps();
 // now that group→church / member→church maps are built, attribute any events stored without a church
 // (migrated chat, or pre-map writes) so per-church retention buckets them correctly
 if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) console.log(`[relay] attributed ${r} events to a church (per-church retention)`); }
