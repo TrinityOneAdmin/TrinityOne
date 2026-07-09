@@ -1,0 +1,2 @@
+// welcome.4.js — extracted from welcome.html for strict CSP (no inline).
+(function(){if(!/Android/i.test(navigator.userAgent))return;document.querySelectorAll("[data-steward-cta]").forEach(function(a){a.href="./trinityone-steward.apk";a.setAttribute("download","");if(/start a church/i.test(a.textContent))a.textContent="Get the Steward app (Android)";});})();
