@@ -1028,23 +1028,29 @@ function serveStatic(req, res) {
     const cp = _exportAuth(req, req.headers['host'] || '', route);
     if (!cp) { res.writeHead(401, H); res.end('{"error":"unauthorized: a fresh NIP-98 proof by the church key (or a steward) bound to /import"}'); return; }
     const chunks = []; let n = 0, tooBig = false;
-    req.on('data', (c) => { n += c.length; if (n > MAX_IMPORT) { tooBig = true; req.destroy(); return; } chunks.push(c); });
+    req.on('data', (c) => { if (tooBig) return; n += c.length; if (n > MAX_IMPORT) { tooBig = true; try { res.writeHead(413, H); res.end('{"error":"import too large"}'); } catch {} req.destroy(); return; } chunks.push(c); });   // respond BEFORE destroy — destroy skips 'end', so a deferred 413 would hang the request (→ 502)
     req.on('end', () => {
-      if (tooBig) { res.writeHead(413, H); res.end('{"error":"import too large"}'); return; }
-      const fresh = !CHURCH_PUBS.has(cp);
-      if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
-      let imported = 0, duplicates = 0, invalid = 0;
-      for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {
-        const s = line.trim(); if (!s) continue;
-        let e; try { e = JSON.parse(s); } catch { invalid++; continue; }
-        if (e && e._manifest) continue;                              // the archive's manifest header line
-        if (!e || !e.id || !e.sig || !verifyEvent(e)) { invalid++; continue; }   // integrity: only signature-valid events
-        const r = store.put(e, cp);                                  // attribute to the authed church
-        if (r === 'stored') imported++; else duplicates++;
-      }
-      hydrateMaps();   // rebuild membership/groups/care from the imported structure docs so the church is live at once
-      store.cull();
-      res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, invalid }));
+      try {
+        if (tooBig) return;   // 413 already sent in the data handler
+        const fresh = !CHURCH_PUBS.has(cp);
+        if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
+        let imported = 0, duplicates = 0, invalid = 0;
+        for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {
+          const s = line.trim(); if (!s) continue;
+          let e; try { e = JSON.parse(s); } catch { invalid++; continue; }
+          if (e && e._manifest) continue;                            // the archive's manifest header line
+          let ok = false; try { ok = !!(e && e.id && e.sig && verifyEvent(e)); } catch { ok = false; }   // verifyEvent can THROW on malformed input — one bad line must never kill the whole import (→ hang → 502)
+          if (!ok) { invalid++; continue; }
+          try {
+            const r = store.put(e, cp);                              // attribute to the authed church
+            if (r === 'stored') { imported++; if (e.kind === 5) for (const t of e.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === e.pubkey) store.del(t[1]); } }   // apply deletions so a deleted message doesn't resurrect on restore
+            else duplicates++;
+          } catch { invalid++; }
+        }
+        // respond BEFORE the heavy re-scan so a slow hydrate can't time the request out at the proxy (→ 502)
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, invalid }));
+        setImmediate(() => { try { hydrateMaps(); } catch {} try { store.cull(); } catch {} });   // membership/groups/care live once this settles
+      } catch (err) { try { res.writeHead(500, H); res.end(JSON.stringify({ error: 'import failed: ' + ((err && err.message) || 'error') })); } catch {} }
     });
     return;
   }
