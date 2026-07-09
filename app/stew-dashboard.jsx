@@ -3234,7 +3234,7 @@ function DashBecomeStewardPanel() {
       {reqMsg ? <div style={{ fontSize: 12.5, color: reqMsg.startsWith('✓') ? 'var(--sage)' : 'var(--clay)', fontWeight: 600, marginTop: 9, lineHeight: 1.45 }}>{reqMsg}</div> : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '16px 0 12px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>or give the owner your code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
       <div style={{ padding: '12px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Your steward name</div>
+        <div title="A memorable name generated from your key — the same key always makes this exact name. The owner compares it when adding you, so it's a quick human cross-check that they've got the right person. It isn't a display name; your npub is the real identifier." style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', cursor: 'help' }}>Your steward name</div>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, color: 'var(--ink)' }}>{(window.Steward.stewardName && window.Steward.stewardName(npub)) || '—'}</div>
       </div>
       <SkKey value={npub || '—'} label="your steward code" />
