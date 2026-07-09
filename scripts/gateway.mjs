@@ -142,9 +142,16 @@ function ensureSignedBundle() {
     mkdirSync(BUNDLE_CACHE_DIR, { recursive: true });
     const tmp = tgz + '.tmp.' + process.pid;
     // git archive -> deterministic-enough single artifact we then freeze on disk and never regenerate for this sha.
-    const ar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', 'HEAD'], { maxBuffer: 512 * 1024 * 1024 });
-    if (ar.status !== 0 || !ar.stdout || !ar.stdout.length) return null;
-    writeFileSync(tmp, ar.stdout);
+    if (process.env.STRICT_WEB_BUNDLE) {
+      // D1: build a PRE-TRANSPILED (Babel-free) web bundle here on the release host — a8 has no esbuild to do
+      // it at pull time. The script writes the .tgz straight to tmp. Falls through to a null return on failure.
+      const bs = spawnSync('bash', [join(ROOT, 'scripts', 'build-strict-tgz.sh'), tmp], { maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'ignore', 'inherit'] });
+      if (bs.status !== 0 || !existsSync(tmp)) return null;
+    } else {
+      const ar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', 'HEAD'], { maxBuffer: 512 * 1024 * 1024 });
+      if (ar.status !== 0 || !ar.stdout || !ar.stdout.length) return null;
+      writeFileSync(tmp, ar.stdout);
+    }
     // detached Ed25519 signature over the EXACT cached bytes.
     const sigTmp = sig + '.tmp.' + process.pid;
     const sg = spawnSync('openssl', ['pkeyutl', '-sign', '-inkey', RELEASE_KEY, '-rawin', '-in', tmp, '-out', sigTmp]);
@@ -809,9 +816,13 @@ async function getAudioFeed(url) {
 // `STRICT_CSP=1` in the systemd unit's Environment= today AFTER they've run `bash scripts/sync-web.sh`
 // to populate www/ — but the default repo serve at `/` still loads .jsx files via Babel.
 const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN' };
+// D1: auto-detect a pre-transpiled build. When the served tree carries no Babel runtime, nothing needs eval,
+// so serve the strict CSP automatically — no per-operator STRICT_CSP env needed (a strict bundle self-declares
+// by the absence of vendor/babel.min.js). STRICT_CSP=1 still forces strict for a manually-prepared www/.
+const _strictWeb = !!process.env.STRICT_CSP || !existsSync(join(ROOT, 'vendor', 'babel.min.js'));
 const CSP = [
   "default-src 'self'",
-  process.env.STRICT_CSP ? "script-src 'self' 'wasm-unsafe-eval'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  _strictWeb ? "script-src 'self' 'wasm-unsafe-eval'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
   // SECURITY-AUDIT-2026-06-24 M11 followup: dropped the Google Fonts allowlist now that all marketing
   // HTML loads vendor/fonts/fonts.css locally. style-src 'unsafe-inline' stays for the marketing pages'
   // <style> blocks; font-src self covers the local woff2s.
