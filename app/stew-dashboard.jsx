@@ -32,7 +32,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   if (!networks.length && !stewarded.length) {
     return (
       <button onClick={onEditName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: 18, textAlign: 'left' }}>
-        <SkBadge initials={initials} picture={church.picture} size={34} radius={10} />
+        <SkBadge initials={initials} picture={church.picture} size={34} radius={999} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{churchName}</span>{church.name ? <Icon name="check" size={12} stroke={3} color="var(--sage)" /> : null}</div>
           <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: churchHandle(church) ? 'var(--font-ui)' : 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchHandle(church) || (church.npub ? church.npub.slice(0, 18) + '…' : 'no key')}</div>
@@ -44,7 +44,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   return (
     <div style={{ position: 'relative', marginBottom: 18 }}>
       <button onClick={() => setOpen(o => !o)} title="Switch between your church, networks, and churches you steward" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, width: '100%', border: '1px solid ' + (offChurch ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)'), background: offChurch ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer', textAlign: 'left' }}>
-        <SkBadge initials={initials} picture={offChurch ? '' : church.picture} size={34} radius={10} accent={offChurch ? 'var(--clay)' : undefined} />
+        <SkBadge initials={initials} picture={offChurch ? '' : church.picture} size={34} radius={999} accent={offChurch ? 'var(--clay)' : undefined} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchName}</span>
@@ -497,7 +497,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'rota'
         ? <button onClick={() => setAddingTeam(true)} title="Create a new serving team" className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {narrow ? '' : 'New team'}</button>
         : <button onClick={() => setPosting(true)} title="Write a new post for your church" className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> {narrow ? '' : 'New post'}</button>}
-      <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={11} accent="var(--sage)" /></button>
+      <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={999} accent="var(--sage)" /></button>
     </React.Fragment>
   );
 
@@ -3780,7 +3780,7 @@ function DashBrandingPanel({ church }) {
       <div style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', background: church.banner ? `center/cover no-repeat url(${church.banner})` : `linear-gradient(135deg, ${acc}, color-mix(in oklab, ${acc} 60%, #000))`, WebkitMaskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none', maskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none' }}>
         <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
         <div style={{ position: 'absolute', left: 12, bottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <SkBadge initials={initials} picture={church.picture} accent={acc} size={36} radius={11} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
+          <SkBadge initials={initials} picture={church.picture} accent={acc} size={36} radius={999} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: '#fff', textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{church.name || 'Your church'}</div>
         </div>
       </div>
@@ -4071,7 +4071,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
     <div style={{ paddingBottom: 24 }}>
       {backupOpen ? <StewBackupModal church={church} onClose={() => setBackupOpen(false)} /> : null}
       {editingName ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={saveName} onClose={() => setEditingName(false)} /> : null}
-      {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} radiusPct={0.29} title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
+      {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} round title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
@@ -4084,7 +4084,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
           <label title="Upload a church picture" style={{ position: 'relative', cursor: picBusy ? 'default' : 'pointer', flexShrink: 0, opacity: picBusy ? .6 : 1 }}>
-            <SkBadge initials={(church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase()} picture={church.picture} size={44} radius={13} />
+            <SkBadge initials={(church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase()} picture={church.picture} size={44} radius={999} />
             <span style={{ position: 'absolute', right: -4, bottom: -4, width: 20, height: 20, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--surface)' }}><Icon name={picBusy ? 'refresh' : 'pen'} size={10} color="#fff" /></span>
             <input type="file" accept="image/*" disabled={picBusy} onChange={onPickPicture} style={{ display: 'none' }} />
           </label>

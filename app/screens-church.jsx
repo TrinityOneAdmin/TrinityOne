@@ -70,7 +70,7 @@ function ChurchBadge({ church, size = 46, radius = 14 }) {
   const pic = safeImgUrl(church.picture);
   return (
     <div style={{
-      width: size, height: size, borderRadius: radius, flexShrink: 0, overflow: 'hidden',
+      width: size, height: size, borderRadius: 999, flexShrink: 0, overflow: 'hidden',   /* church DP is round */
       background: pic ? `center/cover no-repeat url("${pic}")` : `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 62%, #16120c))`,
       display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
       fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: size * 0.38, letterSpacing: '.3px',
