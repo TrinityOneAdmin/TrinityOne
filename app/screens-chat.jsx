@@ -898,6 +898,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [replyTo, setReplyTo] = useC(null);      // the message being replied to (or null)
   const [prayerOn, setPrayerOn] = useC(false);   // flag this message as a prayer request (always available)
   const [pollOpen, setPollOpen] = useC(false);   // compact poll composer open?
+  const [actionsOpen, setActionsOpen] = useC(false);   // the composer "+" popover (prayer / poll / new event)
   const [pollQ, setPollQ] = useC('');
   const [pollOpts, setPollOpts] = useC(['', '']);
   const [reactions, setReactions] = useC({});    // targetId -> { reactorPubkey: {content, ts} }
@@ -1027,7 +1028,6 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
               <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members ? `${group.members} anonymous` : 'Anonymous'} · Nostr</div>
           </div>
-          {isLeader ? <button onClick={() => setComposeEvt(true)} title="Create an event for this group" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 38, padding: '0 12px', borderRadius: 12, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, flexShrink: 0 }}><Icon name="calPlus" size={16} color="#fff" /> Event</button> : null}
           <IconBtn name="shield" onClick={() => ctx.toast('Everyone here is anonymous')} />
         </div>
       </div>
@@ -1121,13 +1121,20 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           </div>
         ) : null}
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
-          <button onClick={() => setPollOpen(v => !v)} title="Create a poll" style={{ width: 44, height: 44, borderRadius: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: pollOpen ? '1px solid var(--clay)' : '1px solid var(--line)', background: pollOpen ? 'color-mix(in oklab, var(--clay) 14%, var(--surface))' : 'var(--surface-2)', color: 'var(--clay)' }}>
-            <Icon name="sliders" size={20} /></button>
-          <button onClick={() => setPrayerOn(v => !v)} title="Mark as a prayer request" style={{ width: 44, height: 44, borderRadius: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            border: prayerOn ? '1px solid var(--gold)' : '1px solid var(--line)',
-            background: prayerOn ? 'color-mix(in oklab, var(--gold) 18%, var(--surface))' : 'var(--surface-2)',
-            color: 'var(--gold)' }}>
-            <Icon name="pray" size={20} fill={prayerOn} /></button>
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            {actionsOpen ? <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} /> : null}
+            <button onClick={() => setActionsOpen(v => !v)} title="Add" aria-label="More options" style={{ width: 44, height: 44, borderRadius: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: (actionsOpen || prayerOn || pollOpen) ? '1px solid var(--clay)' : '1px solid var(--line)',
+              background: (actionsOpen || prayerOn || pollOpen) ? 'color-mix(in oklab, var(--clay) 14%, var(--surface))' : 'var(--surface-2)', color: 'var(--clay)' }}>
+              <Icon name="plus" size={22} color="var(--clay)" style={{ transition: 'transform .18s ease', transform: actionsOpen ? 'rotate(45deg)' : 'none' }} /></button>
+            {actionsOpen ? (
+              <div style={{ position: 'absolute', bottom: 52, left: 0, zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 6, minWidth: 190, display: 'flex', flexDirection: 'column', gap: 2, animation: 'trinityFade .16s ease both' }}>
+                <button onClick={() => { setPrayerOn(v => !v); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: prayerOn ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pray" size={18} color="var(--gold)" fill={prayerOn} /> Prayer request{prayerOn ? ' · on' : ''}</button>
+                <button onClick={() => { setPollOpen(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="sliders" size={18} color="var(--clay)" /> Poll</button>
+                {isLeader ? <button onClick={() => { setComposeEvt(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="calPlus" size={18} color="var(--clay)" /> New event</button> : null}
+              </div>
+            ) : null}
+          </div>
           <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={1}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); } }}
             placeholder={prayerOn ? 'Share a prayer request…' : 'Message…'} style={{
