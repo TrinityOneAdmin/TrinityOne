@@ -88,6 +88,7 @@ const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-confirme
 const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent NOTICE that they were linked to a child, d=guardnotice:<parentpub>, p-tagged + content NIP-44-encrypted to the parent (the child link never appears in cleartext)
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a self-hosted media item referencing a content-addressed blob (sha256 + host)
 const PINSERMON_D = 'trinityone/pinsermon:';   // the church's currently-featured sermon → member Today card + notification (one per church)
+const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (last-backup time + reminder cadence) → same nudge on every steward/device
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
@@ -775,6 +776,20 @@ window.Steward = {
     if (!pub) { onPinned(null); return () => {}; }
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [PINSERMON_D + pub] }], {
       onevent(e) { if ((e.tags.find(t => t[0] === 'deleted') || [])[1]) { onPinned(null); return; } try { onPinned({ ...JSON.parse(e.content), at: e.created_at }); } catch { onPinned(null); } },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // backup reminder, church-wide: record the last-backup time + reminder cadence in a church doc, so every steward
+  // and device shows the same 'last backed up' + overdue nudge — not just the device that happened to run it.
+  setBackupMeta(at, remind) {
+    if (!sk) return Promise.resolve(null);
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BACKUPMETA_D + pub], ['t', NET]], content: JSON.stringify({ at: at || now(), remind: remind || 'monthly' }) }));
+  },
+  subscribeBackupMeta(onMeta) {
+    if (!pub) { onMeta(null); return () => {}; }
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [BACKUPMETA_D + pub] }], {
+      onevent(e) { try { const c = JSON.parse(e.content); onMeta({ at: c.at || e.created_at, remind: c.remind || 'monthly' }); } catch { onMeta(null); } },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };

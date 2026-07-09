@@ -10599,6 +10599,7 @@ zoo`.split("\n");
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
   var PINSERMON_D = "trinityone/pinsermon:";
+  var BACKUPMETA_D = "trinityone/backup-meta:";
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
   async function _sha256hex(u83) {
@@ -11482,6 +11483,37 @@ zoo`.split("\n");
             onPinned({ ...JSON.parse(e.content), at: e.created_at });
           } catch {
             onPinned(null);
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // backup reminder, church-wide: record the last-backup time + reminder cadence in a church doc, so every steward
+    // and device shows the same 'last backed up' + overdue nudge — not just the device that happened to run it.
+    setBackupMeta(at, remind) {
+      if (!sk) return Promise.resolve(null);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BACKUPMETA_D + pub], ["t", NET]], content: JSON.stringify({ at: at || now(), remind: remind || "monthly" }) }));
+    },
+    subscribeBackupMeta(onMeta) {
+      if (!pub) {
+        onMeta(null);
+        return () => {
+        };
+      }
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [BACKUPMETA_D + pub] }], {
+        onevent(e) {
+          try {
+            const c = JSON.parse(e.content);
+            onMeta({ at: c.at || e.created_at, remind: c.remind || "monthly" });
+          } catch {
+            onMeta(null);
           }
         },
         oneose() {

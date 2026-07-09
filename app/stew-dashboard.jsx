@@ -3878,7 +3878,16 @@ function DashBackup() {
   const [msg, setMsg] = React.useState(null);   // { ok, text }
   const [last, setLast] = React.useState(() => { try { return Number(localStorage.getItem('trinityone.lastBackupAt') || 0); } catch { return 0; } });
   const [freq, setFreq] = React.useState(() => { try { return localStorage.getItem('trinityone.backupRemind') || 'monthly'; } catch { return 'monthly'; } });
-  const setFrequency = (f) => { setFreq(f); try { localStorage.setItem('trinityone.backupRemind', f); } catch {} };
+  const setFrequency = (f) => { setFreq(f); try { localStorage.setItem('trinityone.backupRemind', f); } catch {} try { window.Steward.setBackupMeta && window.Steward.setBackupMeta(last, f); } catch {} };
+  // church-wide backup state: same 'last backed up' + cadence on every steward/device, not just this one
+  React.useEffect(() => {
+    if (!window.Steward.subscribeBackupMeta) return;
+    return window.Steward.subscribeBackupMeta((m) => {
+      if (!m) return;
+      if (m.at) setLast((prev) => { const v = Math.max(prev || 0, m.at); try { localStorage.setItem('trinityone.lastBackupAt', String(v)); } catch {} return v; });
+      if (m.remind) { setFreq(m.remind); try { localStorage.setItem('trinityone.backupRemind', m.remind); } catch {} }
+    });
+  }, []);
   const [encrypt, setEncrypt] = React.useState(() => { try { return localStorage.getItem('trinityone.backupEncrypt') !== '0'; } catch { return true; } });
   const setEncryptPref = (v) => { setEncrypt(v); try { localStorage.setItem('trinityone.backupEncrypt', v ? '1' : '0'); } catch {} };
   const [includeMedia, setIncludeMedia] = React.useState(() => { try { return localStorage.getItem('trinityone.backupMedia') !== '0'; } catch { return true; } });
@@ -3931,6 +3940,7 @@ function DashBackup() {
         setTimeout(() => URL.revokeObjectURL(url), 3000);
       }
       const ts = Math.floor(Date.now() / 1000); setLast(ts); try { localStorage.setItem('trinityone.lastBackupAt', String(ts)); } catch {}
+      try { window.Steward.setBackupMeta && window.Steward.setBackupMeta(ts, freq); } catch {}   // record church-wide so every steward's nudge resets
       setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') });
     } catch (e) { setMsg({ ok: false, text: e.message || 'Backup failed' }); }
     setBusy(false);
