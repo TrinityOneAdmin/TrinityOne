@@ -26,7 +26,7 @@ for f in "$TMP"/app/*.jsx; do
 done
 
 # 3. rewrite the app shells: remove the Babel runtime <script>, point script tags at the transpiled .js
-for html in index.html steward.html; do
+for html in index.html steward.html landing-app-today.html; do
   [ -f "$TMP/$html" ] || continue
   sed -i \
     -e '/vendor\/babel\.min\.js/d' \

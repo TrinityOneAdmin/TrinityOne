@@ -62,25 +62,6 @@
 <script type="text/babel" src="app/identity-avatar.jsx"></script>
 <script type="text/babel" src="app/screens-today.jsx"></script>
 
-<script type="text/babel">
-  const D = window.LumenData;
-  // a friendly, signed-in identity so the hero reads as a real, lived-in screen
-  const ctx = {
-    identity: { name: 'Maria', avatar: { kind: 'monogram', color: '#C25A38' } },
-    dark: false,
-    toggleDark() {}, openProfile() {}, openShare() {}, openReader() {},
-    openListen() {}, openPlans() {}, openDevotional() {}, openSearch() {},
-    go() {}, toast() {},
-  };
-
-  ReactDOM.createRoot(document.getElementById('root')).render(
-    <div className="lumen" style={{ width: 392, height: 846 }}>
-      <PhoneFrame>
-        <div style={{ position: 'absolute', inset: 0 }}><TodayScreen ctx={ctx} /></div>
-        <TabBar active="today" onChange={() => {}} />
-      </PhoneFrame>
-    </div>
-  );
-</script>
+<script type="text/babel" src="app/landing-today.jsx"></script>
 </body>
 </html>
