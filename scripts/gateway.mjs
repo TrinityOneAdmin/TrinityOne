@@ -816,10 +816,12 @@ async function getAudioFeed(url) {
 // `STRICT_CSP=1` in the systemd unit's Environment= today AFTER they've run `bash scripts/sync-web.sh`
 // to populate www/ — but the default repo serve at `/` still loads .jsx files via Babel.
 const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN' };
-// D1: auto-detect a pre-transpiled build. When the served tree carries no Babel runtime, nothing needs eval,
-// so serve the strict CSP automatically — no per-operator STRICT_CSP env needed (a strict bundle self-declares
-// by the absence of vendor/babel.min.js). STRICT_CSP=1 still forces strict for a manually-prepared www/.
-const _strictWeb = !!process.env.STRICT_CSP || !existsSync(join(ROOT, 'vendor', 'babel.min.js'));
+// D1: auto-detect a pre-transpiled build so the strict, eval-free CSP turns on with no per-operator env. A
+// build is "strict" when its served index.html loads NO in-browser Babel. Read the shell for `text/babel`
+// rather than probing for vendor/babel.min.js — the relay update extracts OVER existing files without pruning,
+// so a stale babel.min.js can linger on disk after the switch and would wrongly force the lax CSP back on.
+let _strictWeb = !!process.env.STRICT_CSP;
+try { if (!_strictWeb) _strictWeb = !readFileSync(join(ROOT, 'index.html'), 'utf8').includes('type="text/babel"'); } catch {}
 const CSP = [
   "default-src 'self'",
   _strictWeb ? "script-src 'self' 'wasm-unsafe-eval'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
