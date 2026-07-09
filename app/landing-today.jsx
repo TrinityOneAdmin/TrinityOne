@@ -2,6 +2,11 @@
 // It renders the REAL Today screen (from app/screens-today) inside a phone frame, so the marketing preview
 // can't drift from the actual app. Loaded after react-dom + the app scripts, which set the globals it uses
 // (ReactDOM, PhoneFrame, TodayScreen, TabBar). The main strict build transpiles this app/*.jsx → .js.
+// this preview reuses the REAL Today screen, which reads a couple of prefs via lsGet/lsSet (defined in the full
+// app, which we don't load here). Provide lightweight globals so the standalone preview renders.
+window.lsGet = window.lsGet || function (key, fallback) { try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); } catch (e) { return fallback; } };
+window.lsSet = window.lsSet || function (key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} };
+
 const D = window.LumenData;
 // a friendly, signed-in identity so the hero reads as a real, lived-in screen
 const ctx = {
