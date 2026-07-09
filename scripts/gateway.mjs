@@ -1045,6 +1045,42 @@ function serveStatic(req, res) {
     res.end(data);
     return;
   }
+  // negentropy resync (digest): per-bucket fingerprints of the church's event set, so a trusted peer can see which
+  // buckets differ without pulling anything (finds old gaps a forward cursor misses). Same trust gate as /sync.
+  if (route === '/sync-digest' && req.method === 'GET') {
+    const cp = _syncAuth(req, req.headers['host'] || '', '/sync-digest');
+    const q = new URL(req.url, 'http://x').searchParams;
+    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    res.end(JSON.stringify({ church: cp, buckets: _bucketDigest(cp) }));
+    return;
+  }
+  // negentropy resync (ids): the church's event IDs in ONE bucket — fetched only for buckets whose fingerprint differs.
+  if (route === '/sync-ids' && req.method === 'GET') {
+    const cp = _syncAuth(req, req.headers['host'] || '', '/sync-ids');
+    const q = new URL(req.url, 'http://x').searchParams;
+    const bucket = (q.get('bucket') || '').toLowerCase();
+    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{2}$/.test(bucket)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    res.end(JSON.stringify({ church: cp, bucket, ids: store.churchEventIds(cp).filter((id) => id.slice(0, 2) === bucket) }));
+    return;
+  }
+  // negentropy resync (events): the raw events for the IDs a peer found it's missing (POSTed id list, bounded).
+  if (route === '/sync-events' && req.method === 'POST') {
+    const cp = _syncAuth(req, req.headers['host'] || '', '/sync-events');
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    const chunks = []; let n = 0, big = false;
+    req.on('data', (c) => { if (big) return; n += c.length; if (n > 4 * 1024 * 1024) { big = true; try { res.writeHead(413, { 'Cache-Control': 'no-store' }); res.end('too many ids'); } catch {} req.destroy(); return; } chunks.push(c); });
+    req.on('end', () => {
+      if (big) return;
+      let ids = []; try { const b = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (Array.isArray(b.ids)) ids = b.ids.filter((x) => /^[0-9a-f]{64}$/.test(x)).slice(0, 5000); } catch {}
+      const events = store.syncEventsByIds(cp, ids);
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+      for (const e of events) res.write(JSON.stringify(e) + '\n');
+      res.end();
+    });
+    return;
+  }
   // RESTORE / CLONE (the import engine): take a church's backup (decrypted JSONL of signed events, streamed by the
   // client) and import it — bootstrapping a fresh relay or repopulating one after loss. NIP-98-authed to the church
   // key (which may also REGISTER a not-yet-known church here — same trust as self-registration) or a steward of an
@@ -1645,6 +1681,40 @@ async function syncChurchFromPeer(cp, peerBase) {
   SYNC_CURSORS[key] = maxTs; try { writeFileSync(SYNC_CURSOR_FILE, JSON.stringify(SYNC_CURSORS)); } catch {}
   return { ok: true, imported };
 }
+// negentropy set reconciliation: partition a church's event IDs into buckets by ID prefix (256 buckets) and
+// fingerprint each — sha256 of the sorted IDs (first 16 bytes) + count. Two relays compare digests; only buckets
+// whose fingerprints DIFFER need their ID lists exchanged, so we find EVERY difference (including old gaps a
+// forward-only cursor never backfills) while transferring almost nothing when already in sync. sha256-of-the-
+// exact-set (not an XOR/sum) can't silently collide. Deterministic — both sides bucket identically.
+function _bucketDigest(cp) {
+  const buckets = {};
+  for (const id of store.churchEventIds(cp)) { if (!/^[0-9a-f]{64}$/.test(id)) continue; const b = id.slice(0, 2); (buckets[b] || (buckets[b] = [])).push(id); }
+  const out = {};
+  for (const b in buckets) { const ids = buckets[b].sort(); out[b] = { fp: createHash('sha256').update(ids.join('')).digest('hex').slice(0, 32), n: ids.length }; }
+  return out;
+}
+// negentropy pull: compare our digest with a peer's; for each differing bucket, fetch the peer's IDs, diff against
+// ours, and pull only the events we're missing. Runs ALONGSIDE the v1 cursor pull (kept as a correctness backstop).
+async function reconcileChurchWithPeer(cp, peerBase) {
+  const digUrl = peerBase + '/sync-digest?church=' + encodeURIComponent(cp);
+  let peerBuckets; try { const r = await fetch(digUrl, { headers: { Authorization: relayProof(digUrl, 'GET', cp) } }); if (!r.ok) return 0; peerBuckets = (await r.json()).buckets || {}; } catch { return 0; }
+  const mine = _bucketDigest(cp), missing = [];
+  for (const b in peerBuckets) {
+    if (mine[b] && mine[b].fp === peerBuckets[b].fp) continue;   // bucket identical on both sides -> nothing to do
+    const idsUrl = peerBase + '/sync-ids?church=' + encodeURIComponent(cp) + '&bucket=' + b;
+    let peerIds; try { const r = await fetch(idsUrl, { headers: { Authorization: relayProof(idsUrl, 'GET', cp) } }); if (!r.ok) continue; peerIds = (await r.json()).ids || []; } catch { continue; }
+    const have = new Set(store.churchEventIds(cp).filter((id) => id.slice(0, 2) === b));
+    for (const id of peerIds) if (/^[0-9a-f]{64}$/.test(id) && !have.has(id)) missing.push(id);
+  }
+  if (!missing.length) return 0;
+  let imported = 0;
+  for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
+    const evUrl = peerBase + '/sync-events';
+    let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); if (e.kind === 5) for (const t of e.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === e.pubkey) store.del(t[1]); } } }
+  }
+  return imported;
+}
 // resync media: pull blobs this church holds on a peer that we don't have yet. Content-addressed, so it's
 // self-verifying (the sha must match) and idempotent. Runs AFTER the event sync, skipped if this relay hosts no
 // media, and respects the relay's media caps. A distinct, paced pass — media is the heavy part of a sync.
@@ -1681,6 +1751,7 @@ async function syncAllChurches() {
       const base = String(peer).replace(/^ws/i, 'http').replace(/\/+$/, '');
       try { if (self && new URL(base).host === self) continue; } catch { continue; }   // never sync from self
       try { const r = await syncChurchFromPeer(cp, base); if (r.ok && r.imported) { total += r.imported; console.log(`[sync] +${r.imported} from ${base} for church ${cp.slice(0, 8)}`); } } catch {}
+      try { const g = await reconcileChurchWithPeer(cp, base); if (g) { total += g; console.log(`[sync] +${g} via reconcile from ${base} for church ${cp.slice(0, 8)}`); } } catch {}   // negentropy: backfill any old gaps the cursor missed
       try { const m = await syncMediaFromPeer(cp, base); if (m) console.log(`[sync] +${m} media from ${base} for church ${cp.slice(0, 8)}`); } catch {}   // paced media pass
     }
   }

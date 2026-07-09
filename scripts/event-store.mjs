@@ -121,6 +121,12 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // (like exportChurch) — NOT via a #church filter, which matchFilter would wrongly narrow to tag-carrying events.
   const qExportChurchSince = db.prepare('SELECT raw FROM events WHERE church = ? AND created_at >= ? ORDER BY created_at ASC');
   function exportChurchSince(cp, since) { const out = []; for (const r of qExportChurchSince.all(cp, since || 0)) { try { out.push(JSON.parse(r.raw)); } catch {} } return out; }
+  // negentropy resync: just the event IDs a church holds (for bucketed set-difference), and the raw events for a
+  // given ID list (to pull only the true difference). Cheap ID-only scan; the events fetch is bounded by the caller.
+  const qChurchIds = db.prepare('SELECT id FROM events WHERE church = ?');
+  function churchEventIds(cp) { return qChurchIds.all(cp).map((r) => r.id); }
+  const qEventByIdCh = db.prepare('SELECT raw FROM events WHERE church = ? AND id = ?');
+  function syncEventsByIds(cp, ids) { const out = []; if (!Array.isArray(ids)) return out; for (const id of ids) { const r = qEventByIdCh.get(cp, id); if (r) { try { out.push(JSON.parse(r.raw)); } catch {} } } return out; }
 
   // retention (per-church fairness): every structured (replaceable/addressable) doc is kept forever; each
   // church — including the '' shared bucket for unattributed DMs/reactions — keeps only its newest
@@ -154,5 +160,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
-  return { db, put, query, count, authorOf, del, exportChurch, exportChurchSince, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, count, authorOf, del, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }
