@@ -1018,6 +1018,29 @@ function serveStatic(req, res) {
     runSync().then((n) => { res.writeHead(200, H); res.end(JSON.stringify({ ok: true, imported: n })); }).catch(() => { res.writeHead(500, H); res.end('{"error":"sync failed"}'); });
     return;
   }
+  // resync media (manifest): the sha256 + size of every blob this relay holds for a church, to a TRUSTED peer
+  // relay — it compares against its own and pulls only what it's missing (below). Same trust gate as /sync.
+  if (route === '/sync-media' && req.method === 'GET') {
+    const cp = _syncAuth(req, req.headers['host'] || '', '/sync-media');
+    const q = new URL(req.url, 'http://x').searchParams;
+    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    const blobs = [];
+    try { for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; if (_blobOwner(f) !== cp) continue; let size = 0; try { size = statSync(join(BLOB_DIR, f)).size; } catch { continue; } blobs.push({ sha: f, size }); } } catch {}
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    res.end(JSON.stringify({ church: cp, blobs }));
+    return;
+  }
+  // resync media (bytes): stream one blob to a trusted peer relay — only if the blob belongs to the authed church.
+  if (route.startsWith('/sync-blob/') && req.method === 'GET') {
+    const sha = route.slice('/sync-blob/'.length).toLowerCase();
+    const cp = _syncAuth(req, req.headers['host'] || '', route);
+    const q = new URL(req.url, 'http://x').searchParams;
+    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{64}$/.test(sha) || _blobOwner(sha) !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    let data; try { data = readFileSync(join(BLOB_DIR, sha)); } catch { res.writeHead(404, { 'Cache-Control': 'no-store' }); res.end('not found'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': data.length, 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    res.end(data);
+    return;
+  }
   // RESTORE / CLONE (the import engine): take a church's backup (decrypted JSONL of signed events, streamed by the
   // client) and import it — bootstrapping a fresh relay or repopulating one after loss. NIP-98-authed to the church
   // key (which may also REGISTER a not-yet-known church here — same trust as self-registration) or a steward of an
@@ -1618,6 +1641,32 @@ async function syncChurchFromPeer(cp, peerBase) {
   SYNC_CURSORS[key] = maxTs; try { writeFileSync(SYNC_CURSOR_FILE, JSON.stringify(SYNC_CURSORS)); } catch {}
   return { ok: true, imported };
 }
+// resync media: pull blobs this church holds on a peer that we don't have yet. Content-addressed, so it's
+// self-verifying (the sha must match) and idempotent. Runs AFTER the event sync, skipped if this relay hosts no
+// media, and respects the relay's media caps. A distinct, paced pass — media is the heavy part of a sync.
+async function syncMediaFromPeer(cp, peerBase) {
+  if (MEDIA_OFF) return 0;
+  const manUrl = peerBase + '/sync-media?church=' + encodeURIComponent(cp);
+  let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) return 0; man = await r.json(); } catch { return 0; }
+  let pulled = 0;
+  for (const b of (man && man.blobs) || []) {
+    if (!b || !/^[0-9a-f]{64}$/.test(b.sha) || existsSync(join(BLOB_DIR, b.sha))) continue;   // already have it (or junk)
+    if (MEDIA_CAP && _mediaBytesTotal + (b.size || 0) > MEDIA_CAP) break;                       // this relay's media is full
+    if (CHURCH_MEDIA_CAP && (_mediaBytesByChurch.get(cp) || 0) + (b.size || 0) > CHURCH_MEDIA_CAP) break;
+    const blobUrl = peerBase + '/sync-blob/' + b.sha + '?church=' + encodeURIComponent(cp);
+    try {
+      const r = await fetch(blobUrl, { headers: { Authorization: relayProof(blobUrl, 'GET', cp) } });
+      if (!r.ok) continue;
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (createHash('sha256').update(buf).digest('hex') !== b.sha) continue;   // content-addressed integrity check
+      writeFileSync(join(BLOB_DIR, b.sha + '.church'), cp);                      // sidecar BEFORE the blob (S4: never servable with no owner)
+      writeFileSync(join(BLOB_DIR, b.sha), buf);
+      _mediaBytesTotal += buf.length; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + buf.length);
+      pulled++;
+    } catch {}
+  }
+  return pulled;
+}
 async function syncAllChurches() {
   if (!CHURCH_PUBS.size) return 0;
   let self = ''; try { self = ORIGIN ? new URL(ORIGIN).host : ''; } catch {}
@@ -1628,6 +1677,7 @@ async function syncAllChurches() {
       const base = String(peer).replace(/^ws/i, 'http').replace(/\/+$/, '');
       try { if (self && new URL(base).host === self) continue; } catch { continue; }   // never sync from self
       try { const r = await syncChurchFromPeer(cp, base); if (r.ok && r.imported) { total += r.imported; console.log(`[sync] +${r.imported} from ${base} for church ${cp.slice(0, 8)}`); } } catch {}
+      try { const m = await syncMediaFromPeer(cp, base); if (m) console.log(`[sync] +${m} media from ${base} for church ${cp.slice(0, 8)}`); } catch {}   // paced media pass
     }
   }
   return total;
