@@ -3674,7 +3674,7 @@ function WebAddressModal({ church, onClose }) {
 
 // Crop + placement for an uploaded image: drag to reposition, slider to zoom — saved at the target
 // size (banner 3:1, picture square). Replaces the silent centre-crop, so a steward controls the framing.
-function ImageCropModal({ file, outW, outH, round, title, onSave, onClose }) {
+function ImageCropModal({ file, outW, outH, round, radiusPct, title, onSave, onClose }) {
   const ref = React.useRef(null);
   const [img, setImg] = React.useState(null);
   const [zoom, setZoom] = React.useState(1);
@@ -3717,7 +3717,7 @@ function ImageCropModal({ file, outW, outH, round, title, onSave, onClose }) {
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Drag to reposition, slide to zoom. What’s inside the frame is exactly what members will see.</div>
       <div style={{ display: 'flex', justifyContent: 'center' }}>
         <canvas ref={ref} width={DW} height={DH} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp}
-          style={{ width: DW, height: DH, maxWidth: '100%', borderRadius: round ? '50%' : 14, border: '1px solid var(--line)', cursor: 'grab', touchAction: 'none', background: 'var(--surface-2)' }} />
+          style={{ width: DW, height: DH, maxWidth: '100%', borderRadius: round ? '50%' : (radiusPct != null ? Math.round(Math.min(DW, DH) * radiusPct) : 14), border: '1px solid var(--line)', cursor: 'grab', touchAction: 'none', background: 'var(--surface-2)' }} />
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, margin: '15px 2px 4px' }}>
         <Icon name="search" size={15} color="var(--ink-3)" />
@@ -4061,7 +4061,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
     <div style={{ paddingBottom: 24 }}>
       {backupOpen ? <StewBackupModal church={church} onClose={() => setBackupOpen(false)} /> : null}
       {editingName ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={saveName} onClose={() => setEditingName(false)} /> : null}
-      {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} round title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
+      {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} radiusPct={0.29} title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
