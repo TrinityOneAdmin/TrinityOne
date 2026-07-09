@@ -3864,6 +3864,27 @@ function DashBackup() {
   const [media, setMedia] = React.useState(null);   // { count, bytes } — for the include-media toggle + size guard
   React.useEffect(() => { let ok = true; (async () => { try { const m = await window.Steward.mediaSize(); if (ok) setMedia(m); } catch {} })(); return () => { ok = false; }; }, []);
   const fmtBytes = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB';
+  // restore / clone
+  const [restoreOpen, setRestoreOpen] = React.useState(false);
+  const [restoreFile, setRestoreFile] = React.useState(null);   // { name, bytes }
+  const [restoreTarget, setRestoreTarget] = React.useState('this');   // 'this' | 'other'
+  const [restoreUrl, setRestoreUrl] = React.useState('');
+  const [restoreBusy, setRestoreBusy] = React.useState(false);
+  const [restoreProg, setRestoreProg] = React.useState(null);   // { phase, done, total }
+  const [restoreMsg, setRestoreMsg] = React.useState(null);
+  const onPickRestore = (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return; setRestoreMsg(null); const rd = new FileReader(); rd.onload = () => setRestoreFile({ name: f.name, bytes: new Uint8Array(rd.result) }); rd.onerror = () => setRestoreMsg({ ok: false, text: 'Couldn’t read that file.' }); rd.readAsArrayBuffer(f); };
+  const doRestore = async () => {
+    if (!restoreFile) return;
+    setRestoreBusy(true); setRestoreMsg(null); setRestoreProg(null);
+    try {
+      const relayUrl = restoreTarget === 'other' ? restoreUrl.trim() : '';
+      if (restoreTarget === 'other' && !/^wss?:\/\/|^https?:\/\//i.test(relayUrl)) throw new Error('Enter the other relay’s web address (https://…).');
+      const r = await window.Steward.restoreChurchData(restoreFile.bytes, { relayUrl: relayUrl.replace(/^ws/i, 'http'), onProgress: (phase, done, total) => setRestoreProg({ phase, done, total }) });
+      setRestoreMsg({ ok: true, text: 'Restored ' + r.imported + ' records' + (r.duplicates ? ' (' + r.duplicates + ' already there)' : '') + (r.mediaTotal ? ' + ' + r.mediaRestored + '/' + r.mediaTotal + ' media' : '') + (r.registered ? ' — church set up on ' + (relayUrl ? 'that' : 'this') + ' relay.' : '.') + (r.invalid ? ' ' + r.invalid + ' entries were skipped (couldn’t verify).' : '') });
+      setRestoreFile(null);
+    } catch (e) { setRestoreMsg({ ok: false, text: e.message || 'Restore failed' }); }
+    setRestoreBusy(false); setRestoreProg(null);
+  };
   const windowDays = { weekly: 7, monthly: 30, off: Infinity };
   const overdue = freq !== 'off' && (Date.now() / 1000 - last) > windowDays[freq] * 86400;
   const doBackup = async () => {
@@ -3928,6 +3949,31 @@ function DashBackup() {
             <button key={k} onClick={() => setFrequency(k)} style={{ padding: '8px 15px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: freq === k ? 'var(--clay)' : 'transparent', color: freq === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
           ))}
         </div>
+      </div>
+      <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+        <div onClick={() => setRestoreOpen((o) => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>Restore or clone from a backup</div>
+          <span style={{ color: 'var(--ink-3)', fontSize: 12, fontWeight: 600 }}>{restoreOpen ? 'Hide' : 'Open'}</span>
+        </div>
+        {restoreOpen ? (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Load a backup file to rebuild this church’s data — into <b>this</b> relay (recover after a loss) or <b>another</b> relay (set up a spare, or move). Encrypted backups open with your church key automatically.</div>
+            <input id="restoreFileInput" type="file" accept=".json,.jsonl,.zip,.tone-backup,application/json,application/zip" onChange={onPickRestore} style={{ display: 'none' }} />
+            <button onClick={() => document.getElementById('restoreFileInput').click()} className="sk-btn" style={{ padding: '9px 14px', fontSize: 13 }}>{restoreFile ? '✓ ' + restoreFile.name : 'Choose backup file…'}</button>
+            {restoreFile ? (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ ...seg, marginBottom: 10 }}>
+                  {[['this', 'This relay'], ['other', 'Another relay']].map(([k, label]) => (
+                    <button key={k} onClick={() => setRestoreTarget(k)} style={{ padding: '7px 13px', borderRadius: 8, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, background: restoreTarget === k ? 'var(--clay)' : 'transparent', color: restoreTarget === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
+                  ))}
+                </div>
+                {restoreTarget === 'other' ? <input value={restoreUrl} onChange={(e) => setRestoreUrl(e.target.value)} placeholder="https://other-relay.example" spellCheck={false} autoCapitalize="none" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 13, marginBottom: 10 }} /> : null}
+                <button onClick={doRestore} disabled={restoreBusy} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 13.5 }}>{restoreBusy ? (restoreProg && restoreProg.phase === 'media' ? 'Restoring media ' + restoreProg.done + '/' + restoreProg.total + '…' : 'Importing records…') : 'Restore this backup'}</button>
+              </div>
+            ) : null}
+            {restoreMsg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: restoreMsg.ok ? 'var(--sage)' : 'var(--clay)' }}>{restoreMsg.ok ? '✓ ' : '✗ '}{restoreMsg.text}</div> : null}
+          </div>
+        ) : null}
       </div>
     </Panel>
   );

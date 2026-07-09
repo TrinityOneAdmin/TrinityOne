@@ -48,9 +48,19 @@ async function _openBackup(envelope) {                               // church-k
   const pt = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct)));
   return { bytes: pt, fmt: e.fmt || 'jsonl' };
 }
-// a fresh NIP-98 (kind-27235) GET proof signed by the church key, bound to `url` — authorises /export,
-// /export-media and per-blob pulls. (sk/pub are the module's active church identity.)
-function _nip98(url) { return 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'GET'], ['church', pub]], content: '' }, sk))); }
+// a fresh NIP-98 (kind-27235) proof signed by the church key, bound to `url` + method — authorises /export,
+// /export-media, per-blob pulls (GET) and /import (POST). (sk/pub are the module's active church identity.)
+function _nip98(url, method) { return 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', method || 'GET'], ['church', pub]], content: '' }, sk))); }
+// restore one media blob to `base` with a signed kind-24242 upload auth (the church key passes _blobUploader).
+// (_sha256hex is defined below and used at call time.)
+async function _putBlob(base, bytes) {
+  const sha = await _sha256hex(bytes);
+  const native = !!(typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]], content: 'upload' }, sk)));
+  const h = { Authorization: auth, 'Content-Type': 'application/octet-stream' };
+  let body = bytes; if (native) { h['X-Blob-B64'] = '1'; body = _b64(bytes); }   // CapacitorHttp mangles raw binary -> base64 transport
+  try { const r = await fetch(base + '/blob', { method: 'PUT', headers: h, body }); return r.ok; } catch { return false; }
+}
 
 const NET = 'trinityone';
 const KEY_LS = 'trinityone.steward.church-key';     // localStorage seed (pilot)
@@ -490,6 +500,37 @@ window.Steward = {
   // decrypt an encrypted backup envelope with THIS device's church key -> { bytes, fmt }. The restore/verify
   // counterpart of encrypt-on-export; fmt is 'jsonl' (events) or 'zip' (events + media). (Restore UI = Stage 3.)
   async decryptBackup(envelope) { return _openBackup(envelope); },
+  // RESTORE / CLONE: read a backup file (encrypted envelope, plaintext zip, or plaintext jsonl), decrypt with the
+  // church key if sealed, then import into a relay — THIS one (default) or `relayUrl` (clone onto another relay).
+  // Events go to POST /import (which registers the church on a fresh relay); media blobs re-upload via PUT /blob.
+  // Returns the relay's import tally + how many blobs restored. onProgress(phase, done, total) is optional.
+  async restoreChurchData(fileBytes, { relayUrl, onProgress } = {}) {
+    if (!sk || !pub) throw new Error('No church key on this device');
+    const base = relayUrl ? String(relayUrl).replace(/\/+$/, '') : _blobBase();
+    const u8 = fileBytes instanceof Uint8Array ? fileBytes : new Uint8Array(fileBytes);
+    let events = '', blobs = {};
+    let asText = null; try { asText = strFromU8(u8); } catch {}
+    let env = null; if (asText) { try { env = JSON.parse(asText); } catch {} }
+    if (env && env.trinityone_backup === 'encrypted-v1') {          // sealed to the church key -> decrypt
+      const opened = await _openBackup(env);
+      if (opened.fmt === 'zip') { const f = unzipSync(opened.bytes); events = strFromU8(f['events.jsonl'] || new Uint8Array()); for (const k in f) if (k.indexOf('blobs/') === 0) blobs[k.slice(6)] = f[k]; }
+      else events = strFromU8(opened.bytes);
+    } else if (u8[0] === 0x50 && u8[1] === 0x4b) {                   // 'PK' magic -> plaintext zip (events + media)
+      const f = unzipSync(u8); events = strFromU8(f['events.jsonl'] || new Uint8Array()); for (const k in f) if (k.indexOf('blobs/') === 0) blobs[k.slice(6)] = f[k];
+    } else { events = asText || ''; }                                // plaintext jsonl (events only)
+    if (!events.trim()) throw new Error('This file has no church data to restore.');
+    // 1. import the events (a fresh relay registers the church here)
+    if (onProgress) onProgress('events', 0, 1);
+    const ir = await fetch(base + '/import', { method: 'POST', headers: { Authorization: _nip98(base + '/import', 'POST'), 'Content-Type': 'application/x-ndjson' }, body: events });
+    if (!ir.ok) throw new Error('Restore failed — the relay returned ' + ir.status + (ir.status === 401 ? ' (are you the church owner, and does that relay allow this church?)' : ''));
+    const result = await ir.json();
+    if (onProgress) onProgress('events', 1, 1);
+    // 2. restore media blobs
+    const shas = Object.keys(blobs); let done = 0, ok = 0, failed = 0;
+    for (const sha of shas) { if (onProgress) onProgress('media', done, shas.length); if (await _putBlob(base, blobs[sha])) ok++; else failed++; done++; }
+    if (onProgress) onProgress('media', shas.length, shas.length);
+    return { ...result, mediaRestored: ok, mediaFailed: failed, mediaTotal: shas.length };
+  },
   // restore/import a church key from its 12-word recovery phrase (replaces the current key on this device)
   restoreKey(mnemonic) {
     const m = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');

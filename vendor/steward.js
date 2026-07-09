@@ -129,21 +129,21 @@
             }
           };
           var setupTypeNumber = function(test) {
-            var bits = QRUtil.getBCHTypeNumber(_typeNumber);
+            var bits2 = QRUtil.getBCHTypeNumber(_typeNumber);
             for (var i3 = 0; i3 < 18; i3 += 1) {
-              var mod2 = !test && (bits >> i3 & 1) == 1;
+              var mod2 = !test && (bits2 >> i3 & 1) == 1;
               _modules[Math.floor(i3 / 3)][i3 % 3 + _moduleCount - 8 - 3] = mod2;
             }
             for (var i3 = 0; i3 < 18; i3 += 1) {
-              var mod2 = !test && (bits >> i3 & 1) == 1;
+              var mod2 = !test && (bits2 >> i3 & 1) == 1;
               _modules[i3 % 3 + _moduleCount - 8 - 3][Math.floor(i3 / 3)] = mod2;
             }
           };
           var setupTypeInfo = function(test, maskPattern) {
             var data = _errorCorrectionLevel << 3 | maskPattern;
-            var bits = QRUtil.getBCHTypeInfo(data);
+            var bits2 = QRUtil.getBCHTypeInfo(data);
             for (var i3 = 0; i3 < 15; i3 += 1) {
-              var mod2 = !test && (bits >> i3 & 1) == 1;
+              var mod2 = !test && (bits2 >> i3 & 1) == 1;
               if (i3 < 6) {
                 _modules[i3][8] = mod2;
               } else if (i3 < 8) {
@@ -153,7 +153,7 @@
               }
             }
             for (var i3 = 0; i3 < 15; i3 += 1) {
-              var mod2 = !test && (bits >> i3 & 1) == 1;
+              var mod2 = !test && (bits2 >> i3 & 1) == 1;
               if (i3 < 8) {
                 _modules[8][_moduleCount - i3 - 1] = mod2;
               } else if (i3 < 9) {
@@ -416,9 +416,9 @@
             margin = typeof margin == "undefined" ? cellSize * 4 : margin;
             var size = _this.getModuleCount() * cellSize + margin * 2;
             var min = margin;
-            var max = size - margin;
+            var max2 = size - margin;
             return createDataURL(size, size, function(x, y) {
-              if (min <= x && x < max && min <= y && y < max) {
+              if (min <= x && x < max2 && min <= y && y < max2) {
                 var c = Math.floor((x - min) / cellSize);
                 var r = Math.floor((y - min) / cellSize);
                 return _this.isDark(r, c) ? 0 : 1;
@@ -479,7 +479,7 @@
             margin = typeof margin == "undefined" ? cellSize * 2 : margin;
             var size = _this.getModuleCount() * cellSize + margin * 2;
             var min = margin;
-            var max = size - margin;
+            var max2 = size - margin;
             var y, x, r1, r2, p;
             var blocks = {
               "\u2588\u2588": "\u2588",
@@ -499,15 +499,15 @@
               r2 = Math.floor((y + 1 - min) / cellSize);
               for (x = 0; x < size; x += 1) {
                 p = "\u2588";
-                if (min <= x && x < max && min <= y && y < max && _this.isDark(r1, Math.floor((x - min) / cellSize))) {
+                if (min <= x && x < max2 && min <= y && y < max2 && _this.isDark(r1, Math.floor((x - min) / cellSize))) {
                   p = " ";
                 }
-                if (min <= x && x < max && min <= y + 1 && y + 1 < max && _this.isDark(r2, Math.floor((x - min) / cellSize))) {
+                if (min <= x && x < max2 && min <= y + 1 && y + 1 < max2 && _this.isDark(r2, Math.floor((x - min) / cellSize))) {
                   p += " ";
                 } else {
                   p += "\u2588";
                 }
-                ascii += margin < 1 && y + 1 >= max ? blocksLastLineNoMargin[p] : blocks[p];
+                ascii += margin < 1 && y + 1 >= max2 ? blocksLastLineNoMargin[p] : blocks[p];
               }
               ascii += "\n";
             }
@@ -525,7 +525,7 @@
             margin = typeof margin == "undefined" ? cellSize * 2 : margin;
             var size = _this.getModuleCount() * cellSize + margin * 2;
             var min = margin;
-            var max = size - margin;
+            var max2 = size - margin;
             var y, x, r, p;
             var white = Array(cellSize + 1).join("\u2588\u2588");
             var black = Array(cellSize + 1).join("  ");
@@ -536,7 +536,7 @@
               line = "";
               for (x = 0; x < size; x += 1) {
                 p = 1;
-                if (min <= x && x < max && min <= y && y < max && _this.isDark(r, Math.floor((x - min) / cellSize))) {
+                if (min <= x && x < max2 && min <= y && y < max2 && _this.isDark(r, Math.floor((x - min) / cellSize))) {
                   p = 0;
                 }
                 line += p ? white : black;
@@ -584,10 +584,10 @@
               var b0 = bin.read();
               if (b0 == -1) break;
               var b1 = read();
-              var b2 = read();
+              var b22 = read();
               var b3 = read();
               var k = String.fromCharCode(b0 << 8 | b1);
-              var v = b2 << 8 | b3;
+              var v = b22 << 8 | b3;
               unicodeMap2[k] = v;
               count += 1;
             }
@@ -2444,12 +2444,12 @@
     });
   }
   var isPosBig = (n) => typeof n === "bigint" && _0n <= n;
-  function inRange(n, min, max) {
-    return isPosBig(n) && isPosBig(min) && isPosBig(max) && min <= n && n < max;
+  function inRange(n, min, max2) {
+    return isPosBig(n) && isPosBig(min) && isPosBig(max2) && min <= n && n < max2;
   }
-  function aInRange(title, n, min, max) {
-    if (!inRange(n, min, max))
-      throw new Error("expected valid " + title + ": " + min + " <= n < " + max + ", got " + n);
+  function aInRange(title, n, min, max2) {
+    if (!inRange(n, min, max2))
+      throw new Error("expected valid " + title + ": " + min + " <= n < " + max2 + ", got " + n);
   }
   function bitLen(n) {
     let len;
@@ -2933,9 +2933,9 @@
     const invertedZs = FpInvertBatch(c.Fp, points.map((p) => p.Z));
     return points.map((p, i3) => c.fromAffine(p.toAffine(invertedZs[i3])));
   }
-  function validateW(W, bits) {
-    if (!Number.isSafeInteger(W) || W <= 0 || W > bits)
-      throw new Error("invalid window size, expected [1.." + bits + "], got W=" + W);
+  function validateW(W, bits2) {
+    if (!Number.isSafeInteger(W) || W <= 0 || W > bits2)
+      throw new Error("invalid window size, expected [1.." + bits2 + "], got W=" + W);
   }
   function calcWOpts(W, scalarBits) {
     validateW(W, scalarBits);
@@ -2973,7 +2973,7 @@
   }
   var wNAF = class {
     // Parametrized with a given Point class (not individual point)
-    constructor(Point2, bits) {
+    constructor(Point2, bits2) {
       __publicField(this, "BASE");
       __publicField(this, "ZERO");
       __publicField(this, "Fn");
@@ -2981,7 +2981,7 @@
       this.BASE = Point2.BASE;
       this.ZERO = Point2.ZERO;
       this.Fn = Point2.Fn;
-      this.bits = bits;
+      this.bits = bits2;
     }
     // non-const time multiplication ladder
     _unsafeLadder(elm, n, p = this.ZERO) {
@@ -3229,11 +3229,11 @@
   // node_modules/@noble/curves/abstract/weierstrass.js
   var divNearest = (num2, den) => (num2 + (num2 >= 0 ? den : -den) / _2n2) / den;
   function _splitEndoScalar(k, basis, n) {
-    const [[a1, b1], [a2, b2]] = basis;
-    const c1 = divNearest(b2 * k, n);
+    const [[a1, b1], [a2, b22]] = basis;
+    const c1 = divNearest(b22 * k, n);
     const c2 = divNearest(-b1 * k, n);
     let k1 = k - c1 * a1 - c2 * a2;
-    let k2 = -c1 * b1 - c2 * b2;
+    let k2 = -c1 * b1 - c2 * b22;
     const k1neg = k1 < _0n4;
     const k2neg = k2 < _0n4;
     if (k1neg)
@@ -3792,8 +3792,8 @@
     // scalar field
     __publicField(_Point, "Fn", Fn2);
     let Point2 = _Point;
-    const bits = Fn2.BITS;
-    const wnaf = new wNAF(Point2, extraOpts.endo ? Math.ceil(bits / 2) : bits);
+    const bits2 = Fn2.BITS;
+    const wnaf = new wNAF(Point2, extraOpts.endo ? Math.ceil(bits2 / 2) : bits2);
     Point2.BASE.precompute(8);
     return Point2;
   }
@@ -4122,19 +4122,19 @@
     const P = secp256k1_CURVE.p;
     const _3n3 = BigInt(3), _6n = BigInt(6), _11n = BigInt(11), _22n = BigInt(22);
     const _23n = BigInt(23), _44n = BigInt(44), _88n = BigInt(88);
-    const b2 = y * y * y % P;
-    const b3 = b2 * b2 * y % P;
+    const b22 = y * y * y % P;
+    const b3 = b22 * b22 * y % P;
     const b6 = pow2(b3, _3n3, P) * b3 % P;
     const b9 = pow2(b6, _3n3, P) * b3 % P;
-    const b11 = pow2(b9, _2n3, P) * b2 % P;
-    const b22 = pow2(b11, _11n, P) * b11 % P;
-    const b44 = pow2(b22, _22n, P) * b22 % P;
+    const b11 = pow2(b9, _2n3, P) * b22 % P;
+    const b222 = pow2(b11, _11n, P) * b11 % P;
+    const b44 = pow2(b222, _22n, P) * b222 % P;
     const b88 = pow2(b44, _44n, P) * b44 % P;
     const b176 = pow2(b88, _88n, P) * b88 % P;
     const b220 = pow2(b176, _44n, P) * b44 % P;
     const b223 = pow2(b220, _3n3, P) * b3 % P;
-    const t1 = pow2(b223, _23n, P) * b22 % P;
-    const t2 = pow2(t1, _6n, P) * b2 % P;
+    const t1 = pow2(b223, _23n, P) * b222 % P;
+    const t2 = pow2(t1, _6n, P) * b22 % P;
     const root = pow2(t2, _2n3, P);
     if (!Fpk1.eql(Fpk1.sqr(root), y))
       throw new Error("Cannot find square root");
@@ -7452,24 +7452,24 @@ zoo`.split("\n");
     };
   }
   // @__NO_SIDE_EFFECTS__
-  function padding(bits, chr = "=") {
-    anumber2(bits);
+  function padding(bits2, chr = "=") {
+    anumber2(bits2);
     astr("padding", chr);
     return {
       encode(data) {
         astrArr("padding.encode", data);
-        while (data.length * bits % 8)
+        while (data.length * bits2 % 8)
           data.push(chr);
         return data;
       },
       decode(input) {
         astrArr("padding.decode", input);
         let end = input.length;
-        if (end * bits % 8)
+        if (end * bits2 % 8)
           throw new Error("padding: invalid, string should have whole number of bytes");
         for (; end > 0 && input[end - 1] === chr; end--) {
           const last = end - 1;
-          const byte = last * bits;
+          const byte = last * bits2;
           if (byte % 8 === 0)
             throw new Error("padding: invalid, string has too much padding");
         }
@@ -7544,12 +7544,12 @@ zoo`.split("\n");
     }
     let carry = 0;
     let pos = 0;
-    const max = powers[from];
+    const max2 = powers[from];
     const mask = powers[to] - 1;
     const res = [];
     for (const n of data) {
       anumber2(n);
-      if (n >= max)
+      if (n >= max2)
         throw new Error(`convertRadix2: invalid data word=${n} from=${from}`);
       carry = carry << from | n;
       if (pos + from > 32)
@@ -7588,21 +7588,21 @@ zoo`.split("\n");
     };
   }
   // @__NO_SIDE_EFFECTS__
-  function radix2(bits, revPadding = false) {
-    anumber2(bits);
-    if (bits <= 0 || bits > 32)
+  function radix2(bits2, revPadding = false) {
+    anumber2(bits2);
+    if (bits2 <= 0 || bits2 > 32)
       throw new Error("radix2: bits should be in (0..32]");
-    if (/* @__PURE__ */ radix2carry(8, bits) > 32 || /* @__PURE__ */ radix2carry(bits, 8) > 32)
+    if (/* @__PURE__ */ radix2carry(8, bits2) > 32 || /* @__PURE__ */ radix2carry(bits2, 8) > 32)
       throw new Error("radix2: carry overflow");
     return {
       encode: (bytes) => {
         if (!isBytes2(bytes))
           throw new Error("radix2.encode input should be Uint8Array");
-        return convertRadix2(Array.from(bytes), 8, bits, !revPadding);
+        return convertRadix2(Array.from(bytes), 8, bits2, !revPadding);
       },
       decode: (digits) => {
         anumArr("radix2.decode", digits);
-        return Uint8Array.from(convertRadix2(digits, bits, 8, revPadding));
+        return Uint8Array.from(convertRadix2(digits, bits2, 8, revPadding));
       }
     };
   }
@@ -9715,7 +9715,25 @@ zoo`.split("\n");
     fdt[i3] = 5;
   var i3;
   var flm = /* @__PURE__ */ hMap(flt, 9, 0);
+  var flrm = /* @__PURE__ */ hMap(flt, 9, 1);
   var fdm = /* @__PURE__ */ hMap(fdt, 5, 0);
+  var fdrm = /* @__PURE__ */ hMap(fdt, 5, 1);
+  var max = function(a) {
+    var m = a[0];
+    for (var i3 = 1; i3 < a.length; ++i3) {
+      if (a[i3] > m)
+        m = a[i3];
+    }
+    return m;
+  };
+  var bits = function(d, p, m) {
+    var o = p / 8 | 0;
+    return (d[o] | d[o + 1] << 8) >> (p & 7) & m;
+  };
+  var bits16 = function(d, p) {
+    var o = p / 8 | 0;
+    return (d[o] | d[o + 1] << 8 | d[o + 2] << 16) >> (p & 7);
+  };
   var shft = function(p) {
     return (p + 7) / 8 | 0;
   };
@@ -9752,6 +9770,147 @@ zoo`.split("\n");
     if (!nt)
       throw e;
     return e;
+  };
+  var inflt = function(dat, st, buf, dict) {
+    var sl = dat.length, dl = dict ? dict.length : 0;
+    if (!sl || st.f && !st.l)
+      return buf || new u82(0);
+    var noBuf = !buf;
+    var resize = noBuf || st.i != 2;
+    var noSt = st.i;
+    if (noBuf)
+      buf = new u82(sl * 3);
+    var cbuf = function(l2) {
+      var bl = buf.length;
+      if (l2 > bl) {
+        var nbuf = new u82(Math.max(bl * 2, l2));
+        nbuf.set(buf);
+        buf = nbuf;
+      }
+    };
+    var final = st.f || 0, pos = st.p || 0, bt = st.b || 0, lm = st.l, dm = st.d, lbt = st.m, dbt = st.n;
+    var tbts = sl * 8;
+    do {
+      if (!lm) {
+        final = bits(dat, pos, 1);
+        var type = bits(dat, pos + 1, 3);
+        pos += 3;
+        if (!type) {
+          var s = shft(pos) + 4, l = dat[s - 4] | dat[s - 3] << 8, t = s + l;
+          if (t > sl) {
+            if (noSt)
+              err(0);
+            break;
+          }
+          if (resize)
+            cbuf(bt + l);
+          buf.set(dat.subarray(s, t), bt);
+          st.b = bt += l, st.p = pos = t * 8, st.f = final;
+          continue;
+        } else if (type == 1)
+          lm = flrm, dm = fdrm, lbt = 9, dbt = 5;
+        else if (type == 2) {
+          var hLit = bits(dat, pos, 31) + 257, hcLen = bits(dat, pos + 10, 15) + 4;
+          var tl = hLit + bits(dat, pos + 5, 31) + 1;
+          pos += 14;
+          var ldt = new u82(tl);
+          var clt = new u82(19);
+          for (var i3 = 0; i3 < hcLen; ++i3) {
+            clt[clim[i3]] = bits(dat, pos + i3 * 3, 7);
+          }
+          pos += hcLen * 3;
+          var clb = max(clt), clbmsk = (1 << clb) - 1;
+          var clm = hMap(clt, clb, 1);
+          for (var i3 = 0; i3 < tl; ) {
+            var r = clm[bits(dat, pos, clbmsk)];
+            pos += r & 15;
+            var s = r >> 4;
+            if (s < 16) {
+              ldt[i3++] = s;
+            } else {
+              var c = 0, n = 0;
+              if (s == 16)
+                n = 3 + bits(dat, pos, 3), pos += 2, c = ldt[i3 - 1];
+              else if (s == 17)
+                n = 3 + bits(dat, pos, 7), pos += 3;
+              else if (s == 18)
+                n = 11 + bits(dat, pos, 127), pos += 7;
+              while (n--)
+                ldt[i3++] = c;
+            }
+          }
+          var lt = ldt.subarray(0, hLit), dt = ldt.subarray(hLit);
+          lbt = max(lt);
+          dbt = max(dt);
+          lm = hMap(lt, lbt, 1);
+          dm = hMap(dt, dbt, 1);
+        } else
+          err(1);
+        if (pos > tbts) {
+          if (noSt)
+            err(0);
+          break;
+        }
+      }
+      if (resize)
+        cbuf(bt + 131072);
+      var lms = (1 << lbt) - 1, dms = (1 << dbt) - 1;
+      var lpos = pos;
+      for (; ; lpos = pos) {
+        var c = lm[bits16(dat, pos) & lms], sym = c >> 4;
+        pos += c & 15;
+        if (pos > tbts) {
+          if (noSt)
+            err(0);
+          break;
+        }
+        if (!c)
+          err(2);
+        if (sym < 256)
+          buf[bt++] = sym;
+        else if (sym == 256) {
+          lpos = pos, lm = null;
+          break;
+        } else {
+          var add2 = sym - 254;
+          if (sym > 264) {
+            var i3 = sym - 257, b = fleb[i3];
+            add2 = bits(dat, pos, (1 << b) - 1) + fl[i3];
+            pos += b;
+          }
+          var d = dm[bits16(dat, pos) & dms], dsym = d >> 4;
+          if (!d)
+            err(3);
+          pos += d & 15;
+          var dt = fd[dsym];
+          if (dsym > 3) {
+            var b = fdeb[dsym];
+            dt += bits16(dat, pos) & (1 << b) - 1, pos += b;
+          }
+          if (pos > tbts) {
+            if (noSt)
+              err(0);
+            break;
+          }
+          if (resize)
+            cbuf(bt + 131072);
+          var end = bt + add2;
+          if (bt < dt) {
+            var shift = dl - dt, dend = Math.min(dt, end);
+            if (shift + bt < 0)
+              err(3);
+            for (; bt < dend; ++bt)
+              buf[bt] = dict[shift + bt];
+          }
+          for (; bt < end; ++bt)
+            buf[bt] = buf[bt - dt];
+        }
+      }
+      st.l = lm, st.p = lpos, st.b = bt, st.f = final;
+      if (lm)
+        final = 1, st.m = lbt, st.d = dm, st.n = dbt;
+    } while (!final);
+    return bt != buf.length && noBuf ? slc(buf, 0, bt) : buf.subarray(0, bt);
   };
   var wbits = function(d, p, v) {
     v <<= p & 7;
@@ -10100,12 +10259,24 @@ zoo`.split("\n");
       o[k] = b[k];
     return o;
   };
+  var b2 = function(d, b) {
+    return d[b] | d[b + 1] << 8;
+  };
+  var b4 = function(d, b) {
+    return (d[b] | d[b + 1] << 8 | d[b + 2] << 16 | d[b + 3] << 24) >>> 0;
+  };
+  var b8 = function(d, b) {
+    return b4(d, b) + b4(d, b + 4) * 4294967296;
+  };
   var wbytes = function(d, b, v) {
     for (; v; ++b)
       d[b] = v, v >>>= 8;
   };
   function deflateSync(data, opts) {
     return dopt(data, opts || {}, 0, 0);
+  }
+  function inflateSync(data, opts) {
+    return inflt(data, { i: 2 }, opts && opts.out, opts && opts.dictionary);
   }
   var fltn = function(d, p, t, o) {
     for (var k in d) {
@@ -10128,6 +10299,22 @@ zoo`.split("\n");
     tds = 1;
   } catch (e) {
   }
+  var dutf8 = function(d) {
+    for (var r = "", i3 = 0; ; ) {
+      var c = d[i3++];
+      var eb = (c > 127) + (c > 223) + (c > 239);
+      if (i3 + eb > d.length)
+        return { s: r, r: slc(d, i3 - 1) };
+      if (!eb)
+        r += String.fromCharCode(c);
+      else if (eb == 3) {
+        c = ((c & 15) << 18 | (d[i3++] & 63) << 12 | (d[i3++] & 63) << 6 | d[i3++] & 63) - 65536, r += String.fromCharCode(55296 | c >> 10, 56320 | c & 1023);
+      } else if (eb & 1)
+        r += String.fromCharCode((c & 31) << 6 | d[i3++] & 63);
+      else
+        r += String.fromCharCode((c & 15) << 12 | (d[i3++] & 63) << 6 | d[i3++] & 63);
+    }
+  };
   function strToU8(str, latin1) {
     if (latin1) {
       var ar_1 = new u82(str.length);
@@ -10161,6 +10348,48 @@ zoo`.split("\n");
     }
     return slc(ar, 0, ai);
   }
+  function strFromU8(dat, latin1) {
+    if (latin1) {
+      var r = "";
+      for (var i3 = 0; i3 < dat.length; i3 += 16384)
+        r += String.fromCharCode.apply(null, dat.subarray(i3, i3 + 16384));
+      return r;
+    } else if (td) {
+      return td.decode(dat);
+    } else {
+      var _a2 = dutf8(dat), s = _a2.s, r = _a2.r;
+      if (r.length)
+        err(8);
+      return s;
+    }
+  }
+  var slzh = function(d, b) {
+    return b + 30 + b2(d, b + 26) + b2(d, b + 28);
+  };
+  var zh = function(d, b, z) {
+    var fnl = b2(d, b + 28), efl = b2(d, b + 30), fn = strFromU8(d.subarray(b + 46, b + 46 + fnl), !(b2(d, b + 8) & 2048)), es = b + 46 + fnl;
+    var _a2 = z64hs(d, es, efl, z, b4(d, b + 20), b4(d, b + 24), b4(d, b + 42)), sc = _a2[0], su = _a2[1], off = _a2[2];
+    return [b2(d, b + 10), sc, su, fn, es + efl + b2(d, b + 32), off];
+  };
+  var z64hs = function(d, b, l, z, sc, su, off) {
+    var nsc = sc == 4294967295, nsu = su == 4294967295, noff = off == 4294967295, e = b + l;
+    var nf = nsc + nsu + noff;
+    if (z && nf) {
+      for (; b + 4 < e; b += 4 + b2(d, b + 2)) {
+        if (b2(d, b) == 1) {
+          return [
+            nsc ? b8(d, b + 4 + 8 * nsu) : sc,
+            nsu ? b8(d, b + 4) : su,
+            noff ? b8(d, b + 4 + 8 * (nsu + nsc)) : off,
+            1
+          ];
+        }
+      }
+      if (z < 2)
+        err(13);
+    }
+    return [sc, su, off, 0];
+  };
   var exfl = function(ex) {
     var le = 0;
     if (ex) {
@@ -10262,6 +10491,47 @@ zoo`.split("\n");
     wzf(out, o, files.length, cdl, oe);
     return out;
   }
+  function unzipSync(data, opts) {
+    var files = {};
+    var e = data.length - 22;
+    for (; b4(data, e) != 101010256; --e) {
+      if (!e || data.length - e > 65558)
+        err(13);
+    }
+    ;
+    var c = b2(data, e + 8);
+    if (!c)
+      return {};
+    var o = b4(data, e + 16);
+    var z = b4(data, e - 20) == 117853008;
+    if (z) {
+      var ze = b4(data, e - 12);
+      z = b4(data, ze) == 101075792;
+      if (z) {
+        c = b4(data, ze + 32);
+        o = b4(data, ze + 48);
+      }
+    }
+    var fltr = opts && opts.filter;
+    for (var i3 = 0; i3 < c; ++i3) {
+      var _a2 = zh(data, o, z), c_2 = _a2[0], sc = _a2[1], su = _a2[2], fn = _a2[3], no = _a2[4], off = _a2[5], b = slzh(data, off);
+      o = no;
+      if (!fltr || fltr({
+        name: fn,
+        size: sc,
+        originalSize: su,
+        compression: c_2
+      })) {
+        if (!c_2)
+          files[fn] = slc(data, b, b + sc);
+        else if (c_2 == 8)
+          files[fn] = inflateSync(data.subarray(b, b + sc), { out: new u82(su) });
+        else
+          err(14, "unknown compression type " + c_2);
+      }
+    }
+    return files;
+  }
 
   // src/steward.src.js
   async function _sealToChurch(bytes, churchPubHex, fmt) {
@@ -10283,8 +10553,25 @@ zoo`.split("\n");
     const pt = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct)));
     return { bytes: pt, fmt: e.fmt || "jsonl" };
   }
-  function _nip98(url) {
-    return "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "GET"], ["church", pub]], content: "" }, sk)));
+  function _nip98(url, method) {
+    return "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", method || "GET"], ["church", pub]], content: "" }, sk)));
+  }
+  async function _putBlob(base, bytes) {
+    const sha = await _sha256hex(bytes);
+    const native = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]], content: "upload" }, sk)));
+    const h = { Authorization: auth, "Content-Type": "application/octet-stream" };
+    let body = bytes;
+    if (native) {
+      h["X-Blob-B64"] = "1";
+      body = _b64(bytes);
+    }
+    try {
+      const r = await fetch(base + "/blob", { method: "PUT", headers: h, body });
+      return r.ok;
+    } catch {
+      return false;
+    }
   }
   var NET = "trinityone";
   var KEY_LS = "trinityone.steward.church-key";
@@ -10812,6 +11099,58 @@ zoo`.split("\n");
     // counterpart of encrypt-on-export; fmt is 'jsonl' (events) or 'zip' (events + media). (Restore UI = Stage 3.)
     async decryptBackup(envelope) {
       return _openBackup(envelope);
+    },
+    // RESTORE / CLONE: read a backup file (encrypted envelope, plaintext zip, or plaintext jsonl), decrypt with the
+    // church key if sealed, then import into a relay — THIS one (default) or `relayUrl` (clone onto another relay).
+    // Events go to POST /import (which registers the church on a fresh relay); media blobs re-upload via PUT /blob.
+    // Returns the relay's import tally + how many blobs restored. onProgress(phase, done, total) is optional.
+    async restoreChurchData(fileBytes, { relayUrl, onProgress } = {}) {
+      if (!sk || !pub) throw new Error("No church key on this device");
+      const base = relayUrl ? String(relayUrl).replace(/\/+$/, "") : _blobBase();
+      const u83 = fileBytes instanceof Uint8Array ? fileBytes : new Uint8Array(fileBytes);
+      let events = "", blobs = {};
+      let asText = null;
+      try {
+        asText = strFromU8(u83);
+      } catch {
+      }
+      let env = null;
+      if (asText) {
+        try {
+          env = JSON.parse(asText);
+        } catch {
+        }
+      }
+      if (env && env.trinityone_backup === "encrypted-v1") {
+        const opened = await _openBackup(env);
+        if (opened.fmt === "zip") {
+          const f = unzipSync(opened.bytes);
+          events = strFromU8(f["events.jsonl"] || new Uint8Array());
+          for (const k in f) if (k.indexOf("blobs/") === 0) blobs[k.slice(6)] = f[k];
+        } else events = strFromU8(opened.bytes);
+      } else if (u83[0] === 80 && u83[1] === 75) {
+        const f = unzipSync(u83);
+        events = strFromU8(f["events.jsonl"] || new Uint8Array());
+        for (const k in f) if (k.indexOf("blobs/") === 0) blobs[k.slice(6)] = f[k];
+      } else {
+        events = asText || "";
+      }
+      if (!events.trim()) throw new Error("This file has no church data to restore.");
+      if (onProgress) onProgress("events", 0, 1);
+      const ir = await fetch(base + "/import", { method: "POST", headers: { Authorization: _nip98(base + "/import", "POST"), "Content-Type": "application/x-ndjson" }, body: events });
+      if (!ir.ok) throw new Error("Restore failed \u2014 the relay returned " + ir.status + (ir.status === 401 ? " (are you the church owner, and does that relay allow this church?)" : ""));
+      const result = await ir.json();
+      if (onProgress) onProgress("events", 1, 1);
+      const shas = Object.keys(blobs);
+      let done = 0, ok = 0, failed = 0;
+      for (const sha of shas) {
+        if (onProgress) onProgress("media", done, shas.length);
+        if (await _putBlob(base, blobs[sha])) ok++;
+        else failed++;
+        done++;
+      }
+      if (onProgress) onProgress("media", shas.length, shas.length);
+      return { ...result, mediaRestored: ok, mediaFailed: failed, mediaTotal: shas.length };
     },
     // restore/import a church key from its 12-word recovery phrase (replaces the current key on this device)
     restoreKey(mnemonic) {
@@ -13027,9 +13366,9 @@ zoo`.split("\n");
       };
     },
     // a live, recent activity feed derived from real events (groups, joins, posts) — newest first
-    subscribeActivity(onActivity, max = 12) {
+    subscribeActivity(onActivity, max2 = 12) {
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => onActivity([...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max));
+      const emit = () => onActivity([...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max2));
       const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub] }, { kinds: [1, 30078], "#p": [pub] }], {
         onevent(e) {
           const own = e.pubkey === pub;
