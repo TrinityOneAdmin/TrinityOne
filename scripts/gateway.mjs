@@ -6,7 +6,7 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync, readdirSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
 import { extname, normalize, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
@@ -303,6 +303,7 @@ let MY_RELAY_NAME = ''; try { MY_RELAY_NAME = JSON.parse(readFileSync(MYNAME_FIL
 // URL, and re-point the relay's directory name at it — so members connect by a stable NAME even though the
 // quick-tunnel URL changes on each start. CLOUDFLARED_BIN is set by the desktop app to its bundled binary.
 const CLOUDFLARED_BIN = process.env.CLOUDFLARED_BIN || 'cloudflared';
+const TUNNEL_FLAG = join(DATA_DIR, 'tunnel-on');   // presence = "stay public": re-open the tunnel on every boot
 let CF_CHILD = null, CF_URL = '';
 function cfPublicWss() { return CF_URL ? CF_URL.replace(/^https/i, 'wss') + '/relay' : ''; }
 async function reclaimRelayName() {   // re-point the claimed name at the current public URL (needs both)
@@ -322,7 +323,7 @@ function startCloudflared() {
     catch (e) { resolve({ ok: false, error: 'cloudflared is not available on this box' }); return; }
     CF_CHILD = child;
     let done = false;
-    const onData = (d) => { const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i); if (m && !done) { done = true; CF_URL = m[0]; if (!MY_RELAY_NAME) { MY_RELAY_NAME = relayPetSlug(); try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle: MY_RELAY_NAME }) + '\n'); } catch {} } reclaimRelayName(); resolve({ ok: true, url: CF_URL }); } };
+    const onData = (d) => { const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i); if (m && !done) { done = true; CF_URL = m[0]; try { writeFileSync(TUNNEL_FLAG, '1'); } catch {} if (!MY_RELAY_NAME) { MY_RELAY_NAME = relayPetSlug(); try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle: MY_RELAY_NAME }) + '\n'); } catch {} } reclaimRelayName(); resolve({ ok: true, url: CF_URL }); } };
     child.stdout.on('data', onData); child.stderr.on('data', onData);
     child.on('exit', () => { CF_CHILD = null; CF_URL = ''; });
     child.on('error', (e) => { if (!done) { done = true; CF_CHILD = null; resolve({ ok: false, error: String((e && e.message) || e) }); } });
@@ -1127,7 +1128,7 @@ function serveStatic(req, res) {
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
     if (route === '/tunnel/state' && req.method === 'GET') { res.writeHead(200, H); res.end(JSON.stringify({ running: !!CF_CHILD, url: CF_URL, wss: cfPublicWss() })); return; }
     if (route === '/tunnel/up' && req.method === 'POST') { startCloudflared().then(r => { res.writeHead(r.ok ? 200 : 502, H); res.end(JSON.stringify(r.ok ? { ok: true, url: CF_URL, wss: cfPublicWss(), name: MY_RELAY_NAME } : { error: r.error })); }); return; }
-    if (route === '/tunnel/down' && req.method === 'POST') { try { if (CF_CHILD) CF_CHILD.kill(); } catch {} CF_CHILD = null; CF_URL = ''; res.writeHead(200, H); res.end('{"ok":true}'); return; }
+    if (route === '/tunnel/down' && req.method === 'POST') { try { if (CF_CHILD) CF_CHILD.kill(); } catch {} CF_CHILD = null; CF_URL = ''; try { unlinkSync(TUNNEL_FLAG); } catch {} res.writeHead(200, H); res.end('{"ok":true}'); return; }
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
   // church-data backup: stream every event this relay holds for the caller's church as JSONL (a self-verifying,
@@ -2061,3 +2062,6 @@ server.listen(PORT, BIND_HOST, () =>
     (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set up a church in the control dashboard)`) +
     `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
     `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}`));
+// "Stay public": if the operator turned on the tunnel before, re-open it on boot (a fresh quick-tunnel URL) and
+// re-point the relay's directory name at it — so a restart doesn't silently drop members' access.
+if (existsSync(TUNNEL_FLAG)) { setTimeout(() => { startCloudflared().then(r => console.log(r.ok ? `  tunnel re-opened: ${r.url}` : `  tunnel re-open failed: ${r.error || ''}`)).catch(() => {}); }, 2500); }
