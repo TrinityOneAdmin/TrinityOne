@@ -150,9 +150,11 @@
       const body = document.getElementById('u-body');
       if (cur.pending) { body.innerHTML = '⏳ An update is in progress…'; pollUpdate(); return; }
       if (!cur.origin) { body.innerHTML = 'This is the release source — nothing to pull here.'; return; }
-      let latest = null;
-      try { latest = await (await fetch(cur.origin.replace(/\/+$/, '') + '/status', { cache: 'no-store' })).json(); } catch (e) {}
-      if (!latest || !latest.version) { body.innerHTML = 'Couldn’t reach the update source (' + esc(cur.origin) + ') to check.'; return; }
+      // The relay checks its update source server-side (cur.latest) — the browser can't be relied on to reach
+      // the release host's ts.net funnel. If the server couldn't reach it either, cur.latest is null.
+      const latest = cur.latest;
+      if (!latest || !latest.version) { body.innerHTML = 'Couldn’t reach the update source (' + esc(cur.origin) + ') to check. You can still force an update with the button below.'
+        + '<button class="btn-clay" id="doUpdate" style="margin-top:8px;display:block">Update now</button>'; document.getElementById('doUpdate').onclick = doUpdate; return; }
       if (latest.version === cur.version) { body.innerHTML = '<span style="color:var(--sage)">✓ Up to date.</span>'; return; }
       body.innerHTML = 'A new build is available (' + esc((latest.versionShort || '') + (latest.builtAt ? ' · ' + latest.builtAt.slice(0, 10) : '')) + '). '
         + '<button class="btn-clay" id="doUpdate" style="margin-top:8px">Update now</button>';
