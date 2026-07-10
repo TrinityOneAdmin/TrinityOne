@@ -114,7 +114,7 @@
 
   /* ── Download cards ── */
   .dl { padding: 40px 0 80px; }
-  .dl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 880px; margin: 0 auto; }
+  .dl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 22px; max-width: 1200px; margin: 0 auto; }
   .dl-card { display: flex; flex-direction: column; padding: 36px 34px; border-radius: var(--r-xl); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-md); }
   .dl-icon { width: 64px; height: 64px; border-radius: 18px; display: flex; align-items: center; justify-content: center; margin-bottom: 22px; }
   .dl-tag { font-family: var(--font-ui); font-weight: 800; font-size: 11.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-3); }
@@ -262,32 +262,29 @@
         <p class="dl-extra">New here? <a href="https://app.trinityone.church/steward.html?setup=1">Start a church &rarr;</a></p>
       </div>
 
-    </div>
-  </div>
-</section>
+      <!-- SUITE (self-host: relay + console in one) -->
+      <div class="dl-card">
+        <div class="dl-icon" style="background:var(--gold-soft,#f3ead1);color:#8a6d1f">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+        </div>
+        <div class="dl-tag">Optional &middot; for churches that self-host</div>
+        <h2>TrinityOne Suite</h2>
+        <p class="blurb">Your own relay <b>and</b> the Steward console in one double-click app — no command line. Your church's messages, giving and directory live on hardware <b>you</b> control.</p>
+        <div class="spacer-grow"></div>
+        <div class="dl-actions">
+          <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-windows-x64-setup.exe" class="dl-btn dl-btn--primary" download>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg><span>Windows</span>
+          </a>
+          <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-macos-arm64.dmg" class="dl-btn dl-btn--ghost" download>
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg><span>macOS</span>
+          </a>
+          <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage" class="dl-btn dl-btn--ghost" download>
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg><span>Linux</span>
+          </a>
+        </div>
+        <p class="dl-extra"><a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener">Other builds</a> (Debian, older Intel Macs)</p>
+      </div>
 
-<!-- RUN YOUR OWN RELAY (optional, for self-hosting churches) -->
-<section class="dl" style="padding-top:0">
-  <div class="wrap">
-    <div class="dl-card" style="max-width:640px;margin:0 auto">
-      <div class="dl-icon" style="background:var(--gold-soft,#f3ead1);color:#8a6d1f">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
-      </div>
-      <div class="dl-tag">Optional &middot; for churches that want to self-host</div>
-      <h2>TrinityOne Suite</h2>
-      <p class="blurb">Run your church's own relay on any always-on computer — a double-click app, no command line. Your messages, giving records and directory live on hardware <b>you</b> control, not a company's.</p>
-      <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:26px">
-        <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-macos-arm64.dmg" class="dl-btn dl-btn--ghost" style="flex:1;min-width:150px;padding:14px 16px" download>
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg><span>macOS</span>
-        </a>
-        <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-windows-x64-setup.exe" class="dl-btn dl-btn--ghost" style="flex:1;min-width:150px;padding:14px 16px" download>
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg><span>Windows</span>
-        </a>
-        <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage" class="dl-btn dl-btn--ghost" style="flex:1;min-width:150px;padding:14px 16px" download>
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg><span>Linux</span>
-        </a>
-      </div>
-      <p class="dl-extra"><a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener">Other builds</a> (Debian package, older Intel Macs) &middot; Running a headless server? <span style="font-family:var(--font-mono,ui-monospace,monospace);font-size:12.5px;background:var(--surface-2,#f2ede3);padding:2px 6px;border-radius:6px;white-space:nowrap">curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></p>
     </div>
   </div>
 </section>
