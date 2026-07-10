@@ -1332,15 +1332,18 @@ function serveStatic(req, res) {
       // Check the update source SERVER-SIDE (this box → origin), not in the operator's browser. The browser
       // often can't reach the release host's ts.net funnel (Tailscale MagicDNS hijacks the name to a private
       // address, or the network blocks ts.net), even though this server can. Best-effort, short timeout.
-      let latest = null;
-      if (ORIGIN) {
-        try {
-          const r = await fetch(ORIGIN.replace(/\/+$/, '') + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
-          const s = await r.json();
-          if (s && s.version) latest = { version: s.version, versionShort: s.versionShort, builtAt: s.builtAt };
-        } catch {}
-      }
-      res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, pending, latest })); return;
+      (async () => {
+        let latest = null;
+        if (ORIGIN) {
+          try {
+            const r = await fetch(ORIGIN.replace(/\/+$/, '') + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+            const s = await r.json();
+            if (s && s.version) latest = { version: s.version, versionShort: s.versionShort, builtAt: s.builtAt };
+          } catch {}
+        }
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, pending, latest }));
+      })();
+      return;
     }
     if (req.method === 'POST') {
       if (!ORIGIN) { res.writeHead(400, H); res.end('{"error":"this relay has no update origin (it may be the release host itself)"}'); return; }
