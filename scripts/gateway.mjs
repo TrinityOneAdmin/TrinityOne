@@ -324,7 +324,9 @@ function relayPetSlug() { const h = RELAY_PUB; if (!/^[0-9a-f]{64}$/i.test(h)) r
 function startCloudflared() {
   return new Promise((resolve) => {
     if (CF_URL && CF_CHILD) { resolve({ ok: true, url: CF_URL }); return; }
-    let child; try { child = spawn(CLOUDFLARED_BIN, ['tunnel', '--no-autoupdate', '--url', 'http://localhost:' + PORT], { stdio: ['ignore', 'pipe', 'pipe'] }); }
+    // Force HTTP/2 (TCP :443) instead of the default QUIC (UDP :7844): VPNs and many firewalls silently drop
+    // the UDP path, which makes cloudflared hang forever with no public URL. HTTP/2 rides ordinary HTTPS out.
+    let child; try { child = spawn(CLOUDFLARED_BIN, ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', 'http://localhost:' + PORT], { stdio: ['ignore', 'pipe', 'pipe'] }); }
     catch (e) { resolve({ ok: false, error: 'cloudflared is not available on this box' }); return; }
     CF_CHILD = child;
     let done = false;
@@ -332,7 +334,7 @@ function startCloudflared() {
     child.stdout.on('data', onData); child.stderr.on('data', onData);
     child.on('exit', () => { CF_CHILD = null; CF_URL = ''; });
     child.on('error', (e) => { if (!done) { done = true; CF_CHILD = null; resolve({ ok: false, error: String((e && e.message) || e) }); } });
-    setTimeout(() => { if (!done) { done = true; resolve({ ok: false, error: 'cloudflared timed out getting a public URL' }); } }, 30000);
+    setTimeout(() => { if (!done) { done = true; try { if (child) child.kill(); } catch {} CF_CHILD = null; resolve({ ok: false, error: 'couldn’t reach Cloudflare — a VPN or firewall may be blocking it. Try turning your VPN off and click again.' }); } }, 30000);
   });
 }
 function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
