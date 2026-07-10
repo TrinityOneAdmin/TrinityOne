@@ -241,14 +241,13 @@ function WizIdentity({ name, setName, nip05, setNip05 }) {
 function WizRelays({ ownRelay, setOwnRelay }) {
   const [relayUrl, setRelayUrl] = React.useState('');
   const [addMsg, setAddMsg] = React.useState(null);
-  // Desktop Relay app installers, published by the relay-desktop CI (tag relay-v*). Bump RELAY_REL when a new
-  // desktop release ships so these point at its assets. (Follow-up: stable 'latest' asset names to drop this.)
-  const RELAY_REL = 'relay-v0.7.1';
-  const RELAY_DL = 'https://github.com/TrinityOneAdmin/TrinityOne/releases/download/' + RELAY_REL + '/';
+  // Desktop Relay app installers. These point at the LATEST release's stable, version-less asset names (the
+  // relay-desktop CI publishes them for every release), so this list never needs updating when a new build ships.
+  const RELAY_DL = 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/';
   const DOWNLOADS = [
-    ['macOS', 'apple', RELAY_DL + 'TrinityOne.Relay_0.7.1_aarch64.dmg'],
-    ['Windows', 'windows', RELAY_DL + 'TrinityOne.Relay_0.7.1_x64-setup.exe'],
-    ['Linux', 'linux', RELAY_DL + 'TrinityOne.Relay_0.7.1_amd64.AppImage'],
+    ['macOS', 'apple', RELAY_DL + 'TrinityOne-Relay-macos-arm64.dmg'],
+    ['Windows', 'windows', RELAY_DL + 'TrinityOne-Relay-windows-x64-setup.exe'],
+    ['Linux', 'linux', RELAY_DL + 'TrinityOne-Relay-linux-x86_64.AppImage'],
   ];
   const addOwn = () => {
     const u = (relayUrl || '').trim(); if (!u) return;
