@@ -270,6 +270,30 @@ try { const k = JSON.parse(readFileSync(RELAY_KEY_FILE, 'utf8')); if (k && k.sk 
 if (!RELAY_SK || !RELAY_PUB) { RELAY_SK = generateSecretKey(); RELAY_PUB = getPublicKey(RELAY_SK); try { writeFileSync(RELAY_KEY_FILE, JSON.stringify({ sk: Buffer.from(RELAY_SK).toString('hex'), pub: RELAY_PUB }), { mode: 0o600 }); } catch {} }
 // a relay-signed NIP-98 (kind-27235) proof bound to url+method+church — how this relay authenticates to a peer's /sync.
 function relayProof(url, method, cp) { return 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', method], ['church', cp]], content: '' }, RELAY_SK))).toString('base64'); }
+// this relay's OWN claim (control panel → claim a memorable name in a directory): kind-27235 signed by RELAY_SK, binding handle+relay-url.
+function relayNameClaim(handle, url) { return 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', 'relay-names/claim'], ['method', 'POST'], ['handle', handle], ['relay', url]], content: '' }, RELAY_SK))).toString('base64'); }
+// ── Relay name directory (Phase 2): a memorable handle a steward can TYPE to connect a church to a relay,
+// instead of a wss:// URL. Any gateway can serve a directory; in practice relays register with the shared
+// community host and consoles resolve there. A claim is SIGNED by the relay's own identity key, so a handle is
+// owned by the first relay pubkey to take it and only that key can re-point it. Resolution is public.
+const RELAY_NAMES_FILE = join(DATA_DIR, 'relay-names.json');
+let RELAY_NAMES = {};
+try { RELAY_NAMES = JSON.parse(readFileSync(RELAY_NAMES_FILE, 'utf8')) || {}; } catch {}
+function saveRelayNames() { try { const tmp = RELAY_NAMES_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(RELAY_NAMES, null, 2) + '\n'); renameSync(tmp, RELAY_NAMES_FILE); } catch {} }
+const _handleRe = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;   // 3–32 chars, lowercase alnum + inner hyphens
+// verify a claim: Authorization 'Nostr <base64 kind-27235 event>' signed by a relay key, tags bind handle+relay.
+function _verifyRelayClaim(req, handle, relayUrl) {
+  try {
+    const h = req.headers['authorization'] || '';
+    if (!/^Nostr /i.test(h)) return null;
+    const ev = JSON.parse(Buffer.from(h.slice(6), 'base64').toString('utf8'));
+    if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
+    if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 120) return null;   // anti-replay
+    const tag = (n) => (ev.tags.find(t => Array.isArray(t) && t[0] === n) || [])[1];
+    if (tag('handle') !== handle || tag('relay') !== relayUrl) return null;
+    return ev.pubkey;   // the claiming relay's identity pubkey
+  } catch { return null; }
+}
 function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
 // Always require the admin token. Do NOT trust loopback: the relay runs behind the Tailscale Funnel /
 // cloudflared, which proxy from 127.0.0.1, so a public request is indistinguishable from a local one.
@@ -1000,6 +1024,37 @@ function serveStatic(req, res) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // deliberately NO Access-Control-Allow-Origin
     if (loopbackSock && !proxied && loopbackHost) { res.writeHead(200, H); res.end(JSON.stringify({ token: ADMIN_TOKEN })); return; }
     res.writeHead(403, H); res.end('{"error":"not a local request"}'); return;
+  }
+  // Relay name directory — resolve a handle (public) or claim one (relay-key-signed). See _verifyRelayClaim.
+  if (route.startsWith('/relay-names/')) {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', ...SEC_HEADERS };
+    if (req.method === 'OPTIONS') { res.writeHead(204, H); res.end(); return; }
+    if (req.method === 'GET' && route.startsWith('/relay-names/resolve/')) {
+      const handle = decodeURIComponent(route.slice('/relay-names/resolve/'.length)).toLowerCase();
+      const rec = RELAY_NAMES[handle];
+      if (!rec) { res.writeHead(404, H); res.end('{"error":"no relay by that name"}'); return; }
+      res.writeHead(200, H); res.end(JSON.stringify({ handle, url: rec.url, pub: rec.pub })); return;
+    }
+    if (req.method === 'POST' && route === '/relay-names/claim') {
+      let body = ''; req.on('data', c => { body += c; if (body.length > 1e4) req.destroy(); });
+      req.on('end', () => {
+        let b; try { b = JSON.parse(body); } catch { res.writeHead(400, H); res.end('{"error":"bad json"}'); return; }
+        const handle = String(b.handle || '').toLowerCase().trim();
+        const url = String(b.url || '').trim();
+        if (!_handleRe.test(handle)) { res.writeHead(400, H); res.end('{"error":"name must be 3–32 chars: lowercase letters, numbers, hyphens"}'); return; }
+        if (!/^wss?:\/\/.+/i.test(url)) { res.writeHead(400, H); res.end('{"error":"url must be a ws:// or wss:// relay address"}'); return; }
+        const pub = _verifyRelayClaim(req, handle, url);
+        if (!pub) { res.writeHead(401, H); res.end('{"error":"claim must be signed by the relay identity key, binding this handle + url, within 2 min"}'); return; }
+        const existing = RELAY_NAMES[handle];
+        if (existing && existing.pub !== pub) { res.writeHead(409, H); res.end('{"error":"that name is already taken by another relay"}'); return; }
+        for (const k of Object.keys(RELAY_NAMES)) { if (RELAY_NAMES[k].pub === pub && k !== handle) delete RELAY_NAMES[k]; }   // one handle per relay: release any previous
+        RELAY_NAMES[handle] = { url, pub, at: Math.floor(Date.now() / 1000) };
+        saveRelayNames();
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, handle, url, pub }));
+      });
+      return;
+    }
+    res.writeHead(404, H); res.end('{"error":"not found"}'); return;
   }
   // church-data backup: stream every event this relay holds for the caller's church as JSONL (a self-verifying,
   // importAll()-restorable archive). NIP-98-authed to the church key or a steward of that church.
