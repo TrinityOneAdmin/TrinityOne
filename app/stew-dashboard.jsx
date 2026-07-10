@@ -1884,6 +1884,26 @@ function DashRelaysCard() {
       setByName('');
     } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
   };
+  // Bring a church's history onto THIS relay by copying it from another (e.g. a community node after a restore).
+  const [cloneSrc, setCloneSrc] = React.useState('');
+  const [cloneMsg, setCloneMsg] = React.useState(null);
+  const [cloning, setCloning] = React.useState(false);
+  const cloneFromHere = async () => {
+    const raw = (cloneSrc || '').trim(); if (!raw || cloning) return;
+    setCloning(true); setCloneMsg({ text: 'Copying your church’s history…' });
+    try {
+      let url = raw;
+      if (!/:\/\//.test(raw) && !raw.includes('.')) {   // a name, not a URL → resolve via the directory
+        const rr = await fetch(RELAY_DIRECTORY + '/relay-names/resolve/' + encodeURIComponent(raw.toLowerCase()), { cache: 'no-store' });
+        if (!rr.ok) { setCloneMsg({ ok: false, text: '✗ No relay named “' + raw + '”.' }); setCloning(false); return; }
+        url = (await rr.json()).url;
+      }
+      const res = await window.Steward.cloneFromRelay(url);
+      setCloneMsg({ ok: true, text: '✓ Copied ' + (res && res.imported != null ? res.imported + ' events' : 'your church’s data') + ' onto this relay.' });
+      setCloneSrc('');
+    } catch (e) { setCloneMsg({ ok: false, text: '✗ ' + ((e && e.message) || 'Clone failed.') }); }
+    setCloning(false);
+  };
   // FEDERATION Phase 3c — auto-find open relays (primary + backup) that have offered to host new churches.
   const [finding, setFinding] = React.useState(false);
   const [findMsg, setFindMsg] = React.useState('');
@@ -1966,6 +1986,18 @@ function DashRelaysCard() {
               {regMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: regMsg[0] === '✓' ? 'var(--sage)' : regMsg[0] === '✗' ? 'var(--clay)' : 'var(--ink-3)' }}>{regMsg}</div> : null}
             </div>
           )}
+        </div>
+        {/* one-time clone: copy a church's whole history from another relay onto this one (e.g. after restore) */}
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Bring your church’s data onto this relay</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>Copy your church’s full history from another relay — handy after restoring from your recovery phrase, so it lives on your own box. Enter the relay’s name or address to copy <b>from</b>.</div>
+          <div style={{ display: 'flex', gap: 9 }}>
+            <input value={cloneSrc} onChange={e => { setCloneSrc(e.target.value); setCloneMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') cloneFromHere(); }}
+              placeholder="grace-city  ·  wss://relay.example.com" spellCheck={false} autoCapitalize="none"
+              style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
+            <button onClick={cloneFromHere} disabled={cloning || !cloneSrc.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (cloning || !cloneSrc.trim()) ? .5 : 1 }}>{cloning ? 'Copying…' : 'Copy here'}</button>
+          </div>
+          {cloneMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: cloneMsg.ok === false ? 'var(--clay)' : cloneMsg.ok ? 'var(--sage)' : 'var(--ink-3)' }}>{cloneMsg.text}</div> : null}
         </div>
         {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>

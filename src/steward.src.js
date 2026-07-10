@@ -562,6 +562,29 @@ window.Steward = {
     if (onProgress) onProgress('media', shas.length, shas.length);
     return { ...result, mediaRestored: ok, mediaFailed: failed, mediaTotal: shas.length };
   },
+  // CLONE a church's data from a SOURCE relay onto a target relay (default: this church's own relay). Reads the
+  // full corpus from the source's /export (church-signed) and imports it into the target's /import — so after a
+  // seed-phrase restore you can pull your church's history from a community node onto your own box. Events only
+  // (media clones via restoreChurchData's archive path). Both ends auth with a fresh proof signed by the church key.
+  async cloneFromRelay(sourceUrl, { targetUrl, onProgress } = {}) {
+    if (!sk || !pub) throw new Error('No church key on this device');
+    const httpBase = (u) => String(u || '').replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
+    const src = httpBase(sourceUrl);
+    if (!src) throw new Error('Enter the relay to copy from.');
+    const dst = targetUrl ? httpBase(targetUrl) : _blobBase();
+    if (src === dst) throw new Error('The source and destination are the same relay.');
+    if (onProgress) onProgress('reading', 0, 1);
+    const er = await fetch(src + '/export', { headers: { Authorization: _nip98(src + '/export') } });
+    if (!er.ok) throw new Error('Couldn’t read your church’s data from that relay (' + er.status + (er.status === 401 ? ' — is it the right relay for this church?' : '') + ')');
+    const events = await er.text();
+    if (!events.trim()) throw new Error('That relay has no data for this church.');
+    if (onProgress) onProgress('writing', 0, 1);
+    const ir = await fetch(dst + '/import', { method: 'POST', headers: { Authorization: _nip98(dst + '/import', 'POST'), 'Content-Type': 'application/x-ndjson' }, body: events });
+    if (!ir.ok) throw new Error('Couldn’t write to the destination relay (' + ir.status + ')');
+    const result = await ir.json();
+    if (onProgress) onProgress('done', 1, 1);
+    return result;
+  },
   // restore/import a church key from its 12-word recovery phrase (replaces the current key on this device)
   restoreKey(mnemonic) {
     const m = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
