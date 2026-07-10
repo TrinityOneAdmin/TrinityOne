@@ -1,0 +1,10 @@
+# Rust / Tauri build output
+/target/
+/gen/schemas/
+
+# Generated / fetched at build time — never committed (see scripts/build-relay-payload.sh + fetch-node-sidecar.sh)
+/payload/
+/binaries/
+
+# Icon set generated at build time from app-icon.png by `tauri icon`
+/icons/

@@ -1,0 +1,115 @@
+# Build the TrinityOne Relay desktop app for macOS, Windows and Linux — the double-click installers a church
+# downloads to self-host its relay. Each runner builds its own native OS (no cross-compiling the hard parts):
+# the Tauri shell wraps a bundled Node runtime + the read-only relay payload, so end users install nothing else.
+#
+#   • push a tag  relay-v1.2.3   → builds all platforms AND attaches the installers to a GitHub Release
+#   • Run workflow (manual)      → builds all platforms and uploads them as artifacts (no release) — use to test
+#
+# First-run notes (this is expected to need a CI pass or two to settle, per the desktop-build plan):
+#   - NODE_VERSION below must be a real nodejs.org/dist version; bump it if the sidecar download 404s.
+#   - macOS/Windows signing is deliberately NOT wired yet — unsigned installers build fine but warn on open.
+name: relay-desktop
+
+on:
+  push:
+    tags: ["relay-v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # needed to attach installers to a Release on tag builds
+
+env:
+  NODE_VERSION: "22.22.2"        # the Node runtime bundled INTO the app (has node:sqlite); != the build Node below
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-13          # Intel
+            target: x86_64-apple-darwin
+          - os: macos-14          # Apple Silicon
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node used only to BUILD (npm ci → esbuild for the payload transpile, and the Tauri CLI). Not shipped.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            relay-app/desktop/src-tauri/target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('relay-app/desktop/src-tauri/Cargo.toml') }}
+
+      - name: Linux — Tauri system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev \
+            build-essential file wget
+
+      - name: Install build deps (esbuild etc.)
+        run: npm ci
+
+      - name: Assemble the relay payload (read-only app code the shell runs)
+        shell: bash
+        run: bash scripts/build-relay-payload.sh relay-app/desktop/src-tauri/payload
+
+      - name: Fetch the Node runtime sidecar for this target
+        shell: bash
+        run: bash scripts/fetch-node-sidecar.sh ${{ matrix.target }}
+
+      - name: Generate app icons from app-icon.png
+        working-directory: relay-app/desktop
+        run: npx --yes @tauri-apps/cli@2 icon src-tauri/app-icon.png
+
+      - name: Build the desktop app
+        working-directory: relay-app/desktop
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"   # AppImage tooling can't FUSE-mount on CI runners
+        run: npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }}
+
+      # Gather the installers into one flat dir regardless of platform layout, for upload/release.
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p dist-installers
+          BND="relay-app/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          find "$BND" -type f \
+            \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.AppImage' \
+               -o -name '*.deb' -o -name '*.exe' -o -name '*.msi' \) \
+            -exec cp {} dist-installers/ \; || true
+          ls -la dist-installers || true
+
+      - name: Upload installers (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: trinityone-relay-${{ matrix.target }}
+          path: dist-installers/*
+          if-no-files-found: warn
+
+      - name: Attach installers to the Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/relay-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-installers/*
+          fail_on_unmatched_files: false

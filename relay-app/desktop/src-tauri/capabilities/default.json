@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The control window loads the relay's own control panel over http://localhost and talks to it via plain HTTP — it uses no Tauri IPC APIs, so only core defaults are granted. The relay sidecar is spawned from Rust (setup), which is not gated by the frontend ACL.",
+  "windows": ["control"],
+  "permissions": ["core:default"]
+}

@@ -1,47 +1,58 @@
-# TrinityOne Relay — desktop shell (v0.7.1, Tauri)
+# TrinityOne Relay — desktop app (Tauri 2)
 
-The native installer that wraps the **runnable core** (`../start.mjs`) and the **control GUI**
-(`../control.html`) into a double-click app for Windows / Mac / Linux. Decisions locked:
-**NIP-01 relay (`scripts/gateway.mjs`) · Tailscale tunnel · Tauri.**
+The double-click installer (`.dmg` / `.exe` / `.AppImage`) that lets a church self-host its relay with no
+terminal and no Node install. It wraps a **bundled Node runtime** running the gateway
+(`scripts/gateway.mjs`) and shows the relay's own **control panel** (`../control.html`) in a native window.
 
-> Scaffold only — this is **not built in the repo CI yet**. Building it needs the Tauri toolchain +
-> per-OS build hosts (signed installers can't be cross-compiled). The GUI it loads (`control.html`)
-> and the relay it runs (`gateway.mjs`) are done and verified.
+## How it works
+- **Payload (read-only code).** `scripts/build-relay-payload.sh` assembles the exact tree the gateway needs
+  to serve — the pre-transpiled web app + `scripts/` + a **minimal** `node_modules` (only `ws`,
+  `nostr-tools`, `web-push`; everything else the gateway uses is a Node built-in). No secrets, no git, no
+  data dir. It's bundled as a Tauri resource, so at runtime it lives at `resources/payload/`.
+- **Node runtime (the sidecar).** `scripts/fetch-node-sidecar.sh <triple>` downloads the official Node
+  binary and installs it as `src-tauri/binaries/trinityone-relay-<target-triple>[.exe]` — the name Tauri
+  resolves for `externalBin`. So the user needs no Node of their own.
+- **Data (writable).** The gateway now honours `TRINITY_DATA_DIR` (see `scripts/gateway.mjs`). The shell
+  points it at the OS per-user app-data dir (`app_data_dir()/data`), so the relay's db, keys, church.json
+  and blobs live there while the app code stays read-only inside the install. Unset, the gateway falls back
+  to `ROOT/relay` exactly as before (every server relay is unaffected).
+- **Window.** `src-tauri/src/main.rs` spawns the sidecar (`node payload/scripts/gateway.mjs 8787`), shows a
+  splash immediately, waits for the port to accept connections, then navigates the window to
+  `http://localhost:8787/relay-app/control.html` — same-origin, so `/status` and the dashboard just work.
+  On close it kills the relay child.
 
-## Architecture
-- **Window** = the control GUI. The Rust backend spawns the relay, waits for it to listen, then opens
-  the window at `http://localhost:<port>/relay-app/control.html?public=<detected-base>` — so `/status`
-  is same-origin and the dashboard "just works."
-- **Relay** = `scripts/gateway.mjs`, shipped as a **bundled Node sidecar** so the user needs no Node
-  installed (compile it once per OS with `node --experimental-sea` or `pkg` into
-  `src-tauri/binaries/trinityone-relay-<target-triple>`). Until then it shells out to system `node`.
-- **Tunnel (v0.7.2)** = bundle Tailscale (or `cloudflared`) and bring it up on first run so "reachable
-  from anywhere" needs no separate install. For now, if the steward already runs Tailscale Funnel, the
-  dashboard shows "Reachable from anywhere"; otherwise it shows the LAN-only warning.
-- **Tray + autostart + auto-update** = Tauri tray plugin + `tauri-plugin-autostart` + the Tauri updater.
-
-## Build (on each target OS)
+## Build
+Don't build by hand for release — push a tag and let CI do all three platforms (see below). To build one
+platform locally for testing:
 ```bash
-# system deps — Linux: sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev \
-#   libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-# Rust: https://rustup.rs   ·   Tauri CLI:
-npm i -D @tauri-apps/cli
-# dev (loads control.html against a locally-run gateway):
-npx tauri dev
-# release installers (.dmg / .msi|.exe / .AppImage|.deb):
-npx tauri build
+# from the repo root
+npm ci                                                   # esbuild, for the payload transpile
+bash scripts/build-relay-payload.sh relay-app/desktop/src-tauri/payload
+bash scripts/fetch-node-sidecar.sh                       # host triple (needs rustc); or pass one explicitly
+cd relay-app/desktop
+npx @tauri-apps/cli@2 icon src-tauri/app-icon.png        # generates src-tauri/icons/*
+npx @tauri-apps/cli@2 build                              # installers in src-tauri/target/**/bundle/
+# Linux system deps: sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+#   libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 ```
-Mac needs an Apple Developer cert for notarization; Windows wants an Authenticode cert. CI matrix
-(macos/windows/ubuntu runners) produces all three from one tag.
 
-## Files here
-- `src-tauri/tauri.conf.json` — app id `com.trinityone.relay`, window, bundle targets.
-- `src-tauri/src/main.rs` — spawns the relay child, opens the control window, kills the child on exit.
-- `src-tauri/Cargo.toml` — Tauri 2 deps.
+## Release (CI)
+`.github/workflows/relay-desktop.yml` builds a 4-way matrix — Linux (`x86_64`), macOS Intel + Apple
+Silicon, Windows (`x86_64`) — each on its own native runner. **No Mac or Windows machine required.**
+- **Push a tag `relay-v1.2.3`** → builds all platforms and attaches the installers to a GitHub Release.
+- **Run workflow (manual)** → builds all platforms, uploads them as artifacts (no release) — use to test.
 
-## Status / next
-- ✅ Control GUI (`../control.html`) + `/status` endpoint — built, verified live.
-- ✅ Runnable launcher (`../start.mjs`) — opens the GUI, reports reachability.
-- ☐ This shell: finalize against the installed Tauri 2 CLI, add the Node sidecar build, icons, tray,
-  updater; set up the CI release matrix.
-- ☐ v0.7.2: bundle the tunnel.
+`.github/workflows/` is gitignored in this repo, so the workflow is force-added; it only *runs* on a
+`relay-v*` tag or a manual dispatch, so having the file in the tree triggers no build.
+
+## Not wired yet (deliberate)
+- **Signing / notarization.** Installers build unsigned — they work but warn on first open (macOS
+  Gatekeeper, Windows SmartScreen). Adding an Apple Developer cert (~$99/yr) + a Windows Authenticode cert
+  removes the warnings; slot the secrets into the workflow when ready. Linux `.AppImage` needs none.
+- **Bundled tunnel** (reachable-from-anywhere without a separate Tailscale/cloudflared install), tray icon,
+  autostart, in-app auto-update. Roadmap.
+
+## First-CI-run notes
+Cross-platform Tauri usually needs a pass or two to settle. Most likely knobs:
+- `NODE_VERSION` in the workflow must be a real `nodejs.org/dist` version (pinned to one with `node:sqlite`).
+- macOS resource-signing may complain about the bundled node binary until signing is configured.

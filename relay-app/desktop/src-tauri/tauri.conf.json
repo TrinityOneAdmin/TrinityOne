@@ -4,28 +4,40 @@
   "version": "0.7.1",
   "identifier": "com.trinityone.relay",
   "build": {
-    "frontendDist": "../../control"
+    "frontendDist": "dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "title": "TrinityOne Relay",
-        "width": 840,
-        "height": 760,
+        "label": "control",
+        "width": 900,
+        "height": 780,
+        "minWidth": 720,
+        "minHeight": 560,
         "resizable": true,
-        "visible": false,
-        "label": "control"
+        "visible": true
       }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": ["payload/**/*"],
+    "externalBin": ["binaries/trinityone-relay"],
     "category": "Utility",
     "shortDescription": "Run your church's TrinityOne relay.",
-    "externalBin": ["binaries/trinityone-relay"]
+    "longDescription": "A self-contained TrinityOne church relay. It serves the app and the Nostr relay from your own computer, so your congregation's messages, giving records and directory live on hardware you control — not a company's. Double-click to run; share the address it gives you with your members."
   }
 }
