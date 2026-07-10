@@ -383,7 +383,9 @@ function StewardRoot() {
   const params = new URLSearchParams(location.search);
   const showcase = params.get('showcase') === '1';   // ?showcase=1 = the design gallery (reference)
   const [surface, setSurface] = useSt(SURFACES.some(s => s.key === params.get('surface')) ? params.get('surface') : 'console');
-  const [consoleView, setConsoleView] = useSt(params.get('setup') === '1' ? 'wizard' : 'dashboard');
+  // Setup wizard is for a church that doesn't exist yet — never gate it behind an unlock PIN. So ?setup=1 only
+  // opens the wizard when there's NO church key; an existing church (locked or not) goes to its normal console.
+  const [consoleView, setConsoleView] = useSt((params.get('setup') === '1' && !window.Steward.hasKey) ? 'wizard' : 'dashboard');
   // a fresh install has no church key → welcome; an encrypted key → unlock gate; otherwise → console.
   const [ks, setKs] = useSt(() => ({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }));
   useStE(() => { const f = () => setKs({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }); window.addEventListener('steward-key', f); return () => window.removeEventListener('steward-key', f); }, []);
