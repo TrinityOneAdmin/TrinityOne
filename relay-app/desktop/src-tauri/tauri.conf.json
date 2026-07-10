@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TrinityOne Relay",
+  "productName": "TrinityOne Suite",
   "version": "0.7.1",
   "identifier": "com.trinityone.relay",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "TrinityOne Relay",
+        "title": "TrinityOne Suite",
         "label": "control",
         "width": 900,
         "height": 780,

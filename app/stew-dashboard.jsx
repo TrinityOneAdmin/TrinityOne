@@ -2024,9 +2024,9 @@ function DashRelaysCard() {
         ) : (
           <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
             <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Run your own relay box</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>The TrinityOne Relay app turns any always-on computer into your church’s relay — no command line. Install it, open it, then add the address it gives you above.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>The TrinityOne Suite app turns any always-on computer into your church’s relay — no command line. Install it, open it, then add the address it gives you above.</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {[['macOS', 'TrinityOne-Relay-macos-arm64.dmg'], ['Windows', 'TrinityOne-Relay-windows-x64-setup.exe'], ['Linux', 'TrinityOne-Relay-linux-x86_64.AppImage']].map(([label, file]) => (
+              {[['macOS', 'TrinityOne-Suite-macos-arm64.dmg'], ['Windows', 'TrinityOne-Suite-windows-x64-setup.exe'], ['Linux', 'TrinityOne-Suite-linux-x86_64.AppImage']].map(([label, file]) => (
                 <a key={label} href={'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/' + file} target="_blank" rel="noopener" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color="currentColor" /> {label}</a>
               ))}
             </div>

@@ -133,8 +133,8 @@ jobs:
             cp "$f" dist-installers/                                        # versioned (Tauri) name
             ext="${f##*.}"
             case "$ext" in
-              exe) cp "$f" "dist-installers/TrinityOne-Relay-${{ matrix.stable }}-setup.exe" ;;
-              *)   cp "$f" "dist-installers/TrinityOne-Relay-${{ matrix.stable }}.$ext" ;;
+              exe) cp "$f" "dist-installers/TrinityOne-Suite-${{ matrix.stable }}-setup.exe" ;;
+              *)   cp "$f" "dist-installers/TrinityOne-Suite-${{ matrix.stable }}.$ext" ;;
             esac
           done
           ls -la dist-installers || true

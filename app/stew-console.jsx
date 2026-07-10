@@ -247,9 +247,9 @@ function WizRelays({ ownRelay, setOwnRelay }) {
   // relay-desktop CI publishes them for every release), so this list never needs updating when a new build ships.
   const RELAY_DL = 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/';
   const DOWNLOADS = [
-    ['macOS', 'apple', RELAY_DL + 'TrinityOne-Relay-macos-arm64.dmg'],
-    ['Windows', 'windows', RELAY_DL + 'TrinityOne-Relay-windows-x64-setup.exe'],
-    ['Linux', 'linux', RELAY_DL + 'TrinityOne-Relay-linux-x86_64.AppImage'],
+    ['macOS', 'apple', RELAY_DL + 'TrinityOne-Suite-macos-arm64.dmg'],
+    ['Windows', 'windows', RELAY_DL + 'TrinityOne-Suite-windows-x64-setup.exe'],
+    ['Linux', 'linux', RELAY_DL + 'TrinityOne-Suite-linux-x86_64.AppImage'],
   ];
   const addOwn = () => {
     const u = (relayUrl || '').trim(); if (!u) return;
@@ -286,7 +286,7 @@ function WizRelays({ ownRelay, setOwnRelay }) {
         </button>
       ) : (
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 17, padding: 17, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Host your church’s own relay so your data lives on infrastructure <b style={{ color: 'var(--ink)' }}>you</b> control. The TrinityOne Relay app runs it — no command line.</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Host your church’s own relay so your data lives on infrastructure <b style={{ color: 'var(--ink)' }}>you</b> control. The TrinityOne Suite app runs it — no command line.</div>
           <div>
             <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 8 }}>1 · GET THE RELAY APP</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

@@ -980,7 +980,7 @@ function tsRun(args, { timeoutMs = 12000 } = {}) {
 }
 async function tsState() {
   const st = await tsRun(['status', '--json'], { timeoutMs: 8000 });
-  if (st.missing || /not found|executable file not found|no such file/i.test(st.err)) return { installed: false };
+  if (st.missing || st.code === -1 || /not found|executable file not found|no such file|enoent/i.test(st.err)) return { installed: false };   // -1/ENOENT = spawn failed → tailscale not installed (e.g. desktop app)
   let j = null; try { j = JSON.parse(st.out); } catch {}
   if (!j) {
     const needsOperator = /operator|access denied|permission denied|use sudo|connect: permission/i.test(st.err);
