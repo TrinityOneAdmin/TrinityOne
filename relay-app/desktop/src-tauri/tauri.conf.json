@@ -35,7 +35,7 @@
       "icons/icon.ico"
     ],
     "resources": ["payload/**/*"],
-    "externalBin": ["binaries/trinityone-relay-node"],
+    "externalBin": ["binaries/trinityone-relay-node", "binaries/trinityone-cloudflared"],
     "category": "Utility",
     "shortDescription": "Run your church's TrinityOne relay.",
     "longDescription": "A self-contained TrinityOne church relay. It serves the app and the Nostr relay from your own computer, so your congregation's messages, giving records and directory live on hardware you control — not a company's. Double-click to run; share the address it gives you with your members."

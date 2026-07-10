@@ -299,6 +299,31 @@ function _verifyRelayClaim(req, handle, relayUrl) {
 const DIRECTORY = (process.env.RELAY_DIRECTORY || 'https://app.trinityone.church').replace(/\/+$/, '');
 const MYNAME_FILE = join(DATA_DIR, 'relay-myname.json');
 let MY_RELAY_NAME = ''; try { MY_RELAY_NAME = JSON.parse(readFileSync(MYNAME_FILE, 'utf8')).handle || ''; } catch {}
+// ── Cloudflare quick tunnel (desktop "go public", no account): spawn cloudflared, capture its trycloudflare.com
+// URL, and re-point the relay's directory name at it — so members connect by a stable NAME even though the
+// quick-tunnel URL changes on each start. CLOUDFLARED_BIN is set by the desktop app to its bundled binary.
+const CLOUDFLARED_BIN = process.env.CLOUDFLARED_BIN || 'cloudflared';
+let CF_CHILD = null, CF_URL = '';
+function cfPublicWss() { return CF_URL ? CF_URL.replace(/^https/i, 'wss') + '/relay' : ''; }
+async function reclaimRelayName() {   // re-point the claimed name at the current public URL (needs both)
+  if (!MY_RELAY_NAME || !CF_URL) return;
+  const wss = cfPublicWss();
+  try { await fetch(DIRECTORY + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': relayNameClaim(MY_RELAY_NAME, wss) }, body: JSON.stringify({ handle: MY_RELAY_NAME, url: wss }) }); } catch {}
+}
+function startCloudflared() {
+  return new Promise((resolve) => {
+    if (CF_URL && CF_CHILD) { resolve({ ok: true, url: CF_URL }); return; }
+    let child; try { child = spawn(CLOUDFLARED_BIN, ['tunnel', '--no-autoupdate', '--url', 'http://localhost:' + PORT], { stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (e) { resolve({ ok: false, error: 'cloudflared is not available on this box' }); return; }
+    CF_CHILD = child;
+    let done = false;
+    const onData = (d) => { const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i); if (m && !done) { done = true; CF_URL = m[0]; reclaimRelayName(); resolve({ ok: true, url: CF_URL }); } };
+    child.stdout.on('data', onData); child.stderr.on('data', onData);
+    child.on('exit', () => { CF_CHILD = null; CF_URL = ''; });
+    child.on('error', (e) => { if (!done) { done = true; CF_CHILD = null; resolve({ ok: false, error: String((e && e.message) || e) }); } });
+    setTimeout(() => { if (!done) { done = true; resolve({ ok: false, error: 'cloudflared timed out getting a public URL' }); } }, 30000);
+  });
+}
 function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
 // Always require the admin token. Do NOT trust loopback: the relay runs behind the Tailscale Funnel /
 // cloudflared, which proxy from 127.0.0.1, so a public request is indistinguishable from a local one.
@@ -1038,7 +1063,7 @@ function serveStatic(req, res) {
     // identity key and registers it with the directory (using its own public wss address).
     if (route === '/relay-names/mine') {
       if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
-      const ownUrl = async () => { let st = {}; try { st = await tsState(); } catch {} return (process.env.RELAY_PUBLIC_URL || st.relayWss || '').trim(); };
+      const ownUrl = async () => { if (cfPublicWss()) return cfPublicWss(); let st = {}; try { st = await tsState(); } catch {} return (process.env.RELAY_PUBLIC_URL || st.relayWss || '').trim(); };
       if (req.method === 'GET') {
         ownUrl().then(u => { res.writeHead(200, H); res.end(JSON.stringify({ handle: MY_RELAY_NAME, relayWss: u, pub: RELAY_PUB, directory: DIRECTORY })); });
         return;
@@ -1089,6 +1114,16 @@ function serveStatic(req, res) {
       return;
     }
     res.writeHead(404, H); res.end('{"error":"not found"}'); return;
+  }
+  // Cloudflare quick-tunnel control (desktop "go public", no account). Admin-gated.
+  if (route === '/tunnel/up' || route === '/tunnel/state' || route === '/tunnel/down') {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', ...SEC_HEADERS };
+    if (req.method === 'OPTIONS') { res.writeHead(204, H); res.end(); return; }
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    if (route === '/tunnel/state' && req.method === 'GET') { res.writeHead(200, H); res.end(JSON.stringify({ running: !!CF_CHILD, url: CF_URL, wss: cfPublicWss() })); return; }
+    if (route === '/tunnel/up' && req.method === 'POST') { startCloudflared().then(r => { res.writeHead(r.ok ? 200 : 502, H); res.end(JSON.stringify(r.ok ? { ok: true, url: CF_URL, wss: cfPublicWss(), name: MY_RELAY_NAME } : { error: r.error })); }); return; }
+    if (route === '/tunnel/down' && req.method === 'POST') { try { if (CF_CHILD) CF_CHILD.kill(); } catch {} CF_CHILD = null; CF_URL = ''; res.writeHead(200, H); res.end('{"ok":true}'); return; }
+    res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
   // church-data backup: stream every event this relay holds for the caller's church as JSONL (a self-verifying,
   // importAll()-restorable archive). NIP-98-authed to the church key or a steward of that church.

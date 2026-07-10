@@ -81,6 +81,8 @@ fn main() {
                 .arg("scripts/gateway.mjs")
                 .arg(PORT.to_string())
                 .env("TRINITY_DATA_DIR", data_dir.to_string_lossy().to_string())
+                // the bundled cloudflared, so the relay can start a Cloudflare quick tunnel ("go public") itself
+                .env("CLOUDFLARED_BIN", std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join(if cfg!(windows) { "trinityone-cloudflared.exe" } else { "trinityone-cloudflared" }))).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "cloudflared".into()))
                 // Bind all interfaces so LAN devices (a phone on the same wifi) can reach the relay directly.
                 // Windows shows a one-time "allow network access?" prompt for this, but the bind + loopback work
                 // regardless of the answer — the app window reaches the relay via 127.0.0.1 either way, so a

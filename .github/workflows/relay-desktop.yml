@@ -90,6 +90,10 @@ jobs:
         shell: bash
         run: bash scripts/fetch-node-sidecar.sh ${{ matrix.target }}
 
+      - name: Fetch the cloudflared tunnel sidecar for this target
+        shell: bash
+        run: bash scripts/fetch-cloudflared-sidecar.sh ${{ matrix.target }}
+
       - name: Generate app icons from app-icon.png
         working-directory: relay-app/desktop
         run: npx --yes @tauri-apps/cli@2 icon src-tauri/app-icon.png

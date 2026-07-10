@@ -151,14 +151,29 @@
       let html = pet ? '<div style="margin-bottom:10px">Known as <b>' + esc(pet) + '</b> <span class="muted">— a name from this relay’s key, so people can recognise it.</span></div>' : '';
       if (m.handle) html += '<div style="margin-bottom:8px">Public name: <b>' + esc(m.handle) + '</b> <span class="muted">— stewards connect their church by typing this in the console.</span></div>';
       if (!m.relayWss) {
-        html += '<div class="muted">Turn on <b>Reach members from anywhere</b> above to claim a public name others can type.</div>';
+        html += '<div class="muted" style="margin-bottom:6px">Your relay isn’t reachable from outside your network yet.</div>'
+          + '<button class="btn-clay" id="cfGo">Go public — one click, no account</button> <span class="muted" id="cfMsg"></span>'
+          + '<div class="muted" style="margin-top:6px">Opens a free Cloudflare tunnel so members can reach your relay from anywhere. They connect by the <b>name</b> you claim — which keeps working even though the tunnel address changes each time.</div>';
       } else {
         html += '<div style="display:flex; gap:8px; margin-top:6px"><input id="relayNameIn" placeholder="' + (m.handle ? 'change name' : 'choose a name, e.g. grace-city') + '" autocomplete="off" /><button class="btn-clay" id="relayNameGo" style="white-space:nowrap">' + (m.handle ? 'Update' : 'Claim') + '</button></div><div class="muted" id="relayNameMsg" style="margin-top:6px"></div>';
       }
       body.innerHTML = html;
       const go = document.getElementById('relayNameGo'); if (go) go.onclick = claimRelayName;
       const inp = document.getElementById('relayNameIn'); if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') claimRelayName(); });
+      const cf = document.getElementById('cfGo'); if (cf) cf.onclick = goPublicCloudflare;
     } catch (e) { body.innerHTML = '<div class="muted">Couldn’t load the relay name.</div>'; }
+  }
+  async function goPublicCloudflare() {
+    const btn = document.getElementById('cfGo'), msg = document.getElementById('cfMsg');
+    if (btn) btn.disabled = true;
+    if (msg) { msg.style.color = 'var(--ink-3)'; msg.textContent = '· opening a tunnel… (~15s)'; }
+    try {
+      const r = await fetch('/tunnel/up', { method: 'POST', headers: authHeaders() });
+      const j = await r.json();
+      if (!r.ok) { if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); } if (btn) btn.disabled = false; return; }
+      if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ public — now claim a name below'; }
+      setTimeout(loadRelayName, 900);
+    } catch (e) { if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; } if (btn) btn.disabled = false; }
   }
   async function claimRelayName() {
     const inp = document.getElementById('relayNameIn'); const msg = document.getElementById('relayNameMsg');
