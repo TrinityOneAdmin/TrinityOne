@@ -1909,8 +1909,9 @@ const wsHeartbeat = setInterval(() => {
   }
 }, 25000);
 wss.on('close', () => clearInterval(wsHeartbeat));
-server.listen(PORT, '0.0.0.0', () =>
-  console.log(`TrinityOne gateway on http://0.0.0.0:${PORT}  (app + relay at /relay, ${store.count()} events loaded)` +
+const BIND_HOST = process.env.RELAY_HOST || '0.0.0.0';   // desktop app sets 127.0.0.1 (loopback → no Windows firewall prompt); servers keep 0.0.0.0
+server.listen(PORT, BIND_HOST, () =>
+  console.log(`TrinityOne gateway on http://${BIND_HOST}:${PORT}  (app + relay at /relay, ${store.count()} events loaded)` +
     (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set up a church in the control dashboard)`) +
     `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
     `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}`));

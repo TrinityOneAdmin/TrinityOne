@@ -9,9 +9,14 @@
 // The payload (scripts/gateway.mjs + web app + minimal node_modules) is produced by scripts/build-relay-payload.sh
 // and bundled as a Tauri resource. The Node runtime is shipped as the sidecar `binaries/trinityone-relay-<triple>`
 // (a renamed official node binary, placed by scripts/fetch-node-sidecar.sh in CI).
+//
+// The relay is told to bind LOOPBACK (RELAY_HOST=127.0.0.1): the window + a local browser reach it there, and
+// Windows never shows a firewall prompt (loopback needs no network permission). Everything the app does with the
+// relay is logged to <app-data>/relay-launch.log so a stuck launch is diagnosable without a console.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use std::net::TcpStream;
+use std::path::Path;
 use std::sync::Mutex;
 use std::{thread, time::Duration};
 use tauri::{Manager, WindowEvent};
@@ -23,54 +28,89 @@ const PORT: u16 = 8787;
 // Holds the running relay child so we can kill it on exit. CommandChild::kill consumes self, hence the Option.
 struct Relay(Mutex<Option<CommandChild>>);
 
+// Append one line to the launch log (best-effort). This is our only window into a background launch failure,
+// since the packaged app has no console (windows_subsystem = "windows").
+fn applog(path: &Path, msg: &str) {
+    use std::io::Write;
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{msg}");
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(Relay(Mutex::new(None)))
         .setup(|app| {
-            // read-only code payload (bundled resource) + writable data dir (per-user app-data)
-            let payload = app.path().resource_dir()?.join("payload");
-            let gateway = payload.join("scripts").join("gateway.mjs");
             let data_dir = app.path().app_data_dir()?.join("data");
             std::fs::create_dir_all(&data_dir).ok();
+            let log = app.path().app_data_dir()?.join("relay-launch.log");
+            let _ = std::fs::remove_file(&log); // fresh log each launch
 
-            // start the relay: bundled node <gateway.mjs> <port>, data redirected to the writable dir
-            let sidecar = app
-                .shell()
-                .sidecar("trinityone-relay-node")?
-                .arg(gateway.to_string_lossy().to_string())
+            // read-only code payload (bundled resource). Pass the script RELATIVE to a working dir set to the
+            // payload, so a space in the install path ("…\TrinityOne Relay\…") can't corrupt the arg.
+            let payload = app.path().resource_dir()?.join("payload");
+            let gateway_abs = payload.join("scripts").join("gateway.mjs");
+            applog(&log, &format!("payload   = {payload:?} (exists={})", payload.exists()));
+            applog(&log, &format!("gateway   = {gateway_abs:?} (exists={})", gateway_abs.exists()));
+            applog(&log, &format!("data_dir  = {data_dir:?}"));
+            applog(&log, &format!("exe       = {:?}", std::env::current_exe()));
+
+            // start the relay: bundled node scripts/gateway.mjs <port> (cwd = payload), data → writable dir,
+            // bound to loopback so there's no firewall prompt.
+            let cmd = match app.shell().sidecar("trinityone-relay-node") {
+                Ok(c) => c,
+                Err(e) => {
+                    applog(&log, &format!("SIDECAR RESOLVE FAILED: {e}"));
+                    return Ok(());
+                }
+            };
+            let cmd = cmd
+                .current_dir(payload.clone())
+                .arg("scripts/gateway.mjs")
                 .arg(PORT.to_string())
                 .env("TRINITY_DATA_DIR", data_dir.to_string_lossy().to_string())
+                .env("RELAY_HOST", "127.0.0.1")
                 .env("RELAY_NO_OPEN", "1"); // the Tauri window IS the control UI; don't also open a browser
-            match sidecar.spawn() {
+            match cmd.spawn() {
                 Ok((mut rx, child)) => {
+                    applog(&log, "sidecar spawned OK");
                     *app.state::<Relay>().0.lock().unwrap() = Some(child);
-                    // drain + log the relay's output (also prevents pipe backpressure stalling the child)
+                    let lp = log.clone();
                     tauri::async_runtime::spawn(async move {
                         while let Some(ev) = rx.recv().await {
                             match ev {
-                                CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
-                                    eprint!("[relay] {}", String::from_utf8_lossy(&b));
-                                }
+                                CommandEvent::Stdout(b) => applog(&lp, &format!("[out] {}", String::from_utf8_lossy(&b).trim_end())),
+                                CommandEvent::Stderr(b) => applog(&lp, &format!("[err] {}", String::from_utf8_lossy(&b).trim_end())),
+                                CommandEvent::Error(e) => applog(&lp, &format!("[error] {e}")),
+                                CommandEvent::Terminated(t) => applog(&lp, &format!("[exit] {t:?}")),
                                 _ => {}
                             }
                         }
                     });
                 }
-                Err(e) => eprintln!("failed to start relay sidecar: {e}"),
+                Err(e) => applog(&log, &format!("SPAWN FAILED: {e}")),
             }
 
-            // wait for the relay to accept connections, then point the window at its control panel
+            // wait for the relay to accept connections, then point the window at its control panel (127.0.0.1,
+            // not localhost — on Windows localhost can resolve to IPv6 ::1 while the relay listens on IPv4).
             if let Some(win) = app.get_webview_window("control") {
+                let lp = log.clone();
                 thread::spawn(move || {
-                    for _ in 0..240 {
-                        // up to ~60s
+                    let mut up = false;
+                    for _ in 0..480 {
+                        // up to ~2 min (first run on Windows can be slow: Defender scans the bundled runtime)
                         if TcpStream::connect(("127.0.0.1", PORT)).is_ok() {
+                            up = true;
                             break;
                         }
                         thread::sleep(Duration::from_millis(250));
                     }
-                    let url = format!("http://localhost:{PORT}/relay-app/control.html");
+                    applog(&lp, &format!("port {PORT} reachable = {up}"));
+                    let url = format!("http://127.0.0.1:{PORT}/relay-app/control.html");
                     if let Ok(u) = url.parse() {
                         let _ = win.navigate(u);
                     }
