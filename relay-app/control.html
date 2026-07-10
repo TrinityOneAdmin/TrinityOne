@@ -103,6 +103,14 @@
       <div class="muted" style="margin-bottom:6px">Your church's web address (optional) — where members reach the app, e.g. <code>https://grace.org</code>. Point that domain's DNS at this box and the app, joining codes and handles all read as yours.</div>
       <input id="t-appurl" placeholder="https://yourchurch.org" spellcheck="false" autocapitalize="none" style="width:100%; box-sizing:border-box; font-size:13px" />
     </div>
+    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line)">
+      <div style="font-weight:700; margin-bottom:4px">Storage limits <span class="muted" id="mediaUsed" style="font-weight:600"></span></div>
+      <div class="muted" style="margin-bottom:10px">For a public relay hosting several churches — cap total media storage, and optionally per church. <code>0</code> = unlimited. Uploads past a limit are refused; messages are unaffected.</div>
+      <div style="display:flex; gap:16px; flex-wrap:wrap">
+        <label style="flex:1; min-width:150px"><span class="muted" style="font-size:12px">Total media (GB)</span><br><input id="t-mediacap" type="number" min="0" step="1" placeholder="0 = unlimited" style="width:100%; box-sizing:border-box; font-size:13px"></label>
+        <label style="flex:1; min-width:150px"><span class="muted" style="font-size:12px">Per church (GB)</span><br><input id="t-churchcap" type="number" min="0" step="1" placeholder="0 = unlimited" style="width:100%; box-sizing:border-box; font-size:13px"></label>
+      </div>
+    </div>
     <div style="margin-top:14px"><button class="btn-clay" id="saveServes">Save</button></div>
   </div>
 

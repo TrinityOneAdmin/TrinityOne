@@ -119,17 +119,23 @@
     try {
       const r = await fetch('/settings', { headers: authHeaders(), cache: 'no-store' });
       if (r.status === 401) { card.style.display = 'none'; return; }   // shown only when unlocked with the admin token
-      const s = (await r.json()).settings || {};
+      const j = await r.json(); const s = j.settings || {};
       card.style.display = 'block';
       document.getElementById('t-app').checked = s.serveApp !== false;
       document.getElementById('t-modules').checked = s.serveModules !== false;
       document.getElementById('t-audio').checked = s.serveAudio !== false;
       document.getElementById('t-appurl').value = s.appUrl || '';
+      const gb = (b) => b ? String(Math.round(b / 1e9 * 100) / 100) : '';
+      document.getElementById('t-mediacap').value = gb(s.mediaCap);
+      document.getElementById('t-churchcap').value = gb(s.churchCap);
+      const used = j.mediaUsed || 0;
+      document.getElementById('mediaUsed').textContent = used ? '· ' + (Math.round(used / 1e9 * 100) / 100) + ' GB used' : '';
     } catch (e) { /* relay down — the hero card shows it */ }
   }
   async function saveServes() {
     const msg = document.getElementById('servesMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = '· saving…';
-    const body = { serveApp: document.getElementById('t-app').checked, serveModules: document.getElementById('t-modules').checked, serveAudio: document.getElementById('t-audio').checked, appUrl: document.getElementById('t-appurl').value.trim() };
+    const capBytes = (id) => Math.round((parseFloat(document.getElementById(id).value) || 0) * 1e9);
+    const body = { serveApp: document.getElementById('t-app').checked, serveModules: document.getElementById('t-modules').checked, serveAudio: document.getElementById('t-audio').checked, appUrl: document.getElementById('t-appurl').value.trim(), mediaCap: capBytes('t-mediacap'), churchCap: capBytes('t-churchcap') };
     try {
       const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
       const s = await r.json();

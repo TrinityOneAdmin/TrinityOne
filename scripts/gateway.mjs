@@ -42,16 +42,21 @@ const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs
 // relay feature toggles — what this box serves besides the Nostr relay itself (owner request). Defaults
 // preserve current behaviour (all on); edited via the token-gated /settings endpoint + the control dashboard.
 const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '' };
+// mediaCap/churchCap: operator storage limits in BYTES (0 = unlimited), settable from the control panel — for a
+// public relay hosting several churches. The effective cap is the setting if non-zero, else the env fallback.
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0 };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
     if (s && typeof s === 'object') {
       SETTINGS.serveApp = s.serveApp !== false; SETTINGS.serveModules = s.serveModules !== false;
       SETTINGS.serveAudio = s.serveAudio !== false; SETTINGS.appUrl = typeof s.appUrl === 'string' ? s.appUrl.slice(0, 200) : '';
+      SETTINGS.mediaCap = Math.max(0, parseInt(s.mediaCap, 10) || 0); SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
     }
   } catch {}
 }
+const effMediaCap = () => SETTINGS.mediaCap || MEDIA_CAP;      // total media-storage cap (bytes), setting overrides env
+const effChurchCap = () => SETTINGS.churchCap || CHURCH_MEDIA_CAP;   // per-church media-storage cap (bytes)
 function saveSettings() { try { const tmp = SETTINGS_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(SETTINGS, null, 2) + '\n'); renameSync(tmp, SETTINGS_FILE); } catch {} }
 loadSettings();
 
@@ -1449,7 +1454,7 @@ function serveStatic(req, res) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS, ...CORS };
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
-    if (req.method === 'GET') { res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS })); return; }
+    if (req.method === 'GET') { res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS, mediaUsed: _mediaBytesTotal, mediaEnv: { cap: MEDIA_CAP, churchCap: CHURCH_MEDIA_CAP } })); return; }
     if (req.method === 'POST') {
       let body = ''; req.on('data', c => { body += c; if (body.length > 1e4) req.destroy(); });
       req.on('end', () => {
@@ -1459,6 +1464,8 @@ function serveStatic(req, res) {
           if ('serveModules' in s) SETTINGS.serveModules = !!s.serveModules;
           if ('serveAudio' in s) SETTINGS.serveAudio = !!s.serveAudio;
           if ('appUrl' in s) SETTINGS.appUrl = String(s.appUrl || '').slice(0, 200);
+          if ('mediaCap' in s) SETTINGS.mediaCap = Math.max(0, parseInt(s.mediaCap, 10) || 0);
+          if ('churchCap' in s) SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
           saveSettings();
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
@@ -1588,8 +1595,9 @@ function serveStatic(req, res) {
       if (who.want && who.want !== sha) { res.writeHead(400, H); res.end('{"error":"hash mismatch (x tag != blob sha256)"}'); return; }
       const isNew = !existsSync(join(BLOB_DIR, sha));   // content-addressed: a re-upload of an existing blob adds no new bytes (don't re-charge quota)
       if (isNew) {
-        if (MEDIA_CAP && _mediaBytesTotal + data.length > MEDIA_CAP) { res.writeHead(507, H); res.end('{"error":"this relay\'s media storage is full"}'); return; }
-        if (CHURCH_MEDIA_CAP && (_mediaBytesByChurch.get(who.church) || 0) + data.length > CHURCH_MEDIA_CAP) { res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
+        const _mc = effMediaCap(), _cc = effChurchCap();
+        if (_mc && _mediaBytesTotal + data.length > _mc) { res.writeHead(507, H); res.end('{"error":"this relay\'s media storage is full"}'); return; }
+        if (_cc && (_mediaBytesByChurch.get(who.church) || 0) + data.length > _cc) { res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
       }
       try {
         const tmp = join(BLOB_DIR, sha + '.tmp'); writeFileSync(tmp, data);
