@@ -1949,6 +1949,8 @@ function DashRelaysCard() {
             );
           })}
         </div>
+        {/* relay actions → responsive 2-column grid so the many sections sit side by side on a wide card */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', gap: '2px 24px', alignItems: 'start' }}>
         {/* add a public relay (redundancy) */}
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', gap: 9 }}>
@@ -2031,6 +2033,7 @@ function DashRelaysCard() {
             <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.5 }}>Download &amp; open it — it starts your relay. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay)' }}>Other builds</a> (Debian package, older Macs). Headless server? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></div>
           </div>
         )}
+        </div>{/* end relay-actions grid */}
         <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
           <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church hosts its own relay — every message, group, and member lives on infrastructure you control. Members reach it wherever you serve the app.</div>
         </div>
@@ -4206,7 +4209,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {section === 'network' ? <React.Fragment>
       <DashNetworksPanel />
 
-      <DashRelaysCard />
+      <div style={{ columnSpan: 'all', breakInside: 'avoid' }}><DashRelaysCard /></div>
       </React.Fragment> : null}
 
       {section === 'security' && delegated ? (
