@@ -185,7 +185,8 @@
     body.innerHTML =
       '<div class="row" style="background:color-mix(in oklab,var(--sage) 9%,var(--surface));border-color:color-mix(in oklab,var(--sage) 28%,transparent)"><span style="color:var(--sage);font-weight:700;font-size:13px">✓ Public via Cloudflare — reachable from anywhere</span></div>' +
       '<div class="row"><span class="k">Public URL</span><span class="v">' + esc(cf.url) + '</span><button class="btn-ghost" onclick="gpCopy(\'' + esc(cf.url) + '\',this)">Copy</button></div>' +
-      '<div class="muted" style="margin-top:6px">Members connect by the <b>name</b> you claim below — it stays the same even if this URL changes. Test from your phone on <b>mobile data</b>: <a href="' + esc(cf.url) + '/status" target="_blank">' + esc(cf.url) + '/status</a>.</div>';
+      '<div class="muted" style="margin-top:6px">Members connect by the <b>name</b> you claim below — it stays the same even if this URL changes. Test from your phone on <b>mobile data</b>: <a href="' + esc(cf.url) + '/status" target="_blank">' + esc(cf.url) + '/status</a>.</div>' +
+      '<div class="row" style="margin-top:12px;background:color-mix(in oklab,var(--clay) 7%,var(--surface));border-color:color-mix(in oklab,var(--clay) 22%,transparent)"><span style="font-size:13px;line-height:1.5"><b>Serve the wider church.</b> Your relay can also <b>host other churches that can’t self-host</b> — add their <code>npub</code> in “Churches on this relay” below, and they get a home on your infrastructure. One box can carry many congregations.</span></div>';
   }
   async function claimRelayName() {
     const inp = document.getElementById('relayNameIn'); const msg = document.getElementById('relayNameMsg');

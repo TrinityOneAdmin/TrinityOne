@@ -126,10 +126,12 @@ fn main() {
                     // Combined "church-in-a-box": open the Steward console (church management), which auto-uses
                     // this local relay (same origin). First launch → the guided setup wizard; later launches →
                     // the dashboard. relayapp=1 tells the console it's already running its own relay.
+                    // First launch → straight into the guided church setup. Afterwards → the launcher (home.html),
+                    // where the operator picks Full suite / Relay only / Console only.
                     let url = if first_run {
                         format!("http://127.0.0.1:{PORT}/steward.html?setup=1&relayapp=1")
                     } else {
-                        format!("http://127.0.0.1:{PORT}/steward.html?relayapp=1")
+                        format!("http://127.0.0.1:{PORT}/relay-app/home.html")
                     };
                     if let Ok(u) = url.parse() {
                         let _ = win.navigate(u);
