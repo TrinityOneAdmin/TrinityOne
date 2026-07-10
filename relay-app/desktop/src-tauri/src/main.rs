@@ -81,7 +81,10 @@ fn main() {
                 .arg("scripts/gateway.mjs")
                 .arg(PORT.to_string())
                 .env("TRINITY_DATA_DIR", data_dir.to_string_lossy().to_string())
-                .env("RELAY_HOST", "127.0.0.1")
+                // Bind all interfaces so LAN devices (a phone on the same wifi) can reach the relay directly.
+                // Windows shows a one-time "allow network access?" prompt for this, but the bind + loopback work
+                // regardless of the answer — the app window reaches the relay via 127.0.0.1 either way, so a
+                // missed/denied prompt never stalls the app; it just gates OTHER devices until allowed.
                 .env("RELAY_NO_OPEN", "1"); // the Tauri window IS the control UI; don't also open a browser
             match cmd.spawn() {
                 Ok((mut rx, child)) => {
