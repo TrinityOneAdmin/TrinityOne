@@ -74,7 +74,7 @@
     <h2>Churches on this relay <span class="muted" id="cfgStatus" style="font-weight:600"></span></h2>
     <!-- token gate: shown only when configuring from another device (loopback is trusted) -->
     <div id="cfgGate" style="display:none">
-      <div class="warn" style="margin-bottom:10px">⚠ Enter the relay's <b>admin token</b> to manage churches — shown in the install output, or run <code>journalctl -u trinityone-relay | grep "admin token"</code> on the relay box.</div>
+      <div class="warn" style="margin-bottom:10px">⚠ Enter the relay's <b>admin token</b> to manage churches. If you're on the relay's own computer this fills in automatically. Otherwise find it in the relay app's window, or the install output. <span style="opacity:.75">(Self-hosted on a Linux server? <code>journalctl -u trinityone-relay | grep "admin token"</code>.)</span></div>
       <div style="display:flex; gap:8px; margin-bottom:6px"><input id="tok" type="password" placeholder="admin token" autocomplete="off" /><button class="btn-clay" id="tokGo" style="white-space:nowrap">Connect</button></div>
     </div>
     <div id="cfgList"><div class="muted">Loading…</div></div>

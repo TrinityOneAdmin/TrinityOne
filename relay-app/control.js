@@ -218,7 +218,15 @@
   document.getElementById('saveCfg').onclick = saveConfig;
   document.getElementById('tokGo').onclick = () => { adminToken = document.getElementById('tok').value.trim(); if (adminToken) localStorage.setItem(TOKEN_KEY, adminToken); loadConfig(); gpTick(); };
   document.getElementById('tok').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('tokGo').click(); });
-  loadConfig();
+  // When this panel is opened ON the relay machine (e.g. the desktop Relay app's own window), the relay hands
+  // us its admin token automatically — no hunting in logs. /local-token only answers genuine same-machine
+  // requests, so this is a no-op when the dashboard is opened remotely over a tunnel.
+  (async () => {
+    if (!adminToken) {
+      try { const r = await fetch('/local-token', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j && j.token) { adminToken = j.token; localStorage.setItem(TOKEN_KEY, adminToken); } } } catch (e) {}
+    }
+    loadConfig();
+  })();
 
   // ── "Go public" wizard: bring the node onto Tailscale + turn on Funnel (public HTTPS/WSS) ──
   let tsBusy = false;       // pause polling while an action is mid-flight (so it can't clobber the view)

@@ -984,6 +984,23 @@ function serveStatic(req, res) {
     }));
     return;
   }
+  // Local-only admin-token disclosure. A request that GENUINELY originates on this machine is already inside
+  // the trust boundary (it could just read relay/admin.json), so we hand it the token — letting the desktop
+  // Relay app's own control panel (served on 127.0.0.1) authenticate itself with NO token-hunting on Mac/Win/
+  // Linux alike. Safe against the "cloudflared proxies from 127.0.0.1" caveat (see adminOK note): a tunnelled
+  // public request has an X-Forwarded-For header and a public Host — we require BOTH a real loopback socket AND
+  // no proxy header AND a loopback Host, which only a direct same-machine request satisfies. No CORS header is
+  // sent, so a cross-origin page in a local browser can't read the response either (only the relay's own UI can).
+  if (route === '/local-token') {
+    const ra = (req.socket && req.socket.remoteAddress) || '';
+    const loopbackSock = ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1';
+    const proxied = req.headers['x-forwarded-for'] != null || req.headers['forwarded'] != null;
+    const hostname = String(req.headers['host'] || '').replace(/^\[|\]$/g, '').split(':')[0].toLowerCase();
+    const loopbackHost = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // deliberately NO Access-Control-Allow-Origin
+    if (loopbackSock && !proxied && loopbackHost) { res.writeHead(200, H); res.end(JSON.stringify({ token: ADMIN_TOKEN })); return; }
+    res.writeHead(403, H); res.end('{"error":"not a local request"}'); return;
+  }
   // church-data backup: stream every event this relay holds for the caller's church as JSONL (a self-verifying,
   // importAll()-restorable archive). NIP-98-authed to the church key or a steward of that church.
   if (route === '/export') {
