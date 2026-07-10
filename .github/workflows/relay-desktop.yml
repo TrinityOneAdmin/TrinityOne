@@ -109,7 +109,14 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        run: |
+          # Tauri treats a DEFINED-but-empty APPLE_CERTIFICATE as "please sign" and then fails importing an
+          # empty cert. So with no secrets configured, unset them all → a clean UNSIGNED build. With the cert
+          # present, they stay set and Tauri signs + notarizes.
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          fi
+          npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       # Gather the installers into one flat dir. Each is published under BOTH its Tauri (versioned) name AND a
       # version-less stable name (TrinityOne-Relay-<stable>.<ext>) so the app can link a permanent
