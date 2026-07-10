@@ -13337,6 +13337,21 @@ zoo`.split("\n");
         }
       }
     },
+    // register this church with ONE specific relay by PROVING key ownership (NIP-98 signed by the church key,
+    // bound to that relay's /config) — no admin token. Used by "connect by name": after adding a relay, the
+    // church self-registers so the relay accepts its posts. Open relays accept it; a restricted one may decline.
+    async registerAtRelay(wssUrl, name) {
+      if (!churchSk || !churchPub) return { ok: false, error: "no church key" };
+      const base = String(wssUrl || "").replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "");
+      const url = base + "/config";
+      try {
+        const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
+        const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: npubEncode(churchPub), name: name || "" }, auth }) });
+        return { ok: r.ok, status: r.status };
+      } catch (e) {
+        return { ok: false, error: e && e.message || "network" };
+      }
+    },
     // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)
     addRelay(input) {
       const url = normRelay(input);

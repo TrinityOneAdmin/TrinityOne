@@ -1878,7 +1878,9 @@ function DashRelaysCard() {
       if (!r.ok) throw new Error('directory');
       const j = await r.json();
       window.Steward.addRelay(j.url);
-      setByNameMsg({ ok: true, text: '✓ Connected to ' + n + '. If it rejects your posts, register it below.' });
+      setByNameMsg({ text: 'Connecting your church…' });
+      let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, ''); } catch (e) {}
+      setByNameMsg({ ok: true, text: reg.ok ? '✓ Connected to “' + n + '” — your church is registered and can post.' : '✓ Added “' + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
       setByName('');
     } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
   };
