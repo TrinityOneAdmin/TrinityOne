@@ -27,19 +27,27 @@ jobs:
       fail-fast: false
       matrix:
         # NB: macOS Intel (macos-13 / x86_64-apple-darwin) is intentionally omitted for now — that runner is
-        # scarce and perpetually queues; Apple Silicon covers the overwhelming majority. Re-add it (or a
-        # universal build) as a follow-up. `bundles` restricts formats per-OS: Windows uses NSIS only (the WiX
-        # MSI bundler chokes on the large payload tree), Linux ships AppImage + deb, macOS ships a .dmg.
+        # `bundles` restricts formats per-OS: Windows uses NSIS only (the WiX MSI bundler chokes on the large
+        # payload tree), Linux ships AppImage + deb, macOS ships a .dmg. `stable` is the version-less name we
+        # ALSO publish each installer under, so the app can link releases/latest/download/<stable> forever.
+        # NB: macOS Intel (macos-13) can be slow to get a runner; if it queues, the other assets still publish.
         include:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             bundles: deb,appimage
+            stable: linux-x86_64
           - os: macos-14          # Apple Silicon
             target: aarch64-apple-darwin
             bundles: app,dmg
+            stable: macos-arm64
+          - os: macos-13          # Intel (older Macs — common in the field)
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+            stable: macos-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis
+            stable: windows-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -91,18 +99,37 @@ jobs:
         shell: bash
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"   # AppImage tooling can't FUSE-mount on CI runners
+          # macOS signing + notarization — all EMPTY until you add the secrets, in which case Tauri builds an
+          # UNSIGNED app exactly as now. Add these repo secrets to auto-sign (removes the Gatekeeper warning):
+          #   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+          #   APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
-      # Gather the installers into one flat dir regardless of platform layout, for upload/release.
+      # Gather the installers into one flat dir. Each is published under BOTH its Tauri (versioned) name AND a
+      # version-less stable name (TrinityOne-Relay-<stable>.<ext>) so the app can link a permanent
+      # releases/latest/download/<stable> URL that never needs bumping.
       - name: Collect installers
         shell: bash
         run: |
           mkdir -p dist-installers
           BND="relay-app/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          # -print0/read -d '' so filenames containing spaces (Tauri's "TrinityOne Relay_…") are safe.
           find "$BND" -type f \
-            \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.AppImage' \
-               -o -name '*.deb' -o -name '*.exe' -o -name '*.msi' \) \
-            -exec cp {} dist-installers/ \; || true
+            \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' \) -print0 |
+          while IFS= read -r -d '' f; do
+            cp "$f" dist-installers/                                        # versioned (Tauri) name
+            ext="${f##*.}"
+            case "$ext" in
+              exe) cp "$f" "dist-installers/TrinityOne-Relay-${{ matrix.stable }}-setup.exe" ;;
+              *)   cp "$f" "dist-installers/TrinityOne-Relay-${{ matrix.stable }}.$ext" ;;
+            esac
+          done
           ls -la dist-installers || true
 
       - name: Upload installers (artifact)
