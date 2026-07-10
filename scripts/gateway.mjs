@@ -310,6 +310,11 @@ async function reclaimRelayName() {   // re-point the claimed name at the curren
   const wss = cfPublicWss();
   try { await fetch(DIRECTORY + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': relayNameClaim(MY_RELAY_NAME, wss) }, body: JSON.stringify({ handle: MY_RELAY_NAME, url: wss }) }); } catch {}
 }
+// the relay's pet-name as a directory handle slug (matches the client's stewardNameFor, lower-cased + hyphens),
+// so going public can auto-claim a memorable name with zero steps — e.g. "Quiet Dove 45" -> "quiet-dove-45".
+const _PET_ADJ = ['quiet', 'bright', 'gentle', 'steady', 'faithful', 'humble', 'joyful', 'kind', 'patient', 'bold', 'gracious', 'calm', 'glad', 'warm', 'true', 'sure'];
+const _PET_NOUN = ['olive', 'cedar', 'dove', 'anchor', 'lamp', 'vine', 'shepherd', 'harbor', 'beacon', 'reed', 'sparrow', 'willow', 'spring', 'haven', 'ember', 'brook'];
+function relayPetSlug() { const h = RELAY_PUB; if (!/^[0-9a-f]{64}$/i.test(h)) return ''; let x = 0; for (let i = 0; i < h.length; i++) x = (x * 31 + h.charCodeAt(i)) >>> 0; return _PET_ADJ[x % 16] + '-' + _PET_NOUN[(x >>> 4) % 16] + '-' + (10 + (x >>> 9) % 90); }
 function startCloudflared() {
   return new Promise((resolve) => {
     if (CF_URL && CF_CHILD) { resolve({ ok: true, url: CF_URL }); return; }
@@ -317,7 +322,7 @@ function startCloudflared() {
     catch (e) { resolve({ ok: false, error: 'cloudflared is not available on this box' }); return; }
     CF_CHILD = child;
     let done = false;
-    const onData = (d) => { const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i); if (m && !done) { done = true; CF_URL = m[0]; reclaimRelayName(); resolve({ ok: true, url: CF_URL }); } };
+    const onData = (d) => { const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i); if (m && !done) { done = true; CF_URL = m[0]; if (!MY_RELAY_NAME) { MY_RELAY_NAME = relayPetSlug(); try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle: MY_RELAY_NAME }) + '\n'); } catch {} } reclaimRelayName(); resolve({ ok: true, url: CF_URL }); } };
     child.stdout.on('data', onData); child.stderr.on('data', onData);
     child.on('exit', () => { CF_CHILD = null; CF_URL = ''; });
     child.on('error', (e) => { if (!done) { done = true; CF_CHILD = null; resolve({ ok: false, error: String((e && e.message) || e) }); } });

@@ -1870,7 +1870,7 @@ function DashRelaysCard() {
   const [byNameMsg, setByNameMsg] = React.useState(null);
   const RELAY_DIRECTORY = 'https://app.trinityone.church';
   const connectByName = async () => {
-    const n = (byName || '').trim().toLowerCase(); if (!n) return;
+    const n = (byName || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); if (!n) return;   // "Quiet Dove 45" → "quiet-dove-45"
     setByNameMsg({ text: 'Looking up “' + n + '”…' });
     try {
       const r = await fetch(RELAY_DIRECTORY + '/relay-names/resolve/' + encodeURIComponent(n), { cache: 'no-store' });
@@ -1894,7 +1894,8 @@ function DashRelaysCard() {
     try {
       let url = raw;
       if (!/:\/\//.test(raw) && !raw.includes('.')) {   // a name, not a URL → resolve via the directory
-        const rr = await fetch(RELAY_DIRECTORY + '/relay-names/resolve/' + encodeURIComponent(raw.toLowerCase()), { cache: 'no-store' });
+        const slug = raw.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+        const rr = await fetch(RELAY_DIRECTORY + '/relay-names/resolve/' + encodeURIComponent(slug), { cache: 'no-store' });
         if (!rr.ok) { setCloneMsg({ ok: false, text: '✗ No relay named “' + raw + '”.' }); setCloning(false); return; }
         url = (await rr.json()).url;
       }
@@ -1939,7 +1940,7 @@ function DashRelaysCard() {
               <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
                 <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface)', color: up ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="globe" size={18} color="currentColor" /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.url}</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)', wordBreak: 'break-all', lineHeight: 1.35 }}>{r.url}</div>
                   <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{self ? 'Your relay · self-hosted' : 'Shared relay'}{up && r.ms != null ? ` · ${r.ms}ms` : ''}</div>
                 </div>
                 {self ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
@@ -1950,7 +1951,7 @@ function DashRelaysCard() {
           })}
         </div>
         {/* relay actions → responsive 2-column grid so the many sections sit side by side on a wide card */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', gap: '2px 24px', alignItems: 'start' }}>
+        <div className="relay-grid">
         {/* add a public relay (redundancy) */}
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', gap: 9 }}>
@@ -4166,7 +4167,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <button key={k} onClick={() => setSection(k)} style={{ padding: '8px 15px', borderRadius: 999, border: '1px solid ' + (section === k ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', background: section === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: section === k ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>{label}</button>
         ))}
       </div>
-      <div className="sk-masonry">
+      <div className={section === 'network' ? 'net-grid' : 'sk-masonry'}>
       {section === 'church' ? <React.Fragment>
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
@@ -4209,7 +4210,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {section === 'network' ? <React.Fragment>
       <DashNetworksPanel />
 
-      <div style={{ columnSpan: 'all', breakInside: 'avoid' }}><DashRelaysCard /></div>
+      <DashRelaysCard />
       </React.Fragment> : null}
 
       {section === 'security' && delegated ? (
