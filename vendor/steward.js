@@ -10681,10 +10681,21 @@ zoo`.split("\n");
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function ownRelay() {
     if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;
+    try {
+      if (lsGet("trinityone.hostoff") === "1") return CANONICAL_RELAY;
+    } catch (e) {
+    }
     const l = typeof location !== "undefined" ? location : null;
     if (!l || !l.host) return CANONICAL_RELAY;
     if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return CANONICAL_RELAY;
     return (l.protocol === "https:" ? "wss://" : "ws://") + l.host + "/relay";
+  }
+  try {
+    const _sp = new URLSearchParams(location.search);
+    const _h = _sp.get("host");
+    if (_h === "off") lsSet("trinityone.hostoff", "1");
+    else if (_h === "on" || _sp.get("relayapp") === "1") lsSet("trinityone.hostoff", "");
+  } catch (e) {
   }
   function extraRelays() {
     try {

@@ -134,12 +134,17 @@ function ownRelay() {
   // native (Capacitor APK): location.host is just "localhost", which has no relay — use the shared pool
   // so a phone-installed steward (or one restored via handoff) reaches the church's data.
   if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;
+  // Suite "Console only" mode (launcher ?host=off): this box isn't the church's relay — run on the community pool.
+  try { if (lsGet('trinityone.hostoff') === '1') return CANONICAL_RELAY; } catch (e) {}
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.host) return CANONICAL_RELAY;
   // a static CDN host (GitHub Pages etc.) has no relay on its origin → publish to the shared pool
   if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return CANONICAL_RELAY;
   return ((l.protocol === 'https:') ? 'wss://' : 'ws://') + l.host + '/relay';
 }
+// Stick/clear the Suite "Console only" flag from the launcher: ?host=off sets it (church runs on community
+// relays), ?host=on or the full-suite ?relayapp=1 clears it (church self-hosts on this box).
+try { const _sp = new URLSearchParams(location.search); const _h = _sp.get('host'); if (_h === 'off') lsSet('trinityone.hostoff', '1'); else if (_h === 'on' || _sp.get('relayapp') === '1') lsSet('trinityone.hostoff', ''); } catch (e) {}
 function extraRelays() {
   try { const a = JSON.parse(lsGet(RELAYS_LS) || '[]'); return Array.isArray(a) ? a.filter(Boolean) : []; } catch { return []; }
 }
