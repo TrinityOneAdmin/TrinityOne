@@ -239,6 +239,16 @@ function WizIdentity({ name, setName, nip05, setNip05 }) {
 }
 
 function WizRelays({ ownRelay, setOwnRelay }) {
+  const [relayUrl, setRelayUrl] = React.useState('');
+  const [addMsg, setAddMsg] = React.useState(null);
+  const myOS = (() => { const s = ((typeof navigator !== 'undefined' && (navigator.platform || navigator.userAgent)) || '').toLowerCase(); return s.includes('mac') ? 'apple' : s.includes('win') ? 'windows' : 'linux'; })();
+  const DOWNLOADS = [['macOS', 'apple', 'TrinityOne-Relay.dmg'], ['Windows', 'windows', 'TrinityOne-Relay-Setup.exe'], ['Linux', 'linux', 'TrinityOne-Relay.AppImage']];
+  const addOwn = () => {
+    const u = (relayUrl || '').trim(); if (!u) return;
+    try { window.Steward.addRelay(u); setAddMsg({ ok: true, text: '✓ Added — your church now uses this relay too.' }); setRelayUrl(''); }
+    catch (e) { setAddMsg({ ok: false, text: '✗ ' + ((e && e.message) || 'That doesn’t look like a relay address.') }); }
+  };
+  const mono5 = { fontFamily: 'var(--mono)', fontSize: 11.5, background: 'var(--surface)', padding: '2px 5px', borderRadius: 5 };
   return (
     <div style={{ marginTop: 18 }}>
       <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>Relays store and serve your church’s signed events. Your church runs on the shared <b style={{ color: 'var(--ink)' }}>TrinityOne community nodes</b> by default — nothing to set up, and if one’s down the others carry on.</p>
@@ -247,13 +257,13 @@ function WizRelays({ ownRelay, setOwnRelay }) {
           const own = window.Steward && window.Steward.extraRelays && window.Steward.extraRelays().includes(url);
           return (
           <div key={url} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-            <Icon name="globe" size={18} color="var(--sage)" />
+            <Icon name="globe" size={18} color={own ? 'var(--clay)' : 'var(--sage)'} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</div>
               <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{own ? 'Your relay · self-hosted' : 'TrinityOne community node'}</div>
             </div>
             <SkPill tint={own ? 'clay' : 'sage'}>{own ? 'Yours' : 'Community'}</SkPill>
-            <div style={{ width: 40, height: 24, borderRadius: 999, background: 'var(--sage)', position: 'relative' }}><span style={{ position: 'absolute', top: 3, right: 3, width: 18, height: 18, borderRadius: 999, background: '#fff' }} /></div>
+            {own ? <button onClick={() => { try { window.Steward.removeRelay(url); } catch (e) {} }} title="Remove this relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={15} color="currentColor" /></button> : null}
           </div>
           );
         })}
@@ -263,9 +273,30 @@ function WizRelays({ ownRelay, setOwnRelay }) {
           <Icon name="plus" size={17} color="var(--clay)" /> Run your own relay
         </button>
       ) : (
-        <div style={{ marginTop: 12, display: 'flex', gap: 10, padding: 13, borderRadius: 13, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, transparent)' }}>
-          <Icon name="check" size={18} stroke={2.4} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>You’re hosting your own relay. The <b style={{ color: 'var(--ink)' }}>TrinityOne Relay</b> app runs on any Mac, Windows or Linux machine — it does the rest, no command line.</div>
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 17, padding: 17, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Host your church’s own relay so your data lives on infrastructure <b style={{ color: 'var(--ink)' }}>you</b> control. The TrinityOne Relay app runs it — no command line.</div>
+          <div>
+            <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 8 }}>1 · GET THE RELAY APP</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {DOWNLOADS.map(([label, os, file]) => (
+                <a key={os} href={'https://app.trinityone.church/download/relay/' + file} target="_blank" rel="noreferrer" className={'sk-btn ' + (myOS === os ? 'sk-btn--clay' : 'sk-btn--ghost')} style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color={myOS === os ? '#fff' : 'currentColor'} /> {label}</a>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.55 }}>Self-hosting on a server instead? Run <span style={mono5}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 6 }}>2 · OPEN IT</div>
+            <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Launch the app — it starts your relay and shows its address (looks like <span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>wss://…</span>).</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 8 }}>3 · CONNECT IT TO YOUR CHURCH</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={relayUrl} onChange={e => { setRelayUrl(e.target.value); setAddMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') addOwn(); }} placeholder="wss://your-relay-address…" spellCheck={false} autoCapitalize="none" style={{ flex: 1, padding: '11px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: 13.5, outline: 'none', boxSizing: 'border-box' }} />
+              <button onClick={addOwn} disabled={!relayUrl.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13.5, whiteSpace: 'nowrap', opacity: relayUrl.trim() ? 1 : .5 }}>Add relay</button>
+            </div>
+            {addMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: addMsg.ok ? 'var(--sage)' : 'var(--clay)' }}>{addMsg.text}</div> : null}
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.55 }}>The app will ask you to register this church (it shows you an admin token) so the relay accepts your posts.</div>
+          </div>
         </div>
       )}
     </div>
