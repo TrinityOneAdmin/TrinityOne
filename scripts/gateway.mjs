@@ -8,6 +8,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { readFileSync, writeFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync, readdirSync } from 'fs';
 import { extname, normalize, join, sep } from 'path';
+import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { openStore, matchFilter } from './event-store.mjs';   // durable event storage (node:sqlite) + the canonical read predicate
@@ -16,10 +17,16 @@ import webpush from 'web-push';
 import { randomBytes, timingSafeEqual, createHash } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
 
-const ROOT = join(new URL('..', import.meta.url).pathname);   // project dir
+const ROOT = fileURLToPath(new URL('..', import.meta.url));   // project dir (fileURLToPath is correct on Windows; the bare .pathname yields "/C:/…")
+// The ONE directory the relay writes to (event db, keys, church.json, blobs, push subs, apks…). Defaults to
+// ROOT/relay so a git-checkout relay is byte-for-byte unchanged. The packaged desktop app sets TRINITY_DATA_DIR
+// to a writable per-user location (OS app-data dir) so the app payload itself can stay READ-ONLY inside the
+// installed bundle — the app ships its code read-only and keeps its data separately, the platform-native way.
+const DATA_DIR = process.env.TRINITY_DATA_DIR || join(ROOT, 'relay');
+try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
-const DB = process.env.RELAY_DB || join(ROOT, 'relay', 'relay-db.json');                 // legacy JSON store (migrated from, once)
-const SQLITE_DB = process.env.RELAY_SQLITE || join(ROOT, 'relay', 'relay.sqlite');       // durable event store
+const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');                 // legacy JSON store (migrated from, once)
+const SQLITE_DB = process.env.RELAY_SQLITE || join(DATA_DIR,'relay.sqlite');       // durable event store
 const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 20000;   // ephemeral budget; raise on a shared/public relay
 // FEDERATION Phase 3a — relay OFFER (opt-in): an operator willing to host OTHER churches sets RELAY_OPEN=1,
 // so this relay advertises itself (in its NIP-11 doc) as accepting new churches. Default OFF: a private/home
@@ -34,7 +41,7 @@ const STEWARDREQ_CAP = 50;          // cap pending steward-requests per church f
 const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs per member — one member can't disk-exhaust the relay with novel d-tags
 // relay feature toggles — what this box serves besides the Nostr relay itself (owner request). Defaults
 // preserve current behaviour (all on); edited via the token-gated /settings endpoint + the control dashboard.
-const SETTINGS_FILE = join(ROOT, 'relay', 'relay-settings.json');
+const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '' };
 function loadSettings() {
   try {
@@ -49,7 +56,7 @@ function saveSettings() { try { const tmp = SETTINGS_FILE + '.tmp'; writeFileSyn
 loadSettings();
 
 // where this box pulls code updates from (written by the installer); blank on the release host itself.
-const ORIGIN = (() => { try { return readFileSync(join(ROOT, 'relay', 'origin'), 'utf8').trim(); } catch { return ''; } })();
+const ORIGIN = (() => { try { return readFileSync(join(DATA_DIR,'origin'), 'utf8').trim(); } catch { return ''; } })();
 // build version — `git archive` stamps version.txt via export-subst when the bundle is built; on a git
 // working tree the $Format placeholders stay literal, so fall back to git. Reported in /status so the
 // control dashboard can tell an installed relay whether a newer build is available.
@@ -62,11 +69,11 @@ const BUILD = (() => {
   }
   return { sha, short: sha.slice(0, 7), date };
 })();
-const UPDATE_FLAG = join(ROOT, 'relay', '.update-request');   // the relay can only write under relay/; a root path-unit watches this and runs the update
+const UPDATE_FLAG = join(DATA_DIR,'.update-request');   // the relay can only write under relay/; a root path-unit watches this and runs the update
 // FEDERATION Phase 5 Tier 2 — self-hosted media (Blossom-style content-addressed blobs). A church stores its
 // OWN audio/video here (no YouTube), addressed by its SHA-256. Upload is church/steward-signed (kind 24242);
 // download is member-gated (NIP-98 kind 27235). Blobs live under relay/ (the one dir the relay may write).
-const BLOB_DIR = join(ROOT, 'relay', 'blobs');
+const BLOB_DIR = join(DATA_DIR,'blobs');
 try { mkdirSync(BLOB_DIR, { recursive: true }); } catch {}
 const MAX_BLOB = parseInt(process.env.RELAY_MAX_BLOB, 10) || 200 * 1024 * 1024;   // 200 MB/blob cap (sermons: audio small, video low-bitrate)
 const MAX_IMPORT = parseInt(process.env.RELAY_MAX_IMPORT, 10) || 256 * 1024 * 1024;   // restore/clone: cap the events JSONL body (blobs come separately via PUT /blob)
@@ -157,8 +164,8 @@ function _syncAuth(req, host, path) {
 // current HEAD sha, and serve the cached bytes for /bundle.tgz and a detached signature over those same
 // bytes for /bundle.sig. Regenerated only when HEAD changes. We sign the raw bundle bytes (openssl
 // pkeyutl -rawin), NOT a client-supplied hash — no signing oracle.
-const RELEASE_KEY = join(ROOT, 'relay', 'release-key.pem');    // release SECRET (gitignored; release host only)
-const BUNDLE_CACHE_DIR = join(ROOT, 'relay', '.bundle-cache'); // per-HEAD cached bundle + signature (gitignored)
+const RELEASE_KEY = join(DATA_DIR,'release-key.pem');    // release SECRET (gitignored; release host only)
+const BUNDLE_CACHE_DIR = join(DATA_DIR,'.bundle-cache'); // per-HEAD cached bundle + signature (gitignored)
 // Build (or reuse) the cached, signed bundle for the current HEAD. Returns { tgz, sig } absolute paths,
 // or null if we can't (e.g. no release key on a non-release box — then we just serve the unsigned tgz
 // as before, and signed verification only kicks in once a key is present). Cheap on the hot path: if the
@@ -237,7 +244,7 @@ function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]
 const CHURCH_PUBS = new Set();
 const CHURCH_NAMES = new Map();   // hex pub -> display name (for the Relay app dashboard)
 const addChurch = (s, name) => { const h = toHexPub(s); if (h) { CHURCH_PUBS.add(h); if (name) CHURCH_NAMES.set(h, name); } };
-const CHURCH_FILE = join(ROOT, 'relay', 'church.json');
+const CHURCH_FILE = join(DATA_DIR,'church.json');
 // (re)load the write policy from env + church.json — called at startup and after a browser config save
 function loadChurches() {
   CHURCH_PUBS.clear(); CHURCH_NAMES.clear();
@@ -250,14 +257,14 @@ function loadChurches() {
 loadChurches();
 // admin token — gates the browser config endpoint (/config), which changes the write policy. Generated
 // once and stored 0600. Loopback requests (you're on the box) are trusted; LAN/tunnel must present it.
-const ADMIN_FILE = join(ROOT, 'relay', 'admin.json');
+const ADMIN_FILE = join(DATA_DIR,'admin.json');
 let ADMIN_TOKEN = '';
 try { ADMIN_TOKEN = JSON.parse(readFileSync(ADMIN_FILE, 'utf8')).token || ''; } catch {}
 if (!ADMIN_TOKEN) { ADMIN_TOKEN = randomBytes(24).toString('base64url'); try { writeFileSync(ADMIN_FILE, JSON.stringify({ token: ADMIN_TOKEN }), { mode: 0o600 }); } catch {} }
 // Relay identity (for resync): this relay's own Nostr keypair. It proves WHICH relay is asking when it pulls a
 // peer for a church's full corpus — a church authorises specific relay pubkeys as its trusted infrastructure
 // (see TRUSTED_RELAYS), the same church key that gatekeeps writes. Generated once, stored 0600 (gitignored).
-const RELAY_KEY_FILE = join(ROOT, 'relay', 'relay-key.json');
+const RELAY_KEY_FILE = join(DATA_DIR,'relay-key.json');
 let RELAY_SK = null, RELAY_PUB = '';
 try { const k = JSON.parse(readFileSync(RELAY_KEY_FILE, 'utf8')); if (k && k.sk && k.pub) { RELAY_SK = Uint8Array.from(Buffer.from(k.sk, 'hex')); RELAY_PUB = k.pub; } } catch {}
 if (!RELAY_SK || !RELAY_PUB) { RELAY_SK = generateSecretKey(); RELAY_PUB = getPublicKey(RELAY_SK); try { writeFileSync(RELAY_KEY_FILE, JSON.stringify({ sk: Buffer.from(RELAY_SK).toString('hex'), pub: RELAY_PUB }), { mode: 0o600 }); } catch {} }
@@ -272,7 +279,7 @@ const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
 const TRUSTED_RELAYS = new Map(); // churchpub -> Set(relay pubkeys the church authorised as trusted infra — may pull the FULL corpus)
 const PEER_URLS = new Map();      // churchpub -> Set(relay URLs to sync this church WITH, from the same church-signed doc)
-const SYNC_CURSOR_FILE = join(ROOT, 'relay', 'sync-cursors.json');   // { "<cp>@<peerUrl>": lastCreatedAt } — resumable, idempotent
+const SYNC_CURSOR_FILE = join(DATA_DIR,'sync-cursors.json');   // { "<cp>@<peerUrl>": lastCreatedAt } — resumable, idempotent
 let SYNC_CURSORS = {}; try { SYNC_CURSORS = JSON.parse(readFileSync(SYNC_CURSOR_FILE, 'utf8')) || {}; } catch {}
 const SYNC_OVERLAP = 600;   // re-pull a 10-min window before the cursor each time, so an event that arrived out-of-order isn't missed
 const GROUP_CHURCH = new Map();  // groupId -> owning church/network pubkey — per-church retention attribution for chat
@@ -339,14 +346,14 @@ const GROUP_MEMBERS = new Map(); // groupId -> Set(pubkey) allowed to post in an
 const GROUP_NAMES = new Map();   // groupId -> display name (for push titles)
 
 // ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
-const SUBS_FILE = join(ROOT, 'relay', 'subscribers.json');
+const SUBS_FILE = join(DATA_DIR,'subscribers.json');
 let subscribers = []; try { const d = JSON.parse(readFileSync(SUBS_FILE, 'utf8')); if (Array.isArray(d)) subscribers = d; } catch {}
 const subSeen = new Set(subscribers.map(s => String(s.email || '').toLowerCase()));
 const SUB_RL = new Map();   // ip -> [recent signup timestamps] — basic per-IP anti-flood
 
 // ---- web push (VAPID): notify members of serving requests in real time (PWA) ----
-const VAPID_PATH = join(ROOT, 'relay', 'vapid.json');
-const SUBS_PATH = join(ROOT, 'relay', 'push-subs.json');
+const VAPID_PATH = join(DATA_DIR,'vapid.json');
+const SUBS_PATH = join(DATA_DIR,'push-subs.json');
 let VAPID = null;
 try { VAPID = JSON.parse(readFileSync(VAPID_PATH, 'utf8')); }
 catch { VAPID = webpush.generateVAPIDKeys(); try { writeFileSync(VAPID_PATH, JSON.stringify(VAPID), { mode: 0o600 }); } catch {} }   // SECURITY-AUDIT-2026-06-24 M3: VAPID private key must not be group-readable
@@ -356,7 +363,7 @@ try { pushSubs = JSON.parse(readFileSync(SUBS_PATH, 'utf8')); } catch {}
 function saveSubs() { try { writeFileSync(SUBS_PATH, JSON.stringify(pushSubs)); } catch {} }
 // per-member category prefs ({ dm, announce, serving }) set from the app's notification settings. A
 // missing member or missing category defaults to ON, so older clients keep getting everything.
-const PREFS_PATH = join(ROOT, 'relay', 'push-prefs.json');
+const PREFS_PATH = join(DATA_DIR,'push-prefs.json');
 let pushPrefs = {};   // { memberHex: { dm, announce, serving } }
 try { pushPrefs = JSON.parse(readFileSync(PREFS_PATH, 'utf8')); } catch {}
 function savePrefs() { try { writeFileSync(PREFS_PATH, JSON.stringify(pushPrefs)); } catch {} }
@@ -1339,7 +1346,7 @@ function serveStatic(req, res) {
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
     if (req.method !== 'POST') { res.writeHead(405, H); res.end('{"error":"method"}'); return; }
     if (!ORIGIN) { res.writeHead(400, H); res.end('{"error":"this relay has no origin to fetch from"}'); return; }
-    const apkDir = join(ROOT, 'relay', 'apks');
+    const apkDir = join(DATA_DIR,'apks');
     (async () => {
       try { mkdirSync(apkDir, { recursive: true }); } catch {}
       const files = {};
@@ -1589,7 +1596,7 @@ function serveStatic(req, res) {
   // APKs deployed via the dashboard "Fetch latest APK" button live under relay/apks/ (writable, survives
   // self-updates). Serve from there if present; a root-level copy (manual scp) still works as a fallback.
   if (/^\/(trinityone|trinityone-steward)\.apk$/.test(p)) {
-    const relApk = join(ROOT, 'relay', 'apks', p.slice(1));
+    const relApk = join(DATA_DIR,'apks', p.slice(1));
     let st2 = null; try { st2 = statSync(relApk); } catch {}
     if (st2 && st2.isFile()) {
       let ver = ''; try { ver = (JSON.parse(readFileSync(join(ROOT, 'apk-latest.json'), 'utf8')).versionName || '').trim(); } catch {}
