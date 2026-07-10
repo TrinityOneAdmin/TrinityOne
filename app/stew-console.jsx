@@ -29,6 +29,7 @@ const WIZ_STEPS = [
   { key: 'key', t: 'Create your church key', ic: 'key' },
   { key: 'identity', t: 'Name your church', ic: 'shield' },
   { key: 'relays', t: 'Choose your relays', ic: 'globe' },
+  { key: 'meetings', t: 'Your regular meetings', ic: 'calendar' },
   { key: 'invite', t: 'Invite your people', ic: 'qr' },
 ];   // giving/funds parked until after the pilot — payments aren't surfaced yet
 
@@ -45,12 +46,41 @@ function WizInput({ label, value, onChange, placeholder, hint, mono, autoFocus }
   );
 }
 
+// the church's regular meetings → recurring calendar events, so members' calendar auto-populates. Pre-filled
+// with sensible defaults; each row is name / day / time / frequency. Published when leaving the step (goNext).
+function WizMeetings({ meetings, setMeetings }) {
+  const fld = { padding: '11px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14, outline: 'none', boxSizing: 'border-box' };
+  const set = (i, patch) => setMeetings(a => a.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.6, marginBottom: 18 }}>Set your weekly rhythm — Sunday service, midweek, and so on. These fill your calendar automatically, so members always see what’s on. You can edit them or add more any time from the Calendar.</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {meetings.map((m, i) => (
+          <div key={i} style={{ padding: 14, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 9 }}>
+            <div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>
+              <input value={m.title} onChange={e => set(i, { title: e.target.value })} placeholder="Meeting name" style={{ ...fld, flex: 1 }} />
+              <button onClick={() => setMeetings(a => a.filter((_, j) => j !== i))} title="Remove this meeting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 10, padding: '9px 10px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={16} color="currentColor" /></button>
+            </div>
+            <div style={{ display: 'flex', gap: 9 }}>
+              <select value={m.day} onChange={e => set(i, { day: +e.target.value })} style={{ ...fld, flex: 1.3, cursor: 'pointer', fontWeight: 600 }}>{['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, di) => <option key={di} value={di}>{d}</option>)}</select>
+              <input type="time" value={m.time} onChange={e => set(i, { time: e.target.value })} style={{ ...fld, flex: 1 }} />
+              <select value={m.recur} onChange={e => set(i, { recur: e.target.value })} style={{ ...fld, flex: 1.2, cursor: 'pointer', fontWeight: 600 }}><option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option></select>
+            </div>
+          </div>
+        ))}
+        <button onClick={() => setMeetings(a => [...a, { title: '', day: 0, time: '10:00', recur: 'weekly' }])} className="sk-btn sk-btn--ghost" style={{ padding: '11px 15px', fontSize: 14, justifyContent: 'center' }}><Icon name="plus" size={16} color="currentColor" /> Add another meeting</button>
+      </div>
+    </div>
+  );
+}
+
 function StewWizard({ onDone }) {
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '', npub: '' };
   const [step, setStep] = React.useState(0);
   const [name, setName] = React.useState(church.name || '');
   const [nip05, setNip05] = React.useState('');
   const [ownRelay, setOwnRelay] = React.useState(false);
+  const [meetings, setMeetings] = React.useState([{ title: 'Sunday Service', day: 0, time: '10:00', recur: 'weekly' }, { title: 'Midweek', day: 3, time: '19:30', recur: 'weekly' }]);
   const last = step === WIZ_STEPS.length - 1;
   // responsive: a phone/narrow window swaps the 296px step-rail for a compact top progress bar
   const [vw, setVw] = React.useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
@@ -62,7 +92,9 @@ function StewWizard({ onDone }) {
       window.Steward.publishProfile({ name: (name || '').trim() || 'Our Church', nip05: (nip05 || '').trim() });
     }
   };
-  const goNext = () => { if (WIZ_STEPS[step].key === 'identity') publishIdentity(); setStep(s => s + 1); };
+  // publish the church's regular meetings (recurring calendar events) when leaving that step
+  const publishMeetings = () => { if (window.Steward && window.Steward.publishMeeting) { for (const m of meetings.filter(x => x.title.trim())) window.Steward.publishMeeting({ title: m.title.trim(), day: m.day, time: m.time, recur: m.recur }); } };
+  const goNext = () => { const k = WIZ_STEPS[step].key; if (k === 'identity') publishIdentity(); if (k === 'meetings') publishMeetings(); setStep(s => s + 1); };
   const finish = () => { if (onDone) onDone(); else setStep(0); };
 
   return (
@@ -117,7 +149,8 @@ function StewWizard({ onDone }) {
               {step === 0 && <WizKey />}
               {step === 1 && <WizIdentity name={name} setName={setName} nip05={nip05} setNip05={setNip05} />}
               {step === 2 && <WizRelays ownRelay={ownRelay} setOwnRelay={setOwnRelay} />}
-              {step === 3 && <WizInvite />}
+              {step === 3 && <WizMeetings meetings={meetings} setMeetings={setMeetings} />}
+              {step === 4 && <WizInvite />}
             </div>
           </div>
           {/* footer */}
