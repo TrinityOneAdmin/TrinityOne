@@ -569,18 +569,18 @@ function StewDashboard({ initial = 'overview' }) {
             })}
           </div>
           <div style={{ flex: 1 }} />
-          {/* In the desktop Suite (served from loopback), this box IS the relay — give a one-click door back to the
-              relay panel so stewards don't have to dig through Settings. Hidden on the hosted web console (a8). */}
-          {typeof location !== 'undefined' && ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname) && (
-            <a href="/relay-app/home.html" title="Relay & Suite controls" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', marginBottom: 10, borderRadius: 11, border: '1px solid var(--line)', textDecoration: 'none', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)' }}>
-              <Icon name="grid2" size={18} color="var(--ink-3)" /> Relay &amp; Suite home
-            </a>
-          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
             <Icon name="lock" size={16} color="var(--sage)" />
             <div style={{ flex: 1 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Key on this device</div><div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{(window.Steward.hasPinLock && window.Steward.hasPinLock()) ? 'Stored locally · locked' : <React.Fragment>Stored locally · <span onClick={() => openSettings('security', 'pin')} style={{ color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>lock with a PIN</span></React.Fragment>}</div></div>
             <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} />
           </div>
+          {/* In the desktop Suite (served from loopback), this box IS the relay — give a one-click door back to the
+              relay panel / launcher so stewards don't have to dig through Settings. Hidden on the hosted web console (a8). */}
+          {typeof location !== 'undefined' && ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname) && (
+            <a href="/relay-app/home.html" title="Relay & Suite controls" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '10px 12px', marginTop: 10, borderRadius: 11, border: '1px solid var(--line)', textDecoration: 'none', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)' }}>
+              <Icon name="grid2" size={18} color="var(--ink-3)" /> Relay &amp; Suite home
+            </a>
+          )}
         </div>
 
         {/* main */}
