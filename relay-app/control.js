@@ -20,7 +20,9 @@
       ? '<div class="row" style="background:color-mix(in oklab, var(--sage) 9%, var(--surface)); border-color:color-mix(in oklab, var(--sage) 28%, transparent)"><span style="color:var(--sage); font-weight:700; font-size:13px">✓ Reachable from anywhere</span><span class="muted" style="margin-left:auto">'+publicBase.replace(/^https?:\/\//,'')+'</span></div>'
       : '<div class="warn">⚠ This relay is only reachable on your computer / local network. Turn on public access below — one click, no terminal.</div>';
   }
-  document.getElementById('openConsole').onclick = () => window.open(reachInfo().consoleUrl, '_blank');
+  // Return to the Steward console IN THIS WINDOW — window.open('_blank') doesn't work in the desktop app's
+  // webview. Prefer going back (preserves the console's state); fall back to navigating there fresh.
+  document.getElementById('openConsole').onclick = () => { if (history.length > 1) { history.back(); } else { location.href = '/steward.html?relayapp=1'; } };
   document.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
     try { await navigator.clipboard.writeText(copyMap[b.dataset.copy]); b.textContent = 'Copied'; setTimeout(()=>b.textContent='Copy', 1400); } catch(e){}
   });
