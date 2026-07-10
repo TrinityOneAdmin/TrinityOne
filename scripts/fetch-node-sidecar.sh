@@ -32,7 +32,9 @@ esac
 
 STEM="node-v${NODE_VERSION}-${NODE_PA}"
 URL="https://nodejs.org/dist/v${NODE_VERSION}/${STEM}.${EXT}"
-OUT="$BIN_DIR/trinityone-relay-${TRIPLE}"
+# NB: the sidecar name must NOT equal the Cargo package name (trinityone-relay) — Tauri rejects that. Hence
+# 'trinityone-relay-node' (it IS the bundled Node runtime). Keep in sync with tauri.conf externalBin + main.rs.
+OUT="$BIN_DIR/trinityone-relay-node-${TRIPLE}"
 [ "$WIN" = 1 ] && OUT="${OUT}.exe"
 
 echo "fetch-node-sidecar: $URL"

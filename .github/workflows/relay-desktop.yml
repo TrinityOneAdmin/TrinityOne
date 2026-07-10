@@ -26,15 +26,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # NB: macOS Intel (macos-13 / x86_64-apple-darwin) is intentionally omitted for now — that runner is
+        # scarce and perpetually queues; Apple Silicon covers the overwhelming majority. Re-add it (or a
+        # universal build) as a follow-up. `bundles` restricts formats per-OS: Windows uses NSIS only (the WiX
+        # MSI bundler chokes on the large payload tree), Linux ships AppImage + deb, macOS ships a .dmg.
         include:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-          - os: macos-13          # Intel
-            target: x86_64-apple-darwin
+            bundles: deb,appimage
           - os: macos-14          # Apple Silicon
             target: aarch64-apple-darwin
+            bundles: app,dmg
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            bundles: nsis
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +91,7 @@ jobs:
         shell: bash
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"   # AppImage tooling can't FUSE-mount on CI runners
-        run: npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }}
+        run: npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       # Gather the installers into one flat dir regardless of platform layout, for upload/release.
       - name: Collect installers

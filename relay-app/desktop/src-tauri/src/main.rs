@@ -37,7 +37,7 @@ fn main() {
             // start the relay: bundled node <gateway.mjs> <port>, data redirected to the writable dir
             let sidecar = app
                 .shell()
-                .sidecar("trinityone-relay")?
+                .sidecar("trinityone-relay-node")?
                 .arg(gateway.to_string_lossy().to_string())
                 .arg(PORT.to_string())
                 .env("TRINITY_DATA_DIR", data_dir.to_string_lossy().to_string())
