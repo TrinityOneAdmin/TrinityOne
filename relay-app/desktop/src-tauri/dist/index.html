@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TrinityOne Relay</title>
+<style>
+  :root { color-scheme: light dark; --bg:#faf8f4; --ink:#2b2a27; --dim:#7c766c; --accent:#3a6b5f; --line:#e7e2d8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16181a; --ink:#ece8e0; --dim:#9a948a; --accent:#7fb8a8; --line:#2a2d30; } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    -webkit-user-select: none; user-select: none;
+  }
+  .card { max-width: 340px; padding: 24px; }
+  .halo {
+    width: 76px; height: 76px; margin: 0 auto 22px; border-radius: 50%;
+    border: 3px solid var(--line); border-top-color: var(--accent);
+    animation: spin 1s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) { .halo { animation: none; border-top-color: var(--line); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 18px; font-weight: 650; margin: 0 0 6px; letter-spacing: .2px; }
+  p { margin: 0; color: var(--dim); font-size: 13.5px; }
+  .slow { margin-top: 16px; font-size: 12px; opacity: 0; transition: opacity .6s; }
+  .slow.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="halo" aria-hidden="true"></div>
+    <h1>Starting your relay…</h1>
+    <p>Setting up your church's own corner of the network. This takes a few seconds the first time.</p>
+    <p class="slow" id="slow">Still working — preparing the database and keys…</p>
+  </div>
+  <script>
+    // Purely cosmetic: reassure the user if the first boot runs long. The Rust shell navigates this
+    // window to the live control panel as soon as the relay is listening.
+    setTimeout(function () { var s = document.getElementById('slow'); if (s) s.classList.add('show'); }, 6000);
+  </script>
+</body>
+</html>

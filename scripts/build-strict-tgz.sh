@@ -25,13 +25,15 @@ for f in "$TMP"/app/*.jsx; do
   rm -f "$f"
 done
 
-# 3. rewrite the app shells: remove the Babel runtime <script>, point script tags at the transpiled .js
+# 3. rewrite the app shells: remove the Babel runtime <script>, point script tags at the transpiled .js.
+#    Portable, no `sed -i` — BSD sed (macOS CI runner) parses `-i -e` differently from GNU sed and breaks;
+#    write to a temp file and move it back so this works identically on Linux + macOS.
 for html in index.html steward.html; do
   [ -f "$TMP/$html" ] || continue
-  sed -i \
+  sed \
     -e '/vendor\/babel\.min\.js/d' \
     -e 's#<script type="text/babel" src="\([^"]*\)\.jsx">#<script src="\1.js">#g' \
-    "$TMP/$html"
+    "$TMP/$html" > "$TMP/$html.strict" && mv "$TMP/$html.strict" "$TMP/$html"
 done
 
 # 4. Babel is no longer loaded by anything → drop it (~3 MB lighter bundle)
