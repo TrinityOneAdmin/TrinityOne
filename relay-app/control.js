@@ -137,6 +137,41 @@
   }
   document.getElementById('saveServes').onclick = saveServes;
 
+  // ── relay's memorable name: a pet-name from its key (recognition) + a claimable directory handle stewards type ──
+  const _PET_ADJ = ['Quiet', 'Bright', 'Gentle', 'Steady', 'Faithful', 'Humble', 'Joyful', 'Kind', 'Patient', 'Bold', 'Gracious', 'Calm', 'Glad', 'Warm', 'True', 'Sure'];
+  const _PET_NOUN = ['Olive', 'Cedar', 'Dove', 'Anchor', 'Lamp', 'Vine', 'Shepherd', 'Harbor', 'Beacon', 'Reed', 'Sparrow', 'Willow', 'Spring', 'Haven', 'Ember', 'Brook'];
+  function petName(hexPub) { if (!/^[0-9a-f]{64}$/i.test(hexPub || '')) return ''; let h = 0; for (let i = 0; i < hexPub.length; i++) h = (h * 31 + hexPub.charCodeAt(i)) >>> 0; return _PET_ADJ[h % 16] + ' ' + _PET_NOUN[(h >>> 4) % 16] + ' ' + (10 + (h >>> 9) % 90); }
+  async function loadRelayName() {
+    const body = document.getElementById('relayNameBody'); if (!body) return;
+    try {
+      const r = await fetch('/relay-names/mine', { headers: authHeaders(), cache: 'no-store' });
+      if (r.status === 401) { body.innerHTML = '<div class="muted">Enter the admin token (Churches card below) to manage your relay’s name.</div>'; return; }
+      const m = await r.json();
+      const pet = petName(m.pub);
+      let html = pet ? '<div style="margin-bottom:10px">Known as <b>' + esc(pet) + '</b> <span class="muted">— a name from this relay’s key, so people can recognise it.</span></div>' : '';
+      if (m.handle) html += '<div style="margin-bottom:8px">Public name: <b>' + esc(m.handle) + '</b> <span class="muted">— stewards connect their church by typing this in the console.</span></div>';
+      if (!m.relayWss) {
+        html += '<div class="muted">Turn on <b>Reach members from anywhere</b> above to claim a public name others can type.</div>';
+      } else {
+        html += '<div style="display:flex; gap:8px; margin-top:6px"><input id="relayNameIn" placeholder="' + (m.handle ? 'change name' : 'choose a name, e.g. grace-city') + '" autocomplete="off" /><button class="btn-clay" id="relayNameGo" style="white-space:nowrap">' + (m.handle ? 'Update' : 'Claim') + '</button></div><div class="muted" id="relayNameMsg" style="margin-top:6px"></div>';
+      }
+      body.innerHTML = html;
+      const go = document.getElementById('relayNameGo'); if (go) go.onclick = claimRelayName;
+      const inp = document.getElementById('relayNameIn'); if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') claimRelayName(); });
+    } catch (e) { body.innerHTML = '<div class="muted">Couldn’t load the relay name.</div>'; }
+  }
+  async function claimRelayName() {
+    const inp = document.getElementById('relayNameIn'); const msg = document.getElementById('relayNameMsg');
+    const handle = (inp.value || '').trim().toLowerCase(); if (!handle) return;
+    msg.style.color = 'var(--ink-3)'; msg.textContent = '· claiming…';
+    try {
+      const r = await fetch('/relay-names/mine', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ handle }) });
+      const j = await r.json();
+      if (!r.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); return; }
+      msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ claimed “' + j.handle + '”'; setTimeout(loadRelayName, 1200);
+    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
+  }
+
   // ── relay software updates (version check + one-click "Update now") via /update + /status ──
   let relayVersion = '';
   async function loadUpdate() {
@@ -216,7 +251,7 @@
   });
   document.getElementById('addCh').onclick = () => { cfgChurches.push({ npub: '', name: '' }); renderCfg(); document.querySelector('#cfgList .ch:last-child input')?.focus(); };
   document.getElementById('saveCfg').onclick = saveConfig;
-  document.getElementById('tokGo').onclick = () => { adminToken = document.getElementById('tok').value.trim(); if (adminToken) localStorage.setItem(TOKEN_KEY, adminToken); loadConfig(); gpTick(); };
+  document.getElementById('tokGo').onclick = () => { adminToken = document.getElementById('tok').value.trim(); if (adminToken) localStorage.setItem(TOKEN_KEY, adminToken); loadConfig(); gpTick(); loadRelayName(); };
   document.getElementById('tok').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('tokGo').click(); });
   // When this panel is opened ON the relay machine (e.g. the desktop Relay app's own window), the relay hands
   // us its admin token automatically — no hunting in logs. /local-token only answers genuine same-machine
@@ -226,6 +261,7 @@
       try { const r = await fetch('/local-token', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j && j.token) { adminToken = j.token; localStorage.setItem(TOKEN_KEY, adminToken); } } } catch (e) {}
     }
     loadConfig();
+    loadRelayName();
   })();
 
   // ── "Go public" wizard: bring the node onto Tailscale + turn on Funnel (public HTTPS/WSS) ──

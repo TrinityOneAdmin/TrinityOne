@@ -1864,6 +1864,24 @@ function DashRelaysCard() {
     if (!r) { setErr('Enter a relay address, e.g. nos.lol (or wss://relay.example.com)'); return; }
     setDraft(''); setErr('');
   };
+  // Connect a church to a relay by its memorable NAME (Phase 2): resolve the handle at the directory → add the
+  // relay. (Registering write-access still uses the token/pairing below.)
+  const [byName, setByName] = React.useState('');
+  const [byNameMsg, setByNameMsg] = React.useState(null);
+  const RELAY_DIRECTORY = 'https://app.trinityone.church';
+  const connectByName = async () => {
+    const n = (byName || '').trim().toLowerCase(); if (!n) return;
+    setByNameMsg({ text: 'Looking up “' + n + '”…' });
+    try {
+      const r = await fetch(RELAY_DIRECTORY + '/relay-names/resolve/' + encodeURIComponent(n), { cache: 'no-store' });
+      if (r.status === 404) { setByNameMsg({ ok: false, text: '✗ No relay is registered under “' + n + '”.' }); return; }
+      if (!r.ok) throw new Error('directory');
+      const j = await r.json();
+      window.Steward.addRelay(j.url);
+      setByNameMsg({ ok: true, text: '✓ Connected to ' + n + '. If it rejects your posts, register it below.' });
+      setByName('');
+    } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
+  };
   // FEDERATION Phase 3c — auto-find open relays (primary + backup) that have offered to host new churches.
   const [finding, setFinding] = React.useState(false);
   const [findMsg, setFindMsg] = React.useState('');
@@ -1920,6 +1938,17 @@ function DashRelaysCard() {
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
           <button onClick={autoFind} disabled={finding} className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
+          {/* connect to a relay by its memorable name (resolved via the directory) */}
+          <div style={{ marginTop: 13 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 7 }}>OR CONNECT BY NAME</div>
+            <div style={{ display: 'flex', gap: 9 }}>
+              <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
+                placeholder="your relay’s name, e.g. grace-city" spellCheck={false} autoCapitalize="none"
+                style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
+              <button onClick={connectByName} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
+            </div>
+            {byNameMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: byNameMsg.ok === false ? 'var(--clay)' : byNameMsg.ok ? 'var(--sage)' : 'var(--ink-3)' }}>{byNameMsg.text}</div> : null}
+          </div>
         </div>
         {/* register this church with the relay's write policy — fixes "Changes weren't saved: different church" */}
         <div style={{ marginTop: 12 }}>

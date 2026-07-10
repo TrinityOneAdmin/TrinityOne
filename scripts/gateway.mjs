@@ -294,6 +294,11 @@ function _verifyRelayClaim(req, handle, relayUrl) {
     return ev.pubkey;   // the claiming relay's identity pubkey
   } catch { return null; }
 }
+// Where THIS relay registers its name + where consoles resolve names. Defaults to the shared community host;
+// a church can self-host a directory by pointing RELAY_DIRECTORY at its own gateway.
+const DIRECTORY = (process.env.RELAY_DIRECTORY || 'https://app.trinityone.church').replace(/\/+$/, '');
+const MYNAME_FILE = join(DATA_DIR, 'relay-myname.json');
+let MY_RELAY_NAME = ''; try { MY_RELAY_NAME = JSON.parse(readFileSync(MYNAME_FILE, 'utf8')).handle || ''; } catch {}
 function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
 // Always require the admin token. Do NOT trust loopback: the relay runs behind the Tailscale Funnel /
 // cloudflared, which proxy from 127.0.0.1, so a public request is indistinguishable from a local one.
@@ -1029,6 +1034,35 @@ function serveStatic(req, res) {
   if (route.startsWith('/relay-names/')) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', ...SEC_HEADERS };
     if (req.method === 'OPTIONS') { res.writeHead(204, H); res.end(); return; }
+    // THIS relay claims / reports its own name (control panel). Admin-gated. The relay signs the claim with its
+    // identity key and registers it with the directory (using its own public wss address).
+    if (route === '/relay-names/mine') {
+      if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+      const ownUrl = async () => { let st = {}; try { st = await tsState(); } catch {} return (process.env.RELAY_PUBLIC_URL || st.relayWss || '').trim(); };
+      if (req.method === 'GET') {
+        ownUrl().then(u => { res.writeHead(200, H); res.end(JSON.stringify({ handle: MY_RELAY_NAME, relayWss: u, pub: RELAY_PUB, directory: DIRECTORY })); });
+        return;
+      }
+      if (req.method === 'POST') {
+        let body = ''; req.on('data', c => { body += c; if (body.length > 1e4) req.destroy(); });
+        req.on('end', async () => {
+          let bd; try { bd = JSON.parse(body); } catch { res.writeHead(400, H); res.end('{"error":"bad json"}'); return; }
+          const handle = String(bd.handle || '').toLowerCase().trim();
+          if (!_handleRe.test(handle)) { res.writeHead(400, H); res.end('{"error":"name must be 3–32 chars: lowercase letters, numbers, hyphens"}'); return; }
+          const myUrl = await ownUrl();
+          if (!myUrl) { res.writeHead(400, H); res.end('{"error":"your relay isn’t reachable from the internet yet — turn on public access first, then claim a name"}'); return; }
+          try {
+            const r = await fetch(DIRECTORY + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': relayNameClaim(handle, myUrl) }, body: JSON.stringify({ handle, url: myUrl }) });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) { res.writeHead(r.status, H); res.end(JSON.stringify({ error: j.error || 'the directory rejected that name' })); return; }
+            MY_RELAY_NAME = handle; try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle }) + '\n'); } catch {}
+            res.writeHead(200, H); res.end(JSON.stringify({ ok: true, handle, url: myUrl, directory: DIRECTORY }));
+          } catch (e) { res.writeHead(502, H); res.end(JSON.stringify({ error: 'could not reach the name directory (' + DIRECTORY + ')' })); }
+        });
+        return;
+      }
+      res.writeHead(405, H); res.end('{"error":"method"}'); return;
+    }
     if (req.method === 'GET' && route.startsWith('/relay-names/resolve/')) {
       const handle = decodeURIComponent(route.slice('/relay-names/resolve/'.length)).toLowerCase();
       const rec = RELAY_NAMES[handle];
