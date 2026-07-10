@@ -387,6 +387,10 @@ function StewardRoot() {
   // a fresh install has no church key → welcome; an encrypted key → unlock gate; otherwise → console.
   const [ks, setKs] = useSt(() => ({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }));
   useStE(() => { const f = () => setKs({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }); window.addEventListener('steward-key', f); return () => window.removeEventListener('steward-key', f); }, []);
+  // A RESTORED / adopted / "help run a church" identity already exists — the restore path marks the wizard
+  // "done" (see StewardWelcome). Honour that once a key lands, so opening with ?setup=1 (the desktop app's
+  // first launch) never drops a JUST-RESTORED church into the new-church setup wizard.
+  useStE(() => { if (ks.has) { try { if (localStorage.getItem('trinityone.steward.wizard.done') === '1') setConsoleView('dashboard'); } catch (e) {} } }, [ks.has]);
   // SECURITY-AUDIT-2026-06-25 Critical-2: needsPin gates the entire console behind a forced PIN modal
   // whenever a freshly-created or legacy-plaintext seed has not been encrypted yet. Tracks both the
   // dedicated steward-needs-pin event AND steward-key (because createKey() fires steward-key after
