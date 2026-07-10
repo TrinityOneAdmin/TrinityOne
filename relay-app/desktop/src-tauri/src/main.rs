@@ -50,6 +50,14 @@ fn main() {
             let log = app.path().app_data_dir()?.join("relay-launch.log");
             let _ = std::fs::remove_file(&log); // fresh log each launch
 
+            // First-ever launch → open the guided setup wizard once; afterwards → the dashboard. (A marker file,
+            // since the church identity itself lives in the webview's storage, not something Rust can see.)
+            let marker = app.path().app_data_dir()?.join(".setup-shown");
+            let first_run = !marker.exists();
+            if first_run {
+                let _ = std::fs::write(&marker, "1");
+            }
+
             // read-only code payload (bundled resource). Pass the script RELATIVE to a working dir set to the
             // payload, so a space in the install path ("…\TrinityOne Relay\…") can't corrupt the arg.
             let payload = app.path().resource_dir()?.join("payload");
@@ -110,7 +118,14 @@ fn main() {
                         thread::sleep(Duration::from_millis(250));
                     }
                     applog(&lp, &format!("port {PORT} reachable = {up}"));
-                    let url = format!("http://127.0.0.1:{PORT}/relay-app/control.html");
+                    // Combined "church-in-a-box": open the Steward console (church management), which auto-uses
+                    // this local relay (same origin). First launch → the guided setup wizard; later launches →
+                    // the dashboard. relayapp=1 tells the console it's already running its own relay.
+                    let url = if first_run {
+                        format!("http://127.0.0.1:{PORT}/steward.html?setup=1&relayapp=1")
+                    } else {
+                        format!("http://127.0.0.1:{PORT}/steward.html?relayapp=1")
+                    };
                     if let Ok(u) = url.parse() {
                         let _ = win.navigate(u);
                     }

@@ -241,6 +241,8 @@ function WizIdentity({ name, setName, nip05, setNip05 }) {
 function WizRelays({ ownRelay, setOwnRelay }) {
   const [relayUrl, setRelayUrl] = React.useState('');
   const [addMsg, setAddMsg] = React.useState(null);
+  // Combined "church-in-a-box" desktop app: this very app IS the relay, so there's nothing to download/connect.
+  const isRelayApp = typeof location !== 'undefined' && new URLSearchParams(location.search).get('relayapp') === '1';
   // Desktop Relay app installers. These point at the LATEST release's stable, version-less asset names (the
   // relay-desktop CI publishes them for every release), so this list never needs updating when a new build ships.
   const RELAY_DL = 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/';
@@ -273,7 +275,12 @@ function WizRelays({ ownRelay, setOwnRelay }) {
           );
         })}
       </div>
-      {!ownRelay ? (
+      {isRelayApp ? (
+        <div style={{ marginTop: 12, padding: 16, borderRadius: 14, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <Icon name="check" size={18} stroke={2.6} color="var(--sage)" style={{ flexShrink: 0, marginTop: 2 }} />
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}><b style={{ color: 'var(--ink)' }}>This computer is your relay.</b> It’s running right now, and your church uses it automatically — your data lives on hardware <b style={{ color: 'var(--ink)' }}>you</b> control. You can add community nodes above as backup if you like.</div>
+        </div>
+      ) : !ownRelay ? (
         <button onClick={() => setOwnRelay(true)} style={{ width: '100%', marginTop: 12, padding: 14, borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontFamily: 'var(--font-ui)' }}>
           <Icon name="plus" size={17} color="var(--clay)" /> Run your own relay
         </button>

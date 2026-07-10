@@ -1846,6 +1846,7 @@ function DashRelaysCard() {
   const checking = status.length === 0;
   const allUp = online === status.length;
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
+  const isRelayApp = typeof location !== 'undefined' && new URLSearchParams(location.search).get('relayapp') === '1';   // combined desktop app: this machine IS the relay
   const [draft, setDraft] = React.useState('');
   const [err, setErr] = React.useState('');
   const [syncBusy, setSyncBusy] = React.useState(false);
@@ -1947,17 +1948,26 @@ function DashRelaysCard() {
           ) : null}
           {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage)' : 'var(--clay)' }}>{syncMsg.text}</div> : null}
         </div>
-        {/* get the desktop Relay app — host your own relay box, no command line (same download links as the setup wizard) */}
-        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
-          <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Run your own relay box</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>The TrinityOne Relay app turns any always-on computer into your church’s relay — no command line. Install it, open it, then add the address it gives you above.</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {[['macOS', 'TrinityOne-Relay-macos-arm64.dmg'], ['Windows', 'TrinityOne-Relay-windows-x64-setup.exe'], ['Linux', 'TrinityOne-Relay-linux-x86_64.AppImage']].map(([label, file]) => (
-              <a key={label} href={'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/' + file} target="_blank" rel="noopener" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color="currentColor" /> {label}</a>
-            ))}
+        {/* In the combined desktop app THIS machine is the relay → offer the relay control panel; otherwise
+            offer the desktop Relay app downloads (same permanent links as the setup wizard). */}
+        {isRelayApp ? (
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>This computer is your relay</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>It’s running as part of this app — your church uses it automatically. The control panel has the advanced relay settings (make it reachable from anywhere, software updates, storage).</div>
+            <a href="/relay-app/control.html" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none', display: 'inline-flex' }}><Icon name="globe" size={15} color="currentColor" /> Open relay control panel</a>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.5 }}>Download &amp; open it — it starts your relay. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay)' }}>Other builds</a> (Debian package, older Macs). Headless server? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></div>
-        </div>
+        ) : (
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Run your own relay box</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>The TrinityOne Relay app turns any always-on computer into your church’s relay — no command line. Install it, open it, then add the address it gives you above.</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {[['macOS', 'TrinityOne-Relay-macos-arm64.dmg'], ['Windows', 'TrinityOne-Relay-windows-x64-setup.exe'], ['Linux', 'TrinityOne-Relay-linux-x86_64.AppImage']].map(([label, file]) => (
+                <a key={label} href={'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/' + file} target="_blank" rel="noopener" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color="currentColor" /> {label}</a>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.5 }}>Download &amp; open it — it starts your relay. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay)' }}>Other builds</a> (Debian package, older Macs). Headless server? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></div>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
           <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church hosts its own relay — every message, group, and member lives on infrastructure you control. Members reach it wherever you serve the app.</div>
         </div>
