@@ -151,18 +151,19 @@
       let html = pet ? '<div style="margin-bottom:10px">Known as <b>' + esc(pet) + '</b> <span class="muted">— a name from this relay’s key, so people can recognise it.</span></div>' : '';
       if (m.handle) html += '<div style="margin-bottom:8px">Public name: <b>' + esc(m.handle) + '</b> <span class="muted">— stewards connect their church by typing this in the console.</span></div>';
       if (!m.relayWss) {
-        html += '<div class="muted" style="margin-bottom:6px">Your relay isn’t reachable from outside your network yet.</div>'
-          + '<button class="btn-clay" id="cfGo">Go public — one click, no account</button> <span class="muted" id="cfMsg"></span>'
-          + '<div class="muted" style="margin-top:6px">Opens a free Cloudflare tunnel so members can reach your relay from anywhere. They connect by the <b>name</b> you claim — which keeps working even though the tunnel address changes each time.</div>';
+        html += '<div class="muted">Turn on public access in <b>Reach members from anywhere</b> above, then a name others can type appears here.</div>';
       } else {
         html += '<div style="display:flex; gap:8px; margin-top:6px"><input id="relayNameIn" placeholder="' + (m.handle ? 'change name' : 'choose a name, e.g. grace-city') + '" autocomplete="off" /><button class="btn-clay" id="relayNameGo" style="white-space:nowrap">' + (m.handle ? 'Update' : 'Claim') + '</button></div><div class="muted" id="relayNameMsg" style="margin-top:6px"></div>';
       }
       body.innerHTML = html;
       const go = document.getElementById('relayNameGo'); if (go) go.onclick = claimRelayName;
       const inp = document.getElementById('relayNameIn'); if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') claimRelayName(); });
-      const cf = document.getElementById('cfGo'); if (cf) cf.onclick = goPublicCloudflare;
     } catch (e) { body.innerHTML = '<div class="muted">Couldn’t load the relay name.</div>'; }
   }
+  // Cloudflare quick tunnel "go public" — lives in the Reach-members card (see renderGoPublic). One click, no account.
+  const cfGoHtml = '<div class="muted" style="margin-bottom:11px">Make this relay reachable from anywhere — <b>free, no account</b>, no fixed IP. One click.</div>'
+    + '<button class="btn-clay" id="cfGo">Go public — no account →</button> <span class="muted" id="cfMsg"></span>';
+  function wireCfGo() { const cf = document.getElementById('cfGo'); if (cf) cf.onclick = goPublicCloudflare; }
   async function goPublicCloudflare() {
     const btn = document.getElementById('cfGo'), msg = document.getElementById('cfMsg');
     if (btn) btn.disabled = true;
@@ -171,9 +172,18 @@
       const r = await fetch('/tunnel/up', { method: 'POST', headers: authHeaders() });
       const j = await r.json();
       if (!r.ok) { if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); } if (btn) btn.disabled = false; return; }
-      if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ public — now claim a name below'; }
-      setTimeout(loadRelayName, 900);
+      if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ public!'; }
+      setTimeout(() => { gpTick(); loadRelayName(); }, 900);
     } catch (e) { if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; } if (btn) btn.disabled = false; }
+  }
+  function renderCfPublic(cf) {
+    const body = document.getElementById('gpBody'), st = document.getElementById('gpStatus');
+    publicBase = cf.url; try { refreshReach(); } catch (e) {}
+    st.textContent = '';
+    body.innerHTML =
+      '<div class="row" style="background:color-mix(in oklab,var(--sage) 9%,var(--surface));border-color:color-mix(in oklab,var(--sage) 28%,transparent)"><span style="color:var(--sage);font-weight:700;font-size:13px">✓ Public via Cloudflare — reachable from anywhere</span></div>' +
+      '<div class="row"><span class="k">Public URL</span><span class="v">' + esc(cf.url) + '</span><button class="btn-ghost" onclick="gpCopy(\'' + esc(cf.url) + '\',this)">Copy</button></div>' +
+      '<div class="muted" style="margin-top:6px">Members connect by the <b>name</b> you claim below — it stays the same even if this URL changes. Test from your phone on <b>mobile data</b>: <a href="' + esc(cf.url) + '/status" target="_blank">' + esc(cf.url) + '/status</a>.</div>';
   }
   async function claimRelayName() {
     const inp = document.getElementById('relayNameIn'); const msg = document.getElementById('relayNameMsg');
@@ -289,7 +299,7 @@
   function renderGoPublic(s) {
     const body = document.getElementById('gpBody'), st = document.getElementById('gpStatus');
     if (s.locked)         { st.textContent='· locked';   body.innerHTML = gpWarn('🔒 Enter the <b>admin token</b> in the Churches card below — it unlocks one-click public access too.'); return; }
-    if (s.installed === false) { st.textContent='';      body.innerHTML = gpWarn('Tailscale isn’t installed on this box. Re-run the installer to enable one-click public access.'); return; }
+    if (s.installed === false) { st.textContent='· not public yet'; body.innerHTML = cfGoHtml; wireCfGo(); return; }   // no Tailscale (e.g. desktop app) → the bundled Cloudflare tunnel is the path
     if (s.needsOperator)  { st.textContent='· needs a nudge'; body.innerHTML = gpWarn('The relay can’t manage Tailscale yet. On the relay box, run once:<br><br><code>sudo tailscale set --operator=trinityone</code><br><br>then <button class="btn-ghost" onclick="gpTick()">refresh</button>.'); return; }
     if (s.funnelOn && s.publicUrl) {
       st.textContent=''; publicBase = s.publicUrl; refreshReach();
@@ -315,15 +325,18 @@
       return;
     }
     st.textContent='· not public yet';
-    body.innerHTML =
-      '<div class="muted" style="margin-bottom:11px">Make this relay reachable from anywhere — free, secure HTTPS, no fixed IP. Two clicks.</div>' +
-      '<button class="btn-clay" id="gpUp">Connect to Tailscale →</button> <span class="muted" id="gpMsg"></span>';
+    body.innerHTML = cfGoHtml +
+      '<div class="muted" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">Prefer a stable address on your own Tailscale? <button class="btn-ghost" id="gpUp">Use Tailscale instead →</button> <span class="muted" id="gpMsg"></span></div>';
+    wireCfGo();
     document.getElementById('gpUp').onclick = doUp;
   }
 
   async function gpTick() {
     if (tsBusy) return;
     try {
+      // Cloudflare quick tunnel is the no-account default — if it's up, show that and skip the Tailscale flow.
+      let cf = null; try { cf = await (await fetch('/tunnel/state', { headers: authHeaders(), cache: 'no-store' })).json(); } catch (e) {}
+      if (cf && cf.running && cf.url) { renderCfPublic(cf); return; }
       const r = await fetch('/tailscale/state', { headers: authHeaders(), cache:'no-store' });
       if (r.status === 401) { renderGoPublic({ locked:true }); return; }
       const s = await r.json();
