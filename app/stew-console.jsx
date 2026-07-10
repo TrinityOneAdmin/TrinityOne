@@ -241,7 +241,15 @@ function WizIdentity({ name, setName, nip05, setNip05 }) {
 function WizRelays({ ownRelay, setOwnRelay }) {
   const [relayUrl, setRelayUrl] = React.useState('');
   const [addMsg, setAddMsg] = React.useState(null);
-  const DOWNLOADS = [['macOS', 'apple'], ['Windows', 'windows'], ['Linux', 'linux']];   // desktop apps pending the build pipeline; shown as SOON
+  // Desktop Relay app installers, published by the relay-desktop CI (tag relay-v*). Bump RELAY_REL when a new
+  // desktop release ships so these point at its assets. (Follow-up: stable 'latest' asset names to drop this.)
+  const RELAY_REL = 'relay-v0.7.1';
+  const RELAY_DL = 'https://github.com/TrinityOneAdmin/TrinityOne/releases/download/' + RELAY_REL + '/';
+  const DOWNLOADS = [
+    ['macOS', 'apple', RELAY_DL + 'TrinityOne.Relay_0.7.1_aarch64.dmg'],
+    ['Windows', 'windows', RELAY_DL + 'TrinityOne.Relay_0.7.1_x64-setup.exe'],
+    ['Linux', 'linux', RELAY_DL + 'TrinityOne.Relay_0.7.1_amd64.AppImage'],
+  ];
   const addOwn = () => {
     const u = (relayUrl || '').trim(); if (!u) return;
     try { window.Steward.addRelay(u); setAddMsg({ ok: true, text: '✓ Added — your church now uses this relay too.' }); setRelayUrl(''); }
@@ -276,11 +284,12 @@ function WizRelays({ ownRelay, setOwnRelay }) {
           <div>
             <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 8 }}>1 · GET THE RELAY APP</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {DOWNLOADS.map(([label, os]) => (
-                <span key={os} title="Desktop apps are on the way — for now, self-host with the one-line installer below" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, opacity: .55, cursor: 'default' }}><Icon name="download" size={15} color="currentColor" /> {label}<span style={{ fontSize: 10, fontWeight: 800, marginLeft: 6, color: 'var(--clay-ink)' }}>SOON</span></span>
+              {DOWNLOADS.map(([label, os, href]) => (
+                <a key={os} href={href} target="_blank" rel="noopener" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color="currentColor" /> {label}</a>
               ))}
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 10, lineHeight: 1.55 }}>One-click desktop apps for Mac, Windows &amp; Linux are on the way. For now you can self-host on any always-on computer or server with one line:</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Download, then open it — it starts your relay, no command line. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay)' }}>Other builds</a> (Debian package, older Macs).</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 12, lineHeight: 1.55 }}>Running a headless server instead? Self-host with one line:</div>
             <div style={{ ...({ fontFamily: 'var(--mono)', fontSize: 11.5, background: 'var(--surface)', borderRadius: 8 }), marginTop: 8, padding: '10px 12px', border: '1px solid var(--line)', overflowX: 'auto', whiteSpace: 'nowrap' }}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</div>
           </div>
           <div>
