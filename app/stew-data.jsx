@@ -162,7 +162,7 @@ function SkKey({ value, label = 'npub', tint = 'clay', style = {} }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', ...style }}>
       <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: t.fg, background: t.bg, padding: '3px 7px', borderRadius: 6 }}>{label}</span>
       <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{short}</span>
-      <button onClick={() => { setCopied(true); setTimeout(() => setCopied(false), 1400); }} style={{ border: 'none', background: 'none', cursor: 'pointer', color: copied ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', padding: 4 }}>
+      <button onClick={() => { copyText(value); setCopied(true); setTimeout(() => setCopied(false), 1400); }} title={'Copy ' + label} style={{ border: 'none', background: 'none', cursor: 'pointer', color: copied ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', padding: 4 }}>
         <Icon name={copied ? 'check' : 'copy'} size={16} stroke={2} color="currentColor" />
       </button>
     </div>
