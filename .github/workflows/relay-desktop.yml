@@ -141,6 +141,11 @@ jobs:
               *)   cp "$f" "dist-installers/TrinityOne-Suite-${{ matrix.stable }}.$ext" ;;
             esac
           done
+          # Version manifest for the in-app update check. sha MUST match version.txt (git rev-parse HEAD,
+          # same checkout the payload was stamped from) so /suite-update compares like-for-like. Every matrix
+          # job writes the same sha; softprops clobbers by filename on the Release, so one wins harmlessly.
+          SHA="$(git rev-parse HEAD)"
+          printf '{"sha":"%s","version":"0.7.1","tag":"%s"}\n' "$SHA" "${GITHUB_REF_NAME}" > dist-installers/suite-latest.json
           ls -la dist-installers || true
 
       - name: Upload installers (artifact)

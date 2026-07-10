@@ -1474,6 +1474,20 @@ function serveStatic(req, res) {
     }
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
+  // Suite desktop-app update check: compare THIS build's sha (version.txt, stamped at build) against the latest
+  // published suite-latest.json on GitHub Releases. Fetched server-side so the launcher avoids a cross-origin CORS
+  // fetch. Returns updateAvailable + the download page; the app can't self-install (it's an installer), so this
+  // just surfaces "a new version is out — download it".
+  if (route === '/suite-update' && req.method === 'GET') {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS };
+    (async () => {
+      let latest = null;
+      try { const r = await fetch('https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/suite-latest.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) }); if (r.ok) latest = await r.json(); } catch {}
+      const cur = BUILD.sha, ls = (latest && latest.sha) || '';
+      res.writeHead(200, H); res.end(JSON.stringify({ current: cur, currentShort: BUILD.short, latest: ls, latestShort: ls.slice(0, 7), updateAvailable: !!(ls && cur && ls !== cur), url: 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest' }));
+    })();
+    return;
+  }
   // relay self-update: POST drops a flag in relay/ (the only path the sandboxed relay can write); a root
   // systemd path-unit watches it and runs scripts/relay-update.sh (pull bundle, swap code, restart).
   if (route === '/update') {
