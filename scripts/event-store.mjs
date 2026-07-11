@@ -105,6 +105,12 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     for (const r of rows) { let e; try { e = JSON.parse(r.raw); } catch { continue; } if (matchFilter(e, f)) out.push(e); }
     return out;
   }
+  // Uncapped ASC iteration by kind — for BOOT hydration only (rebuilding in-memory maps). Unlike query() it has
+  // NO display cap, so a church past 10k structured docs isn't silently truncated. Not a client read path.
+  function eachKind(kinds, cb) {
+    const sql = 'SELECT raw FROM events WHERE kind IN (' + kinds.map(() => '?').join(',') + ') ORDER BY created_at ASC';
+    for (const r of db.prepare(sql).all(...kinds)) { let e; try { e = JSON.parse(r.raw); } catch { continue; } cb(e); }
+  }
 
   function count() { return qCount.get().n; }
 
@@ -160,5 +166,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
-  return { db, put, query, count, authorOf, del, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, eachKind, count, authorOf, del, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }

@@ -686,7 +686,14 @@ function resolveChurch(e) {
 }
 // (re)build all in-memory church/member/group/care maps from the stored kind-30078 structure docs, oldest-first.
 // Run at startup and after a restore/clone import so the imported church's membership + groups take effect at once.
-function hydrateMaps() { if (!CHURCH_PUBS.size) return; for (const e of store.query({ kinds: [30078], limit: 1000000 }).sort((a, b) => (a.created_at || 0) - (b.created_at || 0))) note(e); }
+let _hydrating = false;
+function hydrateMaps() {
+  if (!CHURCH_PUBS.size) return;
+  _hydrating = true;                                   // suppress per-doc rebuilds (O(n^2)); rebuild once at the end
+  try { store.eachKind([30078], note); }               // uncapped ASC iteration — no 10k truncation of old docs
+  finally { _hydrating = false; }
+  rebuildBlocked(); rebuildMinors();                   // rebuildBlocked() also rebuilds MEMBERS from the full maps
+}
 // persist the current church allow-list to church.json (so a clone-registered church survives a relay restart).
 function persistChurches() { try { const churches = [...CHURCH_PUBS].map(h => ({ npub: npubEncode(h), name: CHURCH_NAMES.get(h) || '' })); const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE); } catch {} }
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
@@ -696,7 +703,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (d.startsWith(MEMBER_D) && CHURCH_PUBS.has(d.slice(MEMBER_D.length))) {   // asked to join / joined one of our churches
     const cp = d.slice(MEMBER_D.length); let s = MEMBER_DOCS.get(cp); if (!s) { s = new Set(); MEMBER_DOCS.set(cp, s); }
     if (removed) { s.delete(e.pubkey); if (MEMBER_CHURCH.get(e.pubkey) === cp) MEMBER_CHURCH.delete(e.pubkey); } else { s.add(e.pubkey); MEMBER_CHURCH.set(e.pubkey, cp); }
-    rebuildMembers();   // effective membership respects the join policy + admitted list + blocklist
+    if (!_hydrating) rebuildMembers();   // effective membership respects the join policy + admitted list + blocklist
   }
   else if (d.startsWith(NETWORK_D) && CHURCH_PUBS.has(e.pubkey)) {   // a church joined/left a network
     const np = d.slice(NETWORK_D.length); if (removed) NETWORKS.delete(np); else NETWORKS.add(np);
@@ -720,20 +727,20 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(BLOCKED_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(BLOCKED_D.length) === e.pubkey) {
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
-    BLOCKED_BY.set(e.pubkey, set); rebuildBlocked();   // rebuildBlocked() rebuilds MEMBERS (drops the blocked)
+    BLOCKED_BY.set(e.pubkey, set); if (!_hydrating) rebuildBlocked();   // rebuildBlocked() rebuilds MEMBERS (drops the blocked)
   }
   else if (d.startsWith(JOINPOLICY_D) && CHURCH_PUBS.has(cp = d.slice(JOINPOLICY_D.length)) && (e.pubkey === cp || stewardOf(e.pubkey, cp))) {   // a church's join policy
     let approval = false; if (!removed) { try { approval = !!JSON.parse(e.content).approval; } catch {} }
     if (approval) REQUIRE_APPROVAL.add(cp); else REQUIRE_APPROVAL.delete(cp);
-    rebuildMembers();
+    if (!_hydrating) rebuildMembers();
   }
   else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardOf(e.pubkey, cp))) {   // a church's approved-members allowlist
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
-    ADMITTED_BY.set(cp, set); rebuildMembers();
+    ADMITTED_BY.set(cp, set); if (!_hydrating) rebuildMembers();
   }
   else if (d.startsWith(MINORS_D) && CHURCH_PUBS.has(cp = d.slice(MINORS_D.length)) && e.pubkey === cp) {   // safeguarding: church's minors list — OWNER-ONLY
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
-    MINORS_BY.set(cp, set); rebuildMinors();
+    MINORS_BY.set(cp, set); if (!_hydrating) rebuildMinors();
   }
   else if (d.startsWith(APPROVED_D) && CHURCH_PUBS.has(cp = d.slice(APPROVED_D.length)) && e.pubkey === cp) {   // safeguarding: church's cleared-adults list — OWNER-ONLY
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
