@@ -1867,12 +1867,18 @@ function serveStatic(req, res) {
     const v = (BUILD && BUILD.short) || '0';
     html = html.replace(/\b(src|href)="([^"]+\.(?:m?js|jsx|css))"/g, (m, attr, url) => (/^(https?:|\/\/|data:)/i.test(url) || url.includes('?')) ? m : attr + '="' + url + '?v=' + v + '"');
     const body = Buffer.from(html);
-    res.writeHead(200, { 'Content-Type': MIME['.html'] || 'text/html', 'Content-Length': body.length, 'Access-Control-Allow-Origin': '*', 'Content-Security-Policy': CSP, 'Cache-Control': 'no-cache', ...SEC_HEADERS });
+    // The desktop app's own control panel + launcher (/relay-app/*) MUST NOT be cached: WebView2 was observed
+    // serving a stale control.js across reinstalls (it doesn't reliably revalidate 'no-cache'), which froze the
+    // panel on old code. These files are always local (the on-box relay) so 'no-store' costs nothing. Everything
+    // else stays 'no-cache' so the member app can still load its HTML shell offline.
+    const htmlCache = p.startsWith('/relay-app/') ? 'no-store' : 'no-cache';
+    res.writeHead(200, { 'Content-Type': MIME['.html'] || 'text/html', 'Content-Length': body.length, 'Access-Control-Allow-Origin': '*', 'Content-Security-Policy': CSP, 'Cache-Control': htmlCache, ...SEC_HEADERS });
     res.end(body); return;
   }
   const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS };
-  // app assets change every release — revalidate (belt-and-braces with the ?v= cache-bust above).
-  if (['.js', '.mjs', '.jsx', '.css', '.json'].includes(ext)) headers['Cache-Control'] = 'no-cache';
+  // app assets change every release — revalidate (belt-and-braces with the ?v= cache-bust above). The desktop
+  // control UI (/relay-app/*) is 'no-store' outright — see the HTML note above; WebView2 mishandles 'no-cache'.
+  if (['.js', '.mjs', '.jsx', '.css', '.json'].includes(ext)) headers['Cache-Control'] = p.startsWith('/relay-app/') ? 'no-store' : 'no-cache';
   res.writeHead(200, headers);
   createReadStream(file).pipe(res);
 }
