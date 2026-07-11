@@ -293,8 +293,11 @@
     } catch (e) { /* relay down — hero card shows it */ }
   }
   async function doUpdate() {
-    if (!confirm('Update this relay now? It will briefly restart — members reconnect automatically.')) return;
-    const msg = document.getElementById('updateMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = '· starting…';
+    const btn = document.getElementById('doUpdate'), msg = document.getElementById('updateMsg');
+    // two-click armed confirm — webview confirm() is unreliable (same reason Restore uses this pattern)
+    if (btn && btn.dataset.armed !== '1') { btn.dataset.armed = '1'; btn.dataset.orig = btn.textContent; btn.textContent = 'Confirm — restart the relay'; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· click again — the relay briefly restarts'; } return; }
+    if (btn) { btn.dataset.armed = ''; if (btn.dataset.orig) btn.textContent = btn.dataset.orig; }
+    msg.style.color = 'var(--ink-3)'; msg.textContent = '· starting…';
     try {
       const r = await fetch('/update', { method: 'POST', headers: authHeaders() });
       const s = await r.json();
@@ -311,7 +314,7 @@
         const s = await (await fetch('/status', { cache: 'no-store' })).json();
         if (s.version && relayVersion && s.version !== relayVersion) { clearInterval(iv); msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ updated'; setTimeout(loadUpdate, 800); }
       } catch (e) { /* restarting — keep polling */ }
-      if (n > 40) { clearInterval(iv); msg.textContent = '· taking a while — check: journalctl -u trinityone-update'; }
+      if (n > 40) { clearInterval(iv); msg.textContent = '· taking a while — fully close and reopen the app, then check this card again.'; }
     }, 3000);
   }
 

@@ -1,7 +1,7 @@
 // TrinityOne service worker — makes the app boot offline.
 // The app SHELL (html/jsx/libs/fonts) is cached here; Bible MODULES live in IndexedDB (engine.js)
 // and chat goes over the relay WebSocket — neither is touched by this worker.
-const CACHE = 'trinity-shell-v211';   // bump on each app deploy so installed PWAs refresh the shell
+const CACHE = 'trinity-shell-v212';   // bump on each app deploy so installed PWAs refresh the shell
 // SECURITY-AUDIT-2026-06-25 Critical-1: query-string params that MUST NOT enter the SW cache key.
 // The classic case is `?invite=<full 12-word BIP-39 seed>` — even after the React app strips the URL
 // via history.replaceState (app.jsx ~L466), the SW fetch handler has already cached the response
@@ -14,7 +14,7 @@ const SENSITIVE_QS = ['invite', 'follow', 'relay', 'name', 'adopt', 'church', 'c
 // online visit (to install / join) makes every screen available offline afterwards.
 const CORE = [
   './', './index.html',
-  './vendor/react.development.js', './vendor/react-dom.development.js', './vendor/babel.min.js',
+  './vendor/react.production.min.js', './vendor/react-dom.production.min.js',
   './vendor/fflate.js', './vendor/sqljs/sql-wasm.js', './vendor/sqljs/sql-wasm.wasm',
   './engine.js', './vendor/identity.js', './vendor/fellowship.js', './vendor/mydata.js', './vendor/library/index.js',
   './vendor/fonts/fonts.css',
