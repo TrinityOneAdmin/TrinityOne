@@ -6,7 +6,7 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs';
 import { extname, normalize, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
@@ -30,6 +30,16 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));   // project dir (fi
 // installed bundle — the app ships its code read-only and keeps its data separately, the platform-native way.
 const DATA_DIR = process.env.TRINITY_DATA_DIR || join(ROOT, 'relay');
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+// A staged restore must contain NO symlinks: a symlink named e.g. `relay.sqlite` would let the store, once it's
+// swapped in, write THROUGH the link to an arbitrary path (an arbitrary-file-write primitive). Reject the whole
+// restore if any entry (at any depth) is a symlink. (tar as a non-root user already blocks `..` traversal and
+// device nodes; this closes the remaining symlink vector.)
+function stagingHasSymlink(p) {
+  let st; try { st = lstatSync(p); } catch { return false; }
+  if (st.isSymbolicLink()) return true;
+  if (st.isDirectory()) { for (const c of readdirSync(p)) if (stagingHasSymlink(join(p, c))) return true; }
+  return false;
+}
 // Restore-on-boot: /relay-restore stages an uploaded backup under .restore-pending/. Apply it BEFORE anything
 // reads the data dir (the DB, keys, church.json all load at module init below), then clear the staging. This is
 // how "restore this relay / move it to a new machine" takes effect — the operator restarts and the box comes up
@@ -38,6 +48,7 @@ try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
   const staging = join(DATA_DIR, '.restore-pending');
   if (!existsSync(staging)) return;
   try {
+    if (stagingHasSymlink(staging)) { console.error('  restore-on-boot REFUSED: backup contains a symlink'); rmSync(staging, { recursive: true, force: true }); return; }
     for (const name of readdirSync(staging)) {
       const dst = join(DATA_DIR, name);
       try { rmSync(dst, { recursive: true, force: true }); } catch {}
@@ -319,6 +330,12 @@ const RELAY_NAMES_FILE = join(DATA_DIR, 'relay-names.json');
 let RELAY_NAMES = {};
 try { RELAY_NAMES = JSON.parse(readFileSync(RELAY_NAMES_FILE, 'utf8')) || {}; } catch {}
 function saveRelayNames() { try { const tmp = RELAY_NAMES_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(RELAY_NAMES, null, 2) + '\n'); renameSync(tmp, RELAY_NAMES_FILE); } catch {} }
+// pub → handle reverse index (one handle per relay key) so applyClaimRecord is O(1), not an O(n) scan per record.
+const _handleByPub = new Map();
+for (const [h, r] of Object.entries(RELAY_NAMES)) if (r && r.pub) _handleByPub.set(r.pub, h);
+// Debounce the whole-file directory write: a gossip merge of many records does ONE write, not one per record.
+let _relayNamesDirty = false;
+function scheduleSaveRelayNames() { if (_relayNamesDirty) return; _relayNamesDirty = true; setTimeout(() => { _relayNamesDirty = false; saveRelayNames(); }, 1000); }
 const _handleRe = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;   // 3–32 chars, lowercase alnum + inner hyphens
 // verify a claim: Authorization 'Nostr <base64 kind-27235 event>' signed by a relay key, tags bind handle+relay.
 // Verify a directory record (signed claim event) on its own merits — no request context needed, so the SAME
@@ -354,9 +371,11 @@ function applyClaimRecord(rec) {
   const existing = RELAY_NAMES[rec.handle];
   if (existing && existing.pub !== rec.pub) return false;             // name owned by another key — first-claim-wins
   if (existing && (existing.at || 0) >= rec.at) return false;         // not newer than what we have
-  for (const k of Object.keys(RELAY_NAMES)) { if (RELAY_NAMES[k].pub === rec.pub && k !== rec.handle) delete RELAY_NAMES[k]; }  // one handle per relay
+  const prev = _handleByPub.get(rec.pub);                             // this key's previous handle — release it (one handle per relay)
+  if (prev && prev !== rec.handle) delete RELAY_NAMES[prev];
   RELAY_NAMES[rec.handle] = { url: rec.url, pub: rec.pub, at: rec.at, ...(rec.offer ? { offer: rec.offer } : {}), ev: rec.ev };
-  saveRelayNames();
+  _handleByPub.set(rec.pub, rec.handle);
+  scheduleSaveRelayNames();
   return true;
 }
 // Where THIS relay registers its name + where consoles resolve names. Defaults to the shared community host;
@@ -405,13 +424,17 @@ async function reclaimRelayName() {   // re-point the claimed name at the curren
 // Gossip pull: fetch every directory peer's signed records and merge them, so this relay mirrors the whole
 // name/offer directory. Runs shortly after boot and on a timer. Records are self-verifying + latest-wins, so
 // pulling from anyone is safe and order-independent.
+const _gossipSince = {};   // per-peer high-water (max verified created_at seen) → pull only newer records next time
 async function gossipDirectory() {
   for (const peer of DIRECTORY_PEERS) {
     try {
-      const r = await fetch(peer + '/relay-names/sync', { signal: AbortSignal.timeout(8000) });
+      const r = await fetch(peer + '/relay-names/sync?since=' + (_gossipSince[peer] || 0), { signal: AbortSignal.timeout(8000) });
       if (!r.ok) continue;
       const j = await r.json();
-      for (const ev of (j.records || []).slice(0, 5000)) { const rec = verifyClaimEvent(ev, 0); if (rec) applyClaimRecord(rec); }
+      for (const ev of (j.records || []).slice(0, 5000)) {
+        const rec = verifyClaimEvent(ev, 0);
+        if (rec) { applyClaimRecord(rec); if (rec.at > (_gossipSince[peer] || 0)) _gossipSince[peer] = rec.at; }
+      }
     } catch {}
   }
 }
@@ -466,7 +489,9 @@ function startCloudflared() {
 function openExternal(url) {
   try {
     const p = process.platform;
-    const c = p === 'win32' ? spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' })
+    // Windows: rundll32 FileProtocolHandler with an arg array — NEVER `cmd /c start`, which re-parses its command
+    // line so metacharacters in the URL could inject commands. macOS/Linux openers already take an arg array.
+    const c = p === 'win32' ? spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], { detached: true, stdio: 'ignore' })
       : p === 'darwin' ? spawn('open', [url], { detached: true, stdio: 'ignore' })
       : spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
     c.on('error', () => {}); c.unref(); return true;
@@ -483,6 +508,8 @@ const TRUSTED_RELAYS = new Map(); // churchpub -> Set(relay pubkeys the church a
 const PEER_URLS = new Map();      // churchpub -> Set(relay URLs to sync this church WITH, from the same church-signed doc)
 const SYNC_CURSOR_FILE = join(DATA_DIR,'sync-cursors.json');   // { "<cp>@<peerUrl>": lastCreatedAt } — resumable, idempotent
 let SYNC_CURSORS = {}; try { SYNC_CURSORS = JSON.parse(readFileSync(SYNC_CURSOR_FILE, 'utf8')) || {}; } catch {}
+let _cursorsDirty = false;   // written once per sync pass, atomically (tmp+rename) — see saveCursors()
+function saveCursors() { if (!_cursorsDirty) return; _cursorsDirty = false; try { const tmp = SYNC_CURSOR_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(SYNC_CURSORS)); renameSync(tmp, SYNC_CURSOR_FILE); } catch {} }
 const SYNC_OVERLAP = 600;   // re-pull a 10-min window before the cursor each time, so an event that arrived out-of-order isn't missed
 const GROUP_CHURCH = new Map();  // groupId -> owning church/network pubkey — per-church retention attribution for chat
 const MEMBER_CHURCH = new Map(); // member pubkey -> a church they belong to — attributes their DMs/reactions to a church
@@ -1090,7 +1117,16 @@ const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'n
 // rather than probing for vendor/babel.min.js — the relay update extracts OVER existing files without pruning,
 // so a stale babel.min.js can linger on disk after the switch and would wrongly force the lax CSP back on.
 let _strictWeb = !!process.env.STRICT_CSP;
-try { if (!_strictWeb) _strictWeb = !readFileSync(join(ROOT, 'index.html'), 'utf8').includes('type="text/babel"'); } catch {}
+// Auto-detect: engage the strict, eval-free CSP only when BOTH served shells are pre-transpiled (no in-browser
+// Babel). Requiring both avoids the mismatch where a strict index.html forces a CSP that breaks a still-lax
+// steward.html — the shell that holds the church key, where an XSS backstop matters most.
+try {
+  if (!_strictWeb) {
+    const idx = readFileSync(join(ROOT, 'index.html'), 'utf8');
+    let stw = ''; try { stw = readFileSync(join(ROOT, 'steward.html'), 'utf8'); } catch {}
+    _strictWeb = !idx.includes('type="text/babel"') && !stw.includes('type="text/babel"');
+  }
+} catch {}
 const CSP = [
   "default-src 'self'",
   _strictWeb ? "script-src 'self' 'wasm-unsafe-eval'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
@@ -1298,7 +1334,7 @@ function serveStatic(req, res) {
     res.writeHead(404, H); res.end('{"error":"not found"}'); return;
   }
   // Cloudflare quick-tunnel control (desktop "go public", no account). Admin-gated.
-  if (route === '/tunnel/up' || route === '/tunnel/state' || route === '/tunnel/down') {
+  if (route === '/tunnel/up' || route === '/tunnel/state' || route === '/tunnel/down' || route === '/tunnel/log') {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', ...SEC_HEADERS };
     if (req.method === 'OPTIONS') { res.writeHead(204, H); res.end(); return; }
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
@@ -1685,8 +1721,10 @@ function serveStatic(req, res) {
     return;
   }
   // Open an external URL in the host's browser — for the desktop launcher's "Get update" (the webview can't do
-  // it). LOOPBACK ONLY (a request that came through the public tunnel carries x-forwarded-for → refused) and
-  // restricted to github.com, so a remote visitor can never make the host machine open arbitrary sites.
+  // it). Hardened against CSRF: it requires the ADMIN TOKEN (which forces a CORS preflight and which a random
+  // cross-origin page can't obtain — /local-token is loopback-fenced), on top of loopback-only + no-proxy. The
+  // URL is re-parsed and only its canonical href for https://github.com/… is opened (never the raw request
+  // string), and openExternal uses no shell — so path/query metacharacters can't inject a command.
   if (route === '/open-external' && req.method === 'POST') {
     const ra = (req.socket && req.socket.remoteAddress) || '';
     const loopbackSock = ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1';
@@ -1694,11 +1732,11 @@ function serveStatic(req, res) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };
     let body = ''; req.on('data', c => { body += c; if (body.length > 2000) req.destroy(); });
     req.on('end', () => {
-      if (!loopbackSock || proxied) { res.writeHead(403, H); res.end('{"error":"local only"}'); return; }
+      if (!loopbackSock || proxied || !adminOK(req)) { res.writeHead(403, H); res.end('{"error":"local admin only"}'); return; }
       let u = ''; try { u = String(JSON.parse(body || '{}').url || ''); } catch {}
-      let host = ''; try { host = new URL(u).host.toLowerCase(); } catch {}
-      if (host !== 'github.com') { res.writeHead(400, H); res.end('{"error":"only github.com links"}'); return; }
-      const ok = openExternal(u);
+      let parsed = null; try { parsed = new URL(u); } catch {}
+      if (!parsed || parsed.protocol !== 'https:' || parsed.host.toLowerCase() !== 'github.com') { res.writeHead(400, H); res.end('{"error":"only https://github.com links"}'); return; }
+      const ok = openExternal(parsed.href);   // canonical, re-serialised — never the raw request string
       res.writeHead(ok ? 200 : 500, H); res.end(JSON.stringify({ ok }));
     });
     return;
@@ -1732,11 +1770,12 @@ function serveStatic(req, res) {
     try { rmSync(staging, { recursive: true, force: true }); } catch {}
     try { mkdirSync(staging, { recursive: true }); } catch {}
     let child;
-    try { child = spawn('tar', ['-xzf', '-', '-C', staging], { stdio: ['pipe', 'ignore', 'ignore'] }); }
+    try { child = spawn('tar', ['--no-same-owner', '--no-same-permissions', '-xzf', '-', '-C', staging], { stdio: ['pipe', 'ignore', 'ignore'] }); }
     catch (e) { res.writeHead(500, H); res.end('{"error":"tar not available on this box"}'); return; }
     child.on('error', () => { try { res.writeHead(500, H); } catch {} try { res.end('{"error":"extract failed"}'); } catch {} });
     child.on('exit', (code) => {
-      // a valid relay backup carries at least the event DB or the church list
+      // reject anything containing a symlink (arbitrary-write vector), and require a real relay backup shape
+      if (code === 0 && stagingHasSymlink(staging)) { try { rmSync(staging, { recursive: true, force: true }); } catch {} res.writeHead(400, H); res.end('{"error":"backup contains a symlink — refused"}'); return; }
       const ok = code === 0 && (existsSync(join(staging, 'relay.sqlite')) || existsSync(join(staging, 'church.json')));
       if (!ok) { try { rmSync(staging, { recursive: true, force: true }); } catch {} res.writeHead(400, H); res.end('{"error":"not a valid relay backup file"}'); return; }
       res.writeHead(200, H); res.end('{"ok":true,"restart":true}');
@@ -2133,7 +2172,7 @@ async function syncChurchFromPeer(cp, peerBase) {
     if (put === 'stored') { imported++; note(e); if (e.kind === 5) for (const t of e.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === e.pubkey) store.del(t[1]); } }   // apply deletions, as the live path does
     if ((e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
   }
-  SYNC_CURSORS[key] = maxTs; try { writeFileSync(SYNC_CURSOR_FILE, JSON.stringify(SYNC_CURSORS)); } catch {}
+  if (maxTs !== (SYNC_CURSORS[key] || 0)) { SYNC_CURSORS[key] = maxTs; _cursorsDirty = true; }   // persisted once per pass by saveCursors()
   return { ok: true, imported };
 }
 // negentropy set reconciliation: partition a church's event IDs into buckets by ID prefix (256 buckets) and
@@ -2214,6 +2253,7 @@ async function syncAllChurches() {
       try { const m = await syncMediaFromPeer(cp, base); if (m) console.log(`[sync] +${m} media from ${base} for church ${cp.slice(0, 8)}`); } catch {}   // paced media pass
     }
   }
+  saveCursors();   // one atomic write per pass, only if any cursor advanced
   return total;
 }
 let _syncing = false;
@@ -2350,7 +2390,8 @@ server.listen(PORT, BIND_HOST, () =>
   console.log(`TrinityOne gateway on http://${BIND_HOST}:${PORT}  (app + relay at /relay, ${store.count()} events loaded)` +
     (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set up a church in the control dashboard)`) +
     `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
-    `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}`));
+    `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}` +
+    (!_strictWeb ? `\n  ⚠ CSP is LAX (unsafe-inline/eval) — served shells still carry in-browser Babel. Deploy a PRE-TRANSPILED build (or set STRICT_CSP=1) before go-live: the console holds the church key.` : '')));
 // "Stay public": if the operator turned on the tunnel before, re-open it on boot (a fresh quick-tunnel URL) and
 // re-point the relay's directory name at it — so a restart doesn't silently drop members' access.
 if (existsSync(TUNNEL_FLAG)) { setTimeout(() => { startCloudflared().then(r => console.log(r.ok ? `  tunnel re-opened: ${r.url}` : `  tunnel re-open failed: ${r.error || ''}`)).catch(() => {}); }, 2500); }
