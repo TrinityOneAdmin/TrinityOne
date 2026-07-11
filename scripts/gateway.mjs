@@ -6,7 +6,7 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
 import { extname, normalize, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
@@ -309,7 +309,18 @@ let MY_RELAY_NAME = ''; try { MY_RELAY_NAME = JSON.parse(readFileSync(MYNAME_FIL
 // quick-tunnel URL changes on each start. CLOUDFLARED_BIN is set by the desktop app to its bundled binary.
 const CLOUDFLARED_BIN = process.env.CLOUDFLARED_BIN || 'cloudflared';
 const TUNNEL_FLAG = join(DATA_DIR, 'tunnel-on');   // presence = "stay public": re-open the tunnel on every boot
-let CF_CHILD = null, CF_URL = '';
+const CF_LOG_FILE = join(DATA_DIR, 'cloudflared.log');   // full transcript of the last tunnel attempt (for diagnosing)
+let CF_CHILD = null, CF_URL = '', CF_TAIL = [];   // CF_TAIL: ring buffer of the last log lines, surfaced in errors
+function cfLog(s) { const line = String(s); for (const ln of line.split(/\r?\n/)) { if (ln.trim()) CF_TAIL.push(ln.trim()); } while (CF_TAIL.length > 40) CF_TAIL.shift(); try { appendFileSync(CF_LOG_FILE, line); } catch {} }
+// Turn cloudflared's own log tail into a human hint about WHY the tunnel didn't hold. VPNs block the QUIC (UDP)
+// path; a firewall / antivirus can block cloudflared's outbound entirely (it prints the URL, then can't keep the
+// connection and exits "no more connections active"). Missing binary is a build problem.
+function cfErrorHint() {
+  const t = CF_TAIL.join('\n');
+  if (/no more connections active|failed to (dial|connect)|context deadline|timeout|refused|unreachable|ERR /i.test(t))
+    return 'the tunnel couldn’t stay connected. A VPN, firewall, or antivirus is likely blocking cloudflared — allow it through your firewall (or turn your VPN off) and click again.';
+  return 'couldn’t reach Cloudflare — a VPN or firewall may be blocking it. Try turning your VPN off and click again.';
+}
 function cfPublicWss() { return CF_URL ? CF_URL.replace(/^https/i, 'wss') + '/relay' : ''; }
 async function reclaimRelayName() {   // re-point the claimed name at the current public URL (needs both)
   if (!MY_RELAY_NAME || !CF_URL) return;
@@ -324,17 +335,34 @@ function relayPetSlug() { const h = RELAY_PUB; if (!/^[0-9a-f]{64}$/i.test(h)) r
 function startCloudflared() {
   return new Promise((resolve) => {
     if (CF_URL && CF_CHILD) { resolve({ ok: true, url: CF_URL }); return; }
-    // Force HTTP/2 (TCP :443) instead of the default QUIC (UDP :7844): VPNs and many firewalls silently drop
-    // the UDP path, which makes cloudflared hang forever with no public URL. HTTP/2 rides ordinary HTTPS out.
-    let child; try { child = spawn(CLOUDFLARED_BIN, ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', 'http://localhost:' + PORT], { stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (e) { resolve({ ok: false, error: 'cloudflared is not available on this box' }); return; }
+    try { writeFileSync(CF_LOG_FILE, ''); } catch {}    // fresh transcript per attempt
+    CF_TAIL = [];
+    // Let cloudflared auto-pick its transport (default): it prechecks connectivity and uses QUIC where it can,
+    // falling back to HTTP/2 over ordinary HTTPS where UDP is blocked (e.g. behind a VPN). --edge-ip-version auto
+    // lets it try IPv4 and IPv6 edges.
+    let child; try { child = spawn(CLOUDFLARED_BIN, ['tunnel', '--no-autoupdate', '--edge-ip-version', 'auto', '--url', 'http://localhost:' + PORT], { stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (e) { resolve({ ok: false, error: 'cloudflared isn’t bundled with this build — reinstall the latest Suite.' }); return; }
     CF_CHILD = child;
-    let done = false;
-    const onData = (d) => { const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i); if (m && !done) { done = true; CF_URL = m[0]; try { writeFileSync(TUNNEL_FLAG, '1'); } catch {} if (!MY_RELAY_NAME) { MY_RELAY_NAME = relayPetSlug(); try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle: MY_RELAY_NAME }) + '\n'); } catch {} } reclaimRelayName(); resolve({ ok: true, url: CF_URL }); } };
+    let done = false, url = '', registered = false;
+    // Success is NOT "the URL string appeared" — cloudflared prints the trycloudflare URL up front, BEFORE the
+    // edge connection is up. If the connection then fails the child exits and the tunnel is dead. So we only
+    // declare victory once we see a "Registered tunnel connection" line AND we have the URL.
+    const finishOk = () => {
+      if (done) return; done = true; CF_URL = url;
+      try { writeFileSync(TUNNEL_FLAG, '1'); } catch {}
+      if (!MY_RELAY_NAME) { MY_RELAY_NAME = relayPetSlug(); try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle: MY_RELAY_NAME }) + '\n'); } catch {} }
+      reclaimRelayName(); resolve({ ok: true, url: CF_URL });
+    };
+    const onData = (d) => {
+      const s = String(d); cfLog(s);
+      const m = s.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i); if (m) url = m[0];
+      if (/Registered tunnel connection|Connection [0-9a-f-]+ registered/i.test(s)) registered = true;
+      if (url && registered) finishOk();
+    };
     child.stdout.on('data', onData); child.stderr.on('data', onData);
-    child.on('exit', () => { CF_CHILD = null; CF_URL = ''; });
+    child.on('exit', () => { CF_CHILD = null; CF_URL = ''; if (!done) { done = true; resolve({ ok: false, error: cfErrorHint() }); } });
     child.on('error', (e) => { if (!done) { done = true; CF_CHILD = null; resolve({ ok: false, error: String((e && e.message) || e) }); } });
-    setTimeout(() => { if (!done) { done = true; try { if (child) child.kill(); } catch {} CF_CHILD = null; resolve({ ok: false, error: 'couldn’t reach Cloudflare — a VPN or firewall may be blocking it. Try turning your VPN off and click again.' }); } }, 30000);
+    setTimeout(() => { if (!done) { done = true; try { if (child) child.kill(); } catch {} CF_CHILD = null; resolve({ ok: false, error: cfErrorHint() }); } }, 30000);
   });
 }
 function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
@@ -1134,6 +1162,7 @@ function serveStatic(req, res) {
     if (req.method === 'OPTIONS') { res.writeHead(204, H); res.end(); return; }
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
     if (route === '/tunnel/state' && req.method === 'GET') { res.writeHead(200, H); res.end(JSON.stringify({ running: !!CF_CHILD, url: CF_URL, wss: cfPublicWss() })); return; }
+    if (route === '/tunnel/log' && req.method === 'GET') { res.writeHead(200, H); res.end(JSON.stringify({ tail: CF_TAIL.slice(-14) })); return; }
     if (route === '/tunnel/up' && req.method === 'POST') { startCloudflared().then(r => { res.writeHead(r.ok ? 200 : 502, H); res.end(JSON.stringify(r.ok ? { ok: true, url: CF_URL, wss: cfPublicWss(), name: MY_RELAY_NAME } : { error: r.error })); }); return; }
     if (route === '/tunnel/down' && req.method === 'POST') { try { if (CF_CHILD) CF_CHILD.kill(); } catch {} CF_CHILD = null; CF_URL = ''; try { unlinkSync(TUNNEL_FLAG); } catch {} res.writeHead(200, H); res.end('{"ok":true}'); return; }
     res.writeHead(405, H); res.end('{"error":"method"}'); return;

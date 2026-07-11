@@ -170,7 +170,8 @@
   }
   // Cloudflare quick tunnel "go public" — lives in the Reach-members card (see renderGoPublic). One click, no account.
   const cfGoHtml = '<div class="muted" style="margin-bottom:11px">Make this relay reachable from anywhere — <b>free, no account</b>, no fixed IP. One click.</div>'
-    + '<button class="btn-clay" id="cfGo">Go public — no account →</button> <span class="muted" id="cfMsg"></span>';
+    + '<button class="btn-clay" id="cfGo">Go public — no account →</button> <span class="muted" id="cfMsg"></span>'
+    + '<pre id="cfDetail" style="display:none;margin-top:10px;padding:10px 12px;background:var(--surface-2,#f2efe8);border:1px solid var(--line);border-radius:8px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--ink-3);max-height:180px;overflow:auto"></pre>';
   function wireCfGo() { const cf = document.getElementById('cfGo'); if (cf) cf.onclick = goPublicCloudflare; }
   async function goPublicCloudflare() {
     const btn = document.getElementById('cfGo'), msg = document.getElementById('cfMsg');
@@ -179,7 +180,17 @@
     try {
       const r = await fetch('/tunnel/up', { method: 'POST', headers: authHeaders() });
       const j = await r.json();
-      if (!r.ok) { if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); } if (btn) btn.disabled = false; return; }
+      if (!r.ok) {
+        if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); }
+        if (btn) btn.disabled = false;
+        // pull cloudflared's own last lines so a stubborn failure is diagnosable without hunting for a log file
+        try {
+          const lg = await (await fetch('/tunnel/log', { headers: authHeaders(), cache: 'no-store' })).json();
+          const det = document.getElementById('cfDetail');
+          if (det && lg && lg.tail && lg.tail.length) { det.style.display = 'block'; det.textContent = lg.tail.join('\n'); }
+        } catch (e) {}
+        return;
+      }
       if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ public!'; }
       setTimeout(() => { gpTick(); loadRelayName(); }, 900);
     } catch (e) { if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; } if (btn) btn.disabled = false; }
