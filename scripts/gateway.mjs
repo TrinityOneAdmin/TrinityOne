@@ -347,10 +347,18 @@ function cfErrorHint() {
   return 'couldn’t reach Cloudflare — a VPN or firewall may be blocking it. Try turning your VPN off and click again.';
 }
 function cfPublicWss() { return CF_URL ? CF_URL.replace(/^https/i, 'wss') + '/relay' : ''; }
-async function reclaimRelayName() {   // re-point the claimed name at the current public URL (needs both)
+// What this relay tells the directory about hosting: `open` = actually accepting new churches now (operator
+// opted in to offer, not invite-only, under cap). The directory lists open relays so another church's Auto-find
+// can DISCOVER this relay without knowing its name. churches/region/operator are load + contact hints.
+function offerMeta() {
+  const full = !!(OFFER_CAP && CHURCH_PUBS.size >= OFFER_CAP);
+  const open = (OFFER_OPEN || SETTINGS.offerHosting) && !SETTINGS.inviteOnly && !full;
+  return { open, churches: CHURCH_PUBS.size, ...(OFFER_REGION ? { region: OFFER_REGION } : {}), ...(OFFER_OPERATOR ? { operator: OFFER_OPERATOR } : {}) };
+}
+async function reclaimRelayName() {   // re-point the claimed name at the current public URL (needs both) + refresh the offer
   if (!MY_RELAY_NAME || !CF_URL) return;
   const wss = cfPublicWss();
-  try { await fetch(DIRECTORY + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': relayNameClaim(MY_RELAY_NAME, wss) }, body: JSON.stringify({ handle: MY_RELAY_NAME, url: wss }) }); } catch {}
+  try { await fetch(DIRECTORY + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': relayNameClaim(MY_RELAY_NAME, wss) }, body: JSON.stringify({ handle: MY_RELAY_NAME, url: wss, offer: offerMeta() }) }); } catch {}
 }
 // the relay's pet-name as a directory handle slug (matches the client's stewardNameFor, lower-cased + hyphens),
 // so going public can auto-claim a memorable name with zero steps — e.g. "Quiet Dove 45" -> "quiet-dove-45".
@@ -1161,7 +1169,7 @@ function serveStatic(req, res) {
           const myUrl = await ownUrl();
           if (!myUrl) { res.writeHead(400, H); res.end('{"error":"your relay isn’t reachable from the internet yet — turn on public access first, then claim a name"}'); return; }
           try {
-            const r = await fetch(DIRECTORY + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': relayNameClaim(handle, myUrl) }, body: JSON.stringify({ handle, url: myUrl }) });
+            const r = await fetch(DIRECTORY + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': relayNameClaim(handle, myUrl) }, body: JSON.stringify({ handle, url: myUrl, offer: offerMeta() }) });
             const j = await r.json().catch(() => ({}));
             if (!r.ok) { res.writeHead(r.status, H); res.end(JSON.stringify({ error: j.error || 'the directory rejected that name' })); return; }
             MY_RELAY_NAME = handle; try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle }) + '\n'); } catch {}
@@ -1178,6 +1186,18 @@ function serveStatic(req, res) {
       if (!rec) { res.writeHead(404, H); res.end('{"error":"no relay by that name"}'); return; }
       res.writeHead(200, H); res.end(JSON.stringify({ handle, url: rec.url, pub: rec.pub })); return;
     }
+    // Discovery list: relays that told us they're OPEN to host, claimed recently (a rough liveness filter — a
+    // relay re-claims on every go-public/boot). The CLIENT still probes each one's NIP-11 to confirm it's live +
+    // actually open before showing it, so a stale entry here is harmless. This is what makes Auto-find global.
+    if (req.method === 'GET' && route === '/relay-names/offers') {
+      const now = Math.floor(Date.now() / 1000), MAX_AGE = 14 * 86400;
+      const relays = Object.entries(RELAY_NAMES)
+        .filter(([, r]) => r && r.url && r.offer && r.offer.open && (now - (r.at || 0) < MAX_AGE))
+        .map(([handle, r]) => ({ handle, url: r.url, churches: (r.offer.churches | 0), region: r.offer.region || '', operator: r.offer.operator || '' }))
+        .sort((a, b) => (a.churches || 0) - (b.churches || 0))
+        .slice(0, 200);
+      res.writeHead(200, H); res.end(JSON.stringify({ relays })); return;
+    }
     if (req.method === 'POST' && route === '/relay-names/claim') {
       let body = ''; req.on('data', c => { body += c; if (body.length > 1e4) req.destroy(); });
       req.on('end', () => {
@@ -1191,7 +1211,10 @@ function serveStatic(req, res) {
         const existing = RELAY_NAMES[handle];
         if (existing && existing.pub !== pub) { res.writeHead(409, H); res.end('{"error":"that name is already taken by another relay"}'); return; }
         for (const k of Object.keys(RELAY_NAMES)) { if (RELAY_NAMES[k].pub === pub && k !== handle) delete RELAY_NAMES[k]; }   // one handle per relay: release any previous
-        RELAY_NAMES[handle] = { url, pub, at: Math.floor(Date.now() / 1000) };
+        const offer = (b.offer && typeof b.offer === 'object')
+          ? { open: !!b.offer.open, churches: (b.offer.churches | 0), region: String(b.offer.region || '').slice(0, 40), operator: String(b.offer.operator || '').slice(0, 64) }
+          : undefined;
+        RELAY_NAMES[handle] = { url, pub, at: Math.floor(Date.now() / 1000), ...(offer ? { offer } : {}) };
         saveRelayNames();
         res.writeHead(200, H); res.end(JSON.stringify({ ok: true, handle, url, pub }));
       });
@@ -1548,6 +1571,9 @@ function serveStatic(req, res) {
           if ('inviteOnly' in s) SETTINGS.inviteOnly = !!s.inviteOnly;
           if ('offerHosting' in s) SETTINGS.offerHosting = !!s.offerHosting;
           saveSettings();
+          // push the new offer/access state to the directory now, so discovery reflects it without waiting for
+          // the next go-public/boot (no-op unless this relay is public + has a claimed name).
+          if ('offerHosting' in s || 'inviteOnly' in s) { try { reclaimRelayName(); } catch {} }
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });

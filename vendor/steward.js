@@ -10828,7 +10828,16 @@ zoo`.split("\n");
   }
   var _discoverySeed = [];
   async function discoverRelayOffers(seedExtra, region) {
-    const seed = [.../* @__PURE__ */ new Set([...seedExtra || [], ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
+    let dirUrls = [];
+    try {
+      const r = await fetch(DIRECTORY_URL + "/relay-names/offers", { cache: "no-store" });
+      if (r.ok) {
+        const j = await r.json();
+        dirUrls = (j.relays || []).map((x) => normRelay(x && x.url)).filter(Boolean);
+      }
+    } catch (e) {
+    }
+    const seed = [.../* @__PURE__ */ new Set([...seedExtra || [], ...dirUrls, ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
     const probed = await Promise.all(seed.map(async (url) => {
       const t = await _relayInfo(url);
       if (t && t.enforces === true && t.open === true && !t.full) return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "" };

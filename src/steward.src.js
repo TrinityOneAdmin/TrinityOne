@@ -238,7 +238,12 @@ function _relayInfo(wssUrl) {
 // point (FEDERATION-PLAN guardrail). Empty on the pilot (a8 isn't offering), so auto-pick is a safe no-op.
 let _discoverySeed = [];
 async function discoverRelayOffers(seedExtra, region) {
-  const seed = [...new Set([...(seedExtra || []), ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
+  // Global discovery: ask the shared directory which relays have advertised they're open to host, so we can
+  // surface relays this church has NEVER added. Merge with the local seed; each candidate is still NIP-11
+  // probed below, so a stale/dishonest directory entry can't fake an offer.
+  let dirUrls = [];
+  try { const r = await fetch(DIRECTORY_URL + '/relay-names/offers', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); dirUrls = (j.relays || []).map(x => normRelay(x && x.url)).filter(Boolean); } } catch (e) {}
+  const seed = [...new Set([...(seedExtra || []), ...dirUrls, ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
   const probed = await Promise.all(seed.map(async (url) => {
     const t = await _relayInfo(url);
     if (t && t.enforces === true && t.open === true && !t.full) return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '' };
