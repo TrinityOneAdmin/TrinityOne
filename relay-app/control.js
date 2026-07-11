@@ -246,9 +246,15 @@
     st.textContent = '';
     body.innerHTML =
       '<div class="row" style="background:color-mix(in oklab,var(--sage) 9%,var(--surface));border-color:color-mix(in oklab,var(--sage) 28%,transparent)"><span style="color:var(--sage);font-weight:700;font-size:13px">✓ Public via Cloudflare — reachable from anywhere</span></div>' +
-      '<div class="row"><span class="k">Public URL</span><span class="v">' + esc(cf.url) + '</span><button class="btn-ghost" onclick="gpCopy(\'' + esc(cf.url) + '\',this)">Copy</button></div>' +
+      '<div class="row"><span class="k">Public URL</span><span class="v">' + esc(cf.url) + '</span><button class="btn-ghost" data-copyurl="' + esc(cf.url) + '">Copy</button></div>' +
       '<div class="muted" style="margin-top:6px">Members connect by the <b>name</b> you claim below — it stays the same even if this URL changes. Test from your phone on <b>mobile data</b>: <a href="' + esc(cf.url) + '/status" target="_blank">' + esc(cf.url) + '/status</a>.</div>' +
       '<div class="row" style="margin-top:12px;background:color-mix(in oklab,var(--clay) 7%,var(--surface));border-color:color-mix(in oklab,var(--clay) 22%,transparent)"><span style="font-size:13px;line-height:1.5"><b>Serve the wider church.</b> Your relay can also <b>host other churches that can’t self-host</b> — add their <code>npub</code> in “Churches on this relay” below, and they get a home on your infrastructure. One box can carry many congregations.</span></div>';
+    wireCopyUrls(body);   // strict-CSP: no inline onclick — wire the Copy button here
+  }
+  // wire any [data-copyurl] Copy button inside a freshly-rendered container (used instead of inline onclick,
+  // which the strict CSP blocks). Mirrors gpCopy's behaviour (copy + "Copied" flash).
+  function wireCopyUrls(root) {
+    (root || document).querySelectorAll('[data-copyurl]').forEach(b => { b.onclick = () => gpCopy(b.dataset.copyurl, b); });
   }
   async function claimRelayName() {
     const inp = document.getElementById('relayNameIn'); const msg = document.getElementById('relayNameMsg');
@@ -366,13 +372,14 @@
     const body = document.getElementById('gpBody'), st = document.getElementById('gpStatus');
     if (s.locked)         { st.textContent='· locked';   body.innerHTML = gpWarn('🔒 Enter the <b>admin token</b> in the Churches card below — it unlocks one-click public access too.'); return; }
     if (s.installed === false) { st.textContent='· not public yet'; body.innerHTML = cfGoHtml; wireCfGo(); return; }   // no Tailscale (e.g. desktop app) → the bundled Cloudflare tunnel is the path
-    if (s.needsOperator)  { st.textContent='· needs a nudge'; body.innerHTML = gpWarn('The relay can’t manage Tailscale yet. On the relay box, run once:<br><br><code>sudo tailscale set --operator=trinityone</code><br><br>then <button class="btn-ghost" onclick="gpTick()">refresh</button>.'); return; }
+    if (s.needsOperator)  { st.textContent='· needs a nudge'; body.innerHTML = gpWarn('The relay can’t manage Tailscale yet. On the relay box, run once:<br><br><code>sudo tailscale set --operator=trinityone</code><br><br>then <button class="btn-ghost" id="gpRefreshOp">refresh</button>.'); var _rb = document.getElementById('gpRefreshOp'); if (_rb) _rb.onclick = gpTick; return; }
     if (s.funnelOn && s.publicUrl) {
       st.textContent=''; publicBase = s.publicUrl; refreshReach();
       body.innerHTML =
         '<div class="row" style="background:color-mix(in oklab,var(--sage) 9%,var(--surface));border-color:color-mix(in oklab,var(--sage) 28%,transparent)"><span style="color:var(--sage);font-weight:700;font-size:13px">✓ Reachable from anywhere — no terminal needed</span></div>' +
-        '<div class="row"><span class="k">Public URL</span><span class="v">'+esc(s.publicUrl)+'</span><button class="btn-ghost" onclick="gpCopy(\''+esc(s.publicUrl)+'\',this)">Copy</button></div>' +
+        '<div class="row"><span class="k">Public URL</span><span class="v">'+esc(s.publicUrl)+'</span><button class="btn-ghost" data-copyurl="'+esc(s.publicUrl)+'">Copy</button></div>' +
         '<div class="muted" style="margin-top:6px">Test it from your phone on <b>mobile data</b> (Wi-Fi off): <a href="'+esc(s.publicUrl)+'/status" target="_blank">'+esc(s.publicUrl)+'/status</a> — JSON means it’s live worldwide.</div>';
+      wireCopyUrls(body);
       return;
     }
     if (s.loggedIn) {
