@@ -1,14 +1,21 @@
-# TrinityOne — Relay app (v0.7.0 runnable core)
+# TrinityOne — Relay (self-host core)
 
-The box that carries your church's messages, run on your own computer. This is the **runnable core** —
-the launcher the packaged desktop app (Tauri, signed installer) will wrap so there's nothing to type.
+The box that carries your church's messages, run on your own computer. Two ways to run it:
+
+- **Easiest — the TrinityOne Suite** (macOS / Windows / Linux desktop app): double-click to install, pick
+  *Full suite* or *Relay only*, click **Go public** for a free no-account Cloudflare tunnel, and claim a
+  memorable **name** members connect by. Get it from the app's Downloads page — nothing to type.
+- **Always-on server** (Raspberry Pi / mini-PC / old laptop / VPS): the one-line installer below runs it
+  as a hardened systemd service.
+
+This README covers the server core; the Suite wraps the same relay.
 
 ## Install on a Linux box, one line *(recommended — always-on)*
 For a relay that runs on boot and keeps running with nothing left open — on a Raspberry Pi, a
 mini-PC, an old laptop, or a VPS (any apt-based Linux; not Pi-specific):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/swasb-altFreeBird/TrinityOne/main/relay-app/install.sh | sudo bash
+curl -fsSL https://app.trinityone.church/relay-app/install.sh | sudo bash
 ```
 
 It installs Node if needed, fetches the app, runs the relay as a hardened `systemd` service under a
@@ -42,15 +49,17 @@ Open the **control dashboard** (`/relay-app/control.html`) and, under *Churches 
 your church's `npub` (from the Steward console) and Save. It writes the relay's write policy and applies
 it instantly — no file editing, no restart. The relay only accepts writes from churches listed there.
 
-Configuring requires the relay's **admin token** (the relay runs behind a tunnel that proxies from
-localhost, so it can't safely treat "local" requests as trusted). The token is printed by the installer,
-or `journalctl -u trinityone-relay | grep "admin token"` on the relay box — enter it once in the dashboard.
+Configuring from the relay's **own computer** fills the admin token in automatically — the relay hands it
+only to genuine same-machine requests (`/local-token`, loopback-fenced). Configuring from **another device**
+needs the token: it's printed by the installer, or `journalctl -u trinityone-relay | grep "admin token"` on
+a Linux server box. Enter it once in the dashboard.
 
 The config is stored in `../relay/church.json`; you can still edit it by hand + `systemctl restart` if
 you prefer.
 
-## What's next (see `reference/brief-relay-app-wizard.md`)
-- **v0.7.1** — Tauri shell: this launcher + the `stew-relay.jsx` control UI as a signed desktop app
-  with a setup wizard, tray, auto-start, auto-update.
-- **v0.7.2** — a **bundled tunnel** so "reachable from anywhere" needs no extra account or setup
-  (Tailscale vs Cloudflare — DECISION 2).
+## Shipped
+- **Desktop Suite** (Tauri) — this launcher + control panel as an installer with a setup wizard,
+  auto-update, and a **bundled Cloudflare quick tunnel** ("Go public", no account).
+- **Connect by name** + **Auto-find relays**, **invite-only** + **offer-to-host**, whole-relay
+  **backup & restore**, per-church **storage caps**, and a **federated (mirrored) relay-name directory**
+  so discovery survives any single host going down.

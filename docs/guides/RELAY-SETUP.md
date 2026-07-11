@@ -18,9 +18,11 @@ Out of the box, your church is on the shared TrinityOne relay. It works, it's fr
 
 If someone you trust runs a relay and offers space, your church can adopt it — the app can even find one for you.
 
-1. In the Steward console, open the **Relays** card (under Settings).
+1. In the Steward console, open **Settings → Network**.
 2. Tap **Auto-find relays for me.** The app discovers relays that are **offering space**, checks each one actually enforces TrinityOne's rules (so your church's safeguarding + membership policy still applies), and picks a couple — including a **backup**.
 3. Done. Your church now publishes to those relays. Members follow the same as before.
+
+**Know the relay's name already?** Under **OR CONNECT BY NAME**, type it (e.g. `grace-city`) and Connect. The name always points at the relay's current address — so a self-hosted relay behind the free tunnel keeps working even though its raw URL changes on every restart. Prefer the **name**, never a raw `wss://…trycloudflare.com` URL.
 
 > **Why a backup?** Two relays means if one is down, your church keeps working. When you have two, self-hosted media is automatically mirrored across them, and the console's "backup copy host(s)" fills itself in.
 
@@ -34,21 +36,45 @@ This is the church-box option: your data, your server, your domain (`relay.yourc
 - A small always-on computer or a cheap VPS. A Raspberry-Pi-class box is fine for chat/prayer. **For self-hosted audio/video, use a box with real upload bandwidth or cheap object storage — not a home connection behind a phone/5G router,** which chokes on uploads.
 - Node.js. That's basically it — the relay is one small service.
 
-### Start it
+### Easiest — the TrinityOne Suite (no command line)
+Download the **TrinityOne Suite** from the app's Downloads page (macOS / Windows / Linux), install it, and
+open it. Pick **Full suite** (relay + manage your church on one box) or **Relay only**. On first run it
+guides you through creating/entering your church, so the relay already knows which church it serves.
+
+Then, in the relay panel:
+1. **Go public — no account** — one click starts a free Cloudflare quick tunnel. No port-forwarding, no
+   static IP, no account.
+2. **Claim a name** under *Your relay's name* (e.g. `grace-city`). That's the stable handle stewards type
+   in **Settings → Network → Connect by name** — it survives the tunnel URL rotating on restart.
+3. Share invites from the Steward console as usual; the invite QR carries the relay automatically, so you
+   never dictate a `wss://` address to members.
+
+### Advanced — headless server (Raspberry Pi / VPS)
+For an always-on box with no window open, use the one-line installer (see `relay-app/README.md`) or run the
+core directly:
 ```bash
-git clone https://github.com/TrinityOneAdmin/TrinityOne.git && cd TrinityOne
+git clone https://github.com/TrinityOneAdmin/TrinityOne.git && cd TrinityOne   # canonical repo
 npm install
-node scripts/gateway.mjs 8000      # relay + app + media store on :8000
+CHURCH_NPUB=npub1… node scripts/gateway.mjs 8000     # relay + app + media store on :8000
 ```
-Set your church key so the relay knows which church it serves — `CHURCH_NPUB=npub1…` (comma-separate for several), or a `relay/church.json`. See [`ops/HOSTING.md`](../ops/HOSTING.md) for the full server setup (systemd, backups, keys).
+Set the church key via `CHURCH_NPUB=npub1…` (comma-separate for several) or a `relay/church.json`. See
+[`ops/HOSTING.md`](../ops/HOSTING.md) for the full server runbook (systemd, keys).
 
-### Put it on your own domain
-Members reach a relay over `wss://` on a real domain. The simplest, free way — no port-forwarding, no static IP — is a **Cloudflare Tunnel**:
-1. Point `relay.yourchurch.org` at Cloudflare.
-2. Run `cloudflared` on the relay box, tunnelling your domain to `localhost:8000`.
-3. In the Steward console → Relays, add `wss://relay.yourchurch.org/relay` and publish it. Members pick it up automatically.
+### Reachable from anywhere
+The Suite's **Go public** (above) is the easiest path — a free, no-account tunnel; connect churches by the
+**name** you claim, not the rotating URL.
 
-Full runbook: [`ops/GO-LIVE-DOMAIN.md`](../ops/GO-LIVE-DOMAIN.md).
+Want a **fixed address on your own domain** (`relay.yourchurch.org`)? Run a Cloudflare **named** tunnel (an
+account + `cloudflared` on the box, tunnelling the domain to `localhost:8000`), then add
+`wss://relay.yourchurch.org/relay` in **Settings → Network**. Full runbook:
+[`ops/GO-LIVE-DOMAIN.md`](../ops/GO-LIVE-DOMAIN.md).
+
+### Back up your relay
+In the relay panel, **Back up & restore this relay → Download backup** saves the whole box — every church's
+messages, records and media, plus the relay's identity — as one encrypted-at-rest file you keep on a drive
+or cloud **you** control. It contains keys, so guard it like your recovery phrase. **Restore** (then restart
+the app) rebuilds the relay from that file — how you move it to a new machine, or roll back. A steward can
+also back up just their own church's data from the console (**Settings → Backup & data**).
 
 ### Run two for safety
 Redundancy matters. Stand up a **second** relay (a friend church, a second VPS, a cheap object-storage-backed node) and add it too. With ≥2 relays your church drops the shared fallback entirely — you're fully self-hosted, and media mirrors across both.
@@ -57,11 +83,15 @@ Redundancy matters. Stand up a **second** relay (a friend church, a second VPS, 
 
 ## Hosting other churches (public/shared relay)
 
-If you run a relay with room to spare, you can **offer space** to other churches:
-- `RELAY_OPEN=1` — advertise that you accept other churches (they can auto-find you). Add `RELAY_OPERATOR="Grace Church"` and `RELAY_REGION="UK"` to identify yourself, and `RELAY_CHURCH_CAP=10` to cap how many churches you'll take.
+If you run a relay with room to spare, you can **offer space** to other churches. In the relay panel's
+*Churches on this relay* card:
+- **Offer to host other churches** — advertises your relay so others' **Auto-find** surfaces it.
+- **Invite-only** — off = a church can add itself (up to 200); on = only churches you add with the admin token.
+
+(Headless/server equivalents: `RELAY_OPEN=1`, `RELAY_OPERATOR="Grace Church"`, `RELAY_REGION="UK"`, `RELAY_CHURCH_CAP=10`.)
 
 ### Protecting your disk (media storage controls)
-Self-hosted audio/video is big. If several churches share your node, cap it so nobody exhausts your disk:
+Self-hosted audio/video is big. If several churches share your node, cap it so nobody exhausts your disk. Set the **Total media (GB)** and **Per church (GB)** fields in the relay panel, or the env vars:
 - `RELAY_MEDIA_OFF=1` — be a relay **only**; refuse all media uploads (chat/prayer still work).
 - `RELAY_MEDIA_CAP=<bytes>` — a **total** media limit across all churches.
 - `RELAY_CHURCH_MEDIA_CAP=<bytes>` — a **per-church** media limit.
