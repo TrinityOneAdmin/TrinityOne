@@ -179,8 +179,8 @@
       if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = on ? '· ✓ media will mirror too' : '· ✓ media stays put (mirrors small)'; setTimeout(() => { msg.textContent = ''; }, 3000); }
     } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
   };
-  document.getElementById('syncNow').onclick = async () => {
-    const msg = document.getElementById('syncMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = 'syncing…';
+  document.getElementById('replSyncNow').onclick = async () => {
+    const msg = document.getElementById('replSyncMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = 'syncing…';
     try {
       const r = await fetch('/sync-now', { method: 'POST', headers: authHeaders() });
       const s = await r.json();
