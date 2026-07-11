@@ -128,10 +128,17 @@ const MEDIA_OFF = /^(1|true|yes|on)$/i.test(process.env.RELAY_MEDIA_OFF || ''); 
 const MEDIA_CAP = parseInt(process.env.RELAY_MEDIA_CAP, 10) || 0;                 // global media byte cap (0 = unlimited)
 const CHURCH_MEDIA_CAP = parseInt(process.env.RELAY_CHURCH_MEDIA_CAP, 10) || 0;   // per-church media byte cap (0 = unlimited)
 const _mediaBytesByChurch = new Map(); let _mediaBytesTotal = 0;   // usage, scanned from disk at boot + updated on upload
+// P7b: in-memory blob index (church -> Map<sha,size>), so /sync-media + /replication-status don't do a
+// readdir + readFileSync(.church) + statSync per blob on every request. Built by the same boot scan below,
+// then kept live on upload + media-sync pull (blobs are never pruned, so the index only grows). _indexBlob()
+// records one blob everywhere; call it whenever a blob lands on disk with a known owner.
+const _blobsByChurch = new Map();   // cp -> Map<sha, size>
+function _indexBlob(cp, sha, size) { if (!cp) return; let m = _blobsByChurch.get(cp); if (!m) { m = new Map(); _blobsByChurch.set(cp, m); } m.set(sha, size); }
+function _churchBlobList(cp) { const m = _blobsByChurch.get(cp); if (!m) return []; const out = []; for (const [sha, size] of m) out.push({ sha, size }); return out; }
 // P7: tally media usage AFTER the relay starts listening (was a synchronous statSync-per-blob walk blocking boot
 // on a media-heavy box). SET the totals from the disk scan (authoritative) rather than accumulate, so any upload
 // that lands during the brief window isn't double-counted — the scan already sees it on disk.
-setTimeout(() => { try { let total = 0; const by = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) by.set(o, (by.get(o) || 0) + sz); } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); } catch {} }, 0);
+setTimeout(() => { try { let total = 0; const by = new Map(); const idx = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) { by.set(o, (by.get(o) || 0) + sz); let m = idx.get(o); if (!m) { m = new Map(); idx.set(o, m); } m.set(f, sz); } } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); _blobsByChurch.clear(); for (const [k, v] of idx) _blobsByChurch.set(k, v); } catch {} }, 0);
 // Streaming base64 for the native (CapacitorHttp) blob path — encode/decode in aligned chunks so a big blob never
 // sits fully in RAM (a 200 MB video buffered + base64'd would cost ~450 MB). Each whole 3-byte group → 4 b64 chars
 // independently, so concatenating the chunks equals base64(file); only the final partial group is padded. Decode
@@ -1388,8 +1395,7 @@ function serveStatic(req, res) {
   if (route === '/export-media') {
     const cp = _exportAuth(req, req.headers['host'] || '', route);
     if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
-    const blobs = [];
-    try { for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; if (_blobOwner(f) !== cp) continue; let size = 0; try { size = statSync(join(BLOB_DIR, f)).size; } catch { continue; } blobs.push({ sha: f, size }); } } catch {}
+    const blobs = _churchBlobList(cp);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.end(JSON.stringify({ church: cp, blobs, totalBytes: blobs.reduce((a, b) => a + b.size, 0) }));
     return;
@@ -1421,8 +1427,7 @@ function serveStatic(req, res) {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-media');
     const q = new URL(req.url, 'http://x').searchParams;
     if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
-    const blobs = [];
-    try { for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; if (_blobOwner(f) !== cp) continue; let size = 0; try { size = statSync(join(BLOB_DIR, f)).size; } catch { continue; } blobs.push({ sha: f, size }); } } catch {}
+    const blobs = _churchBlobList(cp);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.end(JSON.stringify({ church: cp, blobs }));
     return;
@@ -1944,7 +1949,7 @@ function serveStatic(req, res) {
         if (isNew) renameSync(tmp, finalPath); else cleanup();        // dedup: identical blob already stored → drop the temp
         const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
       } catch (e) { cleanup(); res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
-      if (isNew) { _mediaBytesTotal += size; _mediaBytesByChurch.set(who.church, (_mediaBytesByChurch.get(who.church) || 0) + size); }   // account the new bytes
+      if (isNew) { _mediaBytesTotal += size; _mediaBytesByChurch.set(who.church, (_mediaBytesByChurch.get(who.church) || 0) + size); _indexBlob(who.church, sha, size); }   // account + index the new bytes
       res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
     });
     return;
@@ -2259,7 +2264,7 @@ async function syncMediaFromPeer(cp, peerBase) {
       if (createHash('sha256').update(buf).digest('hex') !== b.sha) continue;   // content-addressed integrity check
       writeFileSync(join(BLOB_DIR, b.sha + '.church'), cp);                      // sidecar BEFORE the blob (S4: never servable with no owner)
       writeFileSync(join(BLOB_DIR, b.sha), buf);
-      _mediaBytesTotal += buf.length; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + buf.length);
+      _mediaBytesTotal += buf.length; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + buf.length); _indexBlob(cp, b.sha, buf.length);
       pulled++;
     } catch {}
   }
