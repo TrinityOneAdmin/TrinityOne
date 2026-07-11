@@ -155,6 +155,24 @@ function extraRelays() {
 // name → the relay's current url — the relay re-claims it on every go-public/boot.)
 const NAMES_LS = 'trinityone.steward.relay-names';
 const DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, 'http').replace(/\/relay\/?$/i, '');   // wss://app…/relay → https://app…
+// The directory is MIRRORED across relays, so resolve/discover against several — this church's own relay first
+// (fastest + works even if the shared hosts are blocked), then the shared hosts. First to answer wins.
+function _dirBases() {
+  const out = [];
+  for (const r of [ownRelay(), ...CANONICAL_RELAYS]) {
+    const b = String(r || '').replace(/^ws/i, 'http').replace(/\/relay\/?$/i, '');
+    if (/^https?:\/\/.+/i.test(b) && !out.includes(b)) out.push(b);
+  }
+  return out;
+}
+async function resolveRelayName(handle) {
+  const h = String(handle || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  if (!h) return null;
+  for (const base of _dirBases()) {
+    try { const r = await fetch(base + '/relay-names/resolve/' + encodeURIComponent(h), { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j && j.url) return j; } } catch (e) {}
+  }
+  return null;
+}
 function getNamedRelays() { try { const a = JSON.parse(lsGet(NAMES_LS) || '[]'); return Array.isArray(a) ? a.filter(e => e && e.name) : []; } catch { return []; } }
 function setNamedRelays(a) { try { lsSet(NAMES_LS, JSON.stringify(a)); } catch (e) {} }
 function _writeExtraRelays(list) { try { lsSet(RELAYS_LS, JSON.stringify([...new Set(list.filter(Boolean))])); window.dispatchEvent(new CustomEvent('steward-relays')); } catch (e) {} }
@@ -166,9 +184,7 @@ async function refreshNamedRelays() {
   let extra = extraRelays(), changed = false;
   for (const entry of named) {
     try {
-      const r = await fetch(DIRECTORY_URL + '/relay-names/resolve/' + encodeURIComponent(entry.name), { cache: 'no-store' });
-      if (!r.ok) continue;
-      const j = await r.json(); const newUrl = normRelay(j && j.url);
+      const j = await resolveRelayName(entry.name); const newUrl = normRelay(j && j.url);
       if (newUrl && newUrl !== entry.url) { extra = extra.filter(u => u !== entry.url); extra.push(newUrl); entry.url = newUrl; changed = true; }
     } catch (e) {}
   }
@@ -242,7 +258,9 @@ async function discoverRelayOffers(seedExtra, region) {
   // surface relays this church has NEVER added. Merge with the local seed; each candidate is still NIP-11
   // probed below, so a stale/dishonest directory entry can't fake an offer.
   let dirUrls = [];
-  try { const r = await fetch(DIRECTORY_URL + '/relay-names/offers', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); dirUrls = (j.relays || []).map(x => normRelay(x && x.url)).filter(Boolean); } } catch (e) {}
+  for (const base of _dirBases()) {
+    try { const r = await fetch(base + '/relay-names/offers', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); dirUrls.push(...(j.relays || []).map(x => normRelay(x && x.url)).filter(Boolean)); } } catch (e) {}
+  }
   const seed = [...new Set([...(seedExtra || []), ...dirUrls, ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
   const probed = await Promise.all(seed.map(async (url) => {
     const t = await _relayInfo(url);
@@ -1945,6 +1963,8 @@ window.Steward = {
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return true;
   },
+  // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not required)
+  resolveRelayName(name) { return resolveRelayName(name); },
   // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
   rememberRelayName(name, url) {
     const n = String(name || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');

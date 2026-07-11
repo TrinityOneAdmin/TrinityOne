@@ -1880,10 +1880,8 @@ function DashRelaysCard() {
     const n = (byName || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); if (!n) return;   // "Quiet Dove 45" → "quiet-dove-45"
     setByNameMsg({ text: 'Looking up “' + n + '”…' });
     try {
-      const r = await fetch(RELAY_DIRECTORY + '/relay-names/resolve/' + encodeURIComponent(n), { cache: 'no-store' });
-      if (r.status === 404) { setByNameMsg({ ok: false, text: '✗ No relay is registered under “' + n + '”.' }); return; }
-      if (!r.ok) throw new Error('directory');
-      const j = await r.json();
+      const j = await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
+      if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ No relay is registered under “' + n + '”.' }); return; }
       window.Steward.addRelay(j.url);
       window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
       setByNameMsg({ text: 'Connecting your church…' });
@@ -1901,11 +1899,10 @@ function DashRelaysCard() {
     setCloning(true); setCloneMsg({ text: 'Copying your church’s history…' });
     try {
       let url = raw;
-      if (!/:\/\//.test(raw) && !raw.includes('.')) {   // a name, not a URL → resolve via the directory
-        const slug = raw.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-        const rr = await fetch(RELAY_DIRECTORY + '/relay-names/resolve/' + encodeURIComponent(slug), { cache: 'no-store' });
-        if (!rr.ok) { setCloneMsg({ ok: false, text: '✗ No relay named “' + raw + '”.' }); setCloning(false); return; }
-        url = (await rr.json()).url;
+      if (!/:\/\//.test(raw) && !raw.includes('.')) {   // a name, not a URL → resolve via the mirrored directory
+        const jj = await window.Steward.resolveRelayName(raw);
+        if (!jj || !jj.url) { setCloneMsg({ ok: false, text: '✗ No relay named “' + raw + '”.' }); setCloning(false); return; }
+        url = jj.url;
       }
       const res = await window.Steward.cloneFromRelay(url);
       setCloneMsg({ ok: true, text: '✓ Copied ' + (res && res.imported != null ? res.imported + ' events' : 'your church’s data') + ' onto this relay.' });

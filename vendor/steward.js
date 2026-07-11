@@ -10707,6 +10707,29 @@ zoo`.split("\n");
   }
   var NAMES_LS = "trinityone.steward.relay-names";
   var DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, "http").replace(/\/relay\/?$/i, "");
+  function _dirBases() {
+    const out = [];
+    for (const r of [ownRelay(), ...CANONICAL_RELAYS]) {
+      const b = String(r || "").replace(/^ws/i, "http").replace(/\/relay\/?$/i, "");
+      if (/^https?:\/\/.+/i.test(b) && !out.includes(b)) out.push(b);
+    }
+    return out;
+  }
+  async function resolveRelayName(handle) {
+    const h = String(handle || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    if (!h) return null;
+    for (const base of _dirBases()) {
+      try {
+        const r = await fetch(base + "/relay-names/resolve/" + encodeURIComponent(h), { cache: "no-store" });
+        if (r.ok) {
+          const j = await r.json();
+          if (j && j.url) return j;
+        }
+      } catch (e) {
+      }
+    }
+    return null;
+  }
   function getNamedRelays() {
     try {
       const a = JSON.parse(lsGet(NAMES_LS) || "[]");
@@ -10737,9 +10760,7 @@ zoo`.split("\n");
     let extra = extraRelays(), changed = false;
     for (const entry of named) {
       try {
-        const r = await fetch(DIRECTORY_URL + "/relay-names/resolve/" + encodeURIComponent(entry.name), { cache: "no-store" });
-        if (!r.ok) continue;
-        const j = await r.json();
+        const j = await resolveRelayName(entry.name);
         const newUrl = normRelay(j && j.url);
         if (newUrl && newUrl !== entry.url) {
           extra = extra.filter((u) => u !== entry.url);
@@ -10829,13 +10850,15 @@ zoo`.split("\n");
   var _discoverySeed = [];
   async function discoverRelayOffers(seedExtra, region) {
     let dirUrls = [];
-    try {
-      const r = await fetch(DIRECTORY_URL + "/relay-names/offers", { cache: "no-store" });
-      if (r.ok) {
-        const j = await r.json();
-        dirUrls = (j.relays || []).map((x) => normRelay(x && x.url)).filter(Boolean);
+    for (const base of _dirBases()) {
+      try {
+        const r = await fetch(base + "/relay-names/offers", { cache: "no-store" });
+        if (r.ok) {
+          const j = await r.json();
+          dirUrls.push(...(j.relays || []).map((x) => normRelay(x && x.url)).filter(Boolean));
+        }
+      } catch (e) {
       }
-    } catch (e) {
     }
     const seed = [.../* @__PURE__ */ new Set([...seedExtra || [], ...dirUrls, ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
     const probed = await Promise.all(seed.map(async (url) => {
@@ -13468,6 +13491,10 @@ zoo`.split("\n");
       setNamedRelays(getNamedRelays().filter((e) => e.url !== url));
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return true;
+    },
+    // resolve a relay name → its current record via the mirrored directory (tries several relays; a8 not required)
+    resolveRelayName(name) {
+      return resolveRelayName(name);
     },
     // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
     rememberRelayName(name, url) {

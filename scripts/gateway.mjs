@@ -300,8 +300,16 @@ try { const k = JSON.parse(readFileSync(RELAY_KEY_FILE, 'utf8')); if (k && k.sk 
 if (!RELAY_SK || !RELAY_PUB) { RELAY_SK = generateSecretKey(); RELAY_PUB = getPublicKey(RELAY_SK); try { writeFileSync(RELAY_KEY_FILE, JSON.stringify({ sk: Buffer.from(RELAY_SK).toString('hex'), pub: RELAY_PUB }), { mode: 0o600 }); } catch {} }
 // a relay-signed NIP-98 (kind-27235) proof bound to url+method+church — how this relay authenticates to a peer's /sync.
 function relayProof(url, method, cp) { return 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', method], ['church', cp]], content: '' }, RELAY_SK))).toString('base64'); }
-// this relay's OWN claim (control panel → claim a memorable name in a directory): kind-27235 signed by RELAY_SK, binding handle+relay-url.
-function relayNameClaim(handle, url) { return 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', 'relay-names/claim'], ['method', 'POST'], ['handle', handle], ['relay', url]], content: '' }, RELAY_SK))).toString('base64'); }
+// this relay's OWN claim (control panel → claim a memorable name in a directory): kind-27235 signed by RELAY_SK,
+// binding handle+relay-url (+offer when hosting). The SIGNED event is the gossip record — self-verifying, so any
+// relay can store + re-share it without trusting the sender. relayNameClaimEvent returns the event; the *Auth
+// header form wraps it for the direct POST.
+function relayNameClaimEvent(handle, url, offer) {
+  const tags = [['u', 'relay-names/claim'], ['method', 'POST'], ['handle', handle], ['relay', url]];
+  if (offer && typeof offer === 'object') tags.push(['offer', JSON.stringify(offer)]);
+  return finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, RELAY_SK);
+}
+function relayNameClaim(handle, url, offer) { return 'Nostr ' + Buffer.from(JSON.stringify(relayNameClaimEvent(handle, url, offer))).toString('base64'); }
 // ── Relay name directory (Phase 2): a memorable handle a steward can TYPE to connect a church to a relay,
 // instead of a wss:// URL. Any gateway can serve a directory; in practice relays register with the shared
 // community host and consoles resolve there. A claim is SIGNED by the relay's own identity key, so a handle is
@@ -312,21 +320,53 @@ try { RELAY_NAMES = JSON.parse(readFileSync(RELAY_NAMES_FILE, 'utf8')) || {}; } 
 function saveRelayNames() { try { const tmp = RELAY_NAMES_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(RELAY_NAMES, null, 2) + '\n'); renameSync(tmp, RELAY_NAMES_FILE); } catch {} }
 const _handleRe = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;   // 3–32 chars, lowercase alnum + inner hyphens
 // verify a claim: Authorization 'Nostr <base64 kind-27235 event>' signed by a relay key, tags bind handle+relay.
-function _verifyRelayClaim(req, handle, relayUrl) {
+// Verify a directory record (signed claim event) on its own merits — no request context needed, so the SAME
+// check works for a direct POST and for a record gossiped in from a peer. maxAgeSec bounds freshness (strict for
+// a live claim = anti-replay; generous/absent for gossip, where latest-wins by created_at prevents rollback).
+function verifyClaimEvent(ev, maxAgeSec) {
   try {
-    const h = req.headers['authorization'] || '';
-    if (!/^Nostr /i.test(h)) return null;
-    const ev = JSON.parse(Buffer.from(h.slice(6), 'base64').toString('utf8'));
     if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
-    if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 120) return null;   // anti-replay
+    if (maxAgeSec && Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > maxAgeSec) return null;
     const tag = (n) => (ev.tags.find(t => Array.isArray(t) && t[0] === n) || [])[1];
-    if (tag('handle') !== handle || tag('relay') !== relayUrl) return null;
-    return ev.pubkey;   // the claiming relay's identity pubkey
+    const handle = String(tag('handle') || '').toLowerCase();
+    const url = String(tag('relay') || '');
+    if (!_handleRe.test(handle) || !/^wss?:\/\/.+/i.test(url)) return null;
+    let offer; try { const o = tag('offer'); if (o) { const p = JSON.parse(o); offer = { open: !!p.open, churches: (p.churches | 0), region: String(p.region || '').slice(0, 40), operator: String(p.operator || '').slice(0, 64) }; } } catch {}
+    return { handle, url, pub: ev.pubkey, at: ev.created_at || 0, offer, ev };
   } catch { return null; }
+}
+// header form of the above (direct POST): parse Authorization: Nostr <b64 event>, verify, require it bind THIS
+// handle+url. Returns the claiming relay pubkey or null. Kept so the existing /relay-names/claim path is intact.
+function _verifyRelayClaim(req, handle, relayUrl) {
+  const h = req.headers['authorization'] || '';
+  if (!/^Nostr /i.test(h)) return null;
+  let ev; try { ev = JSON.parse(Buffer.from(h.slice(6), 'base64').toString('utf8')); } catch { return null; }
+  const rec = verifyClaimEvent(ev, 120);
+  if (!rec || rec.handle !== String(handle).toLowerCase() || rec.url !== relayUrl) return null;
+  return ev;   // the verified signed event (caller merges it via applyClaimRecord)
+}
+// Merge a verified record into the local directory, LATEST-WINS per relay key. Old/replayed claims can't roll a
+// name back, and a name stays owned by its first key — so the mirror converges no matter what order records
+// arrive. Returns true if it changed the table.
+function applyClaimRecord(rec) {
+  if (!rec || !rec.handle) return false;
+  const existing = RELAY_NAMES[rec.handle];
+  if (existing && existing.pub !== rec.pub) return false;             // name owned by another key — first-claim-wins
+  if (existing && (existing.at || 0) >= rec.at) return false;         // not newer than what we have
+  for (const k of Object.keys(RELAY_NAMES)) { if (RELAY_NAMES[k].pub === rec.pub && k !== rec.handle) delete RELAY_NAMES[k]; }  // one handle per relay
+  RELAY_NAMES[rec.handle] = { url: rec.url, pub: rec.pub, at: rec.at, ...(rec.offer ? { offer: rec.offer } : {}), ev: rec.ev };
+  saveRelayNames();
+  return true;
 }
 // Where THIS relay registers its name + where consoles resolve names. Defaults to the shared community host;
 // a church can self-host a directory by pointing RELAY_DIRECTORY at its own gateway.
 const DIRECTORY = (process.env.RELAY_DIRECTORY || 'https://app.trinityone.church').replace(/\/+$/, '');
+// Directory peers this relay mirrors with — the shared hosts plus any RELAY_DIRECTORY_PEERS override. Each relay
+// pulls every peer's records and merges them, so the whole name/offer directory lives on ALL of them, not one.
+const DIRECTORY_PEERS = [...new Set([
+  DIRECTORY, 'https://app.trinityone.church', 'https://trinityone-master-01.tailbeaac0.ts.net',
+  ...(process.env.RELAY_DIRECTORY_PEERS || '').split(',').map(s => s.trim()).filter(Boolean),
+].map(u => u.replace(/\/+$/, '')))];
 const MYNAME_FILE = join(DATA_DIR, 'relay-myname.json');
 let MY_RELAY_NAME = ''; try { MY_RELAY_NAME = JSON.parse(readFileSync(MYNAME_FILE, 'utf8')).handle || ''; } catch {}
 // ── Cloudflare quick tunnel (desktop "go public", no account): spawn cloudflared, capture its trycloudflare.com
@@ -358,8 +398,23 @@ function offerMeta() {
 async function reclaimRelayName() {   // re-point the claimed name at the current public URL (needs both) + refresh the offer
   if (!MY_RELAY_NAME || !CF_URL) return;
   const wss = cfPublicWss();
-  try { await fetch(DIRECTORY + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': relayNameClaim(MY_RELAY_NAME, wss) }, body: JSON.stringify({ handle: MY_RELAY_NAME, url: wss, offer: offerMeta() }) }); } catch {}
+  const auth = relayNameClaim(MY_RELAY_NAME, wss, offerMeta());   // one signed claim (carries the offer); post to every directory peer
+  await Promise.allSettled(DIRECTORY_PEERS.map(peer => fetch(peer + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': auth }, body: JSON.stringify({ handle: MY_RELAY_NAME, url: wss }), signal: AbortSignal.timeout(8000) }).catch(() => {})));
 }
+// Gossip pull: fetch every directory peer's signed records and merge them, so this relay mirrors the whole
+// name/offer directory. Runs shortly after boot and on a timer. Records are self-verifying + latest-wins, so
+// pulling from anyone is safe and order-independent.
+async function gossipDirectory() {
+  for (const peer of DIRECTORY_PEERS) {
+    try {
+      const r = await fetch(peer + '/relay-names/sync', { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      for (const ev of (j.records || []).slice(0, 5000)) { const rec = verifyClaimEvent(ev, 0); if (rec) applyClaimRecord(rec); }
+    } catch {}
+  }
+}
+try { setTimeout(() => { gossipDirectory().catch(() => {}); }, 10000); setInterval(() => { gossipDirectory().catch(() => {}); }, 300000); } catch {}
 // the relay's pet-name as a directory handle slug (matches the client's stewardNameFor, lower-cased + hyphens),
 // so going public can auto-claim a memorable name with zero steps — e.g. "Quiet Dove 45" -> "quiet-dove-45".
 const _PET_ADJ = ['quiet', 'bright', 'gentle', 'steady', 'faithful', 'humble', 'joyful', 'kind', 'patient', 'bold', 'gracious', 'calm', 'glad', 'warm', 'true', 'sure'];
@@ -1169,12 +1224,17 @@ function serveStatic(req, res) {
           const myUrl = await ownUrl();
           if (!myUrl) { res.writeHead(400, H); res.end('{"error":"your relay isn’t reachable from the internet yet — turn on public access first, then claim a name"}'); return; }
           try {
-            const r = await fetch(DIRECTORY + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': relayNameClaim(handle, myUrl) }, body: JSON.stringify({ handle, url: myUrl, offer: offerMeta() }) });
-            const j = await r.json().catch(() => ({}));
-            if (!r.ok) { res.writeHead(r.status, H); res.end(JSON.stringify({ error: j.error || 'the directory rejected that name' })); return; }
+            const auth = relayNameClaim(handle, myUrl, offerMeta());   // post the signed claim to every directory peer
+            const results = await Promise.allSettled(DIRECTORY_PEERS.map(peer => fetch(peer + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': auth }, body: JSON.stringify({ handle, url: myUrl }), signal: AbortSignal.timeout(8000) })));
+            const okOne = results.find(x => x.status === 'fulfilled' && x.value && x.value.ok);
+            if (!okOne) {
+              const bad = results.find(x => x.status === 'fulfilled'); let err = 'no directory accepted that name';
+              if (bad) { try { err = (await bad.value.json()).error || err; } catch {} }
+              res.writeHead(409, H); res.end(JSON.stringify({ error: err })); return;
+            }
             MY_RELAY_NAME = handle; try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle }) + '\n'); } catch {}
-            res.writeHead(200, H); res.end(JSON.stringify({ ok: true, handle, url: myUrl, directory: DIRECTORY }));
-          } catch (e) { res.writeHead(502, H); res.end(JSON.stringify({ error: 'could not reach the name directory (' + DIRECTORY + ')' })); }
+            res.writeHead(200, H); res.end(JSON.stringify({ ok: true, handle, url: myUrl, directories: DIRECTORY_PEERS.length }));
+          } catch (e) { res.writeHead(502, H); res.end(JSON.stringify({ error: 'could not reach any name directory' })); }
         });
         return;
       }
@@ -1201,24 +1261,38 @@ function serveStatic(req, res) {
     if (req.method === 'POST' && route === '/relay-names/claim') {
       let body = ''; req.on('data', c => { body += c; if (body.length > 1e4) req.destroy(); });
       req.on('end', () => {
-        let b; try { b = JSON.parse(body); } catch { res.writeHead(400, H); res.end('{"error":"bad json"}'); return; }
-        const handle = String(b.handle || '').toLowerCase().trim();
-        const url = String(b.url || '').trim();
-        if (!_handleRe.test(handle)) { res.writeHead(400, H); res.end('{"error":"name must be 3–32 chars: lowercase letters, numbers, hyphens"}'); return; }
-        if (!/^wss?:\/\/.+/i.test(url)) { res.writeHead(400, H); res.end('{"error":"url must be a ws:// or wss:// relay address"}'); return; }
-        const pub = _verifyRelayClaim(req, handle, url);
-        if (!pub) { res.writeHead(401, H); res.end('{"error":"claim must be signed by the relay identity key, binding this handle + url, within 2 min"}'); return; }
-        const existing = RELAY_NAMES[handle];
-        if (existing && existing.pub !== pub) { res.writeHead(409, H); res.end('{"error":"that name is already taken by another relay"}'); return; }
-        for (const k of Object.keys(RELAY_NAMES)) { if (RELAY_NAMES[k].pub === pub && k !== handle) delete RELAY_NAMES[k]; }   // one handle per relay: release any previous
-        const offer = (b.offer && typeof b.offer === 'object')
-          ? { open: !!b.offer.open, churches: (b.offer.churches | 0), region: String(b.offer.region || '').slice(0, 40), operator: String(b.offer.operator || '').slice(0, 64) }
-          : undefined;
-        RELAY_NAMES[handle] = { url, pub, at: Math.floor(Date.now() / 1000), ...(offer ? { offer } : {}) };
-        saveRelayNames();
-        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, handle, url, pub }));
+        // The claim is the signed event in the Authorization header (offer + handle + url are all inside it). We
+        // store that exact event so it can be gossiped to other directories, self-verifying.
+        const hh = req.headers['authorization'] || '';
+        let ev = null; try { if (/^Nostr /i.test(hh)) ev = JSON.parse(Buffer.from(hh.slice(6), 'base64').toString('utf8')); } catch {}
+        const rec = verifyClaimEvent(ev, 120);
+        if (!rec) { res.writeHead(401, H); res.end('{"error":"claim must be a fresh event signed by the relay identity key, binding handle + url"}'); return; }
+        const existing = RELAY_NAMES[rec.handle];
+        if (existing && existing.pub !== rec.pub) { res.writeHead(409, H); res.end('{"error":"that name is already taken by another relay"}'); return; }
+        applyClaimRecord(rec);
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, handle: rec.handle, url: rec.url, pub: rec.pub }));
       });
       return;
+    }
+    // Gossip sync: GET returns this directory's signed records (optionally newer than ?since); POST merges a
+    // peer's records (each re-verified, latest-wins). Peers pull each other on a timer, so the whole directory
+    // converges across every relay — no single host owns it.
+    if (route === '/relay-names/sync') {
+      if (req.method === 'GET') {
+        let since = 0; try { since = parseInt(new URL(req.url, 'http://x').searchParams.get('since') || '0', 10) || 0; } catch {}
+        const records = Object.values(RELAY_NAMES).filter(r => r && r.ev && (r.at || 0) > since).map(r => r.ev).slice(0, 5000);
+        res.writeHead(200, H); res.end(JSON.stringify({ records, now: Math.floor(Date.now() / 1000) })); return;
+      }
+      if (req.method === 'POST') {
+        let body = ''; req.on('data', c => { body += c; if (body.length > 8e6) req.destroy(); });
+        req.on('end', () => {
+          let arr = []; try { arr = JSON.parse(body || '{}').records || []; } catch {}
+          let merged = 0;
+          for (const ev of arr.slice(0, 5000)) { const rec = verifyClaimEvent(ev, 0); if (rec && applyClaimRecord(rec)) merged++; }
+          res.writeHead(200, H); res.end(JSON.stringify({ merged }));
+        });
+        return;
+      }
     }
     res.writeHead(404, H); res.end('{"error":"not found"}'); return;
   }
