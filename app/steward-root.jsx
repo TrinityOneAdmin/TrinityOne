@@ -178,7 +178,10 @@ function seedNewChurch() {
   try {
     if (!localStorage.getItem('trinityone.steward.seeded')) {
       localStorage.setItem('trinityone.steward.seeded', '1');
-      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: g.id, name: g.name, kind: g.kind, sub: g.sub }));
+      // Seed with honest descriptions — NOT the showcase stats on SK.groups ("312 reached", "18 members"),
+      // which would show invented member counts to a brand-new church's first real member.
+      const SEED_SUB = { announce: 'Announcements for everyone', men: 'A midweek small group', women: 'A weekly Bible study', youth: 'For the young people', prayer: 'Share & lift requests' };
+      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));
     }
   } catch (e) {}
 }

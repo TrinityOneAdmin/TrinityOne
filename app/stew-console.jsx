@@ -81,6 +81,7 @@ function StewWizard({ onDone }) {
   const [nip05, setNip05] = React.useState('');
   const [ownRelay, setOwnRelay] = React.useState(false);
   const [meetings, setMeetings] = React.useState([{ title: 'Sunday Service', day: 0, time: '10:00', recur: 'weekly' }, { title: 'Midweek', day: 3, time: '19:30', recur: 'weekly' }]);
+  const [backupSaved, setBackupSaved] = React.useState(false);   // step 0 can't advance until the recovery phrase is confirmed written down
   const last = step === WIZ_STEPS.length - 1;
   // responsive: a phone/narrow window swaps the 296px step-rail for a compact top progress bar
   const [vw, setVw] = React.useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
@@ -95,7 +96,7 @@ function StewWizard({ onDone }) {
   // publish the church's regular meetings (recurring calendar events) when leaving that step
   const publishMeetings = () => { if (window.Steward && window.Steward.publishMeeting) { for (const m of meetings.filter(x => x.title.trim())) window.Steward.publishMeeting({ title: m.title.trim(), day: m.day, time: m.time, recur: m.recur }); } };
   const goNext = () => { const k = WIZ_STEPS[step].key; if (k === 'identity') publishIdentity(); if (k === 'meetings') publishMeetings(); setStep(s => s + 1); };
-  const finish = () => { if (onDone) onDone(); else setStep(0); };
+  const finish = () => { try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch (e) {} if (onDone) onDone(); else setStep(0); };
 
   return (
     <ConsoleChrome>
@@ -146,7 +147,7 @@ function StewWizard({ onDone }) {
             <div style={{ maxWidth: 560 }}>
               <SkPill tint={last ? 'sage' : 'clay'}>Step {step + 1} of {WIZ_STEPS.length}</SkPill>
               <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: narrow ? 25 : 34, letterSpacing: '-1px', margin: '14px 0 0', lineHeight: 1.06 }}>{WIZ_STEPS[step].t}</h1>
-              {step === 0 && <WizKey />}
+              {step === 0 && <WizKey saved={backupSaved} setSaved={setBackupSaved} />}
               {step === 1 && <WizIdentity name={name} setName={setName} nip05={nip05} setNip05={setNip05} />}
               {step === 2 && <WizRelays ownRelay={ownRelay} setOwnRelay={setOwnRelay} />}
               {step === 3 && <WizMeetings meetings={meetings} setMeetings={setMeetings} />}
@@ -161,7 +162,7 @@ function StewWizard({ onDone }) {
             {last ? (
               <button className="sk-btn sk-btn--clay" onClick={finish}>Open Steward Console <Icon name="chevR" size={16} color="#fff" /></button>
             ) : (
-              <button className="sk-btn sk-btn--clay" onClick={goNext}>Continue <Icon name="chevR" size={16} color="#fff" /></button>
+              <button className="sk-btn sk-btn--clay" onClick={goNext} disabled={step === 0 && !backupSaved} style={step === 0 && !backupSaved ? { opacity: .5, cursor: 'not-allowed' } : undefined} title={step === 0 && !backupSaved ? 'Reveal your recovery phrase and tick that you’ve saved it first' : undefined}>Continue <Icon name="chevR" size={16} color="#fff" /></button>
             )}
           </div>
         </div>
@@ -170,9 +171,8 @@ function StewWizard({ onDone }) {
   );
 }
 
-function WizBackup() {
+function WizBackup({ saved, setSaved }) {
   const [shown, setShown] = React.useState(false);
-  const [saved, setSaved] = React.useState(false);
   const phrase = (window.Steward && window.Steward.exportMnemonic && window.Steward.exportMnemonic()) || '';
   const words = phrase.trim().split(/\s+/).filter(Boolean);
   return (
@@ -203,7 +203,7 @@ function WizBackup() {
   );
 }
 
-function WizKey() {
+function WizKey({ saved, setSaved }) {
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '', npub: '' };
   const name = church.name || 'Your church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -222,7 +222,7 @@ function WizKey() {
           <Icon name="copy" size={16} color="rgba(255,255,255,.5)" />
         </div>
       </div>
-      <WizBackup />
+      <WizBackup saved={saved} setSaved={setSaved} />
     </div>
   );
 }
@@ -322,7 +322,7 @@ function WizInvite() {
   return (
     <div style={{ marginTop: 18 }}>
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--sage)', fontWeight: 700, fontSize: 15 }}><Icon name="check" size={18} stroke={2.6} color="var(--sage)" /> {church.name || 'Your church'} is live on Nostr</div>
-      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0' }}>Hand this code or QR to your people. One scan follows your church and pulls in your groups — anonymously.</p>
+      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0' }}>Hand this code or QR to your people. One scan follows your church and pulls in your groups — they set their name as they join.</p>
       <div style={{ marginTop: 22, padding: 24, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow-sm)' }}>
         {window.JoinCard ? <JoinCard qrSize={120} /> : <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Your join code appears here once the console finishes loading.</div>}
       </div>
