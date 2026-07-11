@@ -1966,11 +1966,13 @@ function DashRelaysCard() {
             <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Add relay</button>
           </div>
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
-          <button onClick={autoFind} disabled={finding} className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
+          <button onClick={autoFind} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Lists only relays that offer to host churches and enforce TrinityOne’s rules — so your safeguarding + membership policy still applies.</div>
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
           {/* connect to a relay by its memorable name (resolved via the directory) */}
           <div style={{ marginTop: 13 }}>
-            <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 7 }}>OR CONNECT BY NAME</div>
+            <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 4 }}>OR CONNECT BY NAME</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 7, lineHeight: 1.45 }}>The name the relay’s operator claimed in its panel — it always points at the relay’s current address, even if the tunnel URL changes.</div>
             <div style={{ display: 'flex', gap: 9 }}>
               <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
                 placeholder="your relay’s name, e.g. grace-city" spellCheck={false} autoCapitalize="none"

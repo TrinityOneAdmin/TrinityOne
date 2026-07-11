@@ -1,6 +1,6 @@
 # Running your church in TrinityOne — the steward's guide
 
-*Last updated 2026-06-19. The pilot is moving fast; this reflects what's live now.*
+*Last updated 2026-07-11. The pilot is moving fast; this reflects what's live now.*
 
 This is the map of the **steward console** — the desktop/web app you use to run your church
 (`steward.html`). Members use the phone app; stewards use this. A companion guide goes deeper where the
@@ -96,11 +96,15 @@ never reach the relay or other members. Run from the **church-key holder's** con
   church; **Extras** → opt-in **Kids check-in**; **Joining** → *Require approval to
   join*; **Member names** → *Require a real first & last name*.
 - **Networks** — join a wider church network; announce to it if you own one.
-- **Relays** — point your church at relays (managed, or your own self-hosted one); always falls back to
-  the shared relays. Each self-hosted relay has its own **browser control dashboard** (no terminal):
-  turn on/off what it serves (the **web-app mirror**, **module downloads**, **audio/media**), set your
-  **church's own web address**, and **Update now** when a new build ships — updates are **signature-verified**
-  before they're applied, with automatic rollback if a build doesn't come up.
+- **Relays** (Settings → **Network**) — point your church at relays (managed, or your own self-hosted one);
+  always falls back to the shared relays. To run your own with no command line, install the **TrinityOne
+  Suite** (macOS/Windows/Linux), click **Go public** (a free, no-account tunnel), and claim a **name** —
+  then here, **Connect by name** (the name keeps working even when the tunnel address changes) or
+  **Auto-find** an offering relay. List **two** trusted relays and your church is **mirrored** between them,
+  so losing one loses nothing. Each self-hosted relay has its own **browser control dashboard** (no
+  terminal): what it serves (**web-app mirror**, **module downloads**, **audio/media**), your **church's own
+  web address**, **storage caps**, **invite-only** / **offer-to-host**, a whole-relay **Back up & restore**,
+  and **Update now** — updates are **signature-verified** with automatic rollback.
 - **Security** — set a **console PIN** (encrypts your key on the device), and manage **delegated stewards**
   (invite a helper, approve their request, revoke them). See
   **[STEWARDS-AND-HANDOFF-EXPLAINED.md](STEWARDS-AND-HANDOFF-EXPLAINED.md)**.
