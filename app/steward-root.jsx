@@ -161,6 +161,11 @@ function initChurch() {
   if (inject && isDevHost && !window.Steward.hasKey) { window.Steward.init(inject); return; }
   const adopt = params.get('adopt');                      // QR/link handoff: adopt a church on launch
   if (adopt && !window.Steward.hasKey) { try { window.Steward.adoptChurch(adopt); try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {} } catch (e) {} }
+  // Scrub the seed-bearing params from the URL immediately — a church seed must never persist in history,
+  // bookmarks, Referer, or the service-worker cache (see sw.js SENSITIVE_QS). Mirrors app.jsx's member-seed scrub.
+  if (params.has('churchkey') || params.has('adopt') || params.has('church')) {
+    try { const u = new URL(location.href); ['churchkey', 'adopt', 'church'].forEach(k => u.searchParams.delete(k)); history.replaceState(null, '', u.pathname + (u.search || '') + u.hash); } catch (e) {}
+  }
   window.Steward.init();                                  // load the saved key if there is one (no auto-create)
   if (window.Steward.hasKey && window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
 }

@@ -26,8 +26,16 @@
     e.preventDefault();
     var url = dl.dataset.url || dl.href;
     if (!url) return;
-    fetch('/open-external', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: url }) })
+    // /open-external now requires the admin token (anti-CSRF). Fetch it from the loopback-fenced /local-token
+    // first (only genuine same-machine requests get it), then hand it to the opener.
+    fetch('/local-token', { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        var h = { 'Content-Type': 'application/json' };
+        if (j && j.token) h.Authorization = 'Bearer ' + j.token;
+        return fetch('/open-external', { method: 'POST', headers: h, body: JSON.stringify({ url: url }) });
+      })
+      .then(function (r) { return r && r.ok ? r.json() : null; })
       .then(function (res) { if (res && res.ok) { dl.textContent = 'Opening browser…'; } else { copyFallback(url); } })
       .catch(function () { copyFallback(url); });
   });
