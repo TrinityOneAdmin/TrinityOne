@@ -18,7 +18,7 @@ Out of the box, your church is on the shared TrinityOne relay. It works, it's fr
 
 If someone you trust runs a relay and offers space, your church can adopt it — the app can even find one for you.
 
-1. In the Steward console, open **Settings → Network**.
+1. In the Steward console, open **Settings → Relays**.
 2. Tap **Auto-find relays for me.** The app discovers relays that are **offering space**, checks each one actually enforces TrinityOne's rules (so your church's safeguarding + membership policy still applies), and picks a couple — including a **backup**.
 3. Done. Your church now publishes to those relays. Members follow the same as before.
 
@@ -45,7 +45,7 @@ Then, in the relay panel:
 1. **Go public — no account** — one click starts a free Cloudflare quick tunnel. No port-forwarding, no
    static IP, no account.
 2. **Claim a name** under *Your relay's name* (e.g. `grace-city`). That's the stable handle stewards type
-   in **Settings → Network → Connect by name** — it survives the tunnel URL rotating on restart.
+   in **Settings → Relays → Connect by name** — it survives the tunnel URL rotating on restart.
 3. Share invites from the Steward console as usual; the invite QR carries the relay automatically, so you
    never dictate a `wss://` address to members.
 
@@ -66,7 +66,7 @@ The Suite's **Go public** (above) is the easiest path — a free, no-account tun
 
 Want a **fixed address on your own domain** (`relay.yourchurch.org`)? Run a Cloudflare **named** tunnel (an
 account + `cloudflared` on the box, tunnelling the domain to `localhost:8000`), then add
-`wss://relay.yourchurch.org/relay` in **Settings → Network**. Full runbook:
+`wss://relay.yourchurch.org/relay` in **Settings → Relays**. Full runbook:
 [`ops/GO-LIVE-DOMAIN.md`](../ops/GO-LIVE-DOMAIN.md).
 
 ### Back up your relay

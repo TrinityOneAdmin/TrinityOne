@@ -295,7 +295,7 @@ window.StewardWelcome = StewardWelcome;
 
 const SURFACES = [
   { key: 'console',   label: 'Console',     ic: 'sliders' },
-  { key: 'relay',     label: 'Relay app',   ic: 'globe' },
+  { key: 'relay',     label: 'Suite',       ic: 'globe' },
   { key: 'extension', label: 'Extension',   ic: 'lock' },
   { key: 'phone',     label: 'Phone mode',  ic: 'today' },
   { key: 'custody',   label: 'Key custody', ic: 'shield' },

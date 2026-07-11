@@ -352,7 +352,7 @@
   document.getElementById('saveCfg').onclick = saveConfig;
   document.getElementById('tokGo').onclick = () => { adminToken = document.getElementById('tok').value.trim(); if (adminToken) localStorage.setItem(TOKEN_KEY, adminToken); loadConfig(); gpTick(); loadRelayName(); };
   document.getElementById('tok').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('tokGo').click(); });
-  // When this panel is opened ON the relay machine (e.g. the desktop Relay app's own window), the relay hands
+  // When this panel is opened ON the relay machine (e.g. the TrinityOne Suite's own window), the relay hands
   // us its admin token automatically — no hunting in logs. /local-token only answers genuine same-machine
   // requests, so this is a no-op when the dashboard is opened remotely over a tunnel.
   (async () => {

@@ -96,7 +96,7 @@ never reach the relay or other members. Run from the **church-key holder's** con
   church; **Extras** → opt-in **Kids check-in**; **Joining** → *Require approval to
   join*; **Member names** → *Require a real first & last name*.
 - **Networks** — join a wider church network; announce to it if you own one.
-- **Relays** (Settings → **Network**) — point your church at relays (managed, or your own self-hosted one);
+- **Relays** (Settings → **Relays**) — point your church at relays (managed, or your own self-hosted one);
   always falls back to the shared relays. To run your own with no command line, install the **TrinityOne
   Suite** (macOS/Windows/Linux), click **Go public** (a free, no-account tunnel), and claim a **name** —
   then here, **Connect by name** (the name keeps working even when the tunnel address changes) or

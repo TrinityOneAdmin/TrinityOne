@@ -282,7 +282,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
           <button onClick={() => setRelayOpen(true)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', padding: 0 }}>Running your own relay? Connect it →</button>
         ) : (
           <div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Paste your relay’s <b>admin token</b> — shown in the relay app’s own window (or the installer output) — to register your church so the relay stops rejecting it.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Paste your relay’s <b>admin token</b> — shown in the TrinityOne Suite window (or the installer output) — to register your church so the relay stops rejecting it.</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={relayToken} onChange={e => setRelayToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doRegister(); }} type="password" placeholder="relay admin token" autoComplete="off" style={{ ...fld, height: 44, fontWeight: 400 }} />
               <button onClick={doRegister} disabled={relayBusy || !relayToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (relayBusy || !relayToken.trim()) ? .5 : 1 }}>Connect</button>
@@ -1095,7 +1095,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'invite more' : 'invite your church'} ic="pray" tint="sage" onClick={() => onTab('members')} />
       <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" onClick={() => onTab('groups')} />
       <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
-      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} onClick={() => goSettings('network')} />
+      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} onClick={() => goSettings('relays')} />
     </div>
   );
   const groupsPanel = (
@@ -1988,7 +1988,7 @@ function DashRelaysCard() {
             <button onClick={() => setRegOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Register this church with the relay</button>
           ) : (
             <div style={{ padding: 13, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>If the relay rejects your changes (“set up for a different church”), add this church to its allow-list. Paste the relay’s <b>admin token</b> — shown in the relay app’s own window, or the installer output.</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>If the relay rejects your changes (“set up for a different church”), add this church to its allow-list. Paste the relay’s <b>admin token</b> — shown in the TrinityOne Suite window, or the installer output.</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input value={regToken} onChange={e => setRegToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') register(); }} type="password" placeholder="relay admin token" autoComplete="off" style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
                 <button onClick={register} disabled={regBusy || !regToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (regBusy || !regToken.trim()) ? .5 : 1 }}>Register</button>
@@ -2022,7 +2022,7 @@ function DashRelaysCard() {
           {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage)' : 'var(--clay)' }}>{syncMsg.text}</div> : null}
         </div>
         {/* In the combined desktop app THIS machine is the relay → offer the relay control panel; otherwise
-            offer the desktop Relay app downloads (same permanent links as the setup wizard). */}
+            offer the TrinityOne Suite downloads (same permanent links as the setup wizard). */}
         {isRelayApp ? (
           <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
             <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>This computer is your relay</div>
@@ -4170,11 +4170,11 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        {[['church', 'Church'], ['features', 'Features'], ['network', 'Network'], ['security', 'Security']].map(([k, label]) => (
+        {[['church', 'Church'], ['features', 'Features'], ['network', 'Network'], ['relays', 'Relays'], ['security', 'Security']].map(([k, label]) => (
           <button key={k} onClick={() => setSection(k)} style={{ padding: '8px 15px', borderRadius: 999, border: '1px solid ' + (section === k ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', background: section === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: section === k ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>{label}</button>
         ))}
       </div>
-      <div className={section === 'network' ? 'net-grid' : 'sk-masonry'}>
+      <div className={(section === 'network' || section === 'relays') ? 'net-grid' : 'sk-masonry'}>
       {section === 'church' ? <React.Fragment>
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
@@ -4214,11 +4214,8 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       <DashGivingPanel church={church} />
       </React.Fragment> : null}
 
-      {section === 'network' ? <React.Fragment>
-      <DashNetworksPanel />
-
-      <DashRelaysCard />
-      </React.Fragment> : null}
+      {section === 'network' ? <DashNetworksPanel /> : null}
+      {section === 'relays' ? <DashRelaysCard /> : null}
 
       {section === 'security' && delegated ? (
       <Panel title="Security">

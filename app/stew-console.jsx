@@ -245,7 +245,7 @@ function WizRelays({ ownRelay, setOwnRelay }) {
   const [addMsg, setAddMsg] = React.useState(null);
   // Combined "church-in-a-box" desktop app: this very app IS the relay, so there's nothing to download/connect.
   const isRelayApp = typeof location !== 'undefined' && new URLSearchParams(location.search).get('relayapp') === '1';
-  // Desktop Relay app installers. These point at the LATEST release's stable, version-less asset names (the
+  // Desktop TrinityOne Suite installers. These point at the LATEST release's stable, version-less asset names (the
   // relay-desktop CI publishes them for every release), so this list never needs updating when a new build ships.
   const RELAY_DL = 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/';
   const DOWNLOADS = [
@@ -290,7 +290,7 @@ function WizRelays({ ownRelay, setOwnRelay }) {
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 17, padding: 17, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Host your church’s own relay so your data lives on infrastructure <b style={{ color: 'var(--ink)' }}>you</b> control. The TrinityOne Suite app runs it — no command line.</div>
           <div>
-            <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 8 }}>1 · GET THE RELAY APP</div>
+            <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 8 }}>1 · GET THE TRINITYONE SUITE</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {DOWNLOADS.map(([label, os, href]) => (
                 <a key={os} href={href} target="_blank" rel="noopener" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color="currentColor" /> {label}</a>
