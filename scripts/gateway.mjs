@@ -1878,7 +1878,7 @@ function serveStatic(req, res) {
   const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS };
   // app assets change every release — revalidate (belt-and-braces with the ?v= cache-bust above). The desktop
   // control UI (/relay-app/*) is 'no-store' outright — see the HTML note above; WebView2 mishandles 'no-cache'.
-  if (['.js', '.mjs', '.jsx', '.css', '.json'].includes(ext)) headers['Cache-Control'] = p.startsWith('/relay-app/') ? 'no-store' : 'no-cache';
+  if (['.js', '.mjs', '.jsx', '.css', '.json'].includes(ext)) headers['Cache-Control'] = (p.startsWith('/relay-app/') || p === '/sw.js') ? 'no-store' : 'no-cache';
   res.writeHead(200, headers);
   createReadStream(file).pipe(res);
 }
