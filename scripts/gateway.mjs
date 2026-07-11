@@ -1010,6 +1010,23 @@ async function readCapped(r, maxBytes) {
   for (;;) { const { done, value } = await reader.read(); if (done) break; total += value.length; if (total > maxBytes) { try { await reader.cancel(); } catch {} throw new Error('response too large'); } chunks.push(Buffer.from(value)); }
   return Buffer.concat(chunks).toString('utf8');
 }
+// Stream an NDJSON response line-by-line, invoking onLine(str) per non-empty line, without ever holding the whole
+// body (or a split() copy of it) in memory — a first church sync can be up to MAX_IMPORT (256 MB). Enforces the
+// byte cap as it reads. On a mid-stream cap the lines already delivered stay imported (content-addressed → the next
+// pass dedups and resumes), so it makes forward progress instead of the all-or-nothing buffered read.
+async function forEachNdjsonLine(r, maxBytes, onLine) {
+  const cl = Number(r.headers.get('content-length') || 0);
+  if (cl && cl > maxBytes) throw new Error('response too large');
+  if (!r.body) { const t = await r.text(); if (t.length > maxBytes) throw new Error('response too large'); for (const line of t.split('\n')) { const s = line.trim(); if (s) onLine(s); } return; }
+  const reader = r.body.getReader(); const dec = new TextDecoder('utf-8'); let buf = '', total = 0;
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    total += value.length; if (total > maxBytes) { try { await reader.cancel(); } catch {} throw new Error('response too large'); }
+    buf += dec.decode(value, { stream: true });
+    let nl; while ((nl = buf.indexOf('\n')) >= 0) { const s = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (s) onLine(s); }
+  }
+  buf += dec.decode(); const s = buf.trim(); if (s) onLine(s);   // flush any trailing partial (no final newline)
+}
 const decodeXml = (s) => String(s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
 // ---- SSRF guard: the /feed and /audiofeed proxies fetch church-supplied URLs server-side. Only
 // allow public http(s) hosts, re-checked on every redirect hop, so the proxy can't be aimed at the
@@ -2211,18 +2228,18 @@ async function syncChurchFromPeer(cp, peerBase) {
   const key = cp + '@' + peerBase;
   const since = Math.max(0, (SYNC_CURSORS[key] || 0) - SYNC_OVERLAP);
   const url = peerBase + '/sync?church=' + encodeURIComponent(cp) + '&since=' + since;
-  let body;
-  try { const r = await fetch(url, { headers: { Authorization: relayProof(url, 'GET', cp) } }); if (!r.ok) return { ok: false, status: r.status }; body = await readCapped(r, MAX_IMPORT); }
-  catch { return { ok: false }; }
   let maxTs = SYNC_CURSORS[key] || 0, imported = 0;
-  for (const line of body.split('\n')) {
-    const s = line.trim(); if (!s) continue;
-    let e; try { e = JSON.parse(s); } catch { continue; }
-    if (!e || !e.id || !e.sig || !verifyEvent(e)) continue;   // integrity: never store an unverifiable event
-    const put = store.put(e, cp);
-    if (put === 'stored') { imported++; note(e); if (e.kind === 5) for (const t of e.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === e.pubkey) store.del(t[1]); } }   // apply deletions, as the live path does
-    if ((e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
-  }
+  try {
+    const r = await fetch(url, { headers: { Authorization: relayProof(url, 'GET', cp) } });
+    if (!r.ok) return { ok: false, status: r.status };
+    await forEachNdjsonLine(r, MAX_IMPORT, (s) => {   // stream the corpus line-by-line (bounded memory)
+      let e; try { e = JSON.parse(s); } catch { return; }
+      if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
+      const put = store.put(e, cp);
+      if (put === 'stored') { imported++; note(e); if (e.kind === 5) for (const t of e.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === e.pubkey) store.del(t[1]); } }   // apply deletions, as the live path does
+      if ((e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
+    });
+  } catch { return { ok: false }; }
   if (maxTs !== (SYNC_CURSORS[key] || 0)) { SYNC_CURSORS[key] = maxTs; _cursorsDirty = true; }   // persisted once per pass by saveCursors()
   return { ok: true, imported };
 }
