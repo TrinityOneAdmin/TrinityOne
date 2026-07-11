@@ -2163,9 +2163,25 @@ function serveStatic(req, res) {
     res.end(body); return;
   }
   const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS };
+  // ETag (weak, size+mtime) lets a repeat request revalidate to a body-less 304 instead of re-downloading.
+  const etag = 'W/"' + st.size.toString(16) + '-' + Math.floor(st.mtimeMs).toString(16) + '"';
   // app assets change every release — revalidate (belt-and-braces with the ?v= cache-bust above). The desktop
   // control UI (/relay-app/*) is 'no-store' outright — see the HTML note above; WebView2 mishandles 'no-cache'.
-  if (['.js', '.mjs', '.jsx', '.css', '.json'].includes(ext)) headers['Cache-Control'] = (p.startsWith('/relay-app/') || p === '/sw.js') ? 'no-store' : 'no-cache';
+  if (['.js', '.mjs', '.jsx', '.css', '.json'].includes(ext)) {
+    if (p.startsWith('/relay-app/') || p === '/sw.js') headers['Cache-Control'] = 'no-store';
+    else {
+      // a request that carries the current build's ?v=<sha> is asking for an IMMUTABLE URL: the HTML rewrite mints
+      // a new ?v= every release, so this exact URL only ever serves this byte-for-byte content. Cache it hard and
+      // skip revalidation entirely. A request without (or with a stale) ?v= still just revalidates via no-cache.
+      const qs = (req.url || '').split('?')[1] || ''; const mv = qs.match(/(?:^|&)v=([^&]*)/); const vparam = mv ? decodeURIComponent(mv[1]) : '';
+      headers['Cache-Control'] = (vparam && vparam === ((BUILD && BUILD.short) || '0')) ? 'public, max-age=31536000, immutable' : 'no-cache';
+    }
+  }
+  // conditional GET: a matching If-None-Match returns 304 (no body). Never 304 a 'no-store' asset — it must always re-fetch.
+  if (headers['Cache-Control'] !== 'no-store') {
+    headers['ETag'] = etag;
+    if (req.headers['if-none-match'] === etag) { res.writeHead(304, { 'ETag': etag, 'Access-Control-Allow-Origin': '*', 'Cache-Control': headers['Cache-Control'] || 'no-cache', ...SEC_HEADERS }); res.end(); return; }
+  }
   res.writeHead(200, headers);
   createReadStream(file).pipe(res);
 }
@@ -2215,11 +2231,21 @@ async function syncChurchFromPeer(cp, peerBase) {
 // whose fingerprints DIFFER need their ID lists exchanged, so we find EVERY difference (including old gaps a
 // forward-only cursor never backfills) while transferring almost nothing when already in sync. sha256-of-the-
 // exact-set (not an XOR/sum) can't silently collide. Deterministic — both sides bucket identically.
+// Digest cache: building it sorts + hashes every one of a church's event IDs, and a single sync pass asks for it
+// repeatedly (once to serve each peer that pulls, once per peer in our own reconcile). Cache per church with a short
+// TTL so a burst of digest requests within one pass rebuilds it at most once. Staleness is bounded and harmless:
+// negentropy converges over passes and the forward cursor already carries the newest events, so a briefly-stale
+// digest only defers backfill of an old gap by one pass (< TTL + one sync interval).
+const _digestCache = new Map();   // cp -> { at, val }
+const DIGEST_TTL = 15000;
 function _bucketDigest(cp) {
+  const c = _digestCache.get(cp);
+  if (c && (Date.now() - c.at) < DIGEST_TTL) return c.val;
   const buckets = {};
   for (const id of store.churchEventIds(cp)) { if (!/^[0-9a-f]{64}$/.test(id)) continue; const b = id.slice(0, 2); (buckets[b] || (buckets[b] = [])).push(id); }
   const out = {};
   for (const b in buckets) { const ids = buckets[b].sort(); out[b] = { fp: createHash('sha256').update(ids.join('')).digest('hex').slice(0, 32), n: ids.length }; }
+  _digestCache.set(cp, { at: Date.now(), val: out });
   return out;
 }
 // negentropy pull: compare our digest with a peer's; for each differing bucket, fetch the peer's IDs, diff against
