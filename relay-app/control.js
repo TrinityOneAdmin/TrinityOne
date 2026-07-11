@@ -82,6 +82,7 @@
       cfgChurches = (s.churches || []).map(c => ({ npub: c.npub, name: c.name }));
       renderCfg();
       loadServes();
+      loadReplication();
       loadUpdate();
       loadSubs();
     } catch (e) { /* relay down — the hero card shows it */ }
@@ -150,6 +151,43 @@
     } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
   }
   document.getElementById('saveServes').onclick = saveServes;
+  // ── replication & redundancy (mirror status + media policy + sync now) ──
+  function relTime(sec) { if (sec < 90) return 'just now'; if (sec < 5400) return Math.round(sec / 60) + 'm ago'; if (sec < 129600) return Math.round(sec / 3600) + 'h ago'; return Math.round(sec / 86400) + 'd ago'; }
+  async function loadReplication() {
+    const card = document.getElementById('replCard');
+    try {
+      const r = await fetch('/replication-status', { headers: authHeaders(), cache: 'no-store' });
+      if (r.status === 401) { card.style.display = 'none'; return; }
+      const s = await r.json();
+      card.style.display = 'block';
+      document.getElementById('t-replmedia').checked = !!s.replicateMedia;
+      const now = s.now || 0, list = document.getElementById('replList');
+      const withMirrors = (s.churches || []).filter(c => c.mirrors && c.mirrors.length);
+      if (!withMirrors.length) { list.innerHTML = '<div class="muted">No church here lists a second trusted relay yet, so there’s nothing to mirror. In a church’s Steward console → Network, add another relay as a backup and it’ll mirror here automatically.</div>'; return; }
+      list.innerHTML = withMirrors.map(c => {
+        const rows = c.mirrors.map(m => '<div class="row"><span class="k">↔ ' + esc(m.url.replace(/^wss?:\/\//, '').replace(/\/relay$/, '')) + '</span><span class="v muted">' + (m.lastEventAt ? 'latest ' + relTime(now - m.lastEventAt) : 'waiting for first sync') + '</span></div>').join('');
+        return '<div style="margin-bottom:10px"><div style="font-weight:700;font-size:13.5px;margin-bottom:4px">' + esc(c.name || c.npub.slice(0, 16)) + '</div>' + rows + '</div>';
+      }).join('');
+    } catch (e) {}
+  }
+  document.getElementById('t-replmedia').onchange = async (e) => {
+    const on = e.target.checked, msg = document.getElementById('replMsg');
+    if (msg) { msg.style.color = 'var(--ink-3)'; msg.textContent = '· saving…'; }
+    try {
+      const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ replicateMedia: on }) });
+      if (!r.ok) throw new Error('save failed');
+      if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = on ? '· ✓ media will mirror too' : '· ✓ media stays put (mirrors small)'; setTimeout(() => { msg.textContent = ''; }, 3000); }
+    } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
+  };
+  document.getElementById('syncNow').onclick = async () => {
+    const msg = document.getElementById('syncMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = 'syncing…';
+    try {
+      const r = await fetch('/sync-now', { method: 'POST', headers: authHeaders() });
+      const s = await r.json();
+      if (!r.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '✗ ' + (s.error || 'failed'); return; }
+      msg.style.color = 'var(--sage)'; msg.textContent = '✓ pulled ' + (s.imported || 0) + ' new event(s)'; loadReplication();
+    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '✗ ' + e.message; }
+  };
   // access mode: invite-only saves live (its own switch, not tied to the church-list Save button)
   document.getElementById('t-inviteonly').onchange = async (e) => {
     const on = e.target.checked, msg = document.getElementById('cfgMsg');

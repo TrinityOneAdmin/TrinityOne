@@ -67,7 +67,7 @@ const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs
 const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // mediaCap/churchCap: operator storage limits in BYTES (0 = unlimited), settable from the control panel — for a
 // public relay hosting several churches. The effective cap is the setting if non-zero, else the env fallback.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false };
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, replicateMedia: false };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -77,6 +77,7 @@ function loadSettings() {
       SETTINGS.mediaCap = Math.max(0, parseInt(s.mediaCap, 10) || 0); SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
       SETTINGS.inviteOnly = s.inviteOnly === true;
       SETTINGS.offerHosting = s.offerHosting === true;
+      SETTINGS.replicateMedia = s.replicateMedia === true;
     }
   } catch {}
 }
@@ -1352,6 +1353,19 @@ function serveStatic(req, res) {
     runSync().then((n) => { res.writeHead(200, H); res.end(JSON.stringify({ ok: true, imported: n })); }).catch(() => { res.writeHead(500, H); res.end('{"error":"sync failed"}'); });
     return;
   }
+  // replication status for the control panel: which hosted churches have mirror peers, and how fresh each is.
+  if (route === '/replication-status' && req.method === 'GET') {
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    const churches = [];
+    for (const cp of CHURCH_PUBS) {
+      const peers = [...(PEER_URLS.get(cp) || [])];
+      const mirrors = peers.map(p => { const base = String(p).replace(/^ws/i, 'http').replace(/\/+$/, ''); return { url: p, lastEventAt: SYNC_CURSORS[cp + '@' + base] || 0 }; });
+      churches.push({ npub: npubEncode(cp), name: CHURCH_NAMES.get(cp) || '', mirrors });
+    }
+    res.writeHead(200, H); res.end(JSON.stringify({ autoSync: process.env.RELAY_SYNC !== '0', replicateMedia: SETTINGS.replicateMedia, maxEvents: MAX_EVENTS, now: Math.floor(Date.now() / 1000), churches }));
+    return;
+  }
   // resync media (manifest): the sha256 + size of every blob this relay holds for a church, to a TRUSTED peer
   // relay — it compares against its own and pulls only what it's missing (below). Same trust gate as /sync.
   if (route === '/sync-media' && req.method === 'GET') {
@@ -1644,6 +1658,7 @@ function serveStatic(req, res) {
           if ('churchCap' in s) SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
           if ('inviteOnly' in s) SETTINGS.inviteOnly = !!s.inviteOnly;
           if ('offerHosting' in s) SETTINGS.offerHosting = !!s.offerHosting;
+          if ('replicateMedia' in s) SETTINGS.replicateMedia = !!s.replicateMedia;
           saveSettings();
           // push the new offer/access state to the directory now, so discovery reflects it without waiting for
           // the next go-public/boot (no-op unless this relay is public + has a claimed name).
@@ -2160,6 +2175,10 @@ async function reconcileChurchWithPeer(cp, peerBase) {
 // media, and respects the relay's media caps. A distinct, paced pass — media is the heavy part of a sync.
 async function syncMediaFromPeer(cp, peerBase) {
   if (MEDIA_OFF) return 0;
+  // Anti-bloat default: a mirror replicates the (bounded) event corpus but NOT the heavy media bytes unless the
+  // operator opts in. Off = reference-only — the events pointing at blobs still replicate, the blobs stay on the
+  // relay(s) that hold them (fetched on demand in Phase B). Media is the one unbounded cost, so it's opt-in.
+  if (!SETTINGS.replicateMedia) return 0;
   const manUrl = peerBase + '/sync-media?church=' + encodeURIComponent(cp);
   let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) return 0; man = await r.json(); } catch { return 0; }
   let pulled = 0;

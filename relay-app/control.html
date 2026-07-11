@@ -134,6 +134,14 @@
     </div>
   </div>
 
+  <div class="card" id="replCard" style="display:none">
+    <h2>Replication &amp; redundancy <span class="muted" id="replMsg" style="font-weight:600"></span></h2>
+    <div class="muted" style="margin-bottom:12px">Churches that list this relay <b>and</b> another as trusted are mirrored between them automatically — if one relay is lost, members carry on from the other, and it catches up when it returns. Messages + records replicate (bounded); big <b>media</b> stays put unless you opt in below.</div>
+    <div id="replList"><div class="muted">Loading…</div></div>
+    <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line)"><span><b>Replicate media too</b> — copy sermon audio/video to the mirrors.<br><span class="muted">Off (default) = messages + records mirror, but the heavy media files stay on the relay that holds them (keeps mirrors small). On = full copies everywhere — uses far more disk. Respects your storage caps either way.</span></span><input type="checkbox" id="t-replmedia" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
+    <div style="margin-top:14px; display:flex; align-items:center; gap:12px"><button class="btn-ghost" id="syncNow">↻ Sync now</button><span class="muted" id="syncMsg"></span></div>
+  </div>
+
   <div class="card" id="updateCard" style="display:none">
     <h2>Relay software <span class="muted" id="updateMsg" style="font-weight:600"></span></h2>
     <div class="row"><span class="k">This relay's build</span><span class="v" id="u-current">—</span></div>
