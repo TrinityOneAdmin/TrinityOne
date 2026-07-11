@@ -128,6 +128,7 @@
       const gb = (b) => b ? String(Math.round(b / 1e9 * 100) / 100) : '';
       document.getElementById('t-mediacap').value = gb(s.mediaCap);
       document.getElementById('t-churchcap').value = gb(s.churchCap);
+      const io = document.getElementById('t-inviteonly'); if (io) io.checked = s.inviteOnly === true;   // access mode lives with the church list card
       const used = j.mediaUsed || 0;
       document.getElementById('mediaUsed').textContent = used ? '· ' + (Math.round(used / 1e9 * 100) / 100) + ' GB used' : '';
     } catch (e) { /* relay down — the hero card shows it */ }
@@ -144,6 +145,17 @@
     } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
   }
   document.getElementById('saveServes').onclick = saveServes;
+  // access mode: invite-only saves live (its own switch, not tied to the church-list Save button)
+  document.getElementById('t-inviteonly').onchange = async (e) => {
+    const on = e.target.checked, msg = document.getElementById('cfgMsg');
+    if (msg) { msg.style.color = 'var(--ink-3)'; msg.textContent = '· saving…'; }
+    try {
+      const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ inviteOnly: on }) });
+      if (!r.ok) throw new Error('save failed');
+      if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = on ? '· ✓ invite-only — only churches you add can join' : '· ✓ open — churches can self-register'; setTimeout(() => { msg.textContent = ''; }, 3000); }
+    } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
+  };
+  document.getElementById('refreshCh').onclick = loadConfig;   // pull the latest church list (self-registered churches included)
 
   // ── relay's memorable name: a pet-name from its key (recognition) + a claimable directory handle stewards type ──
   const _PET_ADJ = ['Quiet', 'Bright', 'Gentle', 'Steady', 'Faithful', 'Humble', 'Joyful', 'Kind', 'Patient', 'Bold', 'Gracious', 'Calm', 'Glad', 'Warm', 'True', 'Sure'];

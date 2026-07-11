@@ -50,7 +50,7 @@ const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs
 const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // mediaCap/churchCap: operator storage limits in BYTES (0 = unlimited), settable from the control panel — for a
 // public relay hosting several churches. The effective cap is the setting if non-zero, else the env fallback.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0 };
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -58,6 +58,7 @@ function loadSettings() {
       SETTINGS.serveApp = s.serveApp !== false; SETTINGS.serveModules = s.serveModules !== false;
       SETTINGS.serveAudio = s.serveAudio !== false; SETTINGS.appUrl = typeof s.appUrl === 'string' ? s.appUrl.slice(0, 200) : '';
       SETTINGS.mediaCap = Math.max(0, parseInt(s.mediaCap, 10) || 0); SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
+      SETTINGS.inviteOnly = s.inviteOnly === true;
     }
   } catch {}
 }
@@ -1453,6 +1454,9 @@ function serveStatic(req, res) {
             const hex = toHexPub(String(parsed.addChurch.npub || '').trim());
             if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub' })); return; }
             if (!isAdmin) {
+              // invite-only: the operator has locked the relay — only the admin token may add churches, so a
+              // signed self-registration is refused outright (no matter how valid the proof).
+              if (SETTINGS.inviteOnly) { res.writeHead(403, H); res.end(JSON.stringify({ error: 'this relay is invite-only — ask the operator to add your church' })); return; }
               const a = parsed.auth;
               const sigOk = a && typeof a === 'object' && a.kind === 27235 && verifyEvent(a);
               const fresh = sigOk && Math.abs(Math.floor(Date.now() / 1000) - (a.created_at || 0)) <= 300;
@@ -1510,6 +1514,7 @@ function serveStatic(req, res) {
           if ('appUrl' in s) SETTINGS.appUrl = String(s.appUrl || '').slice(0, 200);
           if ('mediaCap' in s) SETTINGS.mediaCap = Math.max(0, parseInt(s.mediaCap, 10) || 0);
           if ('churchCap' in s) SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
+          if ('inviteOnly' in s) SETTINGS.inviteOnly = !!s.inviteOnly;
           saveSettings();
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
