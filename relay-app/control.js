@@ -175,8 +175,10 @@
   function wireCfGo() { const cf = document.getElementById('cfGo'); if (cf) cf.onclick = goPublicCloudflare; }
   async function goPublicCloudflare() {
     const btn = document.getElementById('cfGo'), msg = document.getElementById('cfMsg');
+    cfHold = true;   // freeze the 4s auto-refresh so it can't wipe the status / error / log while we work
+    const det0 = document.getElementById('cfDetail'); if (det0) { det0.style.display = 'none'; det0.textContent = ''; }   // clear any prior attempt's log
     if (btn) btn.disabled = true;
-    if (msg) { msg.style.color = 'var(--ink-3)'; msg.textContent = '· opening a tunnel… (~15s)'; }
+    if (msg) { msg.style.color = 'var(--ink-3)'; msg.textContent = '· opening a tunnel… (up to 30s)'; }
     try {
       const r = await fetch('/tunnel/up', { method: 'POST', headers: authHeaders() });
       const j = await r.json();
@@ -189,9 +191,10 @@
           const det = document.getElementById('cfDetail');
           if (det && lg && lg.tail && lg.tail.length) { det.style.display = 'block'; det.textContent = lg.tail.join('\n'); }
         } catch (e) {}
-        return;
+        return;   // keep cfHold=true: the error+log stay put until the user clicks Go public again
       }
       if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ public!'; }
+      cfHold = false;   // success — let the refresh render the public card
       setTimeout(() => { gpTick(); loadRelayName(); }, 900);
     } catch (e) { if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; } if (btn) btn.disabled = false; }
   }
@@ -311,6 +314,7 @@
 
   // ── "Go public" wizard: bring the node onto Tailscale + turn on Funnel (public HTTPS/WSS) ──
   let tsBusy = false;       // pause polling while an action is mid-flight (so it can't clobber the view)
+  let cfHold = false;       // freeze the 4s refresh while a Go-public attempt runs OR its error+log is on screen
   let lastAuthUrl = '';     // the login link from `tailscale up`, until the node reports connected
   const gpWarn = (h) => '<div class="warn">'+h+'</div>';
   const gpCopy = (t, b) => { navigator.clipboard.writeText(t).then(()=>{ b.textContent='Copied'; setTimeout(()=>b.textContent='Copy',1400); }).catch(()=>{}); };
@@ -352,7 +356,7 @@
   }
 
   async function gpTick() {
-    if (tsBusy) return;
+    if (tsBusy || cfHold) return;
     try {
       // Cloudflare quick tunnel is the no-account default — if it's up, show that and skip the Tailscale flow.
       let cf = null; try { cf = await (await fetch('/tunnel/state', { headers: authHeaders(), cache: 'no-store' })).json(); } catch (e) {}
