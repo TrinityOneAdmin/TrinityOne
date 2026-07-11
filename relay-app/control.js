@@ -129,6 +129,10 @@
       document.getElementById('t-mediacap').value = gb(s.mediaCap);
       document.getElementById('t-churchcap').value = gb(s.churchCap);
       const io = document.getElementById('t-inviteonly'); if (io) io.checked = s.inviteOnly === true;   // access mode lives with the church list card
+      // backup/restore card (unlocked with the admin token, same as this settings fetch). The download streams a
+      // big file, so it's a plain <a download> with the token in the query rather than a fetch-into-memory blob.
+      const bc = document.getElementById('backupCard'); if (bc) bc.style.display = 'block';
+      const dlb = document.getElementById('dlBackup'); if (dlb) dlb.href = '/relay-backup?token=' + encodeURIComponent(adminToken);
       const used = j.mediaUsed || 0;
       document.getElementById('mediaUsed').textContent = used ? '· ' + (Math.round(used / 1e9 * 100) / 100) + ' GB used' : '';
     } catch (e) { /* relay down — the hero card shows it */ }
@@ -156,6 +160,22 @@
     } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
   };
   document.getElementById('refreshCh').onclick = loadConfig;   // pull the latest church list (self-registered churches included)
+  // restore: two-click confirm (webview confirm() is unreliable), then stream the file to /relay-restore.
+  let restoreArmed = false;
+  document.getElementById('doRestore').onclick = async () => {
+    const btn = document.getElementById('doRestore'), msg = document.getElementById('restoreMsg');
+    const f = (document.getElementById('restoreFile').files || [])[0];
+    if (!f) { msg.style.color = 'var(--clay)'; msg.textContent = '· choose a backup file first'; return; }
+    if (!restoreArmed) { restoreArmed = true; btn.textContent = 'Confirm — replace everything'; msg.style.color = 'var(--clay)'; msg.textContent = '· this REPLACES all data on this relay'; return; }
+    restoreArmed = false; btn.textContent = 'Restore';
+    msg.style.color = 'var(--ink-3)'; msg.textContent = '· uploading…';
+    try {
+      const r = await fetch('/relay-restore', { method: 'POST', headers: authHeaders(), body: f });
+      const s = await r.json();
+      if (!r.ok || !s.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (s.error || 'restore failed'); return; }
+      msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ staged — now fully close and reopen the app to apply';
+    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
+  };
 
   // ── relay's memorable name: a pet-name from its key (recognition) + a claimable directory handle stewards type ──
   const _PET_ADJ = ['Quiet', 'Bright', 'Gentle', 'Steady', 'Faithful', 'Humble', 'Joyful', 'Kind', 'Patient', 'Bold', 'Gracious', 'Calm', 'Glad', 'Warm', 'True', 'Sure'];

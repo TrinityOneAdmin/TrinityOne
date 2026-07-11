@@ -118,6 +118,21 @@
     <div style="margin-top:14px"><button class="btn-clay" id="saveServes">Save</button></div>
   </div>
 
+  <div class="card" id="backupCard" style="display:none">
+    <h2>Back up &amp; restore this relay <span class="muted" id="backupMsg" style="font-weight:600"></span></h2>
+    <div class="muted" style="margin-bottom:12px">A complete snapshot of this box — <b>every church's</b> messages, records and media, plus this relay's own identity. Download it to a drive or cloud <b>you</b> control (USB, Google Drive, OneDrive). <span style="color:var(--clay-ink)">⚠ It contains keys — keep it as safe as your recovery phrase.</span></div>
+    <a class="btn-clay" id="dlBackup" href="#" style="display:inline-block; text-decoration:none">⬇ Download backup</a>
+    <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--line)">
+      <div style="font-weight:700; margin-bottom:4px">Restore from a backup</div>
+      <div class="muted" style="margin-bottom:10px">Replaces <b>everything</b> on this relay with the file, then <b>restart the app</b> to apply. Use this to move the relay to a new computer, or roll back.</div>
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+        <input type="file" id="restoreFile" accept=".tgz,.tar.gz,application/gzip" style="font-size:13px" />
+        <button class="btn-ghost" id="doRestore">Restore</button>
+        <span class="muted" id="restoreMsg"></span>
+      </div>
+    </div>
+  </div>
+
   <div class="card" id="updateCard" style="display:none">
     <h2>Relay software <span class="muted" id="updateMsg" style="font-weight:600"></span></h2>
     <div class="row"><span class="k">This relay's build</span><span class="v" id="u-current">—</span></div>

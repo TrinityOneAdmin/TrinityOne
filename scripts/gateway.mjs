@@ -6,7 +6,7 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, createReadStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs';
 import { extname, normalize, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
@@ -30,6 +30,23 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));   // project dir (fi
 // installed bundle — the app ships its code read-only and keeps its data separately, the platform-native way.
 const DATA_DIR = process.env.TRINITY_DATA_DIR || join(ROOT, 'relay');
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+// Restore-on-boot: /relay-restore stages an uploaded backup under .restore-pending/. Apply it BEFORE anything
+// reads the data dir (the DB, keys, church.json all load at module init below), then clear the staging. This is
+// how "restore this relay / move it to a new machine" takes effect — the operator restarts and the box comes up
+// as the backed-up relay. Runs first so a half-applied restore can't leave a mixed old/new data dir.
+(function applyPendingRestore() {
+  const staging = join(DATA_DIR, '.restore-pending');
+  if (!existsSync(staging)) return;
+  try {
+    for (const name of readdirSync(staging)) {
+      const dst = join(DATA_DIR, name);
+      try { rmSync(dst, { recursive: true, force: true }); } catch {}
+      renameSync(join(staging, name), dst);
+    }
+    console.log('  restored relay data from a backup (.restore-pending applied)');
+  } catch (e) { console.error('  restore-on-boot failed:', (e && e.message) || e); }
+  try { rmSync(staging, { recursive: true, force: true }); } catch {}
+})();
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
 const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');                 // legacy JSON store (migrated from, once)
 const SQLITE_DB = process.env.RELAY_SQLITE || join(DATA_DIR,'relay.sqlite');       // durable event store
@@ -1565,6 +1582,48 @@ function serveStatic(req, res) {
       const ok = openExternal(u);
       res.writeHead(ok ? 200 : 500, H); res.end(JSON.stringify({ ok }));
     });
+    return;
+  }
+  // Full relay backup: stream the ENTIRE data dir (every church's events + media, plus this relay's identity
+  // key + settings) as one gzipped tar. Admin-gated (token in header or ?token=). Uses the platform `tar`
+  // (bundled on Win10+/macOS/Linux). A WAL checkpoint first so relay.sqlite is self-consistent in the archive.
+  if (route === '/relay-backup' && req.method === 'GET') {
+    if (!adminOK(req)) { res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"unauthorized"}'); return; }
+    try { store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch {}
+    const stamp = new Date().toISOString().slice(0, 10);
+    const fname = 'trinityone-relay-backup-' + stamp + '.tgz';
+    let child;
+    try {
+      child = spawn('tar', ['-czf', '-', '-C', DATA_DIR,
+        '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log', '.'],
+        { stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch (e) { res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"tar not available on this box"}'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="' + fname + '"', ...SEC_HEADERS });
+    child.on('error', () => { try { res.destroy(); } catch {} });
+    child.stdout.pipe(res);
+    req.on('close', () => { try { child.kill(); } catch {} });
+    return;
+  }
+  // Restore a full relay backup: stream the uploaded .tgz straight into .restore-pending/, then the operator
+  // restarts and applyPendingRestore() (top of file) swaps it into place before the DB opens. Admin-gated.
+  if (route === '/relay-restore' && req.method === 'POST') {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    const staging = join(DATA_DIR, '.restore-pending');
+    try { rmSync(staging, { recursive: true, force: true }); } catch {}
+    try { mkdirSync(staging, { recursive: true }); } catch {}
+    let child;
+    try { child = spawn('tar', ['-xzf', '-', '-C', staging], { stdio: ['pipe', 'ignore', 'ignore'] }); }
+    catch (e) { res.writeHead(500, H); res.end('{"error":"tar not available on this box"}'); return; }
+    child.on('error', () => { try { res.writeHead(500, H); } catch {} try { res.end('{"error":"extract failed"}'); } catch {} });
+    child.on('exit', (code) => {
+      // a valid relay backup carries at least the event DB or the church list
+      const ok = code === 0 && (existsSync(join(staging, 'relay.sqlite')) || existsSync(join(staging, 'church.json')));
+      if (!ok) { try { rmSync(staging, { recursive: true, force: true }); } catch {} res.writeHead(400, H); res.end('{"error":"not a valid relay backup file"}'); return; }
+      res.writeHead(200, H); res.end('{"ok":true,"restart":true}');
+    });
+    req.pipe(child.stdin);
+    req.on('error', () => { try { child.kill(); } catch {} });
     return;
   }
   // relay self-update: POST drops a flag in relay/ (the only path the sandboxed relay can write); a root
