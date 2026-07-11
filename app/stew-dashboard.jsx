@@ -1095,7 +1095,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'invite more' : 'invite your church'} ic="pray" tint="sage" onClick={() => onTab('members')} />
       <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" onClick={() => onTab('groups')} />
       <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
-      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="self-hosted" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} onClick={() => goSettings('network')} />
+      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} onClick={() => goSettings('network')} />
     </div>
   );
   const groupsPanel = (
@@ -1935,7 +1935,7 @@ function DashRelaysCard() {
   };
   return (
       <Panel title="Relays" action={!checking ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: allUp ? 'var(--sage)' : 'var(--clay)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: allUp ? 'var(--sage)' : 'var(--clay)' }} /> {online}/{status.length} online</span> : null}>
-        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where your church publishes. It hosts its own relay; add public relays for redundancy in case yours is ever offline.</div>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where your church publishes. Add your own relay (self-host it with the TrinityOne Suite) and public ones for redundancy — if one is offline, members reach another.</div>
         {checking ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>Checking relays…</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {status.map(r => {
@@ -2041,7 +2041,7 @@ function DashRelaysCard() {
         )}
         </div>{/* end relay-actions grid */}
         <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
-          <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church hosts its own relay — every message, group, and member lives on infrastructure you control. Members reach it wherever you serve the app.</div>
+          <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church's messages, groups and members live on the relays above. Self-host one with the TrinityOne Suite for infrastructure you fully control — or run on the shared community relays. Either way, members reach it wherever you serve the app.</div>
         </div>
       </Panel>
   );
@@ -4289,7 +4289,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
         </ol>
         <div style={{ display: 'flex', gap: 9, padding: 11, borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', marginBottom: 14 }}>
           <Icon name="shield" size={16} color="var(--gold)" style={{ flexShrink: 0, marginTop: 1 }} />
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Anyone with the phrase can manage the church.</b> Per-person add/remove that doesn’t copy the secret (delegated keys / a steward roster) is on the roadmap — for now, only share it with people you fully trust.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Anyone with this phrase can fully manage the church</b> — it hands over the whole identity, so only share it with someone you fully trust. To add a helper <b>without</b> giving away the key, use <b>Delegated stewards</b> below: they get their own revocable access.</div>
         </div>
         {/* handoff QR — the new steward scans this to adopt the church */}
         <div style={{ marginBottom: 14 }}>
