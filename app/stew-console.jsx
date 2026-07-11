@@ -207,6 +207,8 @@ function WizKey({ saved, setSaved }) {
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '', npub: '' };
   const name = church.name || 'Your church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
+  const [copied, setCopied] = React.useState(false);
+  const copyNpub = () => { try { copyText(church.npub || ''); } catch (e) { try { navigator.clipboard.writeText(church.npub || ''); } catch {} } setCopied(true); setTimeout(() => setCopied(false), 1400); };
   return (
     <div style={{ marginTop: 18 }}>
       <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This mints your church’s identity on Nostr. Every group and notice gets <b style={{ color: 'var(--ink)' }}>signed</b> by it — so members can trust a message is really from you.</p>
@@ -216,11 +218,11 @@ function WizKey({ saved, setSaved }) {
           <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{name}</div><div style={{ fontSize: 12.5, opacity: .6 }}>Public church key</div></div>
           <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: 'var(--sage-soft)' }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--sage)' }} /> Generated</div>
         </div>
-        <div onClick={() => { try { navigator.clipboard.writeText(church.npub || ''); } catch {} }} style={{ cursor: 'pointer', marginTop: 16, display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 11, background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.1)' }}>
+        <button type="button" onClick={copyNpub} aria-label={copied ? 'Copied' : 'Copy npub'} title="Copy this church's public key" style={{ cursor: 'pointer', width: '100%', textAlign: 'left', marginTop: 16, display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 11, background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.1)', color: 'inherit', font: 'inherit' }}>
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold-soft)', background: 'rgba(224,184,96,.16)', padding: '3px 7px', borderRadius: 6 }}>NPUB</span>
           <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, opacity: .85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{church.npub || '—'}</span>
-          <Icon name="copy" size={16} color="rgba(255,255,255,.5)" />
-        </div>
+          <Icon name={copied ? 'check' : 'copy'} size={16} color={copied ? 'var(--sage)' : 'rgba(255,255,255,.5)'} />
+        </button>
       </div>
       <WizBackup saved={saved} setSaved={setSaved} />
     </div>

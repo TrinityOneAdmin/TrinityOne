@@ -10720,7 +10720,7 @@ zoo`.split("\n");
     if (!h) return null;
     for (const base of _dirBases()) {
       try {
-        const r = await fetch(base + "/relay-names/resolve/" + encodeURIComponent(h), { cache: "no-store" });
+        const r = await fetch(base + "/relay-names/resolve/" + encodeURIComponent(h), { cache: "no-store", signal: AbortSignal.timeout(6e3) });
         if (r.ok) {
           const j = await r.json();
           if (j && j.url) return j;

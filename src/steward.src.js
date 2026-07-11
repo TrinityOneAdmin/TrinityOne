@@ -169,7 +169,9 @@ async function resolveRelayName(handle) {
   const h = String(handle || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
   if (!h) return null;
   for (const base of _dirBases()) {
-    try { const r = await fetch(base + '/relay-names/resolve/' + encodeURIComponent(h), { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j && j.url) return j; } } catch (e) {}
+    // 6s hard timeout so a black-holed directory host (common on a censored network) can't stall the whole
+    // resolve — we just fall through to the next mirror.
+    try { const r = await fetch(base + '/relay-names/resolve/' + encodeURIComponent(h), { cache: 'no-store', signal: AbortSignal.timeout(6000) }); if (r.ok) { const j = await r.json(); if (j && j.url) return j; } } catch (e) {}
   }
   return null;
 }

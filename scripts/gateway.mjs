@@ -1186,6 +1186,11 @@ function tsRun(args, { timeoutMs = 12000 } = {}) {
     if (timeoutMs) setTimeout(() => finish(0), timeoutMs);
   });
 }
+// The control panel polls /tailscale/state every 4s while open; each tsState() spawns 1–3 tailscale CLIs.
+// Cache it briefly so an open panel doesn't churn subprocesses for state that changes on the order of minutes.
+// Actions (up/funnel) reset _tsCacheAt so they still read fresh.
+let _tsCache = null, _tsCacheAt = 0;
+async function tsStateCached() { if (_tsCache && Date.now() - _tsCacheAt < 8000) return _tsCache; _tsCache = await tsState(); _tsCacheAt = Date.now(); return _tsCache; }
 async function tsState() {
   const st = await tsRun(['status', '--json'], { timeoutMs: 8000 });
   if (st.missing || st.code === -1 || /not found|executable file not found|no such file|enoent/i.test(st.err)) return { installed: false };   // -1/ENOENT = spawn failed → tailscale not installed (e.g. desktop app)
@@ -1553,11 +1558,12 @@ function serveStatic(req, res) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
     if (route === '/tailscale/state' && req.method === 'GET') {
-      tsState().then(s => { res.writeHead(200, H); res.end(JSON.stringify(s)); })
+      tsStateCached().then(s => { res.writeHead(200, H); res.end(JSON.stringify(s)); })
         .catch(e => { res.writeHead(200, H); res.end(JSON.stringify({ installed: true, error: String((e && e.message) || e) })); });
       return;
     }
     if (route === '/tailscale/up' && req.method === 'POST') {
+      _tsCacheAt = 0;   // an action is happening → next /state read must be fresh
       let body = ''; req.on('data', c => { body += c; if (body.length > 1e4) req.destroy(); });
       req.on('end', () => {
         let authKey = ''; try { authKey = String((JSON.parse(body || '{}')).authKey || '').trim(); } catch {}
@@ -1582,6 +1588,7 @@ function serveStatic(req, res) {
       return;
     }
     if (route === '/tailscale/funnel' && req.method === 'POST') {
+      _tsCacheAt = 0;
       tsRun(['funnel', '--bg', String(PORT)], { timeoutMs: 25000 }).then(async r => {
         if (r.code === 0) { const s = await tsState(); res.writeHead(200, H); res.end(JSON.stringify({ ok: true, ...s })); }
         else { const needsPolicy = /funnel|not available|https|cert|denied|not enabled/i.test((r.err || '') + (r.out || '')); res.writeHead(200, H); res.end(JSON.stringify({ ok: false, error: (r.err || r.out || 'funnel failed').trim().slice(0, 300), needsPolicy })); }
