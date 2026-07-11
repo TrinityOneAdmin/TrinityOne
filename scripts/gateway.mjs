@@ -6,7 +6,8 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs';
+import { Transform } from 'stream';
 import { extname, normalize, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
@@ -131,6 +132,20 @@ const _mediaBytesByChurch = new Map(); let _mediaBytesTotal = 0;   // usage, sca
 // on a media-heavy box). SET the totals from the disk scan (authoritative) rather than accumulate, so any upload
 // that lands during the brief window isn't double-counted — the scan already sees it on disk.
 setTimeout(() => { try { let total = 0; const by = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) by.set(o, (by.get(o) || 0) + sz); } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); } catch {} }, 0);
+// Streaming base64 for the native (CapacitorHttp) blob path — encode/decode in aligned chunks so a big blob never
+// sits fully in RAM (a 200 MB video buffered + base64'd would cost ~450 MB). Each whole 3-byte group → 4 b64 chars
+// independently, so concatenating the chunks equals base64(file); only the final partial group is padded. Decode
+// strips whitespace and aligns to 4 chars. base64 length of N bytes = ceil(N/3)*4.
+class B64Encode extends Transform {
+  constructor() { super(); this._rem = null; }
+  _transform(chunk, _e, cb) { const buf = this._rem ? Buffer.concat([this._rem, chunk]) : chunk; const usable = buf.length - (buf.length % 3); if (usable > 0) this.push(buf.subarray(0, usable).toString('base64')); this._rem = usable < buf.length ? Buffer.from(buf.subarray(usable)) : null; cb(); }
+  _flush(cb) { if (this._rem && this._rem.length) this.push(this._rem.toString('base64')); cb(); }
+}
+class B64Decode extends Transform {
+  constructor() { super(); this._rem = ''; }
+  _transform(chunk, _e, cb) { const s = this._rem + chunk.toString('latin1').replace(/\s+/g, ''); const usable = s.length - (s.length % 4); if (usable > 0) this.push(Buffer.from(s.slice(0, usable), 'base64')); this._rem = s.slice(usable); cb(); }
+  _flush(cb) { if (this._rem) this.push(Buffer.from(this._rem, 'base64')); cb(); }
+}
 // upload auth: a signed, time-bounded kind-24242 event by the CHURCH key, or a steward of a named church.
 function _blobUploader(req) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
@@ -1892,32 +1907,46 @@ function serveStatic(req, res) {
     if (MEDIA_OFF) { res.writeHead(403, H); res.end('{"error":"this relay hosts no media (relay-only)"}'); return; }   // operator disabled media
     const who = _blobUploader(req);
     if (!who) { res.writeHead(401, H); res.end('{"error":"unauthorized: sign a kind-24242 upload auth with the church (or steward) key"}'); return; }
-    const chunks = []; let n = 0, tooBig = false;
-    req.on('data', (c) => { n += c.length; if (n > MAX_BLOB) { tooBig = true; req.destroy(); return; } chunks.push(c); });
-    req.on('end', () => {
-      if (tooBig) { res.writeHead(413, H); res.end('{"error":"blob too large"}'); return; }
-      let data = Buffer.concat(chunks);
-      // native clients send base64 text (CapacitorHttp mangles a raw binary body) — decode back to the real bytes
-      if (req.headers['x-blob-b64']) { try { data = Buffer.from(data.toString('latin1'), 'base64'); } catch { data = Buffer.alloc(0); } }
-      if (!data.length) { res.writeHead(400, H); res.end('{"error":"empty"}'); return; }
-      const sha = createHash('sha256').update(data).digest('hex');
-      if (who.want && who.want !== sha) { res.writeHead(400, H); res.end('{"error":"hash mismatch (x tag != blob sha256)"}'); return; }
-      const isNew = !existsSync(join(BLOB_DIR, sha));   // content-addressed: a re-upload of an existing blob adds no new bytes (don't re-charge quota)
+    // Stream the body to a temp file, hashing as it flows — the whole blob (and its base64 for native uploads)
+    // never sits in RAM. Native clients send base64 text (CapacitorHttp mangles a raw binary body) → decode in a
+    // streaming transform. MAX_BLOB is enforced mid-stream; the storage caps + content-addressed dedup at the end.
+    const isB64 = !!req.headers['x-blob-b64'];
+    const tmp = join(BLOB_DIR, '.up-' + randomBytes(12).toString('hex') + '.tmp');
+    const hash = createHash('sha256'); let size = 0, done = false;
+    const out = createWriteStream(tmp);
+    const src = isB64 ? req.pipe(new B64Decode()) : req;
+    const cleanup = () => { try { unlinkSync(tmp); } catch {} };
+    const fail = (code, msg) => { if (done) return; done = true; try { req.destroy(); } catch {} try { if (src !== req) src.destroy(); } catch {} try { out.destroy(); } catch {} cleanup(); try { res.writeHead(code, H); res.end(JSON.stringify({ error: msg })); } catch {} };
+    src.on('data', (chunk) => {
+      if (done) return;
+      size += chunk.length;
+      if (size > MAX_BLOB) { fail(413, 'blob too large'); return; }
+      hash.update(chunk);
+      if (!out.write(chunk)) { src.pause(); out.once('drain', () => { if (!done) src.resume(); }); }
+    });
+    src.on('error', () => fail(400, 'read'));
+    out.on('error', () => fail(500, 'store failed'));
+    src.on('end', () => { if (!done) out.end(); });
+    out.on('finish', () => {
+      if (done) return; done = true;
+      if (!size) { cleanup(); res.writeHead(400, H); res.end('{"error":"empty"}'); return; }
+      const sha = hash.digest('hex');
+      if (who.want && who.want !== sha) { cleanup(); res.writeHead(400, H); res.end('{"error":"hash mismatch (x tag != blob sha256)"}'); return; }
+      const finalPath = join(BLOB_DIR, sha);
+      const isNew = !existsSync(finalPath);   // content-addressed: a re-upload of an existing blob adds no new bytes
       if (isNew) {
         const _mc = effMediaCap(), _cc = effChurchCap();
-        if (_mc && _mediaBytesTotal + data.length > _mc) { res.writeHead(507, H); res.end('{"error":"this relay\'s media storage is full"}'); return; }
-        if (_cc && (_mediaBytesByChurch.get(who.church) || 0) + data.length > _cc) { res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
+        if (_mc && _mediaBytesTotal + size > _mc) { cleanup(); res.writeHead(507, H); res.end('{"error":"this relay\'s media storage is full"}'); return; }
+        if (_cc && (_mediaBytesByChurch.get(who.church) || 0) + size > _cc) { cleanup(); res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
       }
       try {
-        const tmp = join(BLOB_DIR, sha + '.tmp'); writeFileSync(tmp, data);
-        writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // S4: write the owner sidecar BEFORE the blob is reachable — a failed sidecar must never leave a blob servable with no download gate (fail-open)
-        renameSync(tmp, join(BLOB_DIR, sha));                          // now publish the blob into place (its gate already exists)
+        writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // S4: owner sidecar BEFORE the blob is reachable — never leave a blob servable with no download gate
+        if (isNew) renameSync(tmp, finalPath); else cleanup();        // dedup: identical blob already stored → drop the temp
         const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
-      } catch (e) { res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
-      if (isNew) { _mediaBytesTotal += data.length; _mediaBytesByChurch.set(who.church, (_mediaBytesByChurch.get(who.church) || 0) + data.length); }   // account the new bytes
-      res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size: data.length, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
+      } catch (e) { cleanup(); res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
+      if (isNew) { _mediaBytesTotal += size; _mediaBytesByChurch.set(who.church, (_mediaBytesByChurch.get(who.church) || 0) + size); }   // account the new bytes
+      res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
     });
-    req.on('error', () => { try { res.writeHead(400, H); res.end('{"error":"read"}'); } catch {} });
     return;
   }
   if (route.startsWith('/blob/') && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -1930,7 +1959,9 @@ function serveStatic(req, res) {
     const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=31536000, immutable', ...SEC_HEADERS };   // content-addressed → immutable
     if (/[?&]b64/.test(req.url || '')) {   // native download: CapacitorHttp mangles a binary response body → serve base64 text, the client decodes
       if (req.method === 'HEAD') { res.writeHead(200, { ...base, 'Content-Type': 'text/plain; charset=ascii', 'X-Blob-B64': '1' }); res.end(); return; }
-      try { const s = readFileSync(file).toString('base64'); res.writeHead(200, { ...base, 'Content-Type': 'text/plain; charset=ascii', 'Content-Length': Buffer.byteLength(s), 'X-Blob-B64': '1' }); res.end(s); } catch { res.writeHead(500, base); res.end(); }
+      // stream the file through a base64 encoder (bounded memory) instead of readFileSync().toString('base64')
+      res.writeHead(200, { ...base, 'Content-Type': 'text/plain; charset=ascii', 'Content-Length': Math.ceil(st.size / 3) * 4, 'X-Blob-B64': '1' });
+      const rs = createReadStream(file); rs.on('error', () => { try { res.destroy(); } catch {} }); rs.pipe(new B64Encode()).pipe(res);
       return;
     }
     const range = req.headers['range'] && /bytes=(\d*)-(\d*)/.exec(req.headers['range']);   // seek support for audio/video
