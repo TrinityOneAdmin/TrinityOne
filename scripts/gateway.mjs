@@ -17,6 +17,12 @@ import webpush from 'web-push';
 import { randomBytes, timingSafeEqual, createHash } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
 
+// A church's relay must NOT die from a background hiccup (a dropped cloudflared pipe, a stray rejected fetch).
+// On Node 22 an unhandled rejection/exception exits the process by default — which would kill the relay AND the
+// control panel it serves. Log and keep serving instead; a genuinely fatal state will surface elsewhere.
+process.on('unhandledRejection', (e) => { try { console.error('[unhandledRejection]', (e && e.stack) || e); } catch {} });
+process.on('uncaughtException', (e) => { try { console.error('[uncaughtException]', (e && e.stack) || e); } catch {} });
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url));   // project dir (fileURLToPath is correct on Windows; the bare .pathname yields "/C:/…")
 // The ONE directory the relay writes to (event db, keys, church.json, blobs, push subs, apks…). Defaults to
 // ROOT/relay so a git-checkout relay is byte-for-byte unchanged. The packaged desktop app sets TRINITY_DATA_DIR
@@ -310,7 +316,7 @@ let MY_RELAY_NAME = ''; try { MY_RELAY_NAME = JSON.parse(readFileSync(MYNAME_FIL
 const CLOUDFLARED_BIN = process.env.CLOUDFLARED_BIN || 'cloudflared';
 const TUNNEL_FLAG = join(DATA_DIR, 'tunnel-on');   // presence = "stay public": re-open the tunnel on every boot
 const CF_LOG_FILE = join(DATA_DIR, 'cloudflared.log');   // full transcript of the last tunnel attempt (for diagnosing)
-let CF_CHILD = null, CF_URL = '', CF_TAIL = [];   // CF_TAIL: ring buffer of the last log lines, surfaced in errors
+let CF_CHILD = null, CF_URL = '', CF_TAIL = [], CF_STARTING = null;   // CF_TAIL: ring buffer of log lines; CF_STARTING: in-flight start promise (dedupes concurrent starts)
 function cfLog(s) { const line = String(s); for (const ln of line.split(/\r?\n/)) { if (ln.trim()) CF_TAIL.push(ln.trim()); } while (CF_TAIL.length > 40) CF_TAIL.shift(); try { appendFileSync(CF_LOG_FILE, line); } catch {} }
 // Turn cloudflared's own log tail into a human hint about WHY the tunnel didn't hold. VPNs block the QUIC (UDP)
 // path; a firewall / antivirus can block cloudflared's outbound entirely (it prints the URL, then can't keep the
@@ -333,15 +339,17 @@ const _PET_ADJ = ['quiet', 'bright', 'gentle', 'steady', 'faithful', 'humble', '
 const _PET_NOUN = ['olive', 'cedar', 'dove', 'anchor', 'lamp', 'vine', 'shepherd', 'harbor', 'beacon', 'reed', 'sparrow', 'willow', 'spring', 'haven', 'ember', 'brook'];
 function relayPetSlug() { const h = RELAY_PUB; if (!/^[0-9a-f]{64}$/i.test(h)) return ''; let x = 0; for (let i = 0; i < h.length; i++) x = (x * 31 + h.charCodeAt(i)) >>> 0; return _PET_ADJ[x % 16] + '-' + _PET_NOUN[(x >>> 4) % 16] + '-' + (10 + (x >>> 9) % 90); }
 function startCloudflared() {
-  return new Promise((resolve) => {
-    if (CF_URL && CF_CHILD) { resolve({ ok: true, url: CF_URL }); return; }
+  if (CF_CHILD && CF_URL) return Promise.resolve({ ok: true, url: CF_URL });   // already public — don't spawn again
+  if (CF_STARTING) return CF_STARTING;   // a start is already in flight (e.g. boot auto-reopen) — join it, never spawn a 2nd tunnel
+  CF_STARTING = new Promise((resolve) => {
+    const settle = (r) => { CF_STARTING = null; resolve(r); };
     try { writeFileSync(CF_LOG_FILE, ''); } catch {}    // fresh transcript per attempt
     CF_TAIL = [];
     // Let cloudflared auto-pick its transport (default): it prechecks connectivity and uses QUIC where it can,
     // falling back to HTTP/2 over ordinary HTTPS where UDP is blocked (e.g. behind a VPN). --edge-ip-version auto
     // lets it try IPv4 and IPv6 edges.
     let child; try { child = spawn(CLOUDFLARED_BIN, ['tunnel', '--no-autoupdate', '--edge-ip-version', 'auto', '--url', 'http://localhost:' + PORT], { stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (e) { resolve({ ok: false, error: 'cloudflared isn’t bundled with this build — reinstall the latest Suite.' }); return; }
+    catch (e) { settle({ ok: false, error: 'cloudflared isn’t bundled with this build — reinstall the latest Suite.' }); return; }
     CF_CHILD = child;
     let done = false, url = '', registered = false;
     // Success is NOT "the URL string appeared" — cloudflared prints the trycloudflare URL up front, BEFORE the
@@ -351,7 +359,7 @@ function startCloudflared() {
       if (done) return; done = true; CF_URL = url;
       try { writeFileSync(TUNNEL_FLAG, '1'); } catch {}
       if (!MY_RELAY_NAME) { MY_RELAY_NAME = relayPetSlug(); try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle: MY_RELAY_NAME }) + '\n'); } catch {} }
-      reclaimRelayName(); resolve({ ok: true, url: CF_URL });
+      reclaimRelayName(); settle({ ok: true, url: CF_URL });
     };
     const onData = (d) => {
       const s = String(d); cfLog(s);
@@ -360,10 +368,15 @@ function startCloudflared() {
       if (url && registered) finishOk();
     };
     child.stdout.on('data', onData); child.stderr.on('data', onData);
-    child.on('exit', () => { CF_CHILD = null; CF_URL = ''; if (!done) { done = true; resolve({ ok: false, error: cfErrorHint() }); } });
-    child.on('error', (e) => { if (!done) { done = true; CF_CHILD = null; resolve({ ok: false, error: String((e && e.message) || e) }); } });
-    setTimeout(() => { if (!done) { done = true; try { if (child) child.kill(); } catch {} CF_CHILD = null; resolve({ ok: false, error: cfErrorHint() }); } }, 30000);
+    // A dead pipe on Windows emits 'error' on the stdio stream itself; with no listener Node throws and takes the
+    // WHOLE relay down. Swallow those — they're never fatal to the relay.
+    child.stdout.on('error', () => {}); child.stderr.on('error', () => {});
+    // Only clear shared state if it's OUR child that died — a stale/duplicate tunnel exiting must not wipe a live one.
+    child.on('exit', () => { if (CF_CHILD === child) { CF_CHILD = null; CF_URL = ''; } if (!done) { done = true; settle({ ok: false, error: cfErrorHint() }); } });
+    child.on('error', (e) => { if (CF_CHILD === child) CF_CHILD = null; if (!done) { done = true; settle({ ok: false, error: String((e && e.message) || e) }); } });
+    setTimeout(() => { if (!done) { done = true; try { if (child) child.kill(); } catch {} if (CF_CHILD === child) CF_CHILD = null; settle({ ok: false, error: cfErrorHint() }); } }, 30000);
   });
+  return CF_STARTING;
 }
 function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
 // Always require the admin token. Do NOT trust loopback: the relay runs behind the Tailscale Funnel /
