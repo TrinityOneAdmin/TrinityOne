@@ -10705,6 +10705,63 @@ zoo`.split("\n");
       return [];
     }
   }
+  var NAMES_LS = "trinityone.steward.relay-names";
+  var DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, "http").replace(/\/relay\/?$/i, "");
+  function getNamedRelays() {
+    try {
+      const a = JSON.parse(lsGet(NAMES_LS) || "[]");
+      return Array.isArray(a) ? a.filter((e) => e && e.name) : [];
+    } catch {
+      return [];
+    }
+  }
+  function setNamedRelays(a) {
+    try {
+      lsSet(NAMES_LS, JSON.stringify(a));
+    } catch (e) {
+    }
+  }
+  function _writeExtraRelays(list) {
+    try {
+      lsSet(RELAYS_LS, JSON.stringify([...new Set(list.filter(Boolean))]));
+      window.dispatchEvent(new CustomEvent("steward-relays"));
+    } catch (e) {
+    }
+  }
+  var _refreshingNames = false;
+  async function refreshNamedRelays() {
+    if (_refreshingNames) return;
+    const named = getNamedRelays();
+    if (!named.length) return;
+    _refreshingNames = true;
+    let extra = extraRelays(), changed = false;
+    for (const entry of named) {
+      try {
+        const r = await fetch(DIRECTORY_URL + "/relay-names/resolve/" + encodeURIComponent(entry.name), { cache: "no-store" });
+        if (!r.ok) continue;
+        const j = await r.json();
+        const newUrl = normRelay(j && j.url);
+        if (newUrl && newUrl !== entry.url) {
+          extra = extra.filter((u) => u !== entry.url);
+          extra.push(newUrl);
+          entry.url = newUrl;
+          changed = true;
+        }
+      } catch (e) {
+      }
+    }
+    if (changed) {
+      _writeExtraRelays(extra);
+      setNamedRelays(named);
+    }
+    _refreshingNames = false;
+  }
+  try {
+    setTimeout(refreshNamedRelays, 2500);
+    setInterval(refreshNamedRelays, 9e4);
+    window.addEventListener("focus", refreshNamedRelays);
+  } catch (e) {
+  }
   function normRelay(input) {
     let v = String(input || "").trim();
     if (!v) return "";
@@ -13399,8 +13456,16 @@ zoo`.split("\n");
     removeRelay(url) {
       const next = extraRelays().filter((r) => r !== url);
       lsSet(RELAYS_LS, JSON.stringify(next));
+      setNamedRelays(getNamedRelays().filter((e) => e.url !== url));
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return true;
+    },
+    // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
+    rememberRelayName(name, url) {
+      const n = String(name || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+      const u = normRelay(url);
+      if (!n || !u) return;
+      setNamedRelays([...getNamedRelays().filter((e) => e.name !== n), { name: n, url: u }]);
     },
     // FEDERATION Phase 3c — list relays that have OFFERED to host new churches (enforcing + open + live).
     discoverRelayOffers(region) {

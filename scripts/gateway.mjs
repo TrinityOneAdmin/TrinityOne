@@ -67,7 +67,7 @@ const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs
 const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // mediaCap/churchCap: operator storage limits in BYTES (0 = unlimited), settable from the control panel — for a
 // public relay hosting several churches. The effective cap is the setting if non-zero, else the env fallback.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false };
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -76,6 +76,7 @@ function loadSettings() {
       SETTINGS.serveAudio = s.serveAudio !== false; SETTINGS.appUrl = typeof s.appUrl === 'string' ? s.appUrl.slice(0, 200) : '';
       SETTINGS.mediaCap = Math.max(0, parseInt(s.mediaCap, 10) || 0); SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
       SETTINGS.inviteOnly = s.inviteOnly === true;
+      SETTINGS.offerHosting = s.offerHosting === true;
     }
   } catch {}
 }
@@ -1369,8 +1370,10 @@ function serveStatic(req, res) {
         // OFFER fields (Phase 3a) appear ONLY when the operator opted in via RELAY_OPEN — a private relay omits
         // them entirely, so discovery/auto-pick never surfaces it. `full` lets a busy relay decline new churches
         // without going offline. `churches` is a load hint (already exposed unauthenticated in /status counts).
-        ...(OFFER_OPEN ? {
-          open: !(OFFER_CAP && CHURCH_PUBS.size >= OFFER_CAP),
+        ...((OFFER_OPEN || SETTINGS.offerHosting) ? {
+          // `open` = actually accepting new churches now: not invite-only, and not at the church cap. A relay can
+          // advertise (appear in discovery) yet be closed to self-join (invite-only) — it shows as full/closed.
+          open: !SETTINGS.inviteOnly && !(OFFER_CAP && CHURCH_PUBS.size >= OFFER_CAP),
           full: !!(OFFER_CAP && CHURCH_PUBS.size >= OFFER_CAP),
           churches: CHURCH_PUBS.size,
           ...(MEDIA_CAP ? { mediaCap: MEDIA_CAP, mediaUsed: _mediaBytesTotal } : {}),   // capacity hint for church discovery / auto-pick
@@ -1543,6 +1546,7 @@ function serveStatic(req, res) {
           if ('mediaCap' in s) SETTINGS.mediaCap = Math.max(0, parseInt(s.mediaCap, 10) || 0);
           if ('churchCap' in s) SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
           if ('inviteOnly' in s) SETTINGS.inviteOnly = !!s.inviteOnly;
+          if ('offerHosting' in s) SETTINGS.offerHosting = !!s.offerHosting;
           saveSettings();
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }

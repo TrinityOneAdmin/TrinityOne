@@ -1885,6 +1885,7 @@ function DashRelaysCard() {
       if (!r.ok) throw new Error('directory');
       const j = await r.json();
       window.Steward.addRelay(j.url);
+      window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
       setByNameMsg({ text: 'Connecting your church…' });
       let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, ''); } catch (e) {}
       setByNameMsg({ ok: true, text: reg.ok ? '✓ Connected to “' + n + '” — your church is registered and can post.' : '✓ Added “' + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });

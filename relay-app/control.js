@@ -129,6 +129,7 @@
       document.getElementById('t-mediacap').value = gb(s.mediaCap);
       document.getElementById('t-churchcap').value = gb(s.churchCap);
       const io = document.getElementById('t-inviteonly'); if (io) io.checked = s.inviteOnly === true;   // access mode lives with the church list card
+      const of = document.getElementById('t-offer'); if (of) of.checked = s.offerHosting === true;
       // backup/restore card (unlocked with the admin token, same as this settings fetch). The download streams a
       // big file, so it's a plain <a download> with the token in the query rather than a fetch-into-memory blob.
       const bc = document.getElementById('backupCard'); if (bc) bc.style.display = 'block';
@@ -160,6 +161,15 @@
     } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
   };
   document.getElementById('refreshCh').onclick = loadConfig;   // pull the latest church list (self-registered churches included)
+  document.getElementById('t-offer').onchange = async (e) => {
+    const on = e.target.checked, msg = document.getElementById('cfgMsg');
+    if (msg) { msg.style.color = 'var(--ink-3)'; msg.textContent = '· saving…'; }
+    try {
+      const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ offerHosting: on }) });
+      if (!r.ok) throw new Error('save failed');
+      if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = on ? '· ✓ discoverable — other churches can auto-find this relay' : '· ✓ private — not advertised'; setTimeout(() => { msg.textContent = ''; }, 3000); }
+    } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
+  };
   // restore: two-click confirm (webview confirm() is unreliable), then stream the file to /relay-restore.
   let restoreArmed = false;
   document.getElementById('doRestore').onclick = async () => {
