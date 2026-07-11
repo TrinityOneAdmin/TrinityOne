@@ -29,6 +29,8 @@
   .upd .txt b { color: var(--clay-ink); }
   .upd a.dl { text-decoration: none; font-weight: 700; font-size: 13px; color: #fff; background: var(--clay); padding: 8px 14px; border-radius: 10px; white-space: nowrap; }
   .upd button.x { border: none; background: none; color: var(--dim); font-size: 18px; line-height: 1; cursor: pointer; padding: 2px 4px; flex: none; }
+  :focus-visible, a:focus-visible, button:focus-visible { outline:2px solid var(--clay) !important; outline-offset:2px; }
+  @media (prefers-reduced-motion: reduce){ *{ transition-duration:.001ms !important; animation-duration:.001ms !important; } }
 </style>
 </head>
 <body>

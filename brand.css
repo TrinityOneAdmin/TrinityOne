@@ -109,3 +109,14 @@ body {
   font-family: var(--font-ui); font-weight: 600; font-size: .42em;
   letter-spacing: 2px; text-transform: uppercase; color: var(--ink-2); margin-top: 4px;
 }
+
+/* ── Accessibility: a visible keyboard-focus ring. Many console controls set inline outline:none,
+   so !important is needed to guarantee focus is never invisible for keyboard/switch users. ── */
+:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; border-radius: 4px; }
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible,
+select:focus-visible, [role="button"]:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--clay) !important; outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}

@@ -62,8 +62,8 @@
       '<div class="ch">' +
         '<div class="badge">'+initials(c.name)+'</div>' +
         '<div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:6px">' +
-          '<input data-i="'+i+'" data-f="name" value="'+esc(c.name)+'" placeholder="Church name" />' +
-          '<input data-i="'+i+'" data-f="npub" value="'+esc(c.npub)+'" placeholder="npub1…" spellcheck="false" autocapitalize="none" style="font-family:ui-monospace,monospace; font-size:12px" />' +
+          '<input data-i="'+i+'" data-f="name" value="'+esc(c.name)+'" placeholder="Church name" aria-label="Church name" />' +
+          '<input data-i="'+i+'" data-f="npub" value="'+esc(c.npub)+'" placeholder="npub1…" aria-label="Church public key (npub)" spellcheck="false" autocapitalize="none" style="font-family:ui-monospace,monospace; font-size:12px" />' +
         '</div>' +
         '<button class="btn-ghost" data-rm="'+i+'" style="align-self:flex-start">Remove</button>' +
       '</div>').join('') : '<div class="muted" style="margin-bottom:8px">No churches yet — add one below.</div>';

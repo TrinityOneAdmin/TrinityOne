@@ -894,7 +894,7 @@ function JoinCard({ qrSize = 92, center = false }) {
   return (
     <div style={{ display: 'flex', flexDirection: center ? 'column' : 'row', gap: 16, alignItems: 'center', textAlign: center ? 'center' : 'left' }}>
       <div style={{ width: qrSize + 18, height: qrSize + 18, borderRadius: 14, background: '#fff', boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 9, boxSizing: 'border-box' }}>
-        {svg ? <div style={{ width: qrSize, height: qrSize, display: 'flex' }} dangerouslySetInnerHTML={{ __html: svg }} /> : <SkQR size={qrSize} />}
+        {svg ? <div role="img" aria-label="Invite QR code" style={{ width: qrSize, height: qrSize, display: 'flex' }} dangerouslySetInnerHTML={{ __html: svg }} /> : <SkQR size={qrSize} />}
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Your church code</div>
@@ -3256,7 +3256,7 @@ function DashStewardsPanel({ church }) {
               <button onClick={() => { copyText(window.Steward.stewardInvitePayload ? window.Steward.stewardInvitePayload() : ''); setCopiedInvite(true); setTimeout(() => setCopiedInvite(false), 1400); }} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name={copiedInvite ? 'check' : 'receipt'} size={14} color="currentColor" /> {copiedInvite ? 'Copied' : 'Copy invite'}</button>
             </div>
             {inviteQR ? <div style={{ textAlign: 'center', padding: 12, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', marginTop: 10 }}>
-              {window.Steward.stewardInvitePayload && window.Steward.qrSVG ? <div style={{ width: 180, height: 180, margin: '0 auto', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(window.Steward.stewardInvitePayload()) }} /> : null}
+              {window.Steward.stewardInvitePayload && window.Steward.qrSVG ? <div role="img" aria-label="Steward invite QR code" style={{ width: 180, height: 180, margin: '0 auto', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(window.Steward.stewardInvitePayload()) }} /> : null}
             </div> : null}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 8px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>or add by their code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
             {/* alternative: add by the steward's OWN code (from their Steward app) */}
@@ -3481,7 +3481,7 @@ function DashFeaturesPanel({ church }) {
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{on(k) ? 'On' : 'Off'} — {sub}</div>
             </div>
-            <button onClick={() => toggle(k)} aria-label={'Toggle ' + label} title={(on(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={() => toggle(k)} aria-label={'Toggle ' + label} role="switch" aria-checked={on(k)} title={(on(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: on(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
@@ -3498,7 +3498,7 @@ function DashFeaturesPanel({ church }) {
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{onOpt(k) ? 'On' : 'Off'} — {sub}</div>
             </div>
-            <button onClick={() => toggleOpt(k)} aria-label={'Toggle ' + label} title={(onOpt(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: onOpt(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={() => toggleOpt(k)} aria-label={'Toggle ' + label} role="switch" aria-checked={onOpt(k)} title={(onOpt(k) ? 'Turn off ' : 'Turn on ') + label + ' for your members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: onOpt(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: onOpt(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
@@ -3513,7 +3513,7 @@ function DashFeaturesPanel({ church }) {
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Encrypt all group chat</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{encOn ? 'On — every group is sealed end-to-end; new groups too. Not even the relay can read them.' : 'Off — group chat is stored readable on the relay. (You can still seal groups one by one.)'}</div>
         </div>
-        <button onClick={toggleEncryptAll} aria-label="Toggle encrypt all group chat" title="Seal every group’s messages end-to-end so not even the relay can read them" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={toggleEncryptAll} aria-label="Toggle encrypt all group chat" role="switch" aria-checked={encOn} title="Seal every group’s messages end-to-end so not even the relay can read them" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: encOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
@@ -3524,7 +3524,7 @@ function DashFeaturesPanel({ church }) {
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow member photos</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{photosOn ? 'On — adult members may set a real photo as their picture. Children only if you allow it below.' : 'Off — members use a colour, initial or symbol (recommended for privacy). No uploaded photos.'}</div>
         </div>
-        <button onClick={togglePhotos} aria-label="Toggle member photos" title="Let adult members use a real photo as their picture (children never can)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={togglePhotos} aria-label="Toggle member photos" role="switch" aria-checked={photosOn} title="Let adult members use a real photo as their picture (children never can)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: photosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
@@ -3535,7 +3535,7 @@ function DashFeaturesPanel({ church }) {
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow children’s photos</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{kidPhotosOn ? 'On — members marked as a child may also set a photo. Use with care.' : 'Off — children use a colour, initial or symbol. Recommended for safeguarding.'}</div>
             </div>
-            <button onClick={toggleKidPhotos} aria-label="Toggle children’s photos" title="Let members marked as a child set a real photo (off is recommended)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: kidPhotosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={toggleKidPhotos} aria-label="Toggle children’s photos" role="switch" aria-checked={kidPhotosOn} title="Let members marked as a child set a real photo (off is recommended)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: kidPhotosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: kidPhotosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
@@ -3550,7 +3550,7 @@ function DashFeaturesPanel({ church }) {
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require approval to join</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{approval ? 'On — new people who scan your code wait in “Requests to join” (in Members) until you approve them.' : 'Off — anyone with your invite code or QR joins straight away.'}</div>
         </div>
-        <button onClick={toggleApproval} aria-label="Toggle approval to join" title="Make new people wait for your approval before they can join" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: approval ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={toggleApproval} aria-label="Toggle approval to join" role="switch" aria-checked={approval} title="Make new people wait for your approval before they can join" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: approval ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: approval ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
@@ -3562,7 +3562,7 @@ function DashFeaturesPanel({ church }) {
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require a real first &amp; last name</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{fullName ? 'On — members are asked to set a full name (e.g. “Jane Smith”); those without one are nudged to add a surname.' : 'Off — members may use a single name or stay anonymous.'}</div>
         </div>
-        <button onClick={() => window.Steward.publishProfile({ rules: { ...rules, fullName: !fullName } })} aria-label="Toggle require full name" title="Ask members to set a full first and last name instead of staying anonymous" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: fullName ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={() => window.Steward.publishProfile({ rules: { ...rules, fullName: !fullName } })} aria-label="Toggle require full name" role="switch" aria-checked={fullName} title="Ask members to set a full first and last name instead of staying anonymous" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: fullName ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: fullName ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>

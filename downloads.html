@@ -173,6 +173,8 @@
     .nav-btn .nb-full { display: none; }
     .nav-btn .nb-short { display: inline; }
   }
+  :focus-visible, a:focus-visible, button:focus-visible { outline:2px solid var(--clay) !important; outline-offset:2px; }
+  @media (prefers-reduced-motion: reduce){ *{ transition-duration:.001ms !important; animation-duration:.001ms !important; } }
 </style>
 </head>
 <body>
