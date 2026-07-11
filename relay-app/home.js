@@ -14,6 +14,24 @@
     try { if (upd.dataset.latest) localStorage.setItem('suite.updDismissed', upd.dataset.latest); } catch (e) {}
   });
 
+  // target="_blank" is a no-op in the desktop webview, so route the click through the local relay, which CAN
+  // open the host's browser. Fall back to copying the link if that ever fails (e.g. run in a plain browser).
+  function copyFallback(url) {
+    try { navigator.clipboard.writeText(url); } catch (e) {}
+    if (dl) dl.textContent = '✓ Link copied';
+    var t = upd.querySelector('.txt');
+    if (t) t.innerHTML = '<b>Link copied.</b> Open your web browser (e.g. Brave) and paste it to download the update.';
+  }
+  if (dl) dl.addEventListener('click', function (e) {
+    e.preventDefault();
+    var url = dl.dataset.url || dl.href;
+    if (!url) return;
+    fetch('/open-external', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: url }) })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (res) { if (res && res.ok) { dl.textContent = 'Opening browser…'; } else { copyFallback(url); } })
+      .catch(function () { copyFallback(url); });
+  });
+
   fetch('/suite-update', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
@@ -22,7 +40,7 @@
       try { dismissed = localStorage.getItem('suite.updDismissed'); } catch (e) {}
       if (dismissed === d.latest) return;            // already dismissed this exact release
       upd.dataset.latest = d.latest;
-      if (dl && d.url) dl.href = d.url;
+      if (dl && d.url) { dl.dataset.url = d.url; dl.href = d.url; }
       upd.classList.add('show');
     })
     .catch(function () {});

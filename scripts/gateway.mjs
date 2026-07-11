@@ -379,6 +379,17 @@ function startCloudflared() {
   });
   return CF_STARTING;
 }
+// Open a URL in the host's default browser. The relay runs locally in the desktop Suite, so it can do what the
+// sandboxed webview can't (the webview has no Tauri IPC + target="_blank" is a no-op there). Fire-and-forget.
+function openExternal(url) {
+  try {
+    const p = process.platform;
+    const c = p === 'win32' ? spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' })
+      : p === 'darwin' ? spawn('open', [url], { detached: true, stdio: 'ignore' })
+      : spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
+    c.on('error', () => {}); c.unref(); return true;
+  } catch { return false; }
+}
 function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
 // Always require the admin token. Do NOT trust loopback: the relay runs behind the Tailscale Funnel /
 // cloudflared, which proxy from 127.0.0.1, so a public request is indistinguishable from a local one.
@@ -1535,6 +1546,25 @@ function serveStatic(req, res) {
       const cur = BUILD.sha, ls = (latest && latest.sha) || '';
       res.writeHead(200, H); res.end(JSON.stringify({ current: cur, currentShort: BUILD.short, latest: ls, latestShort: ls.slice(0, 7), updateAvailable: !!(ls && cur && ls !== cur), url: 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest' }));
     })();
+    return;
+  }
+  // Open an external URL in the host's browser — for the desktop launcher's "Get update" (the webview can't do
+  // it). LOOPBACK ONLY (a request that came through the public tunnel carries x-forwarded-for → refused) and
+  // restricted to github.com, so a remote visitor can never make the host machine open arbitrary sites.
+  if (route === '/open-external' && req.method === 'POST') {
+    const ra = (req.socket && req.socket.remoteAddress) || '';
+    const loopbackSock = ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1';
+    const proxied = req.headers['x-forwarded-for'] != null || req.headers['forwarded'] != null;
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    let body = ''; req.on('data', c => { body += c; if (body.length > 2000) req.destroy(); });
+    req.on('end', () => {
+      if (!loopbackSock || proxied) { res.writeHead(403, H); res.end('{"error":"local only"}'); return; }
+      let u = ''; try { u = String(JSON.parse(body || '{}').url || ''); } catch {}
+      let host = ''; try { host = new URL(u).host.toLowerCase(); } catch {}
+      if (host !== 'github.com') { res.writeHead(400, H); res.end('{"error":"only github.com links"}'); return; }
+      const ok = openExternal(u);
+      res.writeHead(ok ? 200 : 500, H); res.end(JSON.stringify({ ok }));
+    });
     return;
   }
   // relay self-update: POST drops a flag in relay/ (the only path the sandboxed relay can write); a root
