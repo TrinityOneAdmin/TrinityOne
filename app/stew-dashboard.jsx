@@ -740,9 +740,10 @@ window.skPrintable = function (html) {
 // On-theme confirm dialog (replaces the browser's native window.confirm, which looks off-brand).
 function SkConfirm({ icon, tint, title, body, confirmLabel, onConfirm, onCancel }) {
   const t = tint || 'var(--clay)';
+  const dlgRef = useStewDialog(onCancel);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onCancel} style={{ position: 'fixed', inset: 0, zIndex: 220, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'lumenFade .16s ease both' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both', outline: 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 9 }}>
           <div style={{ width: 42, height: 42, borderRadius: 12, background: 'color-mix(in oklab, ' + t + ' 14%, var(--surface))', color: t, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={icon || 'lock'} size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, lineHeight: 1.15 }}>{title}</div>
@@ -815,9 +816,10 @@ function InvitePosterModal({ church, url, svg, onClose }) {
     } catch (e) {} finally { setPdfBusy(false); }
   };
   const lineBox = { display: 'flex', alignItems: 'baseline', gap: 7 };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 120, background: 'color-mix(in oklab, var(--ink) 45%, transparent)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '22px 16px' }}>
-      <div className="invite-poster" onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '100%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, position: 'relative', margin: 'auto' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Join ' + (church.name || 'your church')} tabIndex={-1} className="invite-poster" onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '100%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, position: 'relative', margin: 'auto', outline: 'none' }}>
         <button onClick={onClose} title="Close" className="no-print" style={{ position: 'absolute', top: 13, right: 13, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-2)' }}><Icon name="x" size={18} color="currentColor" /></button>
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '1.6px', color: 'var(--clay)', marginBottom: 8 }}>TRINITYONE</div>
@@ -916,9 +918,10 @@ function JoinCard({ qrSize = 92, center = false }) {
 }
 
 function JoinModal({ onClose }) {
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 30 }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Invite your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 30 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, textAlign: 'center' }}>Invite your church</div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 22px', textAlign: 'center' }}>Show this on screen or print it. One scan with a phone camera opens TrinityOne already following your church — anonymously, no sign-up.</p>
         <JoinCard qrSize={168} center />
@@ -942,9 +945,10 @@ function NewPostModal({ onClose }) {
     try { await window.Steward.publishPost(text.trim(), target); } catch {}
     onClose();
   };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="New post" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>New post</div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>A signed message from your church. Members see it in the chosen group or team.</p>
         {targets.length ? (
@@ -1393,9 +1397,10 @@ function EditGroupMembersModal({ group, onClose }) {
       .catch((e) => { clearTimeout(guard); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
   };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
+  const dlgRef = useStewDialog(() => { if (!busy) onClose(); });   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={() => !busy && onClose()} style={{ position: 'absolute', inset: 0, zIndex: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '100%', maxHeight: '88%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Who’s in ' + group.name} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '100%', maxHeight: '88%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ padding: '22px 24px 14px' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>Who’s in “{group.name}”</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>Invite-only — only these members can post and read. Remove someone and the relay locks them out of the chat.</div>
@@ -1563,9 +1568,11 @@ function CategoriesModal({ cats, groups, onClose }) {
   };
   const fld = { flex: 1, minWidth: 0, boxSizing: 'border-box', height: 42, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
   const iconBtn = (extra) => ({ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', ...extra });
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: nested delete-confirm
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 30, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Group categories" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both', outline: 'none' }}>
         <div className="no-scrollbar" style={{ padding: '24px 26px 0', maxHeight: '66vh', overflowY: 'auto' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, marginBottom: 4 }}>Group categories</div>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18, lineHeight: 1.5 }}>Name your own groupings — e.g. <b>Lifegroups</b>, <b>Cell groups</b>, <b>Ministries</b> — then sort each group into one. Members see their groups under these headings.</div>
@@ -1604,7 +1611,7 @@ function CategoriesModal({ cats, groups, onClose }) {
       </div>
       {pendingDelete ? (
         <div onClick={(e) => { e.stopPropagation(); setPendingDelete(null); }} style={{ position: 'absolute', inset: 0, zIndex: 61, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
+          <div ref={pdDlgRef} role="dialog" aria-modal="true" aria-label={'Delete ' + pendingDelete.name} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both', outline: 'none' }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 8 }}>Delete “{pendingDelete.name}”?</div>
             <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px' }}>The category is removed. Its {countIn(pendingDelete.id)} group{countIn(pendingDelete.id) === 1 ? '' : 's'} stay — they just become uncategorised.</p>
             <div style={{ display: 'flex', gap: 10 }}>
@@ -1657,11 +1664,13 @@ function DashGroups() {
     clearTimeout(undoTimer.current); undoTimer.current = setTimeout(() => setUndo(null), 9000);
   };
   const doUndo = () => { if (undo) window.Steward.publishGroup({ id: undo.id, name: undo.name, kind: undo.kind, sub: undo.sub, icon: undo.icon, accent: undo.accent, category: undo.category }); clearTimeout(undoTimer.current); setUndo(null); };
+  const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: delete-confirm
+  const tmDlgRef = useStewDialog(() => setTeamMembers(null), !!teamMembers);        // a11y: team-members list
   return (
     <div style={{ position: 'relative', height: '100%' }}>
       {pendingDelete ? (
         <div onClick={() => setPendingDelete(null)} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+          <div ref={pdDlgRef} role="dialog" aria-modal="true" aria-label={'Delete ' + pendingDelete.name} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 8 }}>
               <div style={{ width: 42, height: 42, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="trash" size={21} /></div>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Delete “{pendingDelete.name}”?</div>
@@ -1711,7 +1720,7 @@ function DashGroups() {
       {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}
       {teamMembers ? (
         <div onClick={() => setTeamMembers(null)} style={{ position: 'absolute', inset: 0, zIndex: 92, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', maxHeight: '80%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
+          <div ref={tmDlgRef} role="dialog" aria-modal="true" aria-label={teamMembers.team.name} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', maxHeight: '80%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
               <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${teamMembers.team.accent || 'var(--clay)'} 16%, var(--surface))`, color: teamMembers.team.accent || 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={teamMembers.team.icon || 'shield'} size={20} /></div>
               <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{teamMembers.team.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{teamMembers.people.length} member{teamMembers.people.length === 1 ? '' : 's'}</div></div>
@@ -1754,9 +1763,10 @@ function GroupLeadersModal({ group, onClose }) {
     }
     onClose();
   };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', maxHeight: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Group leaders" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', maxHeight: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="users" size={20} /></div>
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>Group leaders</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{group.name}</div></div>
@@ -1795,6 +1805,7 @@ function NewTeamModal({ open, onClose }) {
   const [roles, setRoles] = React.useState('');
   const [selId, setSelId] = React.useState('');   // which preset is applied (so switching repopulates)
   React.useEffect(() => { if (open) { setName(''); setDesc(''); setIcon('hand'); setAccent('#C25A38'); setRoles(''); setSelId(''); } }, [open]);
+  const dlgRef = useStewDialog(onClose, open);   // a11y: Escape + focus — before the early return so hook order is stable
   if (!open) return null;
   const applyPreset = (p) => {
     setIcon(p.icon); setAccent(p.accent);
@@ -1816,7 +1827,7 @@ function NewTeamModal({ open, onClose }) {
   const lbl = { fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '14px 0 6px' };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '93%', maxHeight: '90%', overflow: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="New team" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '93%', maxHeight: '90%', overflow: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>New team</div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 4px' }}>Pick a kind to start from, then tweak. The team is a private chat channel and its people fill rota slots.</p>
         <div style={lbl}>Kind</div>
@@ -2076,9 +2087,10 @@ function NewPlanModal({ onClose }) {
     window.Steward.publishPlan({ id: 'custom-' + Date.now().toString(36), title: name.trim(), sub: days.length + ' day' + (days.length === 1 ? '' : 's'), tag: tag.trim() || 'Custom', accent: 'var(--clay)', blurb: '', days, publishAt: isFuture ? schedAt : 0, draft: !!asDraft });
     onClose();
   };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '92%', maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '92%', maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>Your own plan — a sermon series, a season's readings, anything. One reading per line; each line is a day.</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Name</div>
@@ -2192,9 +2204,10 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
     const type = file ? file.type : (editing ? editing.type : 'txt');
     Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, draft: !!asDraft, type, text: text || '', order: editing ? editing.order : undefined })).then(() => onClose());
   };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit devotional' : 'Upload a devotional'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{editing ? 'Edit devotional' : 'Upload a devotional'}</div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>{editing ? 'Update the title or passage, or replace the text file. Members see the change in their app.' : 'A reflection on a passage, as a text (.txt) or Markdown (.md) file. Your congregation reads it in their app.'}</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Title</div>
@@ -2452,9 +2465,10 @@ function BulkUploadModal({ kind, onClose }) {
     setBusy(false); setTimeout(onClose, 650);
   };
   const fld = { display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', marginBottom: 8 };
+  const dlgRef = useStewDialog(() => { if (!busy) onClose(); });   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={() => !busy && onClose()} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '96%', maxHeight: '90%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenScale .2s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Bulk upload ' + (isPlans ? 'reading plans' : 'devotionals')} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '96%', maxHeight: '90%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenScale .2s ease both' }}>
         <div style={{ padding: '24px 26px 0' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Bulk upload {isPlans ? 'reading plans' : 'devotionals'}</div>
           <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Drop one or more text files — each file becomes a plan, with one Bible reference per line (a “# Title” first line is used as the name).' : 'Drop one or more Markdown / text files — each becomes a devotional. The first “# Heading” (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
@@ -2831,9 +2845,10 @@ window.DashMembers = DashMembers;
 
 // ── Kids check-in (opt-in; encrypted to the church key) ──────────────────────────────────────────
 function CkModal({ title, children, onClose }) {
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '100%', maxHeight: '88%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '100%', maxHeight: '88%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 4px' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{title}</div>
           <button onClick={onClose} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
@@ -2974,9 +2989,10 @@ function StewBackupModal({ church, onClose }) {
     ['chat', 'Console settings', 'Relays, video channel, preferences'],
     ['globe', 'Your groups, rota & members', 'Live on the relay — they return when you restore the key'],
   ];
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 470, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, maxHeight: '92%', overflowY: 'auto', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Back up your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 470, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, maxHeight: '92%', overflowY: 'auto', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="lock" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Back up your church</div>
@@ -3095,11 +3111,12 @@ function DashNetworksPanel() {
     try { const r = await window.Steward.createNetwork(newName.trim()); if (r) setCreated(r); } catch (e) { setErr('Couldn’t create the network.'); }
     setBusy(false); setNewName('');
   };
+  const namingRef = useStewDialog(() => setNaming(false), naming);   // a11y: Escape + focus (create-network dialog)
   return (
     <Panel title="Network">
       {naming ? (
         <div onClick={() => setNaming(false)} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+          <div ref={namingRef} role="dialog" aria-modal="true" aria-label="Create a network" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
               <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={21} /></div>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Create a network</div>
@@ -3648,9 +3665,10 @@ function NameEditModal({ current, isNetwork, onSave, onClose }) {
   const [busy, setBusy] = React.useState(false);
   const label = isNetwork ? 'network' : 'church';
   const save = async () => { if (!name.trim()) return; setBusy(true); await onSave(name.trim()); onClose(); };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={current ? ('Rename ' + label) : ('Name your ' + label)} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isNetwork ? 'globe' : 'bank'} size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{current ? `Rename ${label}` : `Name your ${label}`}</div>
@@ -3672,9 +3690,10 @@ function SeriesNameModal({ current, count, onSave, onClose }) {
   const [name, setName] = React.useState(current || '');
   const [busy, setBusy] = React.useState(false);
   const save = async () => { if (!name.trim()) return; setBusy(true); await Promise.resolve(onSave(name.trim())); setBusy(false); onClose(); };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={current ? 'Rename series' : 'Name this series'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="read" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>{current ? 'Rename series' : 'Name this series'}</div>
@@ -3706,9 +3725,10 @@ function SeriesScheduleModal({ label, count, onApply, onClear, onClose }) {
   const fmt = (sec) => new Date(sec * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
   const apply = async () => { setBusy(true); await Promise.resolve(onApply(startSec, interval)); setBusy(false); onClose(); };
   const clear = async () => { setBusy(true); await Promise.resolve(onClear()); setBusy(false); onClose(); };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Schedule release" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="clock" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Schedule release</div>
@@ -3747,9 +3767,10 @@ function WebAddressModal({ church, onClose }) {
   const [busy, setBusy] = React.useState(false);
   const save = async (v) => { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: church.name, nip05: v })); setBusy(false); onClose(); };
   const custom = cur.includes('@') && !isRelayHost;
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Church web address" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Church web address</div>
@@ -3949,9 +3970,10 @@ function PinModal({ action, onClose }) {
     if (ok) onClose(true); else setErr('Couldn’t set the PIN.');
   };
   const inp = { width: '100%', boxSizing: 'border-box', height: 48, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 16, color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)', marginBottom: 10 };
+  const dlgRef = useStewDialog(() => onClose(false));   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={() => onClose(false)} style={{ position: 'absolute', inset: 0, zIndex: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 400, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26 }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={remove ? 'Remove console PIN' : change ? 'Change console PIN' : 'Lock with a PIN'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 400, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 4 }}>{remove ? 'Remove console PIN' : change ? 'Change console PIN' : 'Lock with a PIN'}</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 16 }}>{remove
           ? 'Enter your current PIN to remove the lock. The key goes back to being stored unlocked on this device.'

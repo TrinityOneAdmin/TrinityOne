@@ -36,9 +36,10 @@ function SchDateBlock({ dateStr, accent = 'var(--clay)' }) {
 const schFld = { width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
 const schLbl = { fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '14px 0 6px' };
 function SchModal({ title, children, onClose, width = 480 }) {
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width, maxWidth: '94%', maxHeight: '90%', overflow: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26 }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width, maxWidth: '94%', maxHeight: '90%', overflow: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, outline: 'none' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, marginBottom: 4 }}>{title}</div>
         {children}
       </div>
@@ -859,9 +860,10 @@ function SchEventDetail({ event, onClose }) {
       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3, lineHeight: 1.5 }}>{list.join(', ')}</div>
     </div>
   ) : null;
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
-      <div onClick={ev => ev.stopPropagation()} style={{ width: 440, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={e.title || 'Event'} tabIndex={-1} onClick={ev => ev.stopPropagation()} style={{ width: 440, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both', outline: 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 4px' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink-3)' }}>Event</div>
           <button onClick={onClose} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
@@ -990,9 +992,10 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
   const badTime = !!(start && end && end <= start);
   const canSave = roomId && date && start && end && !badTime && !clashes.length && title.trim();
   const save = () => { if (!canSave) return; window.Steward.publishBooking({ id: bk.id, roomId, date, start, end, title, note }); onClose(); };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={bk.id ? 'Edit booking' : 'Book a room'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both', outline: 'none' }}>
         <div style={{ padding: '20px 24px 6px', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>{bk.id ? 'Edit booking' : 'Book a room'}</div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 24px' }}>
           <div style={roomLbl}>ROOM</div>

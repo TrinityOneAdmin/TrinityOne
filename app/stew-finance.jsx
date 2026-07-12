@@ -100,9 +100,10 @@ function BooksRecord({ book, onRecord, onClose }) {
     <button onClick={() => setDir(v)} style={{ flex: 1, height: 42, border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14,
       background: dir === v ? (v === 'in' ? 'var(--sage, #6b9b7a)' : 'var(--clay)') : 'transparent', color: dir === v ? '#fff' : 'var(--ink-3)' }}>{label}</button>
   );
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }} onClick={onClose}>
-      <div style={{ ...bkCard, width: 420, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Record a transaction" tabIndex={-1} style={{ ...bkCard, width: 420, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
         <h3 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Record a transaction</h3>
         <div style={{ display: 'flex', gap: 6, background: 'var(--surface-2, #f2efe9)', borderRadius: 12, padding: 4, marginBottom: 14 }}>{seg('in', 'Money in')}{seg('out', 'Money out')}</div>
         <label style={bkLbl}>Category</label>
@@ -129,9 +130,10 @@ function BooksRecord({ book, onRecord, onClose }) {
 function BooksDonate({ onGave, onClose }) {
   const [copied, setCopied] = React.useState(false);
   const copyLn = () => { try { navigator.clipboard.writeText(DONATE.ln); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch (e) {} };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70, padding: 16 }} onClick={onClose}>
-      <div style={{ ...bkCard, width: 400, maxWidth: '100%' }} onClick={e => e.stopPropagation()}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Keep TrinityOne going" tabIndex={-1} style={{ ...bkCard, width: 400, maxWidth: '100%', outline: 'none' }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}><Icon name="gift" size={20} color="var(--clay)" /><h3 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Keep TrinityOne going</h3></div>
         <p style={{ color: 'var(--ink)', fontSize: 14, lineHeight: 1.5, margin: '0 0 14px' }}>TrinityOne is free and open — no fees, no lock-in, and your books are always yours. If your church is able, a gift helps cover the shared relays and keep the tools growing. Thank you. 🙏</p>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>{DONATE.suggest.map(a => <span key={a} style={{ border: '1px solid var(--line)', borderRadius: 999, padding: '5px 12px', fontSize: 13, fontWeight: 700, color: 'var(--ink-3)' }}>{a}</span>)}<span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>or any amount</span></div>
@@ -234,9 +236,10 @@ function FinanceImport({ book, F, onPost, onClose }) {
       background: mapping.mode === v ? 'var(--clay)' : 'transparent', color: mapping.mode === v ? '#fff' : 'var(--ink-3)' }}>{label}</button>
   );
 
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 62, padding: 16 }} onClick={onClose}>
-      <div style={{ ...bkCard, width: step === 'review' ? 640 : 460, maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Import a bank statement" tabIndex={-1} style={{ ...bkCard, width: step === 'review' ? 640 : 460, maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column', outline: 'none' }} onClick={e => e.stopPropagation()}>
         <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Import a bank statement</h3>
         <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>{step === 'upload' ? 'Upload a CSV your bank exported, then confirm the columns.' : 'Check each line, pick a category, then post.'}</div>
 
