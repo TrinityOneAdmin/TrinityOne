@@ -2052,8 +2052,10 @@ function serveStatic(req, res) {
     }
     const range = req.headers['range'] && /bytes=(\d*)-(\d*)/.exec(req.headers['range']);   // seek support for audio/video
     if (range) {
-      const start = range[1] ? parseInt(range[1], 10) : 0; const end = range[2] ? parseInt(range[2], 10) : st.size - 1;
-      if (start > end || end >= st.size) { res.writeHead(416, base); res.end(); return; }
+      let start, end;
+      if (range[1] === '' && range[2] !== '') { const n = parseInt(range[2], 10); start = Math.max(0, st.size - n); end = st.size - 1; }   // suffix range `bytes=-N` = the LAST N bytes (mp4 moov-atom probe) — was wrongly served as 0..N
+      else { start = range[1] ? parseInt(range[1], 10) : 0; end = range[2] ? parseInt(range[2], 10) : st.size - 1; }
+      if (start > end || end >= st.size || start < 0) { res.writeHead(416, base); res.end(); return; }
       res.writeHead(206, { ...base, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
       if (req.method === 'HEAD') { res.end(); return; }
       createReadStream(file, { start, end }).pipe(res); return;
@@ -2442,6 +2444,7 @@ wss.on('connection', ws => {
     if (_now - ws._rl.t >= 1000) { ws._rl.t = _now; ws._rl.n = 0; }
     if (++ws._rl.n > 100) { if (++ws._rl.drop > 500) { try { ws.close(1008, 'rate limit'); } catch (e) {} } return; }
     let msg; try { msg = JSON.parse(raw); } catch { return; }
+    if (!Array.isArray(msg) || !msg.length) return;   // a non-array message (or empty) would throw at the destructure below
     const [type, ...rest] = msg;
     if (type === 'EVENT') {
       const evt = rest[0]; if (!evt || !evt.id) return;
