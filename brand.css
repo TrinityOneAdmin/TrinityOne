@@ -7,7 +7,7 @@
   --surface:    #FFFDF8;
   --ink:        #221C16;
   --ink-2:      #6B6052;
-  --ink-3:      #A89E8E;
+  --ink-3:      #736958;  /* a11y: darkened from #A89E8E (~2.6:1, failed WCAG AA) → 5.4:1 on --surface, 4.75:1 on --paper. App is light-only, so one value suffices. */
   --line:       rgba(34,28,22,0.10);
   --line-2:     rgba(34,28,22,0.05);
 

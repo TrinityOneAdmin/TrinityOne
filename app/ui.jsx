@@ -217,13 +217,53 @@ window.trinityGoBack = function () {
   if (_backStack.length) { _backStack[_backStack.length - 1].close(); return true; }
   return false;
 };
+// a11y: keyboard Escape closes the topmost open layer — the desktop/keyboard equivalent of the hardware
+// back button. Delegates to window.trinityGoBack() (app.jsx overrides it with its own overlay-state list;
+// ui.jsx's version reads _backStack) — whichever is live closes the topmost modal and returns true. Only
+// swallow the key when something actually closed. Registered once (ui.jsx loads once).
+if (typeof document !== 'undefined' && !window.__t1EscWired) {
+  window.__t1EscWired = true;
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && window.trinityGoBack && window.trinityGoBack()) e.preventDefault();
+  });
+}
+// a11y: dialog focus management for a modal panel. On open, remember what had focus and move focus onto the
+// panel container (NOT its first input — auto-focusing an input would pop the mobile soft-keyboard on every
+// sheet open, a regression for this touch-first audience); trap Tab within the panel; on close, restore focus
+// to where it was. panelRef points at the panel element (which must carry tabIndex={-1}).
+function useDialogA11y(active, panelRef) {
+  const prevFocus = useUR(null);
+  useUE(() => {
+    if (!active) return;
+    prevFocus.current = (typeof document !== 'undefined') ? document.activeElement : null;
+    // move focus onto the panel — but NOT if the modal already moved focus inside itself (e.g. a search/compose
+    // sheet that deliberately autofocuses its input); stealing that would drop the caret + hide the keyboard.
+    const t = setTimeout(() => { const p = panelRef.current; if (p && !p.contains(document.activeElement)) { try { p.focus(); } catch (e) {} } }, 60);
+    const onKey = (e) => {
+      if (e.key !== 'Tab') return;
+      const p = panelRef.current; if (!p) return;
+      const nodes = p.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])');
+      if (!nodes.length) { e.preventDefault(); p.focus(); return; }
+      const first = nodes[0], last = nodes[nodes.length - 1], a = document.activeElement;
+      if (e.shiftKey && (a === first || a === p)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+    };
+    const p = panelRef.current; if (p) p.addEventListener('keydown', onKey);
+    return () => { clearTimeout(t); if (p) p.removeEventListener('keydown', onKey); const pf = prevFocus.current; if (pf && pf.focus) { try { pf.focus(); } catch (e) {} } };
+  }, [active]);
+}
 
-function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z = 50, docked, passthrough }) {
+function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z = 50, docked, passthrough, label }) {
   // docked = rendered inside a desktop side panel (e.g. reader study panel): fill the pane, no
   // backdrop/slide/handle, no backstack.
   useBackLayer(open && !docked, onClose);
   const [mounted, setMounted] = useU(open);
+  const panelRef = useUR(null);
   useUE(() => { if (open) setMounted(true); }, [open]);
+  // a11y: a passthrough sheet leaves the page behind interactive (e.g. verse-select over the Bible), so it is
+  // NOT a modal dialog — don't trap focus or mark aria-modal there. All other sheets are true modals.
+  const modal = !docked && !passthrough;
+  useDialogA11y(open && modal, panelRef);
   if (!mounted && !open) return null;
   if (docked) {
     return (
@@ -240,7 +280,7 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
         position: 'absolute', inset: 0, background: 'rgba(20,14,8,.42)',
         opacity: open ? 1 : 0, transition: 'opacity .28s',
       }} />}
-      <div onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
+      <div ref={panelRef} {...(modal ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label={label} tabIndex={-1} onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
         maxWidth: 500, marginLeft: 'auto', marginRight: 'auto',   // centered column on a wide screen; full-width on a phone (maxWidth > viewport)
         background: 'var(--surface)', borderRadius: '30px 30px 0 0',
@@ -248,7 +288,7 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
         boxShadow: '0 -10px 40px rgba(20,14,8,.22)',
         transform: open ? 'translateY(0)' : 'translateY(102%)',
         transition: 'transform .34s cubic-bezier(.32,.72,0,1)',
-        paddingBottom: 14, pointerEvents: 'auto',
+        paddingBottom: 14, pointerEvents: 'auto', outline: 'none',
       }}>
         <div style={{ display: 'flex', justifyContent: 'center', padding: '11px 0 4px', flexShrink: 0 }}>
           <div style={{ width: 38, height: 5, borderRadius: 3, background: 'var(--ink-3)', opacity: .4 }} />
@@ -262,11 +302,13 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
 }
 
 // ── Full overlay (slides up, opaque) ──
-function Overlay({ open, onClose, children, docked }) {
+function Overlay({ open, onClose, children, docked, label }) {
   // docked = rendered inside a desktop pane (e.g. two-pane chat): fill the pane, no slide/backstack.
   useBackLayer(open && !docked, onClose);
   const [mounted, setMounted] = useU(open);
+  const panelRef = useUR(null);
   useUE(() => { if (open) setMounted(true); }, [open]);
+  useDialogA11y(open && !docked, panelRef);   // a11y: focus-trap + return-focus (a docked overlay is an inline pane, not a modal)
   if (!mounted && !open) return null;
   if (docked) {
     return (
@@ -276,11 +318,11 @@ function Overlay({ open, onClose, children, docked }) {
     );
   }
   return (
-    <div onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
       position: 'absolute', inset: 0, zIndex: 55, background: 'var(--paper)',
       transform: open ? 'translateY(0)' : 'translateY(100%)',
       transition: 'transform .4s cubic-bezier(.32,.72,0,1)',
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', outline: 'none',
     }}>
       {/* desktop: centre the content at a readable width instead of stretching full-width (no-op on mobile) */}
       <div style={{ width: '100%', maxWidth: 860, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
