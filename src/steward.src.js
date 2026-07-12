@@ -907,6 +907,12 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
+  // true if every relay this console has opened is still connected. The console's reconnect ticker only
+  // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
+  // subs are broad + un-cursored, so blindly re-REQing every 90s would re-download the whole church every 90s).
+  relaysHealthy() {
+    try { const st = pool.listConnectionStatus(); for (const url of relays()) { if (st.get(url) === false) return false; } return true; } catch (e) { return true; }
+  },
   subscribeSermons(onSermons) {
     if (!pub) { onSermons([]); return () => {}; }
     const byId = new Map();

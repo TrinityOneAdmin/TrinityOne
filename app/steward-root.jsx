@@ -22,19 +22,25 @@ window.useStewardIdv = useStewardIdv;
 // return-to-foreground / network-online / a 90s heartbeat, so every subscription tears down + re-subscribes and
 // catches up. Kept SEPARATE from the identity version so it drives re-subscribe WITHOUT changing the cache key
 // (no blank flash on reconnect — the last-known value stays painted while the fresh sub refreshes it).
+// ONE shared reconnect ticker for the whole console (not one per hook — a dashboard mounts ~20 subscription hooks,
+// which would otherwise each register 3 listeners + a 90s timer). It bumps a monotonic counter ONLY when a relay
+// this console opened has actually dropped (relaysHealthy() === false) — so a healthy socket never fires the
+// full-corpus re-query storm; a real drop (every deploy restarts the relay) re-subscribes everything once to recover.
+const _connListeners = new Set();
+let _connWired = false, _connLast = 0;
+function _stewardHealthy() { try { return !window.Steward || !window.Steward.relaysHealthy || window.Steward.relaysHealthy(); } catch (e) { return true; } }
+function _maybeBumpConn() { if (_stewardHealthy()) return; _connLast = Date.now(); _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} }); }
+function _wireStewardConn() {
+  if (_connWired || typeof document === 'undefined') return; _connWired = true;
+  const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - _connLast > 2500) _maybeBumpConn(); };
+  document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('online', _maybeBumpConn);
+  window.addEventListener('focus', onVis);
+  setInterval(() => { if (document.visibilityState === 'visible') _maybeBumpConn(); }, 90000);   // insurance for a silently-dropped socket that no foreground event caught
+}
 function useStewardConn() {
-  const [c, setC] = useSt(0);
-  useStE(() => {
-    if (typeof document === 'undefined') return undefined;
-    let last = Date.now();
-    const bump = () => { last = Date.now(); setC(x => x + 1); };
-    const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - last > 2500) bump(); };
-    document.addEventListener('visibilitychange', onVis);
-    window.addEventListener('online', bump);
-    window.addEventListener('focus', onVis);
-    const beat = setInterval(() => { if (document.visibilityState === 'visible') bump(); }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', bump); window.removeEventListener('focus', onVis); clearInterval(beat); };
-  }, []);
+  const [c, setC] = useSt(0);   // a real drop bumps this via the shared listener set → effects keyed on it re-subscribe
+  useStE(() => { _wireStewardConn(); _connListeners.add(setC); return () => _connListeners.delete(setC); }, []);
   return c;
 }
 window.useStewardConn = useStewardConn;
@@ -118,10 +124,11 @@ window.useStewardNetworks = useStewardNetworks;
 
 // churches whose owner-signed roster lists OUR key — we can act as their steward (phase 2b).
 function useStewardStewardedChurches() {
+  const conn = useStewardConn();
   const [churches, setChurches] = useSt([]);
   useStE(() => (window.Steward.subscribeStewardedChurches
     ? window.Steward.subscribeStewardedChurches(list => { setChurches(list); try { window.dispatchEvent(new CustomEvent('steward-networks')); } catch {} })
-    : undefined), []);
+    : undefined), [conn]);   // re-subscribe after a relay drop/restart
   return churches;
 }
 window.useStewardStewardedChurches = useStewardStewardedChurches;
@@ -129,8 +136,9 @@ window.useStewardStewardedChurches = useStewardStewardedChurches;
 // people in this church's chat — seeded from the local roster cache so Members paints on first render
 function useStewardMembers() {
   const idv = useStewardIdv();
+  const conn = useStewardConn();
   const [members, setMembers] = useSt(() => { try { return JSON.parse(localStorage.getItem('trinityone.steward.members.' + ((window.Steward && window.Steward.churchPub) || '')) || '[]') || []; } catch { return []; } });
-  useStE(() => window.Steward.subscribeMembers(setMembers), [idv]);
+  useStE(() => window.Steward.subscribeMembers(setMembers), [idv, conn]);   // re-subscribe after a relay drop/restart
   return members;
 }
 window.useStewardMembers = useStewardMembers;
@@ -163,8 +171,10 @@ window.useStewardRelays = useStewardRelays;
 // the active identity's own profile (name etc.) + npub — church, or a network when toggled
 function useStewardChurch() {
   const idv = useStewardIdv();
+  const conn = useStewardConn();
   const [p, setP] = useSt({});
-  useStE(() => { setP({}); return window.Steward.subscribeProfile(setP); }, [idv]);
+  useStE(() => { setP({}); }, [idv]);   // clear on identity switch ONLY (not on a reconnect — avoids a blank church-name flash)
+  useStE(() => window.Steward.subscribeProfile(setP), [idv, conn]);   // (re)subscribe on identity change OR relay drop/restart
   // any instance that receives the kind-0 broadcasts it, so every view stays in sync even if this
   // instance's own relay sub mounted before the church's relays were ready.
   useStE(() => { const f = (e) => { if (e.detail) setP(e.detail); }; window.addEventListener('steward-profile', f); return () => window.removeEventListener('steward-profile', f); }, [idv]);
