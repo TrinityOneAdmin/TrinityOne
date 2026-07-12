@@ -3422,7 +3422,7 @@ function SermonEditModal({ sermon, onSave, onClose }) {
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isVideo ? 'play' : 'headphones'} size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Edit {isVideo ? 'video' : 'audio'} details</div>
         </div>
-        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Rename it and add a description your members see in {isVideo ? 'Watch' : 'Listen'}. This only changes the label — the file itself stays as uploaded.</p>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Rename it and add details{isVideo ? ' — members see the description under the video in Watch' : ''}. This only changes the label — the file itself stays as uploaded.</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. Sunday sermon — the Prodigal Son" aria-label="Title" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Details <span style={{ textTransform: 'none', fontWeight: 500 }}>· optional</span></div>
@@ -3492,7 +3492,7 @@ function DashSermons() {
         {encOn ? (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11.5, color: 'var(--ink-2)', background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', borderRadius: 10, padding: '9px 11px', margin: '0 0 10px', lineHeight: 1.45 }}>
             <Icon name="alert" size={15} color="var(--gold)" />
-            <span>Encrypted media <b>can’t stream</b> — members download the whole file and decrypt it <b>before</b> it plays, so large videos start slowly and can’t be skipped through. It stays members-only either way, so for a big sermon video you may prefer to leave this off.</span>
+            <span>Encrypted media <b>can’t stream</b> — the whole file downloads (at its full size in data) and decrypts <b>before</b> it plays, so a large video means a long wait before it starts. It stays members-only either way, so for a big sermon video you may prefer to leave this off.</span>
           </div>
         ) : null}
         <input value={mirrorHosts} onChange={e => setMirrorHosts(e.target.value)} placeholder="Backup copy host(s) — optional, comma-separated"
@@ -3501,7 +3501,7 @@ function DashSermons() {
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 10, lineHeight: 1.4 }}>{autoBackups.length ? 'Auto-filled from your church’s other relays — each upload is mirrored there for redundancy. Edit if needed.' : 'Add another media host to keep backup copies. When your church runs a second relay, it’s suggested here automatically.'}</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)', margin: '0 0 12px', cursor: 'pointer', lineHeight: 1.4 }}>
           <input type="checkbox" checked={notify} onChange={e => setNotify(e.target.checked)} style={{ flexShrink: 0 }} />
-          <span><b>Notify members</b> — feature it on everyone’s Today (“New video / New audio clip”) and send a notification. Leave off for a quiet upload.</span>
+          <span><b>Notify members</b> — feature it on everyone’s Today (“New video / New audio clip”) + send a notification. It becomes the one featured item, replacing any previous. Leave off for a quiet upload.</span>
         </label>
         <input ref={fileRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={onFile} />
         <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="#fff" /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>

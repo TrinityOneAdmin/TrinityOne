@@ -717,8 +717,7 @@ function maybePushSermon(evt) {
     if ((evt.tags || []).some(t => t[0] === 'deleted') || !evt.content) return;  // an unpin, not a feature
     let s; try { s = JSON.parse(evt.content); } catch { return; }
     if (!s || !s.sha256) return;
-    const key = cp + ':' + (s.id || s.sha256);
-    if (SERMON_PUSHED.has(key)) return; SERMON_PUSHED.add(key);                  // once per featured item
+    if (!evt.id || SERMON_PUSHED.has(evt.id)) return; SERMON_PUSHED.add(evt.id);   // dedup on the PIN EVENT, not the sermon id — so re-featuring (a fresh pin event) DOES re-notify, but the same event arriving twice (multi-relay) doesn't
     const isVideo = String(s.mime || '').startsWith('video');
     const cname = CHURCH_NAMES.get(cp) || displayName(cp) || 'Your church';
     const body = (isVideo ? 'New video' : 'New audio clip') + (s.title ? ': ' + s.title : '');

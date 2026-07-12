@@ -15,7 +15,7 @@ function fmtDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (isNaN(d)) return iso;
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });   // undefined → the device's own locale (nationality-agnostic)
 }
 
 function openExternal(url) {
@@ -90,7 +90,7 @@ function SermonRow({ s, loading, onClick }) {
       <div style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 15%, var(--surface))' }}><Icon name={isVideo ? 'play' : 'headphones'} size={20} color="var(--clay)" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{s.title}</div>
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{[isVideo ? 'Video' : 'Audio', sz, s.enc ? 'members only' : null].filter(Boolean).join(' · ')}</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{[isVideo ? 'Video' : 'Audio', sz, s.ts ? fmtDate(s.ts * 1000) : null, 'members only', s.enc ? 'encrypted' : null].filter(Boolean).join(' · ')}</div>
       </div>
       {loading
         ? <div style={{ width: 18, height: 18, flexShrink: 0, borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
@@ -309,7 +309,7 @@ function VideoPlayer({ video, open, onClose, ctx }) {
             </div>
           )}
 
-          {video.desc ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 22px', textWrap: 'pretty' }}>{video.desc}</p> : null}
+          {video.desc ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 22px', textWrap: 'pretty', whiteSpace: 'pre-wrap' }}>{video.desc}</p> : null}
 
           {more.length ? <React.Fragment>
             <SectionLabel>Up next</SectionLabel>
