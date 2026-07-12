@@ -6,10 +6,12 @@ Documentation, organised. For the codebase map, start with [`ARCHITECTURE.md`](.
 - [`guides/GETTING-STARTED.md`](guides/GETTING-STARTED.md) — **joining a church** or **setting up your church** in ~15 minutes
 - [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — symptom → fix, for members, stewards, and relay operators
 - [`guides/RELAY-SETUP.md`](guides/RELAY-SETUP.md) — **connecting your church to a relay**: shared → adopt one → run your own (with domain + media storage controls)
+- [`guides/RELAY-WALKTHROUGH.md`](guides/RELAY-WALKTHROUGH.md) — **running your own relay, step by step**: install the Suite → go public → claim a name → invite → back up → mirror
 
 ## Guides — how to use / run it
 - [`guides/GETTING-STARTED.md`](guides/GETTING-STARTED.md) — the onboarding path for members and stewards
 - [`guides/RELAY-SETUP.md`](guides/RELAY-SETUP.md) — relays explained, from the shared relay to running your own
+- [`guides/RELAY-WALKTHROUGH.md`](guides/RELAY-WALKTHROUGH.md) — the follow-along tutorial for standing up your own relay end to end
 - [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — common problems and their fixes
 - [`guides/STEWARD-GUIDE.md`](guides/STEWARD-GUIDE.md) — running a church from the steward console (the full reference)
 - [`guides/STEWARDS-AND-HANDOFF-EXPLAINED.md`](guides/STEWARDS-AND-HANDOFF-EXPLAINED.md) — delegated stewards + handing off a church without handing over the key

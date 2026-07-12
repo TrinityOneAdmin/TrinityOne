@@ -46,7 +46,7 @@ You'll be the **steward** — the person who runs the church side. Budget ~15 mi
 - **Members** — see who's joined; mark children; confirm parent↔child links.
 - **Finance** (optional) — a simple double-entry book with fund tracking and CSV import.
 
-**5. Where your church lives: the relay.** By default you're on the shared TrinityOne relay and there's nothing to do. When you're ready to run your *own* — for full independence — see **[Connecting your church to a relay](RELAY-SETUP.md)**.
+**5. Where your church lives: the relay.** By default you're on the shared TrinityOne relay and there's nothing to do. When you're ready to run your *own* — for full independence — follow the step-by-step **[relay walkthrough](RELAY-WALKTHROUGH.md)** (or see **[Connecting your church to a relay](RELAY-SETUP.md)** for the concepts).
 
 ---
 

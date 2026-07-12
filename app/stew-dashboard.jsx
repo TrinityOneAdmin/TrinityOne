@@ -1976,8 +1976,9 @@ function DashRelaysCard() {
             <div style={{ display: 'flex', gap: 9 }}>
               <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
                 placeholder="your relay’s name, e.g. grace-city" spellCheck={false} autoCapitalize="none"
+                aria-label="Relay name to connect to" title="Type the name the relay’s operator claimed (e.g. grace-city). It resolves to the relay’s current address, so it keeps working even after the tunnel URL changes."
                 style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-              <button onClick={connectByName} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
+              <button onClick={connectByName} aria-label="Connect to relay by name" title="Look up this name in the relay directory and add its relay to your church." className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
             </div>
             {byNameMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: byNameMsg.ok === false ? 'var(--clay)' : byNameMsg.ok ? 'var(--sage)' : 'var(--ink-3)' }}>{byNameMsg.text}</div> : null}
           </div>

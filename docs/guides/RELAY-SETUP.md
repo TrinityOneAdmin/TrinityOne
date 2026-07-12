@@ -4,6 +4,10 @@ A **relay** is the small server that carries your church's live data — chat, p
 
 You have three levels of independence. Start wherever you're comfortable — you can move up later without losing anything.
 
+> **Just want to be walked through running your own relay, step by step?** See
+> [Running your own church relay — the whole journey](RELAY-WALKTHROUGH.md). This page is the reference;
+> that one is the follow-along tutorial.
+
 ---
 
 ## Level 1 — Use the shared relay (do nothing)
