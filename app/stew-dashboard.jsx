@@ -3452,6 +3452,7 @@ function DashSermons() {
   const [upBusy, setUpBusy] = React.useState(false); const [upMsg, setUpMsg] = React.useState('');
   const [editing, setEditing] = React.useState(null);
   const [notify, setNotify] = React.useState(true);   // feature the new upload on members' Today + push
+  const [pendingDelete, setPendingDelete] = React.useState(null);
   const onFile = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
     const bigVid = String(f.type || '').startsWith('video') && f.size > 25 * 1048576;   // stopgap until on-device transcode: flag a heavy video
@@ -3473,6 +3474,7 @@ function DashSermons() {
   return (
     <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto' }}>
       {editing ? <SermonEditModal sermon={editing} onSave={(fields) => Promise.resolve(window.Steward.publishSermon({ ...editing, ...fields }))} onClose={() => setEditing(null)} /> : null}
+      {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { window.Steward.removeSermon(pendingDelete); setPendingDelete(null); }} onCancel={() => setPendingDelete(null)} /> : null}
       <Panel title="Self-hosted sermons">
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Audio appears in members’ <b>Listen</b> tab, video in <b>Watch</b>. Great over a thin connection.</div>
         {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 12 }}>{sermons.map(s => (
@@ -3481,7 +3483,7 @@ function DashSermons() {
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.desc ? s.desc : (fmtSize(s.size || 0) + (s.enc ? ' · encrypted' : ''))}</div></div>
             <button onClick={() => setEditing(s)} title="Edit name & details" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="pen" size={14} color="currentColor" /></button>
             <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Pin to members’ Today (sends a notification)'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-3)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" /></button>
-            <button onClick={() => window.Steward.removeSermon(s.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
+            <button onClick={() => setPendingDelete(s)} title="Remove" aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
           </div>))}</div> : null}
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)', margin: '0 0 10px', cursor: 'pointer', lineHeight: 1.4 }}>
           <input type="checkbox" checked={encOn} onChange={e => setEncOn(e.target.checked)} style={{ flexShrink: 0 }} />

@@ -841,9 +841,18 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET]], content }))
       .then((r) => { if (r === false) throw new Error('Couldn’t save — every relay rejected it. Check your connection.'); return { id, ...JSON.parse(content) }; });
   },
-  removeSermon(id) {
-    if (!sk) return Promise.resolve(null);
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));
+  async removeSermon(s) {
+    if (!sk) return null;
+    const id = (s && typeof s === 'object') ? s.id : s;
+    await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));   // tombstone the doc (hides it in every app)
+    // reclaim the stored bytes on each host (best-effort; content-addressed so the same sha lives on every mirror)
+    const sha = s && typeof s === 'object' && s.sha256;
+    const hosts = (s && typeof s === 'object' && ((s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []))) || [];
+    if (sha && hosts.length) {
+      const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'delete'], ['x', sha], ['expiration', String(now() + 600)]], content: 'delete' }, sk)));
+      for (const h of hosts) { try { await fetch(String(h).replace(/\/+$/, '') + '/blob/' + sha, { method: 'DELETE', headers: { Authorization: auth } }); } catch (e) {} }
+    }
+    return true;
   },
   // Pin/feature a sermon → members get a Today card + a notification. One per church (addressable → replaces).
   pinSermon(s) {

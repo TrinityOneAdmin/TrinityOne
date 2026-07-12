@@ -138,7 +138,7 @@ function _churchBlobList(cp) { const m = _blobsByChurch.get(cp); if (!m) return 
 // P7: tally media usage AFTER the relay starts listening (was a synchronous statSync-per-blob walk blocking boot
 // on a media-heavy box). SET the totals from the disk scan (authoritative) rather than accumulate, so any upload
 // that lands during the brief window isn't double-counted — the scan already sees it on disk.
-setTimeout(() => { try { let total = 0; const by = new Map(); const idx = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (f.startsWith('.up-') && f.endsWith('.tmp')) { try { unlinkSync(join(BLOB_DIR, f)); } catch {} continue; }   /* orphaned aborted-upload temp: at boot no upload is in flight, so any .up-*.tmp is dead — sweep it */ if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) { by.set(o, (by.get(o) || 0) + sz); let m = idx.get(o); if (!m) { m = new Map(); idx.set(o, m); } m.set(f, sz); } } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); _blobsByChurch.clear(); for (const [k, v] of idx) _blobsByChurch.set(k, v); } catch {} }, 0);
+setTimeout(() => { try { let total = 0; const by = new Map(); const idx = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (f.endsWith('.tmp')) { try { unlinkSync(join(BLOB_DIR, f)); } catch {} continue; }   /* orphaned upload/replication temp: at boot none is in flight, so any *.tmp is dead — sweep it */ if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) { by.set(o, (by.get(o) || 0) + sz); let m = idx.get(o); if (!m) { m = new Map(); idx.set(o, m); } m.set(f, sz); } } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); _blobsByChurch.clear(); for (const [k, v] of idx) _blobsByChurch.set(k, v); } catch {} }, 0);
 // Streaming base64 for the native (CapacitorHttp) blob path — encode/decode in aligned chunks so a big blob never
 // sits fully in RAM (a 200 MB video buffered + base64'd would cost ~450 MB). Each whole 3-byte group → 4 b64 chars
 // independently, so concatenating the chunks equals base64(file); only the final partial group is padded. Decode
@@ -153,13 +153,14 @@ class B64Decode extends Transform {
   _transform(chunk, _e, cb) { const s = this._rem + chunk.toString('latin1').replace(/\s+/g, ''); const usable = s.length - (s.length % 4); if (usable > 0) this.push(Buffer.from(s.slice(0, usable), 'base64')); this._rem = s.slice(usable); cb(); }
   _flush(cb) { if (this._rem) this.push(Buffer.from(this._rem, 'base64')); cb(); }
 }
-// upload auth: a signed, time-bounded kind-24242 event by the CHURCH key, or a steward of a named church.
-function _blobUploader(req) {
+// blob auth: a signed, time-bounded kind-24242 event by the CHURCH key, or a steward of a named church.
+// action defaults to 'upload'; pass 'delete' for the DELETE route (same signer classes).
+function _blobUploader(req, action) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
   let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
   if (!ev || ev.kind !== 24242 || !verifyEvent(ev)) return null;
   const tag = (k) => (ev.tags.find(t => t[0] === k) || [])[1];
-  if (tag('t') !== 'upload') return null;
+  if (tag('t') !== (action || 'upload')) return null;
   const exp = parseInt(tag('expiration') || '0', 10); if (!exp || exp < Math.floor(Date.now() / 1000)) return null;   // must expire (anti-replay)
   const cp = tag('church');
   if (cp && stewardOf(ev.pubkey, cp)) return { church: cp, want: (tag('x') || '').toLowerCase() };
@@ -1497,9 +1498,9 @@ function serveStatic(req, res) {
     const cp = _syncAuth(req, req.headers['host'] || '', route);
     const q = new URL(req.url, 'http://x').searchParams;
     if (!cp || q.get('church') !== cp || !/^[0-9a-f]{64}$/.test(sha) || _blobOwner(sha) !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
-    let data; try { data = readFileSync(join(BLOB_DIR, sha)); } catch { res.writeHead(404, { 'Cache-Control': 'no-store' }); res.end('not found'); return; }
-    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': data.length, 'Cache-Control': 'no-store', ...SEC_HEADERS });
-    res.end(data);
+    const file = join(BLOB_DIR, sha); let st; try { st = statSync(file); } catch { res.writeHead(404, { 'Cache-Control': 'no-store' }); res.end('not found'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': st.size, 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    createReadStream(file).on('error', () => { try { res.destroy(); } catch {} }).pipe(res);   // stream, don't buffer a 200MB blob in RAM
     return;
   }
   // negentropy resync (digest): per-bucket fingerprints of the church's event set, so a trusted peer can see which
@@ -1961,7 +1962,7 @@ function serveStatic(req, res) {
   // CORS preflight: uploads mirror to a BACKUP host (different origin) and members fetch from it, so the
   // Authorization header requires an OPTIONS preflight that permits cross-origin PUT/GET.
   if ((route === '/blob' || route.startsWith('/blob/')) && req.method === 'OPTIONS') {
-    const h = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, PUT, POST, HEAD, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Max-Age': '86400', 'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges' };
+    const h = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, HEAD, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Max-Age': '86400', 'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges' };
     if (req.headers['access-control-request-private-network']) h['Access-Control-Allow-Private-Network'] = 'true';   // permit a backup host on a more-private network (PNA)
     res.writeHead(204, h); res.end(); return;
   }
@@ -2016,6 +2017,23 @@ function serveStatic(req, res) {
       if (isNew) { _mediaBytesTotal += size; _mediaBytesByChurch.set(who.church, (_mediaBytesByChurch.get(who.church) || 0) + size); _indexBlob(who.church, sha, size); }   // account + index the new bytes
       res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
     });
+    return;
+  }
+  // Blob DELETE (Blossom): free the stored file so "Remove sermon" actually reclaims disk + cap. Auth = a fresh
+  // kind-24242 t=delete signed by the owning church (or a steward), bound to this sha via the x tag.
+  if (route.startsWith('/blob/') && req.method === 'DELETE') {
+    const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+    const sha = route.slice('/blob/'.length).toLowerCase();
+    if (!_blobRe.test(sha)) { res.writeHead(400, H); res.end('{"error":"bad hash"}'); return; }
+    const who = _blobUploader(req, 'delete');
+    if (!who) { res.writeHead(401, H); res.end('{"error":"unauthorized: sign a kind-24242 t=delete auth (x=sha) with the church or steward key"}'); return; }
+    if (who.want && who.want !== sha) { res.writeHead(400, H); res.end('{"error":"auth x tag does not match the blob"}'); return; }
+    const owner = _blobOwner(sha);
+    if (owner && owner !== who.church) { res.writeHead(403, H); res.end('{"error":"not your church\'s media"}'); return; }   // only the owning church may delete
+    const file = join(BLOB_DIR, sha); let sz = 0; try { sz = statSync(file).size; } catch {}
+    try { unlinkSync(file); } catch {} try { unlinkSync(file + '.church'); } catch {} try { unlinkSync(file + '.type'); } catch {}
+    if (sz) { const ch = owner || who.church; _mediaBytesTotal = Math.max(0, _mediaBytesTotal - sz); _mediaBytesByChurch.set(ch, Math.max(0, (_mediaBytesByChurch.get(ch) || 0) - sz)); const m = _blobsByChurch.get(ch); if (m) m.delete(sha); }
+    res.writeHead(200, H); res.end(JSON.stringify({ deleted: true, sha256: sha }));
     return;
   }
   if (route.startsWith('/blob/') && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -2344,19 +2362,26 @@ async function syncMediaFromPeer(cp, peerBase) {
   let pulled = 0;
   for (const b of (man && man.blobs) || []) {
     if (!b || !/^[0-9a-f]{64}$/.test(b.sha) || existsSync(join(BLOB_DIR, b.sha))) continue;   // already have it (or junk)
-    if (MEDIA_CAP && _mediaBytesTotal + (b.size || 0) > MEDIA_CAP) break;                       // this relay's media is full
-    if (CHURCH_MEDIA_CAP && (_mediaBytesByChurch.get(cp) || 0) + (b.size || 0) > CHURCH_MEDIA_CAP) break;
+    const _mc = effMediaCap(), _cc = effChurchCap();                                          // honour panel-set caps, not just env
+    if (_mc && _mediaBytesTotal + (b.size || 0) > _mc) break;                                 // this relay's media is full
+    if (_cc && (_mediaBytesByChurch.get(cp) || 0) + (b.size || 0) > _cc) break;
     const blobUrl = peerBase + '/sync-blob/' + b.sha + '?church=' + encodeURIComponent(cp);
+    const tmp = join(BLOB_DIR, '.dl-' + randomBytes(12).toString('hex') + '.tmp');
     try {
       const r = await fetch(blobUrl, { headers: { Authorization: relayProof(blobUrl, 'GET', cp) } });
-      if (!r.ok) continue;
-      const buf = Buffer.from(await r.arrayBuffer());
-      if (createHash('sha256').update(buf).digest('hex') !== b.sha) continue;   // content-addressed integrity check
-      writeFileSync(join(BLOB_DIR, b.sha + '.church'), cp);                      // sidecar BEFORE the blob (S4: never servable with no owner)
-      writeFileSync(join(BLOB_DIR, b.sha), buf);
-      _mediaBytesTotal += buf.length; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + buf.length); _indexBlob(cp, b.sha, buf.length);
+      if (!r.ok || !r.body) continue;
+      // stream to a temp file, hashing as it flows — never buffer a 200MB blob in RAM, and never write straight to
+      // the final <sha> path (a crash there wedges a truncated file that existsSync skips forever with no self-heal).
+      const hash = createHash('sha256'); const out = createWriteStream(tmp); const reader = r.body.getReader();
+      let n = 0, bad = false;
+      for (;;) { const { done, value } = await reader.read(); if (done) break; n += value.length; if (n > MAX_BLOB) { bad = true; try { await reader.cancel(); } catch {} break; } hash.update(value); if (!out.write(Buffer.from(value))) await new Promise(res => out.once('drain', res)); }
+      await new Promise((res, rej) => out.end(err => err ? rej(err) : res()));
+      if (bad || hash.digest('hex') !== b.sha) { try { unlinkSync(tmp); } catch {} continue; }   // content-addressed integrity check
+      writeFileSync(join(BLOB_DIR, b.sha + '.church'), cp);   // owner sidecar BEFORE the blob is reachable
+      renameSync(tmp, join(BLOB_DIR, b.sha));                 // atomic publish — no partial file ever sits at <sha>
+      _mediaBytesTotal += n; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + n); _indexBlob(cp, b.sha, n);
       pulled++;
-    } catch {}
+    } catch { try { unlinkSync(tmp); } catch {} }
   }
   return pulled;
 }
