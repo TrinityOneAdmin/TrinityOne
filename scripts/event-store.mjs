@@ -99,10 +99,25 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     if (f.since) { where.push('created_at >= ?'); args.push(f.since); }
     if (f.until) { where.push('created_at <= ?'); args.push(f.until); }
     const lim = Math.max(1, Math.min(f.limit || 5000, 10000));
-    const sql = 'SELECT raw FROM events' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ?';
-    const rows = db.prepare(sql).all(...args, lim);
+    // Does the filter constrain a tag NOT indexed in SQL (#t/#p/#e/…)? Those are matched only by matchFilter AFTER
+    // the SQL rows come back — so a plain `ORDER BY created_at DESC LIMIT lim` would return the newest `lim` rows of
+    // the indexed set and then drop the matching-but-older ones (a quiet #t group's history drowned out by a chatty
+    // one, or old DMs past the cap — silent, permanent data loss). Stream newest→oldest and collect `lim` POST-match
+    // rows instead, bounded by the indexed WHERE + a hard scan cap so a pathological filter can't run away.
+    const tagKeys = Object.keys(f).filter(k => k[0] === '#' && k !== '#d' && k !== '#church');
     const out = [];
-    for (const r of rows) { let e; try { e = JSON.parse(r.raw); } catch { continue; } if (matchFilter(e, f)) out.push(e); }
+    if (tagKeys.length) {
+      const sql = 'SELECT raw FROM events' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC';
+      let scanned = 0;
+      for (const r of db.prepare(sql).iterate(...args)) {
+        if (++scanned > 200000) break;   // safety: never examine more than 200k rows for one filter
+        let e; try { e = JSON.parse(r.raw); } catch { continue; }
+        if (matchFilter(e, f)) { out.push(e); if (out.length >= lim) break; }
+      }
+      return out;
+    }
+    const sql = 'SELECT raw FROM events' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ?';
+    for (const r of db.prepare(sql).all(...args, lim)) { let e; try { e = JSON.parse(r.raw); } catch { continue; } if (matchFilter(e, f)) out.push(e); }
     return out;
   }
   // Uncapped ASC iteration by kind — for BOOT hydration only (rebuilding in-memory maps). Unlike query() it has
