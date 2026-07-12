@@ -132,7 +132,7 @@ function WatchView({ ctx }) {
     const isVideo = String(s.mime || '').startsWith('video');
     const hosts = (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []);
     if (!hosts.length || !s.sha256) { ctx.toast('This sermon is unavailable'); return; }
-    if (isVideo) { ctx.openVideo({ id: s.id, title: s.title, _sermon: true, sha256: s.sha256, hosts, mime: s.mime, enc: s.enc, published: s.ts ? new Date(s.ts * 1000).toISOString() : '' }); return; }
+    if (isVideo) { ctx.openVideo({ id: s.id, title: s.title, desc: s.desc, _sermon: true, sha256: s.sha256, hosts, mime: s.mime, enc: s.enc, published: s.ts ? new Date(s.ts * 1000).toISOString() : '' }); return; }
     setLoadingId(s.id);
     try {
       const FS = window.Fellowship;

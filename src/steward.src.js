@@ -836,7 +836,7 @@ window.Steward = {
   publishSermon(s) {
     if (!sk) return Promise.resolve(null);
     const id = s.id || ('sermon' + Date.now());
-    const content = JSON.stringify({ id, title: s.title || 'Sermon', sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : [s.host], mime: s.mime || '', size: s.size || 0, ts: now(), enc: s.enc || undefined, series: s.series || undefined });
+    const content = JSON.stringify({ id, title: s.title || 'Sermon', desc: (s.desc && String(s.desc).trim()) || undefined, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : [s.host], mime: s.mime || '', size: s.size || 0, ts: s.ts || now(), enc: s.enc || undefined, series: s.series || undefined });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET]], content }))
       .then(() => ({ id, ...JSON.parse(content) }));
   },

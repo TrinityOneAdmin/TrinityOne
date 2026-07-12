@@ -3400,6 +3400,34 @@ function DashMediaPanel({ church }) {
 
 // Self-hosted media (Tier 2) — the church uploads its OWN audio/video, stored on its relay, members-only.
 // Lives under Resources (content authoring), not Settings. Backup hosts auto-fill from the church's relays.
+// Edit an uploaded sermon's name + details (re-publishes the same doc; the file/blob is untouched).
+function SermonEditModal({ sermon, onSave, onClose }) {
+  const [title, setTitle] = React.useState(sermon.title || '');
+  const [desc, setDesc] = React.useState(sermon.desc || '');
+  const [busy, setBusy] = React.useState(false);
+  const isVideo = String(sermon.mime || '').startsWith('video');
+  const save = async () => { if (!title.trim()) return; setBusy(true); try { await onSave({ title: title.trim(), desc: desc.trim() }); } finally { setBusy(false); onClose(); } };
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Edit ' + (isVideo ? 'video' : 'audio') + ' details'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 460, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={isVideo ? 'play' : 'headphones'} size={21} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Edit {isVideo ? 'video' : 'audio'} details</div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Rename it and add a description your members see in {isVideo ? 'Watch' : 'Listen'}. This only changes the label — the file itself stays as uploaded.</p>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Title</div>
+        <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. Sunday sermon — the Prodigal Son" aria-label="Title" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Details <span style={{ textTransform: 'none', fontWeight: 500 }}>· optional</span></div>
+        <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={3} placeholder="Speaker, date, passage, or a short summary…" aria-label="Details" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18, resize: 'vertical', lineHeight: 1.45 }} />
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
+          <button onClick={save} disabled={busy || !title.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !title.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 function DashSermons() {
   const [sermons, setSermons] = React.useState([]);
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -3413,6 +3441,7 @@ function DashSermons() {
   const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
   const fileRef = React.useRef(null);
   const [upBusy, setUpBusy] = React.useState(false); const [upMsg, setUpMsg] = React.useState('');
+  const [editing, setEditing] = React.useState(null);
   const onFile = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
     setUpBusy(true); setUpMsg((encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
@@ -3429,12 +3458,14 @@ function DashSermons() {
   const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   return (
     <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto' }}>
+      {editing ? <SermonEditModal sermon={editing} onSave={(fields) => Promise.resolve(window.Steward.publishSermon({ ...editing, ...fields }))} onClose={() => setEditing(null)} /> : null}
       <Panel title="Self-hosted sermons">
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Audio appears in members’ <b>Listen</b> tab, video in <b>Watch</b>. Great over a thin connection.</div>
         {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 12 }}>{sermons.map(s => (
           <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <Icon name={String(s.mime || '').startsWith('video') ? 'play' : 'headphones'} size={16} color="var(--sage)" />
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{fmtSize(s.size || 0)}{s.enc ? ' · encrypted' : ''}</div></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.desc ? s.desc : (fmtSize(s.size || 0) + (s.enc ? ' · encrypted' : ''))}</div></div>
+            <button onClick={() => setEditing(s)} title="Edit name & details" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="pen" size={14} color="currentColor" /></button>
             <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Pin to members’ Today (sends a notification)'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-3)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" /></button>
             <button onClick={() => window.Steward.removeSermon(s.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
           </div>))}</div> : null}
@@ -3442,6 +3473,12 @@ function DashSermons() {
           <input type="checkbox" checked={encOn} onChange={e => setEncOn(e.target.checked)} style={{ flexShrink: 0 }} />
           <span><b>Encrypt</b> — only your members can decrypt it (protects it from the host and any cloud backup)</span>
         </label>
+        {encOn ? (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11.5, color: 'var(--ink-2)', background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', borderRadius: 10, padding: '9px 11px', margin: '0 0 10px', lineHeight: 1.45 }}>
+            <Icon name="alert" size={15} color="var(--gold)" />
+            <span>Encrypted media <b>can’t stream</b> — members download the whole file and decrypt it <b>before</b> it plays, so large videos start slowly and can’t be skipped through. It stays members-only either way, so for a big sermon video you may prefer to leave this off.</span>
+          </div>
+        ) : null}
         <input value={mirrorHosts} onChange={e => setMirrorHosts(e.target.value)} placeholder="Backup copy host(s) — optional, comma-separated"
           title="Mirror each upload to another media host for redundancy. Content-addressed, so playback fails over automatically."
           style={{ width: '100%', boxSizing: 'border-box', height: 38, padding: '0 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 12.5, color: 'var(--ink)', margin: '0 0 4px', fontFamily: 'var(--font-ui)' }} />
