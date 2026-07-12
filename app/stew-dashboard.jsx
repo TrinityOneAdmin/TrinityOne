@@ -2522,15 +2522,15 @@ function DashResources() {
   const [bulk, setBulk] = React.useState(false);
   const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
   const btn = (k, label) => (
-    <button onClick={() => setView(k)} style={{ padding: '8px 16px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
+    <button onClick={() => setView(k)} style={{ padding: '8px 13px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
   );
   return (
     <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
       {bulk ? <BulkUploadModal kind={view} onClose={() => setBulk(false)} /> : null}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        <div style={seg}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}{btn('media', 'Sermons')}</div>
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+        <div style={{ ...seg, maxWidth: '100%', overflowX: 'auto' }}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}{btn('media', 'Sermons')}</div>
         <div style={{ flex: 1 }} />
-        {view !== 'media' ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
+        {view !== 'media' ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>{view === 'plans' ? <DashPlans /> : view === 'devotionals' ? <DashDevotionals /> : <DashSermons />}</div>
     </div>
