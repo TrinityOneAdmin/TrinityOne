@@ -112,6 +112,19 @@ never reach the relay or other members. Run from the **church-key holder's** con
 
 ---
 
+### Your church's own web address (custom domain)
+
+By default your church's handle lives on your relay's address — it works out of the box, nothing to set up. If your church owns a domain (e.g. `gracechapel.org`), you can use it as your **web address** so members join with `@gracechapel.org`.
+
+For a custom domain to actually resolve, that domain has to serve your church's identity record at `/.well-known/nostr.json` — and **your relay already serves exactly that**. So the path is:
+
+1. **Run your own relay and put it on your domain.** A Cloudflare **named tunnel** points your domain (or a subdomain like `relay.gracechapel.org`) at your relay. Full steps: **[Connecting your church to a relay → run your own / your own domain](RELAY-SETUP.md#level-3--run-your-own-relay-full-ownership)**.
+2. **Set it here:** *Settings → Church → Web address* → type `gracechapel.org` (just the domain, no `https://`). Members now see the verified `@gracechapel.org`.
+
+No domain of your own? Leave the web address **blank** — the default handle works fine and nothing here is required.
+
+---
+
 ## The rules you can switch on  *(Settings → Congregation features)*
 
 | Rule | Default | What it does |
