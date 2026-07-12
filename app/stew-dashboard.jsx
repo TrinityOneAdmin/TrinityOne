@@ -3442,6 +3442,7 @@ function DashSermons() {
   const fileRef = React.useRef(null);
   const [upBusy, setUpBusy] = React.useState(false); const [upMsg, setUpMsg] = React.useState('');
   const [editing, setEditing] = React.useState(null);
+  const [notify, setNotify] = React.useState(true);   // feature the new upload on members' Today + push
   const onFile = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
     const bigVid = String(f.type || '').startsWith('video') && f.size > 25 * 1048576;   // stopgap until on-device transcode: flag a heavy video
@@ -3450,9 +3451,10 @@ function DashSermons() {
       const encFn = (encOn && window.Steward.mediaEncryptor) ? await window.Steward.mediaEncryptor(members.map(m => m.pubkey).filter(Boolean)) : undefined;
       const mirrors = mirrorHosts.split(',').map(s => s.trim()).filter(Boolean);
       const b = await window.Steward.uploadBlob(f, encFn, mirrors);
-      await window.Steward.publishSermon({ title: f.name.replace(/\.[^.]+$/, ''), sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
+      const pub = await window.Steward.publishSermon({ title: f.name.replace(/\.[^.]+$/, ''), sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
+      if (notify && pub && window.Steward.pinSermon) { try { await window.Steward.pinSermon(pub); } catch (e) {} }   // feature on members' Today → "New video / New audio clip" card + push
       const backups = (b.hosts || []).length - 1;
-      setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
+      setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? ' · members notified' : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
     } catch (err) { setUpMsg('✗ ' + (err.message || 'Upload failed')); }
     setUpBusy(false); setTimeout(() => setUpMsg(''), 3500);
   };
@@ -3484,6 +3486,10 @@ function DashSermons() {
           title="Mirror each upload to another media host for redundancy. Content-addressed, so playback fails over automatically."
           style={{ width: '100%', boxSizing: 'border-box', height: 38, padding: '0 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 12.5, color: 'var(--ink)', margin: '0 0 4px', fontFamily: 'var(--font-ui)' }} />
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 10, lineHeight: 1.4 }}>{autoBackups.length ? 'Auto-filled from your church’s other relays — each upload is mirrored there for redundancy. Edit if needed.' : 'Add another media host to keep backup copies. When your church runs a second relay, it’s suggested here automatically.'}</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)', margin: '0 0 12px', cursor: 'pointer', lineHeight: 1.4 }}>
+          <input type="checkbox" checked={notify} onChange={e => setNotify(e.target.checked)} style={{ flexShrink: 0 }} />
+          <span><b>Notify members</b> — feature it on everyone’s Today (“New video / New audio clip”) and send a notification. Leave off for a quiet upload.</span>
+        </label>
         <input ref={fileRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={onFile} />
         <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="#fff" /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
         {upMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 8 }}>{upMsg}</div> : null}

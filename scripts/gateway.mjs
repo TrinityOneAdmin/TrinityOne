@@ -695,6 +695,32 @@ function maybePushMessage(evt) {
     }
   } catch {}
 }
+// notify members when the church FEATURES a sermon (pins it → the Today "New video / New audio clip" card):
+// the deliberate "tell everyone" action, one-per-church so bulk uploads don't spam. Fires only on live ingest
+// (never on hydration/replay, so a restart can't re-notify), and once per featured item.
+const SERMON_PUSHED = new Set();
+function maybePushSermon(evt) {
+  try {
+    if (evt.kind !== 30078) return;
+    const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
+    if (!d.startsWith(PINSERMON_D)) return;
+    const cp = d.slice(PINSERMON_D.length);
+    if (!CHURCH_PUBS.has(cp)) return;
+    if (evt.pubkey !== cp && !stewardOf(evt.pubkey, cp)) return;                 // only the church/steward features
+    if ((evt.tags || []).some(t => t[0] === 'deleted') || !evt.content) return;  // an unpin, not a feature
+    let s; try { s = JSON.parse(evt.content); } catch { return; }
+    if (!s || !s.sha256) return;
+    const key = cp + ':' + (s.id || s.sha256);
+    if (SERMON_PUSHED.has(key)) return; SERMON_PUSHED.add(key);                  // once per featured item
+    const isVideo = String(s.mime || '').startsWith('video');
+    const cname = CHURCH_NAMES.get(cp) || displayName(cp) || 'Your church';
+    const body = (isVideo ? 'New video' : 'New audio clip') + (s.title ? ': ' + s.title : '');
+    for (const m of MEMBERS) {
+      if (m === cp || MEMBER_CHURCH.get(m) !== cp) continue;
+      pushTo(m, { title: cname, body, url: '/', tag: 'sermon-' + String(s.id || s.sha256).slice(0, 10) }, 'announce');   // '/' → Today, where the New card is
+    }
+  } catch {}
+}
 const dtag = (e) => { const t = (e.tags || []).find(t => t[0] === 'd'); return t ? t[1] : ''; };
 // (replaceable/addressable dedup + smart retention now live in event-store.mjs — the durable store owns them.)
 const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
@@ -2394,6 +2420,7 @@ wss.on('connection', ws => {
       maybePush(evt);   // notify the targeted member if this is a serving request
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
       maybePushMessage(evt);   // notify on a new DM (recipient) or church announcement (members)
+      maybePushSermon(evt);    // notify members when the church features a new sermon (video/audio)
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       let _evtJson = null;   // E6: serialize the event ONCE (lazily, on first match) and reuse for every matching subscriber — was N JSON.stringify(evt) for N subs
       for (const [client, m] of subs) { if (client.readyState !== 1) continue;
