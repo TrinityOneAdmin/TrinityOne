@@ -1404,12 +1404,21 @@ function serveStatic(req, res) {
         res.writeHead(200, H); res.end(JSON.stringify({ records, now: Math.floor(Date.now() / 1000) })); return;
       }
       if (req.method === 'POST') {
+        // DoS: this is unauthenticated and each record costs a schnorr verify. Serialize (one merge at a time),
+        // cap the batch, and yield to the event loop between chunks so a flood of junk records can't freeze the relay.
+        if (_gossipMergeBusy) { res.writeHead(429, H); res.end('{"error":"busy — try again shortly"}'); return; }
         let body = ''; req.on('data', c => { body += c; if (body.length > 8e6) req.destroy(); });
-        req.on('end', () => {
+        req.on('end', async () => {
           let arr = []; try { arr = JSON.parse(body || '{}').records || []; } catch {}
-          let merged = 0;
-          for (const ev of arr.slice(0, 5000)) { const rec = verifyClaimEvent(ev, 0); if (rec && applyClaimRecord(rec)) merged++; }
-          res.writeHead(200, H); res.end(JSON.stringify({ merged }));
+          arr = arr.slice(0, 1000);
+          _gossipMergeBusy = true; let merged = 0;
+          try {
+            for (let i = 0; i < arr.length; i++) {
+              const rec = verifyClaimEvent(arr[i], 0); if (rec && applyClaimRecord(rec)) merged++;
+              if ((i & 31) === 31) await new Promise(r => setImmediate(r));   // unblock the loop every 32 verifies
+            }
+          } finally { _gossipMergeBusy = false; }
+          try { res.writeHead(200, H); res.end(JSON.stringify({ merged })); } catch {}
         });
         return;
       }
@@ -2384,6 +2393,9 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024,   // 
   perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true, concurrencyLimit: 10 } });
 const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (members, chat, profiles, etc.)
 const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is a cheap unauthenticated CPU-DoS — cap it
+const MAX_REQ_EVENTS = 20000;   // aggregate events one REQ may materialize+serialize across all its filters (DoS ceiling; real reads are far smaller)
+const MAX_WS_BUFFER = 16 * 1024 * 1024; // if a client isn't draining and our socket buffer passes this, it's a slow-loris/OOM lever — stop sending + close
+let _gossipMergeBusy = false;   // one /relay-names/sync merge at a time (bounds unauthenticated schnorr-verify CPU)
 server.on('upgrade', (req, socket, head) => {
   if ((req.url || '').split('?')[0] !== '/relay') { socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
@@ -2448,7 +2460,8 @@ wss.on('connection', ws => {
       // serve everything this connection may read now (blocked members withheld; invite-only group
       // messages withheld from non-members per NIP-42)
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
-      for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D)) wantsSafeguard = true; } continue; } matched.push(e); }
+      let _reqEvents = 0;
+      scan: for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D)) wantsSafeguard = true; } continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
@@ -2457,7 +2470,7 @@ wss.on('connection', ws => {
       if (wantsInvite || wantsSafeguard) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }   // safeguarding: challenge so a member's client auths + gets the lists (AUTH-success re-delivers)
       const lim = Math.max(0, ...filters.map(f => f.limit || 0));
       if (lim) matched = matched.slice(-lim);
-      for (const e of matched) ws.send(JSON.stringify(['EVENT', subId, e]));
+      for (const e of matched) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }   // backpressure: a client that isn't reading can't make us buffer unbounded
       ws.send(JSON.stringify(['EOSE', subId]));
     } else if (type === 'AUTH') {
       // NIP-42: the client proves which pubkey it controls, so we can serve it invite-only group reads
@@ -2480,7 +2493,7 @@ wss.on('connection', ws => {
             for (const f of filters) for (const e of store.query(f)) {
               if (seen.has(e.id)) continue; seen.add(e.id);
               if (BLOCKED.has(e.pubkey) || !canRead(e, ws._auth)) continue;
-              if (!canRead(e, null)) ws.send(JSON.stringify(['EVENT', subId, e]));
+              if (!canRead(e, null)) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }
             }
           }
         } else ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed: bad challenge or signature']));
