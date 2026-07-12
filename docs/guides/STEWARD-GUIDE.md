@@ -60,7 +60,18 @@ date/time with a reason. A **double-booking check** warns you and blocks the sav
 taken then. Steward-booked for now.
 
 ### Resources
-Reading plans and devotionals you share with the church, with scheduled (drip) release and ordering.
+Reading plans and devotionals you share with the church, with scheduled (drip) release and ordering. Also **self-hosted sermons** — upload the church's own audio/video (members-only; audio → Listen tab, video → Watch tab). You can rename each upload and add details (the pen button), and pin one to members' Today.
+
+#### Keeping video small and fast
+Self-hosted video is the heaviest thing you'll upload, and members feel it twice — once downloading, and (if you encrypted it) again decrypting before it plays. A few habits keep it light:
+
+- **Record or export at 720p, not 4K.** 720p is plenty for a sermon on a phone and is often 5–10× smaller.
+- **Keep clips short.** A focused 5-minute clip beats a 45-minute service file — for you *and* your members.
+- **Trim on your phone first.** iOS Photos and Google Photos both let you trim a video before sharing — cut dead air at the start and end.
+- **Shrink before uploading** if you can: many phones have a "save smaller / optimise" option, or a free app can re-export at a lower bitrate. Aim for a few MB per minute.
+- **Leave encryption off for a big, not-sensitive sermon** — it stays members-only either way, and unencrypted video can start playing immediately instead of downloading in full first.
+
+*(On-device automatic compression is on the roadmap — for now these steps do the same job.)*
 
 ### Finance  *(optional — turn on in Settings)*
 A treasurer's ledger for the church: record giving, keep **donor records**, categorise

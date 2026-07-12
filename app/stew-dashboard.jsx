@@ -3444,7 +3444,8 @@ function DashSermons() {
   const [editing, setEditing] = React.useState(null);
   const onFile = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
-    setUpBusy(true); setUpMsg((encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
+    const bigVid = String(f.type || '').startsWith('video') && f.size > 25 * 1048576;   // stopgap until on-device transcode: flag a heavy video
+    setUpBusy(true); setUpMsg((bigVid ? '⚠ Large video (' + fmtSize(f.size) + ') — slow to upload' + (encOn ? ' + play' : '') + '. ' : '') + (encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
     try {
       const encFn = (encOn && window.Steward.mediaEncryptor) ? await window.Steward.mediaEncryptor(members.map(m => m.pubkey).filter(Boolean)) : undefined;
       const mirrors = mirrorHosts.split(',').map(s => s.trim()).filter(Boolean);
@@ -3486,6 +3487,7 @@ function DashSermons() {
         <input ref={fileRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={onFile} />
         <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="#fff" /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
         {upMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 8 }}>{upMsg}</div> : null}
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Big videos are slow to upload and, if encrypted, slow to play. Record or export at <b>~720p</b> and keep clips short — a few minutes is usually a few MB. <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/docs/guides/STEWARD-GUIDE.md#keeping-video-small-and-fast" target="_blank" rel="noopener" style={{ color: 'var(--clay)', textDecoration: 'none', fontWeight: 600 }}>How to shrink a video →</a></div>
       </Panel>
     </div>
   );
