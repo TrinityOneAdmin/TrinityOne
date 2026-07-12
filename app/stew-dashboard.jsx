@@ -3405,8 +3405,15 @@ function SermonEditModal({ sermon, onSave, onClose }) {
   const [title, setTitle] = React.useState(sermon.title || '');
   const [desc, setDesc] = React.useState(sermon.desc || '');
   const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
   const isVideo = String(sermon.mime || '').startsWith('video');
-  const save = async () => { if (!title.trim()) return; setBusy(true); try { await onSave({ title: title.trim(), desc: desc.trim() }); } finally { setBusy(false); onClose(); } };
+  const save = async () => {
+    if (!title.trim()) return;
+    setBusy(true); setErr('');
+    try { await onSave({ title: title.trim(), desc: desc.trim() }); onClose(); }   // close only on success
+    catch (e) { setErr((e && e.message) || 'Couldn’t save — check your connection and try again.'); }
+    finally { setBusy(false); }
+  };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
@@ -3420,6 +3427,7 @@ function SermonEditModal({ sermon, onSave, onClose }) {
         <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. Sunday sermon — the Prodigal Son" aria-label="Title" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Details <span style={{ textTransform: 'none', fontWeight: 500 }}>· optional</span></div>
         <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={3} placeholder="Speaker, date, passage, or a short summary…" aria-label="Details" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18, resize: 'vertical', lineHeight: 1.45 }} />
+        {err ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay)', marginBottom: 12, lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
           <button onClick={save} disabled={busy || !title.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !title.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
@@ -3448,6 +3456,7 @@ function DashSermons() {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
     const bigVid = String(f.type || '').startsWith('video') && f.size > 25 * 1048576;   // stopgap until on-device transcode: flag a heavy video
     setUpBusy(true); setUpMsg((bigVid ? '⚠ Large video (' + fmtSize(f.size) + ') — slow to upload' + (encOn ? ' + play' : '') + '. ' : '') + (encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
+    let ok = false;
     try {
       const encFn = (encOn && window.Steward.mediaEncryptor) ? await window.Steward.mediaEncryptor(members.map(m => m.pubkey).filter(Boolean)) : undefined;
       const mirrors = mirrorHosts.split(',').map(s => s.trim()).filter(Boolean);
@@ -3456,8 +3465,9 @@ function DashSermons() {
       if (notify && pub && window.Steward.pinSermon) { try { await window.Steward.pinSermon(pub); } catch (e) {} }   // feature on members' Today → "New video / New audio clip" card + push
       const backups = (b.hosts || []).length - 1;
       setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? ' · members notified' : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
-    } catch (err) { setUpMsg('✗ ' + (err.message || 'Upload failed')); }
-    setUpBusy(false); setTimeout(() => setUpMsg(''), 3500);
+      ok = true;
+    } catch (err) { setUpMsg('✗ ' + ((err && err.message) || 'Upload failed')); }   // surface the relay's real message (storage full / too large / …)
+    setUpBusy(false); if (ok) setTimeout(() => setUpMsg(''), 3500);   // keep errors visible; only auto-clear success
   };
   const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   return (

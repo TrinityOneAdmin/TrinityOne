@@ -138,7 +138,7 @@ function _churchBlobList(cp) { const m = _blobsByChurch.get(cp); if (!m) return 
 // P7: tally media usage AFTER the relay starts listening (was a synchronous statSync-per-blob walk blocking boot
 // on a media-heavy box). SET the totals from the disk scan (authoritative) rather than accumulate, so any upload
 // that lands during the brief window isn't double-counted — the scan already sees it on disk.
-setTimeout(() => { try { let total = 0; const by = new Map(); const idx = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) { by.set(o, (by.get(o) || 0) + sz); let m = idx.get(o); if (!m) { m = new Map(); idx.set(o, m); } m.set(f, sz); } } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); _blobsByChurch.clear(); for (const [k, v] of idx) _blobsByChurch.set(k, v); } catch {} }, 0);
+setTimeout(() => { try { let total = 0; const by = new Map(); const idx = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (f.startsWith('.up-') && f.endsWith('.tmp')) { try { unlinkSync(join(BLOB_DIR, f)); } catch {} continue; }   /* orphaned aborted-upload temp: at boot no upload is in flight, so any .up-*.tmp is dead — sweep it */ if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) { by.set(o, (by.get(o) || 0) + sz); let m = idx.get(o); if (!m) { m = new Map(); idx.set(o, m); } m.set(f, sz); } } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); _blobsByChurch.clear(); for (const [k, v] of idx) _blobsByChurch.set(k, v); } catch {} }, 0);
 // Streaming base64 for the native (CapacitorHttp) blob path — encode/decode in aligned chunks so a big blob never
 // sits fully in RAM (a 200 MB video buffered + base64'd would cost ~450 MB). Each whole 3-byte group → 4 b64 chars
 // independently, so concatenating the chunks equals base64(file); only the final partial group is padded. Decode
@@ -687,7 +687,11 @@ function maybePushMessage(evt) {
     if (evt.kind === 1) {                                          // group chat post
       const gid = gidOf(evt); if (!gid || !BROADCAST.has(gid)) return;   // announcements only (church-posted)
       const gname = GROUP_NAMES.get(gid) || 'Your church';
-      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])] : [...MEMBERS];
+      // SECURITY: scope to the OWNING church's members — MEMBERS is the global union across every church on a
+      // shared relay, so an unscoped fan-out pushes one church's announcement to unrelated churches (cross-tenant
+      // metadata leak + spam). Mirror maybePushSermon's church filter.
+      const gcp = GROUP_CHURCH.get(gid);
+      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])] : [...MEMBERS].filter(m => !gcp || MEMBER_CHURCH.get(m) === gcp);
       for (const r of recips) {
         if (!r || r === evt.pubkey) continue;
         pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid }, 'announce');
@@ -1974,6 +1978,11 @@ function serveStatic(req, res) {
     });
     src.on('error', () => fail(400, 'read'));
     out.on('error', () => fail(500, 'store failed'));
+    // client aborts mid-upload (routine over a thin mobile pipe) emit neither 'end' nor 'error' — without this the
+    // .up-*.tmp file is orphaned forever (the boot scan + cap accounting ignore non-sha filenames). 'close' fires on
+    // BOTH normal completion and abort, so gate on req.complete (true only when the whole body was received) to
+    // avoid nuking the temp on a healthy upload whose disk-flush hasn't finished yet.
+    req.on('close', () => { if (!done && !req.complete) fail(499, 'aborted'); });
     src.on('end', () => { if (!done) out.end(); });
     out.on('finish', () => {
       if (done) return; done = true;

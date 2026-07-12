@@ -10986,6 +10986,7 @@ zoo`.split("\n");
         window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
       } catch (x) {
       }
+      return false;
     }
     return evt;
   }
@@ -11552,7 +11553,14 @@ zoo`.split("\n");
         const h = { Authorization: authHdr, "Content-Type": ctype };
         if (native) h["X-Blob-B64"] = "1";
         const r = await fetch(b + "/blob", { method: "PUT", headers: h, body });
-        if (!r.ok) throw new Error(b + " " + r.status);
+        if (!r.ok) {
+          let m = "";
+          try {
+            m = (await r.json() || {}).error || "";
+          } catch (e) {
+          }
+          throw new Error(m || "Upload failed (" + r.status + ")");
+        }
         return r.json();
       };
       const primary = _blobBase();
@@ -11574,7 +11582,10 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const id = s.id || "sermon" + Date.now();
       const content = JSON.stringify({ id, title: s.title || "Sermon", desc: s.desc && String(s.desc).trim() || void 0, sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : [s.host], mime: s.mime || "", size: s.size || 0, ts: s.ts || now(), enc: s.enc || void 0, series: s.series || void 0 });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET]], content })).then(() => ({ id, ...JSON.parse(content) }));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET]], content })).then((r) => {
+        if (r === false) throw new Error("Couldn\u2019t save \u2014 every relay rejected it. Check your connection.");
+        return { id, ...JSON.parse(content) };
+      });
     },
     removeSermon(id) {
       if (!sk) return Promise.resolve(null);
