@@ -16,6 +16,29 @@ function useStewardIdv() {
 }
 window.useStewardIdv = useStewardIdv;
 
+// reconnect recovery: a relay WebSocket drops while the console is backgrounded AND every time the relay
+// restarts (which happens on every deploy) — and a dropped socket silently misses live events, so the console
+// shows stale data (e.g. a sermon uploaded elsewhere doesn't appear). Mirror the member app's connTick: bump on
+// return-to-foreground / network-online / a 90s heartbeat, so every subscription tears down + re-subscribes and
+// catches up. Kept SEPARATE from the identity version so it drives re-subscribe WITHOUT changing the cache key
+// (no blank flash on reconnect — the last-known value stays painted while the fresh sub refreshes it).
+function useStewardConn() {
+  const [c, setC] = useSt(0);
+  useStE(() => {
+    if (typeof document === 'undefined') return undefined;
+    let last = Date.now();
+    const bump = () => { last = Date.now(); setC(x => x + 1); };
+    const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - last > 2500) bump(); };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('online', bump);
+    window.addEventListener('focus', onVis);
+    const beat = setInterval(() => { if (document.visibilityState === 'visible') bump(); }, 90000);
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', bump); window.removeEventListener('focus', onVis); clearInterval(beat); };
+  }, []);
+  return c;
+}
+window.useStewardConn = useStewardConn;
+
 // live church data from the relay. Nearly every hook here is the same shape — subscribe to a data stream,
 // re-render when the active identity changes — so they're built from ONE factory instead of copy-paste.
 // makeSub(getObj, method, makeInit) returns such a hook: guarded (a missing engine/method is a no-op),
@@ -31,12 +54,13 @@ const _subCache = {};
 function makeSub(getObj, method, makeInit) {
   return function () {
     const idv = useStewardIdv();
-    const key = method + '|' + idv;
+    const conn = useStewardConn();                                                       // reconnect → re-subscribe
+    const key = method + '|' + idv;                                                      // cache by IDENTITY only (stable across reconnects → no blank flash)
     const [v, setV] = useSt(() => (key in _subCache ? _subCache[key] : makeInit()));   // paint last-known instantly
     useStE(() => {
       const o = getObj(); if (!o || !o[method]) return undefined;
       return o[method]((val) => { _subCache[key] = val; setV(val); });   // cache every delivery, then render
-    }, [idv]);
+    }, [idv, conn]);   // re-subscribe on identity change OR reconnect
     return v;
   };
 }
@@ -86,7 +110,8 @@ window.useMealsSkips = makeSub(ME, 'subscribeSkips', () => []);
 // ── hooks that don't fit the factory (custom callback / derived / polling / two-effect) ──
 function useStewardNetworks() {
   const [networks, setNetworks] = useSt([]);
-  useStE(() => window.Steward.subscribeNetworks(setNetworks), []);
+  const conn = useStewardConn();
+  useStE(() => window.Steward.subscribeNetworks(setNetworks), [conn]);   // re-subscribe after a relay restart / reconnect
   return networks;
 }
 window.useStewardNetworks = useStewardNetworks;

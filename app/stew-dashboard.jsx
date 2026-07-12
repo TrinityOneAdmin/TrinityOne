@@ -3435,9 +3435,10 @@ function DashSermons() {
   const autoBackups = React.useMemo(() => { try { return (window.Steward.mediaHosts ? window.Steward.mediaHosts() : []).slice(1); } catch { return []; } }, []);
   const [mirrorHosts, setMirrorHosts] = React.useState(autoBackups.join(', '));   // auto-filled from the church's other relays; editable
   const [pinnedId, setPinnedId] = React.useState(null);   // the currently-featured sermon (pushed to members' Today)
-  React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(setSermons) : undefined), []);
-  React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
-  React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), []);
+  const conn = window.useStewardConn ? window.useStewardConn() : 0;   // re-subscribe after a relay restart / reconnect (else a sermon uploaded elsewhere never appears)
+  React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(setSermons) : undefined), [conn]);
+  React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn]);
+  React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn]);
   const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
   const fileRef = React.useRef(null);
   const [upBusy, setUpBusy] = React.useState(false); const [upMsg, setUpMsg] = React.useState('');
