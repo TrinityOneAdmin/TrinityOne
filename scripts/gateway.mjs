@@ -168,7 +168,8 @@ function _blobUploader(req) {
 }
 // download gate: a fresh NIP-98 (kind 27235) proof, bound to THIS url, signed by a member of the owning church.
 function _blobMember(req, ownerCp, host, path) {
-  if (!ownerCp || !CHURCH_PUBS.size) return true;   // unconfigured / no owner recorded → open
+  if (!CHURCH_PUBS.size) return true;   // unconfigured relay → open (nothing to gate against yet)
+  if (!ownerCp) return false;           // configured relay but this blob has no recorded owner → fail CLOSED (don't world-serve media on a missing/legacy sidecar); backfill the sidecar to restore access
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return false;
   let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return false; }
   if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return false;
@@ -288,6 +289,7 @@ const MINORS_D = 'trinityone/minors:';     // safeguarding: a church's list of m
 const APPROVED_D = 'trinityone/approved:'; // safeguarding: adults cleared to contact youth (mirrors the church's DBS/cleared list) — d=approved:<churchpub>
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-signed child→parents map — d=guardians:<churchpub>; a guardian may always DM their own child
 const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent notice of a steward-made guardian link — d=guardnotice:<parentpub>, p-tagged + NIP-44-encrypted to the parent (child link never in cleartext)
+const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier-2 media key wrapped per-member — its object keys ARE the member roster, so gate reads to effective members (else it's a world-readable membership list)
 // (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable, falls to the default member rule)
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
 const ADMITTED_D = 'trinityone/admitted:';   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
@@ -984,8 +986,9 @@ function canRead(e, authed) {
     // safeguarding lists (minors/approved/guardians) are PII — which pubkeys are children. Members need them to
     // mirror the DM safeguarding gate on-device, but they must NOT be world-readable. Gate to authed members of
     // that church (lazy NIP-42: the REQ handler challenges when one is withheld, then AUTH-success re-delivers).
-    if (d.startsWith(MINORS_D) || d.startsWith(APPROVED_D) || d.startsWith(GUARDIANS_D)) {
-      const cp = d.startsWith(MINORS_D) ? d.slice(MINORS_D.length) : d.startsWith(APPROVED_D) ? d.slice(APPROVED_D.length) : d.slice(GUARDIANS_D.length);
+    if (d.startsWith(MINORS_D) || d.startsWith(APPROVED_D) || d.startsWith(GUARDIANS_D) || d.startsWith(MEDIAKEY_D)) {
+      const pfx = [MINORS_D, APPROVED_D, GUARDIANS_D, MEDIAKEY_D].find(p => d.startsWith(p));   // media-key doc joins the member-gated set: its keys leak the roster otherwise
+      const cp = d.slice(pfx.length);
       // SECURITY-AUDIT-2026-07-06 H1: gate to an EFFECTIVE member of THIS church — not the raw MEMBER_DOCS
       // join set, which still contains blocked + unapproved-pending pubkeys. Otherwise any stranger (even one
       // the church has BANNED) could self-join, AUTH with their own key, and read the plaintext list of which
@@ -1997,7 +2000,7 @@ function serveStatic(req, res) {
         if (_cc && (_mediaBytesByChurch.get(who.church) || 0) + size > _cc) { cleanup(); res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
       }
       try {
-        writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // S4: owner sidecar BEFORE the blob is reachable — never leave a blob servable with no download gate
+        if (isNew || !_blobOwner(sha)) writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // S4: owner sidecar BEFORE the blob is reachable. Set it on first store OR to backfill a missing one — but do NOT flip ownership when another church dedup-re-uploads an identical blob.
         if (isNew) renameSync(tmp, finalPath); else cleanup();        // dedup: identical blob already stored → drop the temp
         const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
       } catch (e) { cleanup(); res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
@@ -2013,7 +2016,7 @@ function serveStatic(req, res) {
     const host = (req.headers.host || '').split(',')[0].trim();
     if (!_blobMember(req, _blobOwner(sha), host, route)) { res.writeHead(401, { 'Access-Control-Allow-Origin': '*', 'WWW-Authenticate': 'Nostr' }); res.end('members only'); return; }
     let ct = 'application/octet-stream'; try { ct = readFileSync(join(BLOB_DIR, sha + '.type'), 'utf8').trim() || ct; } catch {}
-    const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=31536000, immutable', ...SEC_HEADERS };   // content-addressed → immutable
+    const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=31536000, immutable', ...SEC_HEADERS };   // content-addressed → immutable; PRIVATE so a shared proxy can't replay a member's fetch to a non-member
     if (/[?&]b64/.test(req.url || '')) {   // native download: CapacitorHttp mangles a binary response body → serve base64 text, the client decodes
       if (req.method === 'HEAD') { res.writeHead(200, { ...base, 'Content-Type': 'text/plain; charset=ascii', 'X-Blob-B64': '1' }); res.end(); return; }
       // stream the file through a base64 encoder (bounded memory) instead of readFileSync().toString('base64')

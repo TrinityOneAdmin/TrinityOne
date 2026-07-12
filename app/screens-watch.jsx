@@ -289,15 +289,25 @@ function VideoPlayer({ video, open, onClose, ctx }) {
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, margin: 0, lineHeight: 1.18 }}>{video.title}</h1>
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 5 }}>{fmtDate(video.published)}</div>
 
-          {/* channel row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, margin: '16px 0', paddingBottom: 16, borderBottom: '1px solid var(--line)' }}>
-            <ChannelAvatar ch={ch} size={42} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{ch.name || 'Church'}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{ch.handle || 'YouTube'}</div>
+          {/* poster row: for a self-hosted sermon this is the CHURCH — never a "YouTube" channel with a dead button */}
+          {video._sermon ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, margin: '16px 0', paddingBottom: 16, borderBottom: '1px solid var(--line)' }}>
+              <div style={{ width: 42, height: 42, borderRadius: 999, background: 'color-mix(in oklab, var(--clay) 16%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="bank" size={20} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(ctx.church && ctx.church.name) || 'Your church'}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Members only · your church’s own recording</div>
+              </div>
             </div>
-            <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Channel</button>
-          </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, margin: '16px 0', paddingBottom: 16, borderBottom: '1px solid var(--line)' }}>
+              <ChannelAvatar ch={ch} size={42} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{ch.name || 'Church'}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{ch.handle || 'YouTube'}</div>
+              </div>
+              <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Channel</button>
+            </div>
+          )}
 
           {video.desc ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 22px', textWrap: 'pretty' }}>{video.desc}</p> : null}
 
