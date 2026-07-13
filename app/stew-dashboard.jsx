@@ -3436,6 +3436,27 @@ function SermonEditModal({ sermon, onSave, onClose }) {
     </div>
   );
 }
+// Detect H.265/HEVC video — phones' default "High Efficiency" format, which desktop browsers can't decode.
+// Scans the mp4 sample-description fourcc ('hvc1'/'hev1') at the head AND tail (moov may be faststart or trailing).
+// Device-independent, so it warns even when a steward uploads from a phone (where the file plays fine locally).
+async function probeHevcVideo(file) {
+  try {
+    if (!String(file.type || '').startsWith('video')) return false;
+    const hit = (buf) => {
+      const b = new Uint8Array(buf);
+      for (let i = 0; i + 4 <= b.length; i++) {
+        if (b[i] === 0x68) { const a = b[i + 1], c = b[i + 2], d = b[i + 3];   // 'h'
+          if ((a === 0x76 && c === 0x63 && d === 0x31) || (a === 0x65 && c === 0x76 && d === 0x31)) return true; }   // 'hvc1' / 'hev1'
+      }
+      return false;
+    };
+    const CH = 2 * 1048576;
+    if (hit(await file.slice(0, Math.min(file.size, CH)).arrayBuffer())) return true;
+    if (file.size > CH && hit(await file.slice(Math.max(0, file.size - CH)).arrayBuffer())) return true;
+    return false;
+  } catch { return false; }
+}
+
 function DashSermons() {
   const [sermons, setSermons] = React.useState([]);
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -3453,8 +3474,13 @@ function DashSermons() {
   const [editing, setEditing] = React.useState(null);
   const [notify, setNotify] = React.useState(true);   // feature the new upload on members' Today + push
   const [pendingDelete, setPendingDelete] = React.useState(null);
+  const [pendingHevc, setPendingHevc] = React.useState(null);   // an HEVC video awaiting "upload anyway?" confirmation
   const onFile = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
+    if (await probeHevcVideo(f)) { setPendingHevc(f); return; }   // warn before uploading a format web browsers can't play
+    doUpload(f);
+  };
+  const doUpload = async (f) => {
     const bigVid = String(f.type || '').startsWith('video') && f.size > 25 * 1048576;   // stopgap until on-device transcode: flag a heavy video
     setUpBusy(true); setUpMsg((bigVid ? '⚠ Large video (' + fmtSize(f.size) + ') — slow to upload' + (encOn ? ' + play' : '') + '. ' : '') + (encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
     let ok = false;
@@ -3475,6 +3501,7 @@ function DashSermons() {
     <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto' }}>
       {editing ? <SermonEditModal sermon={editing} onSave={(fields) => Promise.resolve(window.Steward.publishSermon({ ...editing, ...fields }))} onClose={() => setEditing(null)} /> : null}
       {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { window.Steward.removeSermon(pendingDelete); setPendingDelete(null); }} onCancel={() => setPendingDelete(null)} /> : null}
+      {pendingHevc ? <SkConfirm icon="alert" tint="var(--gold)" title="This video may not play in web browsers" confirmLabel="Upload anyway" body="It’s recorded in H.265/HEVC — your phone’s “High Efficiency” format. Phones play it fine, but web browsers (and some older devices) can’t. To reach everyone, set your camera to “Most Compatible” (H.264) and re-record. Upload this one anyway? Members on the phone app will still be able to watch it." onConfirm={() => { const f = pendingHevc; setPendingHevc(null); doUpload(f); }} onCancel={() => setPendingHevc(null)} /> : null}
       <Panel title="Self-hosted sermons">
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Audio appears in members’ <b>Listen</b> tab, video in <b>Watch</b>. Great over a thin connection.</div>
         {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 12 }}>{sermons.map(s => (

@@ -65,6 +65,7 @@ Reading plans and devotionals you share with the church, with scheduled (drip) r
 #### Keeping video small and fast
 Self-hosted video is the heaviest thing you'll upload, and members feel it twice — once downloading, and (if you encrypted it) again decrypting before it plays. A few habits keep it light:
 
+- **Record in "Most Compatible" (H.264), not "High Efficiency" (H.265/HEVC).** This is the single most important setting for reach. Most phones default to "High Efficiency" to save space — but that format (HEVC) **won't play in web browsers**, so anyone watching on the web app just sees a spinner. "Most Compatible" (H.264) plays *everywhere* — phone app and web. *iPhone: Settings → Camera → Formats → Most Compatible. Android: Camera app → settings → Video, turn off "High efficiency"/HEVC.* The console warns you if you pick an HEVC file, and members on the phone app can still watch it — but for a video everyone can see, record in H.264. (This doesn't affect audio — audio plays everywhere.)
 - **Record or export at 720p, not 4K.** 720p is plenty for a sermon on a phone and is often 5–10× smaller.
 - **Keep clips short.** A focused 5-minute clip beats a 45-minute service file — for you *and* your members.
 - **Trim on your phone first.** iOS Photos and Google Photos both let you trim a video before sharing — cut dead air at the start and end.
