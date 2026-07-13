@@ -170,15 +170,18 @@ const pool = new SimplePool();
 let sk = null, pub = null;
 // SECURITY-AUDIT-2026-07-06 M3: true once we know we belong to an invite-only group — the only reason a member
 // needs to prove their key to the relay. Set from the (public) group defs; never proactively otherwise.
-let _needAuth = false;
+let _needAuth = true;
 // NIP-42: when a relay challenges, prove our pubkey by signing the auth event with our key — so the relay serves
-// us the invite-only groups we belong to. But do NOT prove it proactively: a signed auth cryptographically links
-// this connection to our pubkey, deanonymising us to a hostile/compromised relay operator or a network observer.
-// So DECLINE the challenge unless we actually need a gated read (_needAuth). A plain member reading only public
-// church content never authenticates → stays anonymous to the relay infrastructure. This changes nothing for
-// humans in the church (names/handles/photos are public, no auth) and nothing for child safety (the relay
-// ENFORCES the adult↔minor DM block server-side regardless; only the client's pre-hide of the Message button
-// needs the minors list, and members who are in invite groups still auth and get it).
+// us our church's PRIVATE docs (the member roster, safeguarding lists, media key, Care module, invite groups).
+// SECURITY-AUDIT-2026-07-13: this was `false` (auth only in the guardian flow), which meant an ordinary member
+// never authenticated — and because the relay can't then tell a member from an anonymous attacker, it served the
+// membership roster + care PII to the whole internet (the arrest-list leak). Those docs are now NIP-42-gated on the
+// relay, so a member MUST authenticate to read them. Auth is still LAZY — the pool signs only when a relay actually
+// challenges (i.e. only when we REQ gated content), so pure public browsing sends no auth. The privacy trade is
+// small and mostly illusory: a member who has JOINED already publishes a signed member: doc over this same
+// connection, so the relay already knows their pubkey; auth only additionally exposes a pure lurker. For an
+// underground church, not leaking the roster to anonymous clients outweighs a joined member proving they're a
+// member to their own church's relay. (Child safety was always enforced server-side regardless of this flag.)
 pool.automaticallyAuth = () => async (authEvent) => {
   if (!_needAuth) throw new Error('nip42: auth declined — no gated resource for this member');
   if (!sk) { try { await window.Fellowship.ready; } catch {} }

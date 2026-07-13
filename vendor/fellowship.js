@@ -5892,7 +5892,7 @@
   var pool = new SimplePool();
   var sk = null;
   var pub = null;
-  var _needAuth = false;
+  var _needAuth = true;
   pool.automaticallyAuth = () => async (authEvent) => {
     if (!_needAuth) throw new Error("nip42: auth declined \u2014 no gated resource for this member");
     if (!sk) {

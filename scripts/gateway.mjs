@@ -993,26 +993,29 @@ function canRead(e, authed) {
   }
   if (e.kind === 30078) {
     const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-    // the Care module — its CONFIG doc plus the needs / member fills / skips — is readable by the whole
-    // church. Members MUST see that care is enabled (else the Care tab + banner never appear), who's
-    // already helping, and each other's "what I'm bringing" notes — not just stewards. The settings doc
-    // is steward/church-authored and the rest member-authored, so they'd otherwise fail the roster gate
-    // below. Write access stays gated in accept(); the UI still applies the per-need visibility setting.
-    if (d === MEALS_SETTINGS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D) || d.startsWith(AVAIL_D)) return true;
-    // safeguarding lists (minors/approved/guardians) are PII — which pubkeys are children. Members need them to
-    // mirror the DM safeguarding gate on-device, but they must NOT be world-readable. Gate to authed members of
-    // that church (lazy NIP-42: the REQ handler challenges when one is withheld, then AUTH-success re-delivers).
-    if (d.startsWith(MINORS_D) || d.startsWith(APPROVED_D) || d.startsWith(GUARDIANS_D) || d.startsWith(MEDIAKEY_D)) {
-      const pfx = [MINORS_D, APPROVED_D, GUARDIANS_D, MEDIAKEY_D].find(p => d.startsWith(p));   // media-key doc joins the member-gated set: its keys leak the roster otherwise
-      const cp = d.slice(pfx.length);
-      // SECURITY-AUDIT-2026-07-06 H1: gate to an EFFECTIVE member of THIS church — not the raw MEMBER_DOCS
-      // join set, which still contains blocked + unapproved-pending pubkeys. Otherwise any stranger (even one
-      // the church has BANNED) could self-join, AUTH with their own key, and read the plaintext list of which
-      // members are children. Mirror rebuildMembers()'s per-church logic: joined ∧ not blocked ∧ (approved | not gated).
-      const md = MEMBER_DOCS.get(cp);
-      const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
-      const effectiveMember = !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));
-      return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || stewardOf(authed, cp) || effectiveMember);
+    // PRIVATE church docs — readable ONLY by an authenticated EFFECTIVE MEMBER of the owning church (lazy NIP-42),
+    // NEVER by an anonymous internet client. Covers: the roster (member/admitted/stewards/blocked), the safeguarding
+    // lists (minors/approved/guardians), the media key, and the Care module (who's sick/vulnerable + notes + meal-
+    // drop schedules + availability). SECURITY-AUDIT-2026-07-13: member/admitted/stewards/blocked + all the Care docs
+    // were falling through to `return true` below — a world-readable membership ("arrest") list + care PII that
+    // silently NULLIFIED the 2026-07-06 media-key gate (the media-key's object keys ARE the roster, so gating only
+    // it while member:/admitted:/stewards: leak the same list was pointless). Now each resolves its owning church
+    // <cp> and applies ONE effective-member check (mirrors rebuildMembers: joined ∧ not-blocked ∧ (approved | not
+    // gated)). Members authenticate to read these — see fellowship.src.js `_needAuth` (flipped to always-auth).
+    // NOTE joinpolicy: is deliberately NOT gated — it's a boolean {approval} with no PII, and a not-yet-joined
+    // member needs to read it. Care <cp>: careavail carries it in the d-tag; the rest are church-authored OR
+    // ['church',cp]-tagged (accept() guarantees one), so CHURCH_PUBS.has(author)?author:namedChurch(e) resolves all.
+    {
+      let cp = '';
+      const suf = [MEMBER_D, ADMITTED_D, STEWARDS_D, BLOCKED_D, MINORS_D, APPROVED_D, GUARDIANS_D, MEDIAKEY_D, AVAIL_D].find(p => d.startsWith(p));
+      if (suf) cp = d.slice(suf.length);
+      else if (d === MEALS_SETTINGS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) cp = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : namedChurch(e);
+      if (cp) {
+        const md = MEMBER_DOCS.get(cp);
+        const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
+        const effectiveMember = !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));
+        return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || stewardOf(authed, cp) || effectiveMember);
+      }
     }
     // FINANCE (books): the content is encrypted client-side (encPublish self-encrypts to the church key), so
     // the docs are ciphertext to everyone but the church. We do NOT gate reads behind NIP-42 auth — the pool
@@ -2512,7 +2515,7 @@ wss.on('connection', ws => {
       // messages withheld from non-members per NIP-42)
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
       let _reqEvents = 0;
-      scan: for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D)) wantsSafeguard = true; } continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
+      scan: for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd === MEALS_SETTINGS_D) wantsSafeguard = true; } continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
