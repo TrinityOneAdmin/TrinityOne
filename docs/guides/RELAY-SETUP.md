@@ -99,6 +99,7 @@ Self-hosted audio/video is big. If several churches share your node, cap it so n
 - `RELAY_MEDIA_OFF=1` — be a relay **only**; refuse all media uploads (chat/prayer still work).
 - `RELAY_MEDIA_CAP=<bytes>` — a **total** media limit across all churches.
 - `RELAY_CHURCH_MEDIA_CAP=<bytes>` — a **per-church** media limit.
+- `RELAY_MEDIA_REQUIRES_HOST=1` — **conversations for everyone, sermons only for self-hosters.** A church you host for chat/prayer/text resources can *not* upload sermon audio/video unless you've **granted it media hosting** — which you do for churches that run (or pair) their own relay. Ideal for a community relay: you keep hosting many churches' conversations cheaply, but big media lives on each church's own box. Grant media per church with `"media": true` in `church.json` (`{"churches":[{"npub":"npub1…","media":true}]}`) or the `RELAY_MEDIA_CHURCHES=<npub,npub>` env. Off by default — a private single-church relay is unaffected. **Turning it on? Grant your own church(es) media first, or their sermon uploads will be refused.** (Text resources — reading plans, devotionals, announcements — are never affected; they aren't media.)
 
 Uploads over a cap are refused with a clear message, and your relay advertises its media policy so churches choosing a relay can see it. (Text — chat, prayer, docs — is already bounded automatically; these knobs are just for the big media blobs.)
 

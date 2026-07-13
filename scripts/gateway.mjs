@@ -79,7 +79,7 @@ const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs
 const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // mediaCap/churchCap: operator storage limits in BYTES (0 = unlimited), settable from the control panel — for a
 // public relay hosting several churches. The effective cap is the setting if non-zero, else the env fallback.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false };
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -89,9 +89,19 @@ function loadSettings() {
       SETTINGS.mediaCap = Math.max(0, parseInt(s.mediaCap, 10) || 0); SETTINGS.churchCap = Math.max(0, parseInt(s.churchCap, 10) || 0);
       SETTINGS.inviteOnly = s.inviteOnly === true;
       SETTINGS.offerHosting = s.offerHosting === true;
+      SETTINGS.mediaRequiresHost = s.mediaRequiresHost === true;
     }
   } catch {}
 }
+// Media-hosting policy for a SHARED/community relay: sermon media (audio/video, or any large blob) may only be
+// uploaded by a church GRANTED media hosting here (MEDIA_HOSTS — a self-hoster, or one the operator vouches for).
+// A church can be provisioned for conversations + text resources (those are Nostr events, never blobs, so this
+// never touches them) WITHOUT the media grant — it just can't host sermons, and is told to run its own relay.
+// OFF by default (RELAY_MEDIA_REQUIRES_HOST, or the console setting) so a private single-church relay is
+// unaffected; flip it on for the community relay (and grant media to the churches that self-host).
+const MEDIA_HOST_ENV = /^(1|true|yes|on)$/i.test(process.env.RELAY_MEDIA_REQUIRES_HOST || '');
+const mediaRequiresHost = () => SETTINGS.mediaRequiresHost === true || MEDIA_HOST_ENV;
+const GUEST_ASSET_MAX = 4 * 1048576;   // a guest church may still upload a small NON-sermon asset (e.g. an image) up to this — the size backstop catches a big blob mislabeled to dodge the audio/video check
 const effMediaCap = () => SETTINGS.mediaCap || MEDIA_CAP;      // total media-storage cap (bytes), setting overrides env
 const effChurchCap = () => SETTINGS.churchCap || CHURCH_MEDIA_CAP;   // per-church media-storage cap (bytes)
 function saveSettings() { try { const tmp = SETTINGS_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(SETTINGS, null, 2) + '\n'); renameSync(tmp, SETTINGS_FILE); } catch {} }
@@ -309,15 +319,21 @@ function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
 const CHURCH_PUBS = new Set();
 const CHURCH_NAMES = new Map();   // hex pub -> display name (for the Relay app dashboard)
-const addChurch = (s, name) => { const h = toHexPub(s); if (h) { CHURCH_PUBS.add(h); if (name) CHURCH_NAMES.set(h, name); } };
+// Churches GRANTED media hosting on this relay (a self-hoster, or one the operator vouches for). A church can be
+// provisioned for conversations + text resources WITHOUT this grant. Only consulted when mediaRequiresHost() is on
+// (the community-relay policy) — see the blob PUT gate. Grant via church.json ({churches:[{npub,media:true}]} or a
+// top-level {media:true}) or the RELAY_MEDIA_CHURCHES env (comma-separated npubs).
+const MEDIA_HOSTS = new Set();
+const addChurch = (s, name, media) => { const h = toHexPub(s); if (h) { CHURCH_PUBS.add(h); if (name) CHURCH_NAMES.set(h, name); if (media) MEDIA_HOSTS.add(h); } };
 const CHURCH_FILE = join(DATA_DIR,'church.json');
 // (re)load the write policy from env + church.json — called at startup and after a browser config save
 function loadChurches() {
-  CHURCH_PUBS.clear(); CHURCH_NAMES.clear();
+  CHURCH_PUBS.clear(); CHURCH_NAMES.clear(); MEDIA_HOSTS.clear();
   (process.env.CHURCH_NPUB || '').split(',').forEach(s => addChurch(s));
+  (process.env.RELAY_MEDIA_CHURCHES || '').split(',').map(s => s.trim()).filter(Boolean).forEach(s => { const h = toHexPub(s); if (h) MEDIA_HOSTS.add(h); });
   try {
     const cj = JSON.parse(readFileSync(CHURCH_FILE, 'utf8'));
-    if (cj) { if (cj.npub) addChurch(cj.npub, cj.name); (cj.npubs || []).forEach(s => addChurch(s)); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c), c && c.name)); }
+    if (cj) { if (cj.npub) addChurch(cj.npub, cj.name, cj.media === true); (cj.npubs || []).forEach(s => addChurch(s)); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c), c && c.name, !!(c && c.media === true))); }
   } catch {}
 }
 loadChurches();
@@ -1971,6 +1987,13 @@ function serveStatic(req, res) {
     if (MEDIA_OFF) { res.writeHead(403, H); res.end('{"error":"this relay hosts no media (relay-only)"}'); return; }   // operator disabled media
     const who = _blobUploader(req);
     if (!who) { res.writeHead(401, H); res.end('{"error":"unauthorized: sign a kind-24242 upload auth with the church (or steward) key"}'); return; }
+    // Media-hosting policy: on a shared/community relay, a church provisioned for conversations/text but NOT granted
+    // media hosting can't upload sermons — reject audio/video up front, and (below) any blob past the small-asset
+    // size backstop. Off unless mediaRequiresHost(); a granted (self-hosting) church and a private relay are unaffected.
+    const guestMedia = mediaRequiresHost() && !MEDIA_HOSTS.has(who.church);
+    const NEEDS_OWN_RELAY = 'To host sermons, connect your church\'s own relay — this community relay keeps your conversations and text resources free, but audio and video need your own relay.';
+    { const ct = String(req.headers['content-type'] || '').toLowerCase();
+      if (guestMedia && (ct.startsWith('audio/') || ct.startsWith('video/'))) { res.writeHead(403, H); res.end(JSON.stringify({ error: NEEDS_OWN_RELAY })); return; } }
     // Stream the body to a temp file, hashing as it flows — the whole blob (and its base64 for native uploads)
     // never sits in RAM. Native clients send base64 text (CapacitorHttp mangles a raw binary body) → decode in a
     // streaming transform. MAX_BLOB is enforced mid-stream; the storage caps + content-addressed dedup at the end.
@@ -1985,6 +2008,7 @@ function serveStatic(req, res) {
       if (done) return;
       size += chunk.length;
       if (size > MAX_BLOB) { fail(413, 'blob too large'); return; }
+      if (guestMedia && size > GUEST_ASSET_MAX) { fail(403, NEEDS_OWN_RELAY); return; }   // guest church: allow a tiny asset, block anything sermon-sized (even if mislabeled)
       hash.update(chunk);
       if (!out.write(chunk)) { src.pause(); out.once('drain', () => { if (!done) src.resume(); }); }
     });
