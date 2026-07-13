@@ -144,6 +144,9 @@ function KeyDistributor() {
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const last = React.useRef({});
+  const membersRef = React.useRef([]); membersRef.current = members;
+  // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
+  React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
   React.useEffect(() => {
     const memberPubs = members.map(m => m.pubkey);
     for (const g of groups) {
@@ -158,7 +161,18 @@ function KeyDistributor() {
         last.current[g.id] = key;
       }
     }
+    // #17: re-wrap the church MEDIA key for the current roster too. Unlike groups (keyed at create/edit), the media
+    // key is only published at sermon UPLOAD, so a member who joined since is missing from it and can't decrypt
+    // existing sermons. ensureMediaKeyForMembers self-guards (only republishes if someone's actually missing).
+    if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(memberPubs);
   }, [groups, members]);
+  // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
+  // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
+  React.useEffect(() => {
+    const call = () => { if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey)); };
+    const t1 = setTimeout(call, 3500), t2 = setTimeout(call, 9000);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
   return null;
 }
 

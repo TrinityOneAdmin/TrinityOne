@@ -10602,6 +10602,7 @@ zoo`.split("\n");
   var BACKUPMETA_D = "trinityone/backup-meta:";
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
+  var _mediaKeyDocKeys = null;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -11698,6 +11699,27 @@ zoo`.split("\n");
         return out;
       };
     },
+    // #17: make sure the CURRENT church media key is wrapped for everyone in `memberPubs`. A member who joins AFTER an
+    // encrypted sermon was uploaded is not in the media-key doc, so their app can't decrypt existing sermons ("needs the
+    // unlock key" dead-end). This re-wraps the EXISTING key (existing blobs stay decryptable — no re-encryption) and
+    // republishes the doc, but ONLY when someone's actually missing (idempotent → safe to call on every roster change).
+    // Returns false (no-op) if this device hasn't loaded the media key yet, or if no sermon has ever been encrypted.
+    async ensureMediaKeyForMembers(memberPubs) {
+      if (!sk || !_mediaKeyHex) return false;
+      const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+      const have = _mediaKeyDocKeys || {};
+      if (want.every((p) => have[p])) return false;
+      const keys = {};
+      for (const mp of want) {
+        try {
+          keys[mp] = encrypt3(_mediaKeyHex, getConversationKey(sk, mp));
+        } catch (e) {
+        }
+      }
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      if (ok !== false) _mediaKeyDocKeys = keys;
+      return ok;
+    },
     // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
     subscribeMediaKey() {
       if (!pub) return () => {
@@ -11706,6 +11728,7 @@ zoo`.split("\n");
         onevent(e) {
           try {
             const o = JSON.parse(e.content);
+            _mediaKeyDocKeys = o && o.keys || null;
             const mine = o.keys && o.keys[pub];
             if (mine && sk) _mediaKeyHex = decrypt3(mine, getConversationKey(sk, e.pubkey));
           } catch (x) {

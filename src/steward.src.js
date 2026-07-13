@@ -91,6 +91,7 @@ const PINSERMON_D = 'trinityone/pinsermon:';   // the church's currently-feature
 const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (last-backup time + reminder cadence) → same nudge on every steward/device
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key
+let _mediaKeyDocKeys = null;                   // the latest media-key doc's wrapped-per-member map (to detect members not yet keyed)
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
@@ -898,11 +899,27 @@ window.Steward = {
     const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
     return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };
   },
+  // #17: make sure the CURRENT church media key is wrapped for everyone in `memberPubs`. A member who joins AFTER an
+  // encrypted sermon was uploaded is not in the media-key doc, so their app can't decrypt existing sermons ("needs the
+  // unlock key" dead-end). This re-wraps the EXISTING key (existing blobs stay decryptable — no re-encryption) and
+  // republishes the doc, but ONLY when someone's actually missing (idempotent → safe to call on every roster change).
+  // Returns false (no-op) if this device hasn't loaded the media key yet, or if no sermon has ever been encrypted.
+  async ensureMediaKeyForMembers(memberPubs) {
+    if (!sk || !_mediaKeyHex) return false;                       // no media key on this device → nothing to distribute yet
+    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+    const have = _mediaKeyDocKeys || {};
+    if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
+    const keys = {};
+    for (const mp of want) { try { keys[mp] = nip44e(_mediaKeyHex, nip44ck(sk, mp)); } catch (e) {} }
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    if (ok !== false) _mediaKeyDocKeys = keys;                    // reflect what we just published so we don't loop
+    return ok;
+  },
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
     if (!pub) return () => {};
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [MEDIAKEY_D + pub] }], {
-      onevent(e) { try { const o = JSON.parse(e.content); const mine = o.keys && o.keys[pub]; if (mine && sk) _mediaKeyHex = nip44d(mine, nip44ck(sk, e.pubkey)); } catch (x) {} },
+      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; const mine = o.keys && o.keys[pub]; if (mine && sk) _mediaKeyHex = nip44d(mine, nip44ck(sk, e.pubkey)); } catch (x) {} },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };
