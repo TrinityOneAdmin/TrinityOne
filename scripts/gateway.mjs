@@ -769,7 +769,17 @@ const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !
 // which church an event counts against for per-church retention: its explicit 'church' tag, else (for chat)
 // its group's owning church, else (a member's DMs/reactions) that member's church, else '' (shared bucket).
 function resolveChurch(e) {
-  const ct = (e.tags || []).find(t => t[0] === 'church'); if (ct && ct[1]) return ct[1];
+  // SECURITY-2026-07-13: honor a self-declared ['church',cp] tag ONLY when the author actually BELONGS to cp. Trusting
+  // it blindly let a member of church A tag events ['church', B] and inject them into B's per-church retention bucket
+  // (culling B's real chat), B's /export backup, and the corpus B replicates to its trusted relays. Entitled = cp
+  // itself / a network / a steward of cp / an EFFECTIVE member of cp (joined ∧ not-blocked ∧ (approved | not-gated),
+  // mirrors rebuildMembers). Otherwise fall through to group-owner / member-own-church attribution below.
+  const ct = (e.tags || []).find(t => t[0] === 'church'); const cp = ct && ct[1];
+  if (cp) {
+    const md = MEMBER_DOCS.get(cp), gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
+    const effMember = !!(md && md.has(e.pubkey)) && !BLOCKED.has(e.pubkey) && (!gated || !!(admitted && admitted.has(e.pubkey)));
+    if (e.pubkey === cp || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, cp) || effMember) return cp;
+  }
   if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
   const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
   return MEMBER_CHURCH.get(e.pubkey) || '';
@@ -1592,6 +1602,12 @@ function serveStatic(req, res) {
       try {
         if (tooBig) return;   // 413 already sent in the data handler
         const fresh = !CHURCH_PUBS.has(cp);
+        // SECURITY-2026-07-13: /import self-registered ANY fresh church key, bypassing the inviteOnly lock + the
+        // registration cap that the self-register route (below) enforces — so an attacker could seed unlimited
+        // churches on an invite-only relay (each new church key = an isLeader, the precondition for cross-church
+        // mischief). Apply the SAME guards here.
+        if (fresh && SETTINGS.inviteOnly) { res.writeHead(403, H); res.end('{"error":"this relay is invite-only — ask the operator to add your church"}'); return; }
+        if (fresh && CHURCH_PUBS.size >= 200) { res.writeHead(429, H); res.end('{"error":"registration capacity reached — contact the relay operator"}'); return; }
         if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
         let imported = 0, duplicates = 0, invalid = 0;
         for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {
@@ -2405,6 +2421,10 @@ async function reconcileChurchWithPeer(cp, peerBase) {
 // media, and respects the relay's media caps. A distinct, paced pass — media is the heavy part of a sync.
 async function syncMediaFromPeer(cp, peerBase) {
   if (MEDIA_OFF) return 0;
+  // SECURITY-2026-07-13: honour the media-hosting policy on the REPLICATION path too. Without this, a church denied
+  // media hosting here (mediaRequiresHost + not in MEDIA_HOSTS) could still land its sermons on this relay by
+  // uploading to a peer it controls and letting trusted-relay sync pull them — bypassing the PUT-gate.
+  if (mediaRequiresHost() && !MEDIA_HOSTS.has(cp)) return 0;
   const manUrl = peerBase + '/sync-media?church=' + encodeURIComponent(cp);
   let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) return 0; man = await r.json(); } catch { return 0; }
   let pulled = 0;
