@@ -104,15 +104,23 @@ function WatchView({ ctx }) {
   const [sermons, setSermons] = useW([]);   // Tier 2: ALL self-hosted sermons (audio + video) — the church's own media
   const [loadingId, setLoadingId] = useW(null);
   const [sermonsReady, setSermonsReady] = useW(false);   // U8: tell "still loading" apart from "genuinely none" so the empty state can't flash on a slow relay
+  const [slow, setSlow] = useW(false);   // UX #9 watchdog: relay never connected (thin pipe / offline) → swap the forever-spinner for a message + Retry
+  const [retry, setRetry] = useW(0);
   const channelUrl = (ctx.church && ctx.church.channel) || '';
   const churchNpub = ctx.church && ctx.church.npub;
   const chName = (ctx.church && ctx.church.name) || 'your church';
   React.useEffect(() => {
-    setSermonsReady(false);
+    setSermonsReady(false); setSlow(false);
     const FS = window.Fellowship;
     if (!churchNpub || !FS || !FS.subscribeSermons) { setSermons([]); setSermonsReady(true); return; }
     return FS.subscribeSermons(churchNpub, (l) => { setSermons(l); setSermonsReady(true); });
-  }, [churchNpub]);
+  }, [churchNpub, retry]);
+  // watchdog: if the sermons feed hasn't loaded after 12s (relay unreachable over a thin pipe), stop spinning forever
+  React.useEffect(() => {
+    if (sermonsReady && data) return;
+    const t = setTimeout(() => setSlow(true), 12000);
+    return () => clearTimeout(t);
+  }, [sermonsReady, data, retry]);
   React.useEffect(() => {
     let alive = true; setData(null);
     const done = (d) => { if (alive) setData(d || { channel: null, videos: [] }); };
@@ -125,7 +133,7 @@ function WatchView({ ctx }) {
       window.Bible.getVideos().then(done);
     }
     return () => { alive = false; };
-  }, [channelUrl]);
+  }, [channelUrl, retry]);
 
   // play a self-hosted sermon: video opens the player; audio plays in the persistent mini-player
   const playSelf = async (s) => {
@@ -146,8 +154,16 @@ function WatchView({ ctx }) {
 
   if (!data || !sermonsReady) {   // U8: wait for BOTH the channel feed AND the sermons sub before deciding it's empty
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 50, color: 'var(--ink-3)', gap: 14 }}>
-        <div style={{ width: 24, height: 24, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 50, color: 'var(--ink-3)', gap: 14, textAlign: 'center' }}>
+        {slow ? (
+          <>
+            <Icon name="alert" size={22} color="var(--ink-3)" />
+            <div style={{ fontSize: 13.5, lineHeight: 1.5, maxWidth: 260 }}>Can’t reach {chName} right now — check your connection. We’ll keep trying.</div>
+            <button onClick={() => { setSlow(false); setRetry(r => r + 1); }} style={{ padding: '8px 18px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>Try again</button>
+          </>
+        ) : (
+          <div style={{ width: 24, height: 24, borderRadius: 999, border: '2.5px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+        )}
       </div>
     );
   }
