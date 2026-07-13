@@ -6433,6 +6433,8 @@
     relays: loadRelays(),
     CANONICAL_RELAY,
     CANONICAL_RELAYS,
+    toPub,
+    // validate/normalise an npub-or-hex → 64-hex (or null on a bad bech32 checksum); used by the UI to reject a mistyped church code
     myPubkey: null,
     myProfile: null,
     churchPub: null,
