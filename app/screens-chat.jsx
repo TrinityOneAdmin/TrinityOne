@@ -1440,6 +1440,14 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
   const members = ctx.churchPeople || [];
   const loading = !!ctx.churchPeopleLoading;
   const me = FS && FS.myPubkey;
+  // UX #3 watchdog: if the roster is still loading after 12s with nothing cached, the relay's likely unreachable
+  // (thin pipe / offline) — say so instead of spinning forever. The app keeps retrying on reconnect (connTick).
+  const [slow, setSlow] = React.useState(false);
+  React.useEffect(() => {
+    if (!(loading && members.length === 0)) { setSlow(false); return; }
+    const t = setTimeout(() => setSlow(true), 12000);
+    return () => clearTimeout(t);
+  }, [loading, members.length]);
   // a member's display: their chosen name, else their @handle (nip05 local part), else the anonymous handle
   const nameOf = (m) => (m.name && m.name.trim()) || (m.nip05 ? String(m.nip05).split('@')[0] : '') || FS.displayFor(m.pubkey).handle;
   const ql = q.trim().toLowerCase();
@@ -1477,8 +1485,17 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
         ) : null}
         {loading && people.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '54px 24px', color: 'var(--ink-3)' }}>
-            <div style={{ width: 26, height: 26, margin: '0 auto', borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
-            <p style={{ marginTop: 14, fontSize: 14 }}>Loading people…</p>
+            {slow ? (
+              <>
+                <Icon name="alert" size={26} color="var(--ink-3)" />
+                <p style={{ marginTop: 14, fontSize: 14, lineHeight: 1.5, maxWidth: 260, marginLeft: 'auto', marginRight: 'auto' }}>Can’t reach {(ctx.church && ctx.church.name) || 'your church'} right now — check your connection. We’ll keep trying.</p>
+              </>
+            ) : (
+              <>
+                <div style={{ width: 26, height: 26, margin: '0 auto', borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+                <p style={{ marginTop: 14, fontSize: 14 }}>Loading people…</p>
+              </>
+            )}
           </div>
         ) : list.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '54px 24px', color: 'var(--ink-3)' }}>
