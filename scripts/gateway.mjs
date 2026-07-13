@@ -2490,6 +2490,7 @@ wss.on('connection', ws => {
       const putRes = store.put(evt, resolveChurch(evt));
       if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, true, 'have newer'])); return; }
       if (putRes === 'duplicate') { ws.send(JSON.stringify(['OK', evt.id, true, 'duplicate'])); return; }
+      if (putRes === 'future') { ws.send(JSON.stringify(['OK', evt.id, false, 'rejected: timestamp is too far in the future — check this device’s clock'])); return; }
       if (++_putsSinceCull >= 256) { _putsSinceCull = 0; store.cull(); }   // E6: throttle the GROUP BY cull off the per-event hot path (was every stored event)
       // NIP-09: a kind-5 deletes the AUTHOR'S OWN referenced events only — authorOf() gates it to self, so a
       // member can retract their message but never delete someone else's. The kind-5 also broadcasts below, so

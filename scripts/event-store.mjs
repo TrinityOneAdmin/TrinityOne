@@ -49,13 +49,19 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     structured INTEGER NOT NULL DEFAULT 0,
     raw TEXT NOT NULL               -- the verbatim event JSON, returned as-is to clients
   );`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_kind    ON events(kind);
-           CREATE INDEX IF NOT EXISTS idx_pubkey  ON events(pubkey);
+  // COMPOSITE (col, created_at) indexes: every read path is `WHERE <col> IN (…) ORDER BY created_at DESC`, so a
+  // single-column index still forced a TEMP B-TREE sort of the whole matching partition (EXPLAIN-confirmed). The
+  // composite lets SQLite walk the index in created_at order and stop at LIMIT — no full-partition sort. PERF-2026-07-13.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_kind_created   ON events(kind, created_at);
+           CREATE INDEX IF NOT EXISTS idx_pubkey_created ON events(pubkey, created_at);
+           CREATE INDEX IF NOT EXISTS idx_church_created ON events(church, created_at);
            CREATE INDEX IF NOT EXISTS idx_created ON events(created_at);
-           CREATE INDEX IF NOT EXISTS idx_church  ON events(church);
            CREATE INDEX IF NOT EXISTS idx_dtag    ON events(dtag);
            CREATE INDEX IF NOT EXISTS idx_repl    ON events(repl);
            CREATE INDEX IF NOT EXISTS idx_cull    ON events(structured, church, created_at);`);
+  // drop the now-redundant single-column indexes (the composite's leading column serves the same lookups) so writes
+  // don't maintain duplicate b-trees. Idempotent + safe: composites above already cover kind/pubkey/church equality.
+  db.exec(`DROP INDEX IF EXISTS idx_kind; DROP INDEX IF EXISTS idx_pubkey; DROP INDEX IF EXISTS idx_church;`);
 
   const qByRepl = db.prepare('SELECT id, created_at FROM events WHERE repl = ?');
   const qById   = db.prepare('SELECT 1 FROM events WHERE id = ?');
@@ -73,6 +79,11 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // `church` is the gateway-RESOLVED owning church (for per-church retention); falls back to the event's tag.
   function put(e, church) {
     if (!e || !e.id) return 'duplicate';
+    // ROBUSTNESS-2026-07-13: reject a FAR-FUTURE created_at. Replaceable docs (roster/blocklist/stewards/admitted)
+    // supersede purely by created_at, so a future-dated one (clock-skew or malice) can NEVER be corrected — an
+    // honest-timestamped fix is rejected as 'have-newer', pinning the stale state cluster-wide via replication.
+    // 15-min tolerance absorbs normal skew. Applies to every path (live + import + sync) since put() is the choke.
+    if ((e.created_at || 0) > Math.floor(Date.now() / 1000) + 900) return 'future';
     if (qById.get(e.id)) return 'duplicate';   // already hold this exact event — no-op (no re-store/re-broadcast)
     const rk = replKey(e);
     if (rk) {
