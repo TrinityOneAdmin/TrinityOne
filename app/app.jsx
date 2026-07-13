@@ -361,9 +361,17 @@ function App() {
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('online', onOnline);
     window.addEventListener('focus', onVis);
-    // insurance: while foregrounded, refresh subscriptions every 90s so a silently-dropped relay socket
-    // can't stall live content (announcements/notifications) for more than ~90s even without a reconnect.
-    const beat = setInterval(() => { if (document.visibilityState === 'visible') { last = Date.now(); bumpConn(x => x + 1); } }, 90000);
+    // perf #2: the 90s tick used to bump connTick UNCONDITIONALLY, tearing down + reopening ~15 subscription
+    // effects every 90s (several with no `since` → full-backlog re-download over the funnel) even on a healthy
+    // socket. Now it only bumps when a relay we opened has actually DROPPED (relaysHealthy() === false) — the same
+    // gate the steward console already uses. A real drop (e.g. a deploy restart) still re-subscribes to recover;
+    // the foreground/online events above still fire immediately (those are real reconnect signals, not a blind timer).
+    const beat = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      const F = window.Fellowship;
+      if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
+      last = Date.now(); bumpConn(x => x + 1);
+    }, 90000);
     return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); clearInterval(beat); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church

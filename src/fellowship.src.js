@@ -544,6 +544,9 @@ window.Fellowship = {
   CANONICAL_RELAY,
   CANONICAL_RELAYS,
   toPub,   // validate/normalise an npub-or-hex → 64-hex (or null on a bad bech32 checksum); used by the UI to reject a mistyped church code
+  // true if every relay we've opened is still connected. The member app's 90s reconnect tick only re-subscribes when
+  // this is FALSE — so a healthy socket never triggers the full re-REQ storm (perf #2). Mirrors the steward console.
+  relaysHealthy() { try { const st = pool.listConnectionStatus(); for (const url of churchRelays()) { if (st.get(url) === false) return false; } return true; } catch (e) { return true; } },
 
   myPubkey: null,
   myProfile: null,

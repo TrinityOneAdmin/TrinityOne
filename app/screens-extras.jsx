@@ -154,7 +154,7 @@ function ListenScreen({ open, onClose, ctx }) {
       setLoadingId(ep.id);
       try {
         const dec = ep.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(churchNpub) : null;   // Tier 2: church media key
-        if (ep.enc && !dec) { ctx.toast('This encrypted sermon needs the church media key'); setLoadingId(null); return; }
+        if (ep.enc && !dec) { ctx.toast('This recording is for members — your app hasn’t received the unlock key yet. It’s sent automatically once your steward is online; try again shortly.'); setLoadingId(null); return; }
         const src = await FS.fetchSermon({ sha256: ep.sha256, hosts: ep.hosts, mime: ep.mime, enc: ep.enc }, { mime: ep.mime || 'audio/mpeg', decrypt: dec });
         window.TrinityAudio.play({ id: ep.id, title: ep.title, subtitle: chName, src, image: ep.image, album: chName });
       } catch (e) { ctx.toast('Couldn’t load: ' + (e.message || 'error')); }

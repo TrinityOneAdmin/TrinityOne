@@ -137,7 +137,7 @@ function WatchView({ ctx }) {
     try {
       const FS = window.Fellowship;
       const dec = s.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(churchNpub) : null;
-      if (s.enc && !dec) { ctx.toast('This encrypted sermon needs the church media key'); setLoadingId(null); return; }
+      if (s.enc && !dec) { ctx.toast('This recording is for members — your app hasn’t received the unlock key yet. It’s sent automatically once your steward is online; try again shortly.'); setLoadingId(null); return; }
       const src = await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
       window.TrinityAudio.play({ id: s.id, title: s.title, subtitle: chName, src, album: chName });
     } catch (e) { ctx.toast('Couldn’t load: ' + (e.message || 'error')); }
@@ -274,7 +274,7 @@ function VideoPlayer({ video, open, onClose, ctx }) {
     (async () => {
       try {
         const dec = video.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(ctx.church && ctx.church.npub) : null;
-        if (video.enc && !dec) { if (alive) setSelfErr('This encrypted video needs the church media key'); return; }
+        if (video.enc && !dec) { if (alive) setSelfErr('This recording is for members — your app hasn’t received the unlock key yet. It’s sent automatically once your steward is online; try again shortly.'); return; }
         url = await FS.fetchSermon(
           { sha256: video.sha256, hosts: video.hosts, mime: video.mime, enc: video.enc },
           { mime: video.mime || 'video/mp4', decrypt: dec, total: video.size || 0,

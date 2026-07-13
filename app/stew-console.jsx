@@ -124,7 +124,7 @@ function StewWizard({ onDone }) {
             {WIZ_STEPS.map((s, i) => {
               const done = i < step, active = i === step;
               return (
-                <button key={s.key} onClick={() => setStep(i)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '11px 12px', borderRadius: 12, border: 'none', cursor: 'pointer', textAlign: 'left', background: active ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'transparent' }}>
+                <button key={s.key} onClick={() => { if (i <= step) setStep(i); }} disabled={i > step} title={i > step ? 'Use “Continue” to move forward' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '11px 12px', borderRadius: 12, border: 'none', cursor: i <= step ? 'pointer' : 'default', opacity: i > step ? 0.55 : 1, textAlign: 'left', background: active ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'transparent' }}>
                   <div style={{ width: 30, height: 30, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13.5, fontFamily: 'var(--font-display)',
                     background: done ? 'var(--sage)' : active ? 'var(--clay)' : 'var(--surface-2)', color: done || active ? '#fff' : 'var(--ink-3)', border: done || active ? 'none' : '1px solid var(--line)' }}>
                     {done ? <Icon name="check" size={16} stroke={2.6} color="#fff" /> : i + 1}
@@ -211,15 +211,15 @@ function WizKey({ saved, setSaved }) {
   const copyNpub = () => { try { copyText(church.npub || ''); } catch (e) { try { navigator.clipboard.writeText(church.npub || ''); } catch {} } setCopied(true); setTimeout(() => setCopied(false), 1400); };
   return (
     <div style={{ marginTop: 18 }}>
-      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This mints your church’s identity on Nostr. Every group and notice gets <b style={{ color: 'var(--ink)' }}>signed</b> by it — so members can trust a message is really from you.</p>
+      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This creates your church’s own secure key. Every group and notice you post is <b style={{ color: 'var(--ink)' }}>signed</b> with it — so members know a message is really from you.</p>
       <div style={{ marginTop: 22, borderRadius: 18, padding: 24, background: 'linear-gradient(160deg, var(--midnight-2), var(--midnight))', color: 'var(--paper)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <SkBadge initials={initials} size={42} />
           <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{name}</div><div style={{ fontSize: 12.5, opacity: .6 }}>Public church key</div></div>
           <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: 'var(--sage-soft)' }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--sage)' }} /> Generated</div>
         </div>
-        <button type="button" onClick={copyNpub} aria-label={copied ? 'Copied' : 'Copy npub'} title="Copy this church's public key" style={{ cursor: 'pointer', width: '100%', textAlign: 'left', marginTop: 16, display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 11, background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.1)', color: 'inherit', font: 'inherit' }}>
-          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold-soft)', background: 'rgba(224,184,96,.16)', padding: '3px 7px', borderRadius: 6 }}>NPUB</span>
+        <button type="button" onClick={copyNpub} aria-label={copied ? 'Copied' : 'Copy church key'} title="Copy this church's public key (its shareable address)" style={{ cursor: 'pointer', width: '100%', textAlign: 'left', marginTop: 16, display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 11, background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.1)', color: 'inherit', font: 'inherit' }}>
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold-soft)', background: 'rgba(224,184,96,.16)', padding: '3px 7px', borderRadius: 6 }}>KEY</span>
           <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 13, opacity: .85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{church.npub || '—'}</span>
           <Icon name={copied ? 'check' : 'copy'} size={16} color={copied ? 'var(--sage)' : 'rgba(255,255,255,.5)'} />
         </button>
@@ -234,7 +234,7 @@ function WizIdentity({ name, setName, nip05, setNip05 }) {
     <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
       <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This is what members see when they follow you. You can change it later from Settings.</p>
       <WizInput label="Church name" value={name} onChange={setName} placeholder="Your church’s name" autoFocus />
-      <WizInput label="Verified name · NIP-05 (optional)" value={nip05} onChange={setNip05} placeholder="yourchurch.org" mono
+      <WizInput label="Website verification (optional)" value={nip05} onChange={setNip05} placeholder="yourchurch.org" mono
         hint="Optional — adds a ✓ next to your name if you host a small verification file. Leave blank for now if you’re not sure." />
     </div>
   );
@@ -260,7 +260,7 @@ function WizRelays({ ownRelay, setOwnRelay }) {
   };
   return (
     <div style={{ marginTop: 18 }}>
-      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>Relays store and serve your church’s signed events. Your church runs on the shared <b style={{ color: 'var(--ink)' }}>TrinityOne community nodes</b> by default — nothing to set up, and if one’s down the others carry on.</p>
+      <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>Relays are the computers that carry your church’s messages. Your church runs on the shared <b style={{ color: 'var(--ink)' }}>TrinityOne community nodes</b> by default — nothing to set up, and if one’s down the others carry on.</p>
       <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
         {(window.Steward && window.Steward.relayList ? window.Steward.relayList() : []).map(url => {
           const own = window.Steward && window.Steward.extraRelays && window.Steward.extraRelays().includes(url);
@@ -323,7 +323,7 @@ function WizInvite() {
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   return (
     <div style={{ marginTop: 18 }}>
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--sage)', fontWeight: 700, fontSize: 15 }}><Icon name="check" size={18} stroke={2.6} color="var(--sage)" /> {church.name || 'Your church'} is live on Nostr</div>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--sage)', fontWeight: 700, fontSize: 15 }}><Icon name="check" size={18} stroke={2.6} color="var(--sage)" /> {church.name || 'Your church'} is live</div>
       <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0' }}>Hand this code or QR to your people. One scan follows your church and pulls in your groups — they set their name as they join.</p>
       <div style={{ marginTop: 22, padding: 24, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow-sm)' }}>
         {window.JoinCard ? <JoinCard qrSize={120} /> : <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Your join code appears here once the console finishes loading.</div>}
