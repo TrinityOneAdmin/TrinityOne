@@ -12,8 +12,10 @@
   if (name)  app += '&name=' + encodeURIComponent(name);
   if (relay && /^wss:\/\//i.test(relay)) app += '&relay=' + encodeURIComponent(relay);   // SECURITY-AUDIT-2026-07-06 L9: only forward an ENCRYPTED (wss://) relay from a public join link — never a cleartext/hostile one
 
-  if (name)   { try { document.getElementById('pill').textContent = 'Hi, ' + decodeURIComponent(name); } catch(e){} }
-  if (church) { try { document.getElementById('head').textContent = 'Join ' + decodeURIComponent(church); } catch(e){} }
+  // URLSearchParams.get() ALREADY percent-decodes — decoding again double-decodes (a name with a literal '%' throws;
+  // encoded chars render wrong). Use the values as-is.
+  if (name)   { try { document.getElementById('pill').textContent = 'Hi, ' + name; } catch(e){} }
+  if (church) { try { document.getElementById('head').textContent = 'Join ' + church; } catch(e){} }
 
   var ua = navigator.userAgent || '';
   var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);

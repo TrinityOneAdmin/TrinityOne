@@ -510,7 +510,7 @@ function App() {
       // a bulk-invite slip carries the person's name (?name=) so the steward's directory shows it without
       // anyone typing. Set it ONLY for a fresh scanner with no name yet — never overwrite an existing name.
       if (_nameP) {
-        const want = decodeURIComponent(_nameP).slice(0, 40).trim();
+        const want = _nameP.slice(0, 40).trim();   // _nameP came from URLSearchParams.get() — already decoded; decoding again broke names with a literal '%'
         for (let i = 0; i < 20 && want; i++) {
           await new Promise(r => setTimeout(r, 150));
           const cur = window.Fellowship && window.Fellowship.myProfile;

@@ -9,6 +9,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   const [av, setAv] = useId({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' });
   const [words, setWords] = useId([]);
   const [ack, setAck] = useId(false);
+  const [copied, setCopied] = useId(false);
   const [checkIdx, setCheckIdx] = useId([]);   // the two word positions we quiz
   const [answers, setAnswers] = useId(['', '']);
   const [checkErr, setCheckErr] = useId('');
@@ -82,7 +83,9 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
             {words.map((w, i) => <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 11, background: 'var(--surface)', border: '1px solid var(--line)' }}><span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', minWidth: 15 }}>{i + 1}</span><span style={{ fontSize: 15, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }}>{w}</span></div>)}
           </div>
         ) : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: 24 }}>Preparing your words…</div>}
-        <button onClick={() => { if (navigator.clipboard && words.length) { navigator.clipboard.writeText(words.join(' ')).catch(() => {}); } }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', padding: '10px', borderRadius: 12, fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 16 }}>Copy the 12 words</button>
+        {/* Give feedback (a silent copy left users unsure it worked) AND — key for a shared/monitored phone — overwrite
+            the clipboard after 60s so the recovery phrase doesn't linger there for a keyboard app / clipboard sync to lift. */}
+        <button onClick={() => { if (navigator.clipboard && words.length) { navigator.clipboard.writeText(words.join(' ')).then(() => { setCopied(true); setTimeout(() => setCopied(false), 8000); setTimeout(() => { try { navigator.clipboard.writeText(' '); } catch (e) {} }, 60000); }).catch(() => {}); } }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: copied ? 'var(--sage)' : 'var(--ink-2)', padding: '10px', borderRadius: 12, fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 16 }}>{copied ? 'Copied ✓ — paste it somewhere safe now (clears in 1 min)' : 'Copy the 12 words'}</button>
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: 11, cursor: 'pointer', padding: '2px 2px' }}>
           <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} style={{ width: 20, height: 20, marginTop: 1, accentColor: 'var(--clay)', flexShrink: 0 }} />
           <span style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>I’ve written down my 12 words and stored them somewhere safe.</span>
