@@ -372,7 +372,9 @@ try { RELAY_NAMES = JSON.parse(readFileSync(RELAY_NAMES_FILE, 'utf8')) || {}; } 
 function saveRelayNames() { try { const tmp = RELAY_NAMES_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(RELAY_NAMES, null, 2) + '\n'); renameSync(tmp, RELAY_NAMES_FILE); } catch {} }
 // pub → handle reverse index (one handle per relay key) so applyClaimRecord is O(1), not an O(n) scan per record.
 const _handleByPub = new Map();
-for (const [h, r] of Object.entries(RELAY_NAMES)) if (r && r.pub) _handleByPub.set(r.pub, h);
+const _lastAtByPub = new Map();   // pubkey -> highest created_at ever accepted from it (monotonic; defeats replaying a released handle's old claim)
+const RELAY_NAMES_CAP = 20000;    // hard cap on directory size — a flood of valid claims can't grow the map/disk without bound
+for (const [h, r] of Object.entries(RELAY_NAMES)) if (r && r.pub) { _handleByPub.set(r.pub, h); if ((r.at || 0) > (_lastAtByPub.get(r.pub) || 0)) _lastAtByPub.set(r.pub, r.at || 0); }
 // Debounce the whole-file directory write: a gossip merge of many records does ONE write, not one per record.
 let _relayNamesDirty = false;
 function scheduleSaveRelayNames() { if (_relayNamesDirty) return; _relayNamesDirty = true; setTimeout(() => { _relayNamesDirty = false; saveRelayNames(); }, 1000); }
@@ -384,7 +386,12 @@ const _handleRe = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;   // 3–32 chars, lowerc
 function verifyClaimEvent(ev, maxAgeSec) {
   try {
     if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
-    if (maxAgeSec && Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > maxAgeSec) return null;
+    const nowSec = Math.floor(Date.now() / 1000);
+    // SECURITY-2026-07-13: reject FUTURE-dated claims on EVERY path (incl. gossip merge, which passes maxAgeSec=0).
+    // applyClaimRecord is latest-wins by created_at, so a year-3000 claim would be permanently unbeatable — it locks
+    // a handle forever and stops the real relay re-pointing its own name. 5-min skew tolerance.
+    if ((ev.created_at || 0) > nowSec + 300) return null;
+    if (maxAgeSec && Math.abs(nowSec - (ev.created_at || 0)) > maxAgeSec) return null;
     const tag = (n) => (ev.tags.find(t => Array.isArray(t) && t[0] === n) || [])[1];
     const handle = String(tag('handle') || '').toLowerCase();
     const url = String(tag('relay') || '');
@@ -408,13 +415,26 @@ function _verifyRelayClaim(req, handle, relayUrl) {
 // arrive. Returns true if it changed the table.
 function applyClaimRecord(rec) {
   if (!rec || !rec.handle) return false;
+  // SECURITY-2026-07-13: per-key MONOTONIC created_at. The old guards only compared against the record stored under
+  // the SAME handle, so replaying a relay's OLD (already-released) handle claim hit an EMPTY slot, passed both guards,
+  // and DELETED the key's current handle (rolling it back + freeing the new name for a squatter). Require every record
+  // to be strictly newer than anything we've accepted from this key, whatever handle it names — releasing is now
+  // monotonic and a replayed old claim is rejected.
+  if ((_lastAtByPub.get(rec.pub) || 0) >= rec.at) return false;
   const existing = RELAY_NAMES[rec.handle];
   if (existing && existing.pub !== rec.pub) return false;             // name owned by another key — first-claim-wins
-  if (existing && (existing.at || 0) >= rec.at) return false;         // not newer than what we have
   const prev = _handleByPub.get(rec.pub);                             // this key's previous handle — release it (one handle per relay)
   if (prev && prev !== rec.handle) delete RELAY_NAMES[prev];
   RELAY_NAMES[rec.handle] = { url: rec.url, pub: rec.pub, at: rec.at, ...(rec.offer ? { offer: rec.offer } : {}), ev: rec.ev };
   _handleByPub.set(rec.pub, rec.handle);
+  _lastAtByPub.set(rec.pub, rec.at);
+  // DoS: bound the directory. If a flood pushed us over the cap, evict the oldest entries (by claim time) — a relay
+  // that still cares re-claims on its next gossip tick (fresh created_at), so eviction is self-healing.
+  const keys = Object.keys(RELAY_NAMES);
+  if (keys.length > RELAY_NAMES_CAP) {
+    keys.sort((a, b) => (RELAY_NAMES[a].at || 0) - (RELAY_NAMES[b].at || 0));
+    for (let i = 0; i < keys.length - RELAY_NAMES_CAP; i++) { const h = keys[i]; const pub = RELAY_NAMES[h] && RELAY_NAMES[h].pub; delete RELAY_NAMES[h]; if (pub && _handleByPub.get(pub) === h) _handleByPub.delete(pub); }
+  }
   scheduleSaveRelayNames();
   return true;
 }
