@@ -673,7 +673,7 @@ async function buildInvitePdf({ name, url, svg }) {
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5); doc.setTextColor(60, 52, 44);
   [['1.', 'Open your phone camera and point it at the code (or type the link).'],
    ['2.', 'Tap Add to Home Screen / Install so it works offline.'],
-   ['3.', 'It opens already following ' + nm + '. Pick a display name, or stay anonymous.'],
+   ['3.', 'It opens already following ' + nm + '. Set your name so your church family recognises you — you can stay private if you need to.'],
    ['4.', 'When asked, write your 12-word recovery phrase in the boxes below.']].forEach(([n, s]) => {
     const l = doc.splitTextToSize(s, W - 2 * M - 18); doc.text(n, M, y); doc.text(l, M + 18, y); y += l.length * 13 + 4;
   });
@@ -691,7 +691,7 @@ async function buildInvitePdf({ name, url, svg }) {
     doc.text(String(i + 1) + '.', x, ly); doc.setDrawColor(172, 162, 147); doc.line(x + 20, ly + 2, x + colW, ly + 2);
   }
   doc.setFontSize(8.5); doc.setTextColor(150, 140, 124);
-  doc.text('TrinityOne · self-custodial fellowship', W / 2, 812, { align: 'center' });
+  doc.text('TrinityOne · your church, in your hands', W / 2, 812, { align: 'center' });
   return doc;
 }
 
@@ -835,7 +835,7 @@ function InvitePosterModal({ church, url, svg, onClose }) {
         <ol style={{ margin: '18px 0 0', paddingLeft: 20, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
           <li>Open your phone camera and point it at the code (or type the link).</li>
           <li>Tap <b>Add to Home Screen / Install</b> so it works offline.</li>
-          <li>It opens already following <b>{church.name || 'your church'}</b>. Pick a display name, or stay anonymous.</li>
+          <li>It opens already following <b>{church.name || 'your church'}</b>. Set your name so your church family recognises you — you can stay private if you need to.</li>
           <li>When asked, write your <b>12-word recovery phrase</b> in the boxes below.</li>
         </ol>
         <div style={{ display: 'flex', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)' }}>
@@ -923,7 +923,7 @@ function JoinModal({ onClose }) {
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Invite your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 30 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, textAlign: 'center' }}>Invite your church</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 22px', textAlign: 'center' }}>Show this on screen or print it. One scan with a phone camera opens TrinityOne already following your church — anonymously, no sign-up.</p>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 22px', textAlign: 'center' }}>Show this on screen or print it. One scan with a phone camera opens TrinityOne already following your church — no account, no phone number.</p>
         <JoinCard qrSize={168} center />
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ width: '100%', padding: 11, fontSize: 14, marginTop: 24 }}>Done</button>
       </div>

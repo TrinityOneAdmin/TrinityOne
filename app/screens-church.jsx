@@ -132,20 +132,22 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
   const [scanning, setScanning] = useCh(false);
   const [busy, setBusy] = useCh(false);
   const hasNpub = /npub1[0-9a-z]{20,}/.test(code);
-  // joinable = a bare npub / invite link, OR a NIP-05 nice name (@church-name / name@host) we can resolve
-  const joinable = hasNpub || /^@?[a-z0-9._-]{2,}(@[a-z0-9.-]+)?$/i.test(code.trim());
-  // follow by npub (from a bare npub, invite link, or scanned QR), else resolve a nice name → npub.
+  // joinable = a bare npub / invite link, OR a typed nice name. UX #5: allow SPACES ("St Marys") — the button used
+  // to silently grey out on a space with no hint, a classic drop-off. We normalise the name on submit.
+  const joinable = hasNpub || /^@?[a-z0-9._\- ]{2,}(@[a-z0-9.-]+)?$/i.test(code.trim());
+  // follow by npub (from a bare npub, invite link, or scanned QR), else resolve a typed name → npub.
   const resolve = async (raw) => {
     const input = raw != null ? raw : code;
     setErr('');
-    if (ctx.followChurch(input) !== false) { onFollowed(); return true; }   // fast path: npub / invite link
+    if (ctx.followChurch(input) !== false) { onFollowed(); return true; }   // fast path: npub / invite link / QR
     setBusy(true);
+    const nice = input.trim().replace(/\s+/g, '-').toLowerCase();   // "St Marys" → "st-marys" so a typed church name resolves
     let npub = null;
-    try { npub = (window.Fellowship && window.Fellowship.resolveChurch) ? await window.Fellowship.resolveChurch(input) : null; } catch (e) {}
+    try { npub = (window.Fellowship && window.Fellowship.resolveChurch) ? await window.Fellowship.resolveChurch(nice) : null; } catch (e) {}
     setBusy(false);
     if (npub && ctx.followChurch(npub) !== false) { onFollowed(); return true; }
     setScanning(false);
-    setErr('Couldn’t find that church. Check the @name, or paste the npub or invite link your steward shared.');
+    setErr('Couldn’t find that church. Check the name, or paste the code or link your steward shared.');
     return false;
   };
   return (
@@ -169,7 +171,7 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 0 16px' }}>
         <div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>enter code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
       </div>
-      <input value={code} onChange={e => { setCode(e.target.value.trim()); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && joinable && !busy) resolve(); }} autoFocus placeholder="@church-name, npub1… or invite link" style={{
+      <input value={code} onChange={e => { setCode(e.target.value.trim()); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && joinable && !busy) resolve(); }} autoFocus placeholder="church name, code, or invite link" style={{
         width: '100%', height: 58, border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 18px',
         fontSize: 14, fontFamily: 'monospace', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', textAlign: 'center', textOverflow: 'ellipsis' }} />
       {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8, lineHeight: 1.4 }}>{err}</div> : null}

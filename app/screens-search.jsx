@@ -12,9 +12,11 @@ function SearchScreen({ ctx, onBack }) {
 
   const isStrong = /^[GH]\d+$/i.test(active);
   const lexEntry = isStrong ? Bible.lex(active) : null;
-  const hits = active && !isStrong ? Bible.search(active, 250, ver) : [];
+  // perf #7: memoize the full-corpus LIKE scan (~31k verses) — it re-ran on every keystroke of the box AND every
+  // background App re-render once a term was active. Now it runs only when the term or version changes.
+  const hits = React.useMemo(() => active && !isStrong ? Bible.search(active, 250, ver) : [], [active, ver]);
   // free-text search also scans installed dictionary/lexicon DEFINITIONS (guard in case an older cached engine has no searchDict)
-  const dictHits = active && !isStrong && Bible.searchDict ? Bible.searchDict(active, 24) : [];
+  const dictHits = React.useMemo(() => active && !isStrong && Bible.searchDict ? Bible.searchDict(active, 24) : [], [active]);
   const seeds = ['light', 'love', 'God', 'beginning', 'life'];
 
   const hl = (text) => {

@@ -17,6 +17,25 @@ const SETTINGS_DEFAULTS = { dark: false, accent: 'clay', readScale: 1 };
 const WALLET_ENABLED = false;   // pilot: the in-app self-custodial wallet (balance/add/withdraw) is parked — members give from their own external wallet. Flip to true when the wallet is intentionally in scope.
 function lsGet(key, fallback){ try{ const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }catch(e){ return fallback; } }
 function lsSet(key, val){ try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
+// perf #10: merge a delivered kind-0 church profile into the church list, returning the SAME array reference when
+// nothing actually changed. The old callbacks did `cs.map(...)` unconditionally → a fresh array on every profile
+// re-delivery (incl. per-relay + reconnect), which re-ran the ~9 church-doc subscription effects keyed on `churches`
+// — a teardown/reopen storm at startup. Compares scalars by === and object fields (features/rules) by value.
+function _mergeChurchProfile(cs, id, p){
+  const i = cs.findIndex(x => x.id === id); if (i < 0) return cs;
+  const x = cs[i];
+  const next = { ...x, name: p.name || x.name,
+    channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed,
+    lnaddr: p.lud16 != null ? p.lud16 : x.lnaddr, giving: p.giving != null ? p.giving : x.giving,
+    picture: p.picture != null ? p.picture : x.picture, banner: p.banner != null ? p.banner : x.banner,
+    bannerFade: p.bannerFade != null ? p.bannerFade : x.bannerFade, accent: p.accent != null ? p.accent : x.accent,
+    features: p.features != null ? p.features : x.features, rules: p.rules != null ? p.rules : x.rules,
+    initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() };
+  const same = (a, b) => a === b || (a && b && typeof a === 'object' && JSON.stringify(a) === JSON.stringify(b));
+  let changed = false; for (const k in next) if (!same(next[k], x[k])) { changed = true; break; }
+  if (!changed) return cs;
+  const out = cs.slice(); out[i] = next; return out;
+}
 function useSettings(){
   const [s, setS] = useA(() => Object.assign({}, SETTINGS_DEFAULTS, lsGet('trinityone.settings', {})));
   const set = (k, v) => setS(prev => { const n = { ...prev, [k]: v }; lsSet('trinityone.settings', n); return n; });
@@ -372,7 +391,7 @@ function App() {
     const offs = followed.map(c =>
       window.Fellowship.subscribeChurchProfile(c.npub || c.id, (p) => {
         if (!p) return;
-        setChurches(cs => cs.map(x => x.id === c.id ? { ...x, name: p.name || x.name, channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : x.lnaddr, giving: p.giving != null ? p.giving : x.giving, picture: p.picture != null ? p.picture : x.picture, banner: p.banner != null ? p.banner : x.banner, bannerFade: p.bannerFade != null ? p.bannerFade : x.bannerFade, accent: p.accent != null ? p.accent : x.accent, features: p.features != null ? p.features : x.features, rules: p.rules != null ? p.rules : x.rules, initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : x));
+        setChurches(cs => _mergeChurchProfile(cs, c.id, p));
       }));
     return () => offs.forEach(o => { try { o && o(); } catch (e) {} });
   }, []);
@@ -392,6 +411,10 @@ function App() {
     const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
     if (!m) return false;
     const npub = m[0];
+    // UX #1: validate the bech32 CHECKSUM before following. The regex matches shape only, so a mistyped code (one
+    // wrong char) previously passed and we'd follow a phantom church stuck showing the placeholder name "Church".
+    // toPub returns null on a bad checksum → reject here so the Follow sheet shows its "couldn't find that church" error.
+    if (window.Fellowship && window.Fellowship.toPub && !window.Fellowship.toPub(npub)) return false;
     const F = window.Fellowship;
     if (F && F.addRelay) {
       // always connect to the whole shared pool (the church publishes across all of it), so a member
@@ -411,7 +434,7 @@ function App() {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     const _stopProfile = window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (!p) return;
-      setChurches(cs => cs.map(c => c.id === npub ? { ...c, name: p.name || c.name, channel: p.channel != null ? p.channel : c.channel, audioFeed: p.audioFeed != null ? p.audioFeed : c.audioFeed, lnaddr: p.lud16 != null ? p.lud16 : c.lnaddr, giving: p.giving != null ? p.giving : c.giving, picture: p.picture != null ? p.picture : c.picture, banner: p.banner != null ? p.banner : c.banner, bannerFade: p.bannerFade != null ? p.bannerFade : c.bannerFade, accent: p.accent != null ? p.accent : c.accent, features: p.features != null ? p.features : c.features, rules: p.rules != null ? p.rules : c.rules, initials: (p.name || c.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() } : c));
+      setChurches(cs => _mergeChurchProfile(cs, npub, p));
     });
     // FEDERATION Phase 2: also read the church's signed NIP-65 relay-list and adopt the (enforcing) relays it
     // declares — so relay moves/additions are followed without a new invite link. Additive + fail-closed.

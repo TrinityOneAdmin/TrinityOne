@@ -739,10 +739,12 @@ function ReadScreen({ ctx }) {
     } else { sc.scrollTop = 0; }
   }, [loc.book, loc.chap, loc.verse, version]);
 
-  const verses = Bible.getVerses(loc.book, loc.chap, version);
+  // perf #7: memoize the SQL+regex verse parse — the whole Read screen re-renders on any App state change (every
+  // relay event, the periodic tick), and getVerses re-queried + re-parsed the chapter (and the compare pane) each time.
+  const verses = React.useMemo(() => Bible.getVerses(loc.book, loc.chap, version), [loc.book, loc.chap, version]);
   const vlist = Bible.versions();
   const cmpAbbr = compare === true ? ((vlist.find(v => v.abbr !== version) || {}).abbr || version) : compare;
-  const cmpVerses = cmpAbbr ? Bible.getVerses(loc.book, loc.chap, cmpAbbr) : [];
+  const cmpVerses = React.useMemo(() => cmpAbbr ? Bible.getVerses(loc.book, loc.chap, cmpAbbr) : [], [loc.book, loc.chap, cmpAbbr]);
 
   const bname = Bible.bookName(loc.book);
   const labelOf = (v) => Bible.refLabel(loc, v);

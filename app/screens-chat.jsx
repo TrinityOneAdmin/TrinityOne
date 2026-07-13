@@ -993,7 +993,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const doUnpin = () => { window.Fellowship.unpin(churchNpub, group.id); ctx.toast('Unpinned'); };
   const doRemove = (m) => { window.Fellowship.hideMessage(churchNpub, group.id, m.id); setMenuFor(null); ctx.toast('Message removed'); };
   const hideSet = hidden || new Set();
-  const visibleMsgs = msgs.filter(m => !hideSet.has(m.id));
+  // perf #6: memoize the visible set on [msgs, hidden] so it's a STABLE reference. It was rebuilt every render, and
+  // the `bubbles` useMemo below lists it in its deps — so that memo recomputed on EVERY render (incl. each composer
+  // keystroke), re-creating up to 200 Bubble elements. Now the thread only re-renders when messages/hidden change.
+  const visibleMsgs = React.useMemo(() => msgs.filter(m => !hideSet.has(m.id)), [msgs, hidden]);   // eslint-disable-line
   const msgById = {}; visibleMsgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents from the VISIBLE set only — a hidden/deleted parent must not leak back through a quote (audit U3)
   // perf #2: memoize the rendered bubbles so a composer keystroke (draft state) doesn't re-render the whole
   // thread. Recompute only when message / reaction / menu / pin / picker state actually changes — NOT on draft.
