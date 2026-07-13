@@ -588,11 +588,21 @@ window.Fellowship = {
     const native = !!(typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
     const furl = native ? (url + (url.indexOf('?') >= 0 ? '&' : '?') + 'b64=1') : url;   // pathname (what the NIP-98 gate checks) is unchanged by the query
     const auth = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', furl], ['method', 'GET']], content: '' }, sk);
-    const res = await fetch(furl, { headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) } });
+    const res = await fetch(furl, { headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) }, signal: opts.signal });
     if (!res.ok) throw new Error('media ' + res.status);
+    const onp = typeof opts.onProgress === 'function' ? opts.onProgress : null;
     let bytes;
-    if (native) { const b = atob(await res.text()); bytes = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) bytes[i] = b.charCodeAt(i); }
-    else { bytes = new Uint8Array(await res.arrayBuffer()); }
+    if (native) {
+      // CapacitorHttp returns the whole body at once — no incremental progress. Report total only (size hint).
+      const b = atob(await res.text()); bytes = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) bytes[i] = b.charCodeAt(i);
+      if (onp) onp(bytes.length, bytes.length);
+    } else if (onp && res.body && typeof res.body.getReader === 'function') {
+      // web: stream the body so we can report download progress as bytes arrive
+      const total = Number(res.headers.get('content-length') || 0) || Number(opts.total || 0);
+      const reader = res.body.getReader(); const chunks = []; let loaded = 0;
+      for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); loaded += value.length; onp(loaded, total); }
+      bytes = new Uint8Array(loaded); let off = 0; for (const c of chunks) { bytes.set(c, off); off += c.length; }
+    } else { bytes = new Uint8Array(await res.arrayBuffer()); }
     if (opts.expectSha) { const got = await _sha256hex(bytes); if (got !== opts.expectSha) throw new Error('media integrity failed'); }
     if (typeof opts.decrypt === 'function') bytes = await opts.decrypt(bytes);   // Tier 2 encryption hook (async-capable)
     return URL.createObjectURL(new Blob([bytes], { type: opts.mime || res.headers.get('content-type') || 'application/octet-stream' }));
@@ -604,7 +614,7 @@ window.Fellowship = {
     if (!hosts.length || !s.sha256) throw new Error('sermon has no host');
     let lastErr;
     for (const h of hosts) {
-      try { return await window.Fellowship.fetchBlob(String(h).replace(/\/+$/, '') + '/blob/' + s.sha256, { expectSha: s.sha256, mime: (opts && opts.mime) || s.mime || 'audio/mpeg', decrypt: opts && opts.decrypt }); }
+      try { return await window.Fellowship.fetchBlob(String(h).replace(/\/+$/, '') + '/blob/' + s.sha256, { expectSha: s.sha256, mime: (opts && opts.mime) || s.mime || 'audio/mpeg', decrypt: opts && opts.decrypt, onProgress: opts && opts.onProgress, signal: opts && opts.signal, total: opts && opts.total }); }
       catch (e) { lastErr = e; }
     }
     throw lastErr || new Error('all hosts failed');

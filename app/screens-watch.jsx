@@ -132,7 +132,7 @@ function WatchView({ ctx }) {
     const isVideo = String(s.mime || '').startsWith('video');
     const hosts = (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []);
     if (!hosts.length || !s.sha256) { ctx.toast('This sermon is unavailable'); return; }
-    if (isVideo) { ctx.openVideo({ id: s.id, title: s.title, desc: s.desc, _sermon: true, sha256: s.sha256, hosts, mime: s.mime, enc: s.enc, published: s.ts ? new Date(s.ts * 1000).toISOString() : '' }); return; }
+    if (isVideo) { ctx.openVideo({ id: s.id, title: s.title, desc: s.desc, _sermon: true, sha256: s.sha256, hosts, mime: s.mime, enc: s.enc, size: s.size, published: s.ts ? new Date(s.ts * 1000).toISOString() : '' }); return; }
     setLoadingId(s.id);
     try {
       const FS = window.Fellowship;
@@ -231,27 +231,62 @@ function WatchView({ ctx }) {
   );
 }
 
+// Download/decrypt feedback for a self-hosted sermon. Web streams so we show a live % + bar;
+// native (CapacitorHttp) can't report mid-download, so we show the size + a spinner honestly.
+function SermonLoading({ prog, enc, onCancel }) {
+  const fmtMB = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+  const total = prog && prog.total > 0 ? prog.total : 0;
+  const loaded = prog ? prog.loaded : 0;
+  const pct = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+  const done = total > 0 && loaded >= total;   // bytes are in — now verifying/decrypting
+  const label = done ? (enc ? 'Decrypting…' : 'Finishing…')
+    : total ? `Downloading… ${pct}%`
+    : (loaded ? `Downloading… ${fmtMB(loaded)}` : 'Downloading…');
+  return (
+    <>
+      {total && !done
+        ? <div style={{ width: '78%', maxWidth: 240, height: 5, borderRadius: 999, background: 'rgba(255,255,255,.22)', overflow: 'hidden' }}>
+            <div style={{ width: pct + '%', height: '100%', background: '#fff', borderRadius: 999, transition: 'width .2s ease' }} />
+          </div>
+        : <div style={{ width: 26, height: 26, borderRadius: 999, border: '2.5px solid rgba(255,255,255,.3)', borderTopColor: '#fff', animation: 'trinitySpin .8s linear infinite' }} />}
+      <div>{label}{enc && !done ? <div style={{ fontSize: 11, opacity: .7, marginTop: 3 }}>Encrypted — the whole video downloads before it plays</div> : null}</div>
+      {onCancel ? <button onClick={onCancel} style={{ marginTop: 2, padding: '5px 14px', borderRadius: 999, border: 'none', background: 'transparent', color: 'rgba(255,255,255,.75)', fontSize: 12.5, cursor: 'pointer', textDecoration: 'underline' }}>Cancel</button> : null}
+    </>
+  );
+}
+
 // ── player overlay ──
 function VideoPlayer({ video, open, onClose, ctx }) {
   const [liveId, setLiveId] = useW(null);
   const [data, setData] = useW(null);
   const [selfSrc, setSelfSrc] = useW(null);   // Tier 2: object URL for a self-hosted (member-gated) video blob
   const [selfErr, setSelfErr] = useW('');
+  const [prog, setProg] = useW(null);         // { loaded, total } bytes while downloading (web reports live; native reports on completion)
+  const [retry, setRetry] = useW(0);          // bump to re-attempt after an error
+  const abortRef = React.useRef(null);
   React.useEffect(() => { if (open) window.Bible.getVideos().then(setData); }, [open]);
   React.useEffect(() => { if (open) setLiveId(video && video.ytId ? video.ytId : null); }, [open, video]);
   React.useEffect(() => {
-    if (!open || !video || !video._sermon) { setSelfSrc(null); setSelfErr(''); return; }
-    let url = null, alive = true; const FS = window.Fellowship; setSelfErr('');
+    if (!open || !video || !video._sermon) { setSelfSrc(null); setSelfErr(''); setProg(null); return; }
+    let url = null, alive = true; const FS = window.Fellowship; setSelfErr(''); setProg(null);
+    const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null; abortRef.current = ac;
     (async () => {
       try {
         const dec = video.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(ctx.church && ctx.church.npub) : null;
         if (video.enc && !dec) { if (alive) setSelfErr('This encrypted video needs the church media key'); return; }
-        url = await FS.fetchSermon({ sha256: video.sha256, hosts: video.hosts, mime: video.mime, enc: video.enc }, { mime: video.mime || 'video/mp4', decrypt: dec });
+        url = await FS.fetchSermon(
+          { sha256: video.sha256, hosts: video.hosts, mime: video.mime, enc: video.enc },
+          { mime: video.mime || 'video/mp4', decrypt: dec, total: video.size || 0,
+            signal: ac && ac.signal, onProgress: (loaded, total) => { if (alive) setProg({ loaded, total }); } });
         if (alive) setSelfSrc(url); else URL.revokeObjectURL(url);
-      } catch (e) { if (alive) setSelfErr('Couldn’t load this video'); }
+      } catch (e) {
+        if (!alive) return;
+        if (e && (e.name === 'AbortError' || String(e).indexOf('abort') >= 0)) return;   // user cancelled — leave the overlay closing
+        setSelfErr('Couldn’t load this video — check your connection and try again.');
+      }
     })();
-    return () => { alive = false; if (url) URL.revokeObjectURL(url); };
-  }, [open, video]);
+    return () => { alive = false; if (ac) try { ac.abort(); } catch {} if (url) URL.revokeObjectURL(url); };
+  }, [open, video, retry]);
   if (!video) return null;
   const ch = (data && data.channel) || {};
   const more = ((data && data.videos) || []).filter(v => v.id !== video.id).slice(0, 4);
@@ -272,7 +307,10 @@ function VideoPlayer({ video, open, onClose, ctx }) {
             selfSrc
               ? <video src={selfSrc} controls autoPlay playsInline style={{ width: '100%', height: '100%', display: 'block', background: '#000' }} />
               : <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, textAlign: 'center', padding: 20 }}>
-                  {selfErr ? <><Icon name="alert" size={22} color="#fff" />{selfErr}</> : <><div style={{ width: 26, height: 26, borderRadius: 999, border: '2.5px solid rgba(255,255,255,.3)', borderTopColor: '#fff', animation: 'trinitySpin .8s linear infinite' }} />Loading…</>}
+                  {selfErr
+                    ? <><Icon name="alert" size={22} color="#fff" />{selfErr}
+                        <button onClick={() => { setSelfErr(''); setRetry(r => r + 1); }} style={{ marginTop: 4, padding: '7px 18px', borderRadius: 999, border: '1px solid rgba(255,255,255,.5)', background: 'transparent', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Try again</button></>
+                    : <SermonLoading prog={prog} enc={video.enc} onCancel={() => { if (abortRef.current) try { abortRef.current.abort(); } catch {} onClose(); }} />}
                 </div>
           ) : liveId ? (
             <iframe title="video" width="100%" height="100%" style={{ border: 'none', display: 'block' }}

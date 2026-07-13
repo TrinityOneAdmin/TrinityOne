@@ -6531,13 +6531,33 @@
       const native = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
       const furl = native ? url + (url.indexOf("?") >= 0 ? "&" : "?") + "b64=1" : url;
       const auth = finalizeEvent2({ kind: 27235, created_at: Math.floor(Date.now() / 1e3), tags: [["u", furl], ["method", "GET"]], content: "" }, sk);
-      const res = await fetch(furl, { headers: { Authorization: "Nostr " + btoa(JSON.stringify(auth)) } });
+      const res = await fetch(furl, { headers: { Authorization: "Nostr " + btoa(JSON.stringify(auth)) }, signal: opts.signal });
       if (!res.ok) throw new Error("media " + res.status);
+      const onp = typeof opts.onProgress === "function" ? opts.onProgress : null;
       let bytes;
       if (native) {
         const b = atob(await res.text());
         bytes = new Uint8Array(b.length);
         for (let i3 = 0; i3 < b.length; i3++) bytes[i3] = b.charCodeAt(i3);
+        if (onp) onp(bytes.length, bytes.length);
+      } else if (onp && res.body && typeof res.body.getReader === "function") {
+        const total = Number(res.headers.get("content-length") || 0) || Number(opts.total || 0);
+        const reader = res.body.getReader();
+        const chunks = [];
+        let loaded = 0;
+        for (; ; ) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          loaded += value.length;
+          onp(loaded, total);
+        }
+        bytes = new Uint8Array(loaded);
+        let off = 0;
+        for (const c of chunks) {
+          bytes.set(c, off);
+          off += c.length;
+        }
       } else {
         bytes = new Uint8Array(await res.arrayBuffer());
       }
@@ -6556,7 +6576,7 @@
       let lastErr;
       for (const h of hosts) {
         try {
-          return await window.Fellowship.fetchBlob(String(h).replace(/\/+$/, "") + "/blob/" + s.sha256, { expectSha: s.sha256, mime: opts && opts.mime || s.mime || "audio/mpeg", decrypt: opts && opts.decrypt });
+          return await window.Fellowship.fetchBlob(String(h).replace(/\/+$/, "") + "/blob/" + s.sha256, { expectSha: s.sha256, mime: opts && opts.mime || s.mime || "audio/mpeg", decrypt: opts && opts.decrypt, onProgress: opts && opts.onProgress, signal: opts && opts.signal, total: opts && opts.total });
         } catch (e) {
           lastErr = e;
         }
