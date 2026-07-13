@@ -264,6 +264,7 @@ function VideoPlayer({ video, open, onClose, ctx }) {
   const [prog, setProg] = useW(null);         // { loaded, total } bytes while downloading (web reports live; native reports on completion)
   const [retry, setRetry] = useW(0);          // bump to re-attempt after an error
   const abortRef = React.useRef(null);
+  const watchdog = React.useRef(null);        // fires if <video> neither plays nor errors (silent codec stall)
   React.useEffect(() => { if (open) window.Bible.getVideos().then(setData); }, [open]);
   React.useEffect(() => { if (open) setLiveId(video && video.ytId ? video.ytId : null); }, [open, video]);
   React.useEffect(() => {
@@ -287,6 +288,13 @@ function VideoPlayer({ video, open, onClose, ctx }) {
     })();
     return () => { alive = false; if (ac) try { ac.abort(); } catch {} if (url) URL.revokeObjectURL(url); };
   }, [open, video, retry]);
+  // Watchdog: once we have a blob, the browser should reach canplay in a second or two. If it neither plays
+  // nor errors (some browsers silently stall on an unsupported codec), surface a reason instead of spinning.
+  React.useEffect(() => {
+    if (!selfSrc || selfErr) return;
+    watchdog.current = setTimeout(() => setSelfErr('This video isn’t starting — its format may not be supported in the browser (common for phone H.265/HEVC recordings). It should still play in the phone app.'), 20000);
+    return () => { if (watchdog.current) { clearTimeout(watchdog.current); watchdog.current = null; } };
+  }, [selfSrc, selfErr]);
   if (!video) return null;
   const ch = (data && data.channel) || {};
   const more = ((data && data.videos) || []).filter(v => v.id !== video.id).slice(0, 4);
@@ -304,8 +312,18 @@ function VideoPlayer({ video, open, onClose, ctx }) {
         {/* video frame */}
         <div style={{ margin: '0 14px', borderRadius: 18, overflow: 'hidden', background: '#000', aspectRatio: '16/9', position: 'relative' }}>
           {video._sermon ? (
-            selfSrc
-              ? <video src={selfSrc} controls autoPlay playsInline style={{ width: '100%', height: '100%', display: 'block', background: '#000' }} />
+            selfSrc && !selfErr
+              ? <video src={selfSrc} controls autoPlay playsInline style={{ width: '100%', height: '100%', display: 'block', background: '#000' }}
+                  onCanPlay={() => { if (watchdog.current) { clearTimeout(watchdog.current); watchdog.current = null; } }}
+                  onError={e => {
+                    const er = e.target && e.target.error; const code = er ? er.code : 0;
+                    // MediaError: 3 = DECODE (corrupt), 4 = SRC_NOT_SUPPORTED (codec/container the browser can't play)
+                    console.error('[sermon] video playback failed', { code, message: er && er.message, mime: video.mime });
+                    setSelfErr(code === 4
+                      ? 'This recording’s video format can’t be played in the browser (often the case for phone H.265/HEVC video). It should still play in the phone app.'
+                      : code === 3 ? 'This video couldn’t be decoded — the file may be damaged.'
+                      : 'This video couldn’t be played here.');
+                  }} />
               : <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, textAlign: 'center', padding: 20 }}>
                   {selfErr
                     ? <><Icon name="alert" size={22} color="#fff" />{selfErr}
