@@ -409,6 +409,18 @@ function _publishSigned(tmpl) {
 function _subscribeMany(filters, handlers) {
   return pool.subscribeMany(relays(), filters, handlers);
 }
+// one-shot read of the single NEWEST event matching `filters` (or null), bounded by a short timeout.
+function _one(filters, ms = 4000) {
+  return new Promise((resolve) => {
+    let best = null, done = false;
+    const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(best); };
+    const sub = pool.subscribeMany(relays(), filters, {
+      onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
+      oneose() { finish(); },
+    });
+    setTimeout(finish, ms);
+  });
+}
 
 window.Steward = {
   pubkey: null, npub: null, hasKey: false,
@@ -581,10 +593,38 @@ window.Steward = {
   async syncEnable() {
     if (!sk || !pub) throw new Error('No church key on this device');
     const ids = await window.Steward.relayIdentities();
-    const trusted = ids.filter((r) => r.pubkey).map((r) => ({ pubkey: r.pubkey, url: r.base }));
-    if (trusted.length < 2) throw new Error('Sync needs at least two TrinityOne relays — add another the church runs.');
+    // Dedup by relay IDENTITY (relayPub): two routes to one box (Cloudflare + Tailscale — the a8 pattern) share a
+    // key and are ONE failure domain, so listing both wouldn't add any redundancy. Sync is only meaningful across
+    // >=2 SEPARATE boxes. Mirrors the member-side R3 fix.
+    const byBox = new Map();
+    for (const r of ids) { if (r.pubkey && !byBox.has(r.pubkey)) byBox.set(r.pubkey, { pubkey: r.pubkey, url: r.base }); }
+    const trusted = [...byBox.values()];
+    if (trusted.length < 2) throw new Error('Sync needs at least two separate TrinityOne relays — add another the church runs.');
     await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }, sk));
     return { relays: trusted.length };
+  },
+  // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,
+  // and whether cross-relay sync is currently published ON. boxes < 2 = single point of failure → the console
+  // nudges the steward to add a backup; boxes >= 2 = autoSyncIfRedundant() can switch mirroring on for them.
+  async backupState() {
+    const ids = await window.Steward.relayIdentities();
+    const boxes = new Set(ids.filter((r) => r.pubkey).map((r) => r.pubkey));
+    const online = new Set(ids.filter((r) => r.pubkey && r.online).map((r) => r.pubkey));
+    let syncOn = false;
+    try { const doc = await _one([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }]); const arr = doc ? JSON.parse(doc.content || '[]') : []; syncOn = Array.isArray(arr) && arr.length >= 2; } catch {}
+    return { boxes: boxes.size, online: online.size, entries: ids.length, syncOn };
+  },
+  // D2: make redundancy automatic. If the church already runs >=2 separate relay boxes and sync isn't already on,
+  // switch it on — so a church that has taken the step of adding a real second relay gets live cross-relay backup
+  // without hunting for a toggle. Idempotent + safe: a single-box church can't sync (nothing to mirror to) and is
+  // left alone (the console shows the add-a-backup nudge instead). No church data goes anywhere it isn't already.
+  async autoSyncIfRedundant() {
+    if (!sk || !pub) return { enabled: false };
+    try {
+      const st = await window.Steward.backupState();
+      if (st.boxes >= 2 && !st.syncOn) { await window.Steward.syncEnable(); return { enabled: true, boxes: st.boxes }; }
+      return { enabled: false, boxes: st.boxes, already: st.syncOn };
+    } catch { return { enabled: false }; }
   },
   // resync: turn cross-relay sync OFF — publish an empty trusted-relays list (relays stop exchanging the corpus).
   async syncDisable() {

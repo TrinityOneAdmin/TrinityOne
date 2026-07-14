@@ -203,6 +203,9 @@ function initChurch() {
   }
   window.Steward.init();                                  // load the saved key if there is one (no auto-create)
   if (window.Steward.hasKey && window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
+  // D2: once the console is up with a key, if the church already runs >=2 separate relay boxes, turn on cross-relay
+  // sync automatically (deferred so it never competes with boot). Single-box churches are left alone + nudged.
+  if (window.Steward.hasKey && window.Steward.autoSyncIfRedundant) setTimeout(() => { try { window.Steward.autoSyncIfRedundant(); } catch {} }, 5000);
 }
 
 // "Start a new church": mint a fresh key, register it, and seed the sample chat groups once (real

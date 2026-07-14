@@ -1883,8 +1883,8 @@ function DashRelaysCard() {
   const [err, setErr] = React.useState('');
   const [syncBusy, setSyncBusy] = React.useState(false);
   const [syncMsg, setSyncMsg] = React.useState(null);
-  const [syncable, setSyncable] = React.useState(null);   // how many of the church's relays are TrinityOne relays (can sync)
-  React.useEffect(() => { let ok = true; (async () => { try { const ids = await window.Steward.relayIdentities(); if (ok) setSyncable(ids.filter((r) => r.pubkey).length); } catch {} })(); return () => { ok = false; }; }, []);
+  const [backup, setBackup] = React.useState(null);   // D2: { boxes, online, syncOn } — distinct relay BOXES (redundancy)
+  React.useEffect(() => { let ok = true; (async () => { try { const b = await window.Steward.backupState(); if (ok) setBackup(b); } catch {} })(); return () => { ok = false; }; }, [status.length]);
   const doSync = async (on) => {
     setSyncBusy(true); setSyncMsg(null);
     try { const r = on ? await window.Steward.syncEnable() : await window.Steward.syncDisable(); setSyncMsg({ ok: true, text: on ? '✓ Sync on — your ' + r.relays + ' relays will keep each other in step.' : 'Sync turned off.' }); }
@@ -1961,6 +1961,19 @@ function DashRelaysCard() {
   return (
       <Panel title="Relays" action={!checking ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: allUp ? 'var(--sage)' : 'var(--clay)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: allUp ? 'var(--sage)' : 'var(--clay)' }} /> {online}/{status.length} online</span> : null}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where your church publishes. Add your own relay (self-host it with the TrinityOne Suite) and public ones for redundancy — if one is offline, members reach another.</div>
+        {/* D2: single-point-of-failure nudge (counts DISTINCT relay boxes by identity — two routes to one box don't
+            count as redundancy) — or a "backup on" reassurance once the church runs 2+ separate relays that mirror. */}
+        {backup && backup.boxes < 2 ? (
+          <div style={{ display: 'flex', gap: 11, padding: '12px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--clay)', marginBottom: 14 }}>
+            <div style={{ flexShrink: 0, color: 'var(--clay)', fontSize: 16, lineHeight: 1.3, fontWeight: 800 }}>⚠</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}><b style={{ color: 'var(--ink)' }}>One relay is a single point of failure.</b> If it goes offline, members can’t reach your church. Add a second relay your church runs — self-host with the TrinityOne Suite, or connect one by name below — and your data will mirror across both automatically.</div>
+          </div>
+        ) : backup && backup.syncOn ? (
+          <div style={{ display: 'flex', gap: 9, alignItems: 'center', padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)', flexShrink: 0 }} />
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Backup on.</b> Your {backup.boxes} relays mirror each other — if one goes down, nothing is lost.</div>
+          </div>
+        ) : null}
         {checking ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>Checking relays…</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {status.map(r => {
@@ -2043,10 +2056,10 @@ function DashRelaysCard() {
         {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
           <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Keep your relays in sync</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {syncable != null ? (syncable >= 2 ? <b>{syncable} of your relays can sync.</b> : 'Add a second relay your church runs to switch this on — public relays (nos.lol etc.) stay publish-only, so gated content never leaves your own infrastructure.') : 'Checking…'}</div>
-          {syncable != null && syncable >= 2 ? (
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on — public relays (nos.lol etc.) stay publish-only, so gated content never leaves your own infrastructure.') : 'Checking…'}</div>
+          {backup != null && backup.boxes >= 2 ? (
             <div style={{ display: 'flex', gap: 9 }}>
-              <button onClick={() => doSync(true)} disabled={syncBusy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13 }}>{syncBusy ? 'Saving…' : 'Turn on sync'}</button>
+              <button onClick={() => doSync(true)} disabled={syncBusy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13 }}>{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>
               <button onClick={() => doSync(false)} disabled={syncBusy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>Turn off</button>
             </div>
           ) : null}
