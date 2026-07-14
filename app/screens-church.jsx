@@ -248,7 +248,7 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
             <Icon name="plus" size={18} stroke={2.2} color="var(--clay)" /> Follow another church</button>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, justifyContent: 'center', marginTop: 14, color: 'var(--ink-3)', fontSize: 11.5 }}>
-            <Icon name="globe" size={13} color="var(--ink-3)" /> Discovered over Nostr · in-person invite only
+            <Icon name="globe" size={13} color="var(--ink-3)" /> By invitation from your church
           </div>
         </div>
       ) : (

@@ -1029,9 +1029,9 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{group.name}</div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members ? `${group.members} anonymous` : 'Anonymous'} · Nostr</div>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members ? `${group.members} members` : 'Members only'} · private to your church</div>
           </div>
-          <IconBtn name="shield" onClick={() => ctx.toast('Everyone here is anonymous')} />
+          <IconBtn name="shield" onClick={() => ctx.toast('Private to your church — only members can see this room.')} />
         </div>
       </div>
       {composeEvt ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
