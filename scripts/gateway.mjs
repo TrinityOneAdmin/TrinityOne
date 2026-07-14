@@ -1023,14 +1023,23 @@ function accept(e) {
 // read-gate (NIP-42): an invite-only group's messages are served only to a connection that has proven
 // (via AUTH) it belongs to that group's member list (or is the church/network). Everything else is public.
 function canRead(e, authed) {
-  if (e.kind === 4) {   // safeguarding: never serve a stored minor↔non-approved-adult DM (catches pre-existing messages / belt-and-braces over accept())
+  if (e.kind === 4) {
     const target = (e.tags.find(t => t[0] === 'p') || [])[1];
     const targetHex = target ? (toHexPub(target) || target) : '';
-    if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || CHURCH_PUBS.has(targetHex) || NETWORKS.has(targetHex)) return true;   // church/steward DMs always deliverable
-    if (guardianLinked(e.pubkey, targetHex)) return true;   // v2: parent↔child always deliverable
-    if (MINORS.has(e.pubkey) && !APPROVED.has(targetHex)) return false;
-    if (targetHex && MINORS.has(targetHex) && !APPROVED.has(e.pubkey)) return false;
-    return true;
+    const churchParty = CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || CHURCH_PUBS.has(targetHex) || NETWORKS.has(targetHex);
+    // SAFEGUARDING (deny to EVERYONE, incl. the parties): never serve a stored minor↔non-approved-adult DM —
+    // unless a church/guardian is a party (they may contact minors). Checked first so delivery can't override it.
+    if (!churchParty && !guardianLinked(e.pubkey, targetHex)) {
+      if (MINORS.has(e.pubkey) && !APPROVED.has(targetHex)) return false;
+      if (targetHex && MINORS.has(targetHex) && !APPROVED.has(e.pubkey)) return false;
+    }
+    // DEANON Finding 1: a DM's ENVELOPE (sender pubkey + recipient p-tag + timing) is cleartext even though the
+    // content is NIP-04-encrypted. Serving it to anyone let an anonymous observer who reaches the relay reconstruct
+    // the church's PRIVATE COMMUNICATION GRAPH (who DMs whom, when) — arrest-list-grade metadata, and it unmasks
+    // "anonymous" members. Restrict delivery to an ENDPOINT of the conversation. Members always NIP-42-auth, so a
+    // recipient still receives their DMs (the auth-challenge trigger fires on a withheld kind-4). NIP-17 gift-wrap
+    // is the eventual fix that also hides the graph from the relay ITSELF; this closes the anon-harvest today.
+    return !!authed && (authed === e.pubkey || authed === targetHex);
   }
   if (e.kind === 30078) {
     const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -2596,7 +2605,7 @@ wss.on('connection', ws => {
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
       let _reqEvents = 0;
       const _scanBudget = { left: 300000 };   // shared across ALL filters of this REQ: caps total fallback-scan rows so a crafted many-filter/multi-letter-tag REQ can't freeze the loop (E1)
-      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd === MEALS_SETTINGS_D || dd === RELAYS_D) wantsSafeguard = true; } continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
+      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd === MEALS_SETTINGS_D || dd === RELAYS_D) wantsSafeguard = true; } else if (!ws._auth && e.kind === 4) wantsSafeguard = true; /* Finding 1: withheld DM envelope → challenge so the actual party can auth + read their own DMs */ continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
