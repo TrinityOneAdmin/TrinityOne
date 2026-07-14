@@ -257,7 +257,6 @@ function _relayInfo(wssUrl) {
   _relayInfoCache.set(wssUrl, p);
   return p;
 }
-function _verifyEnforcing(wssUrl) { return _relayInfo(wssUrl).then(t => !!(t && t.enforces === true)); }
 // NIP-42 auth is best-effort: public church reads are NOT auth-gated, so a slow/failed auth handshake
 // (e.g. "auth timed out" over a tunnel) must never surface as an uncaught error or block anything.
 if (typeof window !== 'undefined') {

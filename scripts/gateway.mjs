@@ -272,6 +272,10 @@ function ensureSignedBundle() {
       strictOK = bs.status === 0 && existsSync(tmp);
     }
     if (!strictOK) {
+      // SILENT-DOWNGRADE GUARD: if we WANTED the strict build but it failed, the fallback ships the raw Babel bundle,
+      // which flips every self-host's CSP back to lax (unsafe-eval) with no other signal. Make it LOUD so a release
+      // isn't cut with a silently-degraded security posture (the sha-frozen bundle would carry it fleet-wide).
+      if (strictWanted) console.error('\n[31m✗✗ STRICT WEB BUNDLE FAILED — falling back to the RAW Babel bundle. Served CSP will be LAX (unsafe-eval) for every relay pulling this bundle. Fix build-strict-tgz.sh + clear relay/.bundle-cache before releasing.[0m\n');
       const ar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', 'HEAD'], { maxBuffer: 512 * 1024 * 1024 });
       if (ar.status !== 0 || !ar.stdout || !ar.stdout.length) return null;
       writeFileSync(tmp, ar.stdout);
@@ -1046,7 +1050,7 @@ function canRead(e, authed) {
       let cp = '';
       const suf = [MEMBER_D, ADMITTED_D, STEWARDS_D, BLOCKED_D, MINORS_D, APPROVED_D, GUARDIANS_D, MEDIAKEY_D, AVAIL_D].find(p => d.startsWith(p));
       if (suf) cp = d.slice(suf.length);
-      else if (d === MEALS_SETTINGS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) cp = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : namedChurch(e);
+      else if (d === MEALS_SETTINGS_D || d === RELAYS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) cp = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : namedChurch(e);   // RELAYS_D (trinityone/relays): the church's relay-topology / sync-peers doc — gate to members, not world-readable (D2 auto-publishes it)
       if (cp) {
         const md = MEMBER_DOCS.get(cp);
         const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
@@ -2592,7 +2596,7 @@ wss.on('connection', ws => {
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
       let _reqEvents = 0;
       const _scanBudget = { left: 300000 };   // shared across ALL filters of this REQ: caps total fallback-scan rows so a crafted many-filter/multi-letter-tag REQ can't freeze the loop (E1)
-      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd === MEALS_SETTINGS_D) wantsSafeguard = true; } continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
+      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd === MEALS_SETTINGS_D || dd === RELAYS_D) wantsSafeguard = true; } continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
