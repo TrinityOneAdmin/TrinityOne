@@ -259,13 +259,19 @@ function ensureSignedBundle() {
   try {
     mkdirSync(BUNDLE_CACHE_DIR, { recursive: true });
     const tmp = tgz + '.tmp.' + process.pid;
-    // git archive -> deterministic-enough single artifact we then freeze on disk and never regenerate for this sha.
-    if (process.env.STRICT_WEB_BUNDLE) {
-      // D1: build a PRE-TRANSPILED (Babel-free) web bundle here on the release host — a8 has no esbuild to do
-      // it at pull time. The script writes the .tgz straight to tmp. Falls through to a null return on failure.
+    // C1: DEFAULT to the PRE-TRANSPILED (Babel-free) web bundle — it halves the first-load payload every
+    // self-host serves (654 kB gz vs 1339 kB; ~1.7 min vs 3.6 min on 2G) AND lets the strict, eval-free CSP
+    // turn on. The JSX→JS transpile needs esbuild, which the release host has (devDep) but a8/self-hosts don't,
+    // so it happens HERE and the plain-JS result ships inside the signed bundle (D1). Opt out with
+    // STRICT_WEB_BUNDLE=0. Falls back to a plain `git archive` if esbuild is absent or the strict build fails,
+    // so a bundle is always produced (and, if raw, the gateway auto-detects it and keeps the lax CSP).
+    const strictWanted = process.env.STRICT_WEB_BUNDLE !== '0' && existsSync(join(ROOT, 'node_modules', '.bin', 'esbuild'));
+    let strictOK = false;
+    if (strictWanted) {
       const bs = spawnSync('bash', [join(ROOT, 'scripts', 'build-strict-tgz.sh'), tmp], { maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'ignore', 'inherit'] });
-      if (bs.status !== 0 || !existsSync(tmp)) return null;
-    } else {
+      strictOK = bs.status === 0 && existsSync(tmp);
+    }
+    if (!strictOK) {
       const ar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', 'HEAD'], { maxBuffer: 512 * 1024 * 1024 });
       if (ar.status !== 0 || !ar.stdout || !ar.stdout.length) return null;
       writeFileSync(tmp, ar.stdout);
