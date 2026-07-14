@@ -8,6 +8,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs';
 import { Transform } from 'stream';
+import { gzipSync } from 'node:zlib';
 import { extname, normalize, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
@@ -1337,6 +1338,22 @@ async function tsState() {
   return { installed: true, backendState, loggedIn: backendState === 'Running', dnsName, funnelOn, publicUrl, relayWss: publicUrl ? publicUrl.replace(/^https/, 'wss') + '/relay' : '' };
 }
 
+// C1/thin-pipe: gzip compressible text assets on the fly, cached by path+mtime. The app bundle is ~2–5 MB of JS
+// served UNCOMPRESSED — minutes on 2G for a self-hosted relay (a8 gets Cloudflare edge gzip; self-hosts don't). gzip
+// is ~3–4× on JS, and caching means we compress each asset at most once no matter how many members cold-load it.
+const GZIP_TYPES = new Set(['.js', '.mjs', '.jsx', '.css', '.json', '.svg', '.txt', '.xml', '.map', '.wasm', '.html']);
+const _gzCache = new Map();   // filepath -> { mtimeMs, buf }
+const _acceptsGzip = (req) => /(^|,)\s*gzip\b/i.test(req.headers['accept-encoding'] || '');
+function _gzipFile(file, mtimeMs) {
+  const c = _gzCache.get(file);
+  if (c && c.mtimeMs === mtimeMs) return c.buf;
+  let buf; try { buf = gzipSync(readFileSync(file), { level: 6 }); } catch { return null; }
+  if (_gzCache.size > 400) _gzCache.clear();   // bounded — the asset set is small; a full clear is fine on overflow
+  _gzCache.set(file, { mtimeMs, buf });
+  return buf;
+}
+function _gzipBuf(body) { try { return gzipSync(body, { level: 6 }); } catch { return null; } }
+
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
   // relay status (for the Relay app control dashboard)
@@ -2305,12 +2322,15 @@ function serveStatic(req, res) {
     // panel on old code. These files are always local (the on-box relay) so 'no-store' costs nothing. Everything
     // else stays 'no-cache' so the member app can still load its HTML shell offline.
     const htmlCache = p.startsWith('/relay-app/') ? 'no-store' : 'no-cache';
-    res.writeHead(200, { 'Content-Type': MIME['.html'] || 'text/html', 'Content-Length': body.length, 'Access-Control-Allow-Origin': '*', 'Content-Security-Policy': CSP, 'Cache-Control': htmlCache, ...SEC_HEADERS });
-    res.end(body); return;
+    const gzH = _acceptsGzip(req) ? _gzipBuf(body) : null;
+    res.writeHead(200, { 'Content-Type': MIME['.html'] || 'text/html', 'Content-Length': (gzH || body).length, ...(gzH ? { 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' } : {}), 'Access-Control-Allow-Origin': '*', 'Content-Security-Policy': CSP, 'Cache-Control': htmlCache, ...SEC_HEADERS });
+    res.end(gzH || body); return;
   }
   const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS };
-  // ETag (weak, size+mtime) lets a repeat request revalidate to a body-less 304 instead of re-downloading.
-  const etag = 'W/"' + st.size.toString(16) + '-' + Math.floor(st.mtimeMs).toString(16) + '"';
+  const useGz = GZIP_TYPES.has(ext) && _acceptsGzip(req);   // gzip compressible text assets on the fly (cached) — the cold-start win
+  // ETag (weak, size+mtime) lets a repeat request revalidate to a body-less 304 instead of re-downloading. Encoding-
+  // aware ('-gz') so a gzipped and an identity response never share an ETag (a cache can't then mismatch encodings).
+  const etag = 'W/"' + st.size.toString(16) + '-' + Math.floor(st.mtimeMs).toString(16) + (useGz ? '-gz' : '') + '"';
   // app assets change every release — revalidate (belt-and-braces with the ?v= cache-bust above). The desktop
   // control UI (/relay-app/*) is 'no-store' outright — see the HTML note above; WebView2 mishandles 'no-cache'.
   if (['.js', '.mjs', '.jsx', '.css', '.json'].includes(ext)) {
@@ -2326,7 +2346,11 @@ function serveStatic(req, res) {
   // conditional GET: a matching If-None-Match returns 304 (no body). Never 304 a 'no-store' asset — it must always re-fetch.
   if (headers['Cache-Control'] !== 'no-store') {
     headers['ETag'] = etag;
-    if (req.headers['if-none-match'] === etag) { res.writeHead(304, { 'ETag': etag, 'Access-Control-Allow-Origin': '*', 'Cache-Control': headers['Cache-Control'] || 'no-cache', ...SEC_HEADERS }); res.end(); return; }
+    if (req.headers['if-none-match'] === etag) { res.writeHead(304, { 'ETag': etag, 'Access-Control-Allow-Origin': '*', 'Cache-Control': headers['Cache-Control'] || 'no-cache', ...(useGz ? { 'Vary': 'Accept-Encoding' } : {}), ...SEC_HEADERS }); res.end(); return; }
+  }
+  if (useGz) {
+    const gz = _gzipFile(file, st.mtimeMs);
+    if (gz) { headers['Content-Encoding'] = 'gzip'; headers['Content-Length'] = gz.length; headers['Vary'] = 'Accept-Encoding'; res.writeHead(200, headers); res.end(gz); return; }
   }
   res.writeHead(200, headers);
   createReadStream(file).pipe(res);
