@@ -5863,13 +5863,80 @@
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
   }
   var _churchRelays = /* @__PURE__ */ new Map();
-  var _churchRelayIds = /* @__PURE__ */ new Map();
+  var _churchList = /* @__PURE__ */ new Map();
+  var _applying = /* @__PURE__ */ new Set();
+  var LISTHW_KEY = "trinityone.relaylist.hw";
+  function _loadHW(cp) {
+    try {
+      const v = JSON.parse(localStorage.getItem(LISTHW_KEY) || "{}")[cp];
+      return typeof v === "number" && isFinite(v) ? v : 0;
+    } catch {
+      return 0;
+    }
+  }
+  function _saveHW(cp, at) {
+    try {
+      const m = JSON.parse(localStorage.getItem(LISTHW_KEY) || "{}");
+      if (typeof m[cp] !== "number" || at > m[cp]) {
+        m[cp] = at;
+        localStorage.setItem(LISTHW_KEY, JSON.stringify(m));
+      }
+    } catch {
+    }
+  }
+  function _maybeDropRelay(url, exceptCp) {
+    if (CANONICAL_RELAYS.includes(url) || DEFAULT_RELAYS.includes(url)) return;
+    for (const [c, m] of _churchRelays) {
+      if (c !== exceptCp && m.has(url)) return;
+    }
+    try {
+      window.Fellowship.removeRelay(url);
+    } catch {
+    }
+    try {
+      pool.close([url]);
+    } catch {
+    }
+  }
+  async function _applyChurchList(cp) {
+    if (_applying.has(cp)) return;
+    _applying.add(cp);
+    try {
+      const cur = _churchList.get(cp);
+      if (!cur) return;
+      const at = cur.at, want = cur.want;
+      await Promise.all([...want].map(async (u) => {
+        let info = null;
+        try {
+          info = await _relayInfo(u);
+        } catch {
+        }
+        if ((_churchList.get(cp) || {}).at !== at) return;
+        if (!info || info.enforces !== true) return;
+        if (!_churchRelays.has(cp)) _churchRelays.set(cp, /* @__PURE__ */ new Map());
+        _churchRelays.get(cp).set(u, info.relayPub || null);
+        if (!(window.Fellowship.relays || []).includes(u)) window.Fellowship.addRelay(u);
+      }));
+      if ((_churchList.get(cp) || {}).at !== at) return;
+      const own = _churchRelays.get(cp);
+      if (own) for (const u of [...own.keys()]) {
+        if (!want.has(u)) {
+          own.delete(u);
+          _maybeDropRelay(u, cp);
+        }
+      }
+      _saveHW(cp, at);
+    } finally {
+      _applying.delete(cp);
+    }
+  }
   function relaysForChurch(cp) {
     const own = cp && _churchRelays.get(cp);
-    const ownIds = cp && _churchRelayIds.get(cp);
     const global = window.Fellowship.relays || [];
-    if (own && ownIds && ownIds.size >= 2) return [.../* @__PURE__ */ new Set([...own, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])];
-    return [.../* @__PURE__ */ new Set([...global, ...own ? [...own] : [], ...CANONICAL_RELAYS])];
+    const ownUrls = own ? [...own.keys()] : [];
+    const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
+    if (boxes >= 2) return [.../* @__PURE__ */ new Set([...ownUrls, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])];
+    return [.../* @__PURE__ */ new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])];
   }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
@@ -8360,34 +8427,29 @@
       const cp = toPub(churchNpub);
       if (!cp) return () => {
       };
-      const considered = new Set(window.Fellowship.relays || []);
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [10002], authors: [cp] }], {
         onevent(e) {
           if (e.pubkey !== cp) return;
-          for (const t of e.tags || []) {
-            if (t[0] !== "r" || !/^wss:\/\//i.test(t[1] || "")) continue;
-            const u = t[1];
-            _relayInfo(u).then((info) => {
-              if (!info || info.enforces !== true) return;
-              if (!CANONICAL_RELAYS.includes(u)) {
-                if (!_churchRelays.has(cp)) _churchRelays.set(cp, /* @__PURE__ */ new Set());
-                _churchRelays.get(cp).add(u);
-                if (info.relayPub) {
-                  if (!_churchRelayIds.has(cp)) _churchRelayIds.set(cp, /* @__PURE__ */ new Set());
-                  _churchRelayIds.get(cp).add(info.relayPub);
-                }
-              }
-              if (!considered.has(u)) {
-                considered.add(u);
-                window.Fellowship.addRelay(u);
-              }
-            });
-          }
+          const at = e.created_at || 0;
+          if (at > Math.floor(Date.now() / 1e3) + 600) return;
+          const seen = _churchList.has(cp) ? _churchList.get(cp).at : _loadHW(cp);
+          if (at < seen) return;
+          const want = new Set((e.tags || []).filter((t) => t[0] === "r" && /^wss:\/\//i.test(t[1] || "") && !CANONICAL_RELAYS.includes(t[1])).map((t) => t[1]));
+          _churchList.set(cp, { at, want });
+          _applyChurchList(cp);
         },
         oneose() {
         }
       });
+      const onchurn = () => {
+        if (_churchList.has(cp)) _applyChurchList(cp);
+      };
+      if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("trinity-relays", onchurn);
       return () => {
+        try {
+          if (typeof window !== "undefined") window.removeEventListener("trinity-relays", onchurn);
+        } catch {
+        }
         try {
           sub.close();
         } catch {

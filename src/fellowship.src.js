@@ -138,22 +138,59 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 function churchRelays() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
 // FEDERATION Phase 4 — decentralise the default. Track the enforcing relays each church declares as its OWN
 // (from its NIP-65 list, non-canonical), so we can read a self-hosted church WITHOUT the shared a8 fallback.
-const _churchRelays = new Map();   // churchPubHex -> Set(own enforcing wss relays) — the read union
-const _churchRelayIds = new Map(); // churchPubHex -> Set(relayPub) — DISTINCT own relay boxes (identity, not URL) for the self-sufficiency test (R3)
+const _churchRelays = new Map();   // cp -> Map(wssUrl -> relayPub|null): the church's adopted OWN relays. keys = read union; distinct non-null values = distinct relay BOXES (R3 self-sufficiency, dedup by identity not URL).
+const _churchList   = new Map();   // cp -> { at, want:Set(url) }: the newest ACCEPTED church-signed relay-list, held in memory; drives (re)adoption + revocation.
+const _applying     = new Set();   // cp currently inside _applyChurchList — coalesces re-entrant churn (addRelay itself fires 'trinity-relays').
+const LISTHW_KEY = 'trinityone.relaylist.hw';   // persisted {cp: created_at} high-water — blocks a replayed OLDER list from downgrading or resurrecting a burned relay (R2 anti-replay).
+function _loadHW(cp) { try { const v = JSON.parse(localStorage.getItem(LISTHW_KEY) || '{}')[cp]; return (typeof v === 'number' && isFinite(v)) ? v : 0; } catch { return 0; } }   // type-guarded: garbage → 0 (safe newest-wins-from-scratch)
+function _saveHW(cp, at) { try { const m = JSON.parse(localStorage.getItem(LISTHW_KEY) || '{}'); if (typeof m[cp] !== 'number' || at > m[cp]) { m[cp] = at; localStorage.setItem(LISTHW_KEY, JSON.stringify(m)); } } catch {} }
+// R2 revoke: the church dropped `url` from its newest list → stop using it. Remove from the live pool only when safe:
+// never the shared canonical pool, never the origin/invite bootstrap relay, never a relay another church still lists.
+function _maybeDropRelay(url, exceptCp) {
+  if (CANONICAL_RELAYS.includes(url) || DEFAULT_RELAYS.includes(url)) return;
+  for (const [c, m] of _churchRelays) { if (c !== exceptCp && m.has(url)) return; }   // still in use by another church
+  try { window.Fellowship.removeRelay(url); } catch {}
+  try { pool.close([url]); } catch {}
+}
+// R2 core: (re)apply a church's newest accepted list — adopt its enforcing relays, revoke the ones it dropped.
+// Idempotent + re-drivable (called on reconnect churn), so a transient NIP-11 probe timeout does NOT strand a
+// self-hosted member — the next churn re-adopts. RACE-SAFE: every async step re-checks the list is still the newest
+// (`.at === at`), so a stale pass can never resurrect a relay a newer list burned (#2). Never revokes/persists for a
+// pass that got superseded mid-flight.
+async function _applyChurchList(cp) {
+  if (_applying.has(cp)) return; _applying.add(cp);
+  try {
+    const cur = _churchList.get(cp); if (!cur) return;
+    const at = cur.at, want = cur.want;
+    await Promise.all([...want].map(async (u) => {
+      let info = null; try { info = await _relayInfo(u); } catch {}
+      if ((_churchList.get(cp) || {}).at !== at) return;      // a newer list arrived mid-probe → abandon this stale pass
+      if (!info || info.enforces !== true) return;            // capability gate (fail-closed); unreachable → retried on next churn
+      if (!_churchRelays.has(cp)) _churchRelays.set(cp, new Map());
+      _churchRelays.get(cp).set(u, info.relayPub || null);    // value = identity → distinct-box count (R3)
+      if (!(window.Fellowship.relays || []).includes(u)) window.Fellowship.addRelay(u);
+    }));
+    if ((_churchList.get(cp) || {}).at !== at) return;        // superseded during adoption → don't revoke or persist
+    const own = _churchRelays.get(cp);
+    if (own) for (const u of [...own.keys()]) { if (!want.has(u)) { own.delete(u); _maybeDropRelay(u, cp); } }   // burn the omitted relays
+    _saveHW(cp, at);
+  } finally { _applying.delete(cp); }
+}
 // relaysForChurch(cp): the read set for ONE church. If the church declares >=2 enforcing relays of its own it's
 // self-sufficient — drop the a8 fallback FOR THIS CHURCH (a8 no longer sees or gatekeeps its traffic, and it's
 // no longer dependent on a8). Otherwise keep a8 (the pilot, and any church still on the shared relay). Per-church
 // + reversible: dropping a8 for a self-hosted church never affects a church still using it, and a8 stays in code.
 function relaysForChurch(cp) {
-  const own = cp && _churchRelays.get(cp);
-  const ownIds = cp && _churchRelayIds.get(cp);
+  const own = cp && _churchRelays.get(cp);   // Map(url -> relayPub|null)
   const global = window.Fellowship.relays || [];
+  const ownUrls = own ? [...own.keys()] : [];
   // R3: "self-sufficient" (safe to drop the shared canonical fallback) requires >=2 DISTINCT relay BOXES of the
   // church's own — counted by identity key (relayPub), NOT by URL. Two routes to one relay (Cloudflare + Tailscale,
   // the a8 pattern) share a relayPub and count ONCE, so a church that only LOOKS redundant keeps its safety net.
-  // Relays too old to advertise an identity aren't counted, so this stays conservative (fallback retained).
-  if (own && ownIds && ownIds.size >= 2) return [...new Set([...own, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])];
-  return [...new Set([...global, ...(own ? [...own] : []), ...CANONICAL_RELAYS])];
+  // Relays too old to advertise an identity (null) aren't counted, so this stays conservative (fallback retained).
+  const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
+  if (boxes >= 2) return [...new Set([...ownUrls, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])];
+  return [...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])];
 }
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
@@ -1610,30 +1647,29 @@ window.Fellowship = {
   // one is skipped. Content is signature-verified regardless of which relay served it, so this can't forge.
   subscribeChurchRelays(churchNpub) {
     const cp = toPub(churchNpub); if (!cp) return () => {};
-    const considered = new Set(window.Fellowship.relays || []);   // don't re-probe relays we already have
     const sub = pool.subscribeMany(churchRelays(), [{ kinds: [10002], authors: [cp] }], {
       onevent(e) {
-        if (e.pubkey !== cp) return;   // only the church's own signed relay-list
-        for (const t of (e.tags || [])) {
-          if (t[0] !== 'r' || !/^wss:\/\//i.test(t[1] || '')) continue;
-          const u = t[1];
-          _relayInfo(u).then(info => {   // one cached probe yields BOTH the enforces gate and the relay's identity
-            if (!info || info.enforces !== true) return;   // capability gate: never route gated content to a non-enforcing relay (fail-closed)
-            // Phase 4: record this church's OWN (non-canonical) enforcing relay for the self-sufficiency check.
-            if (!CANONICAL_RELAYS.includes(u)) {
-              if (!_churchRelays.has(cp)) _churchRelays.set(cp, new Set()); _churchRelays.get(cp).add(u);
-              // R3: track the relay's IDENTITY so self-sufficiency counts distinct BOXES, not URLs. Only relays that
-              // advertise a relayPub count — an alias of an already-seen box adds nothing; an old relay without one
-              // simply doesn't tip us into "self-sufficient" (conservative: keep the fallback).
-              if (info.relayPub) { if (!_churchRelayIds.has(cp)) _churchRelayIds.set(cp, new Set()); _churchRelayIds.get(cp).add(info.relayPub); }
-            }
-            if (!considered.has(u)) { considered.add(u); window.Fellowship.addRelay(u); }   // adopt into the read union once
-          });
-        }
+        if (e.pubkey !== cp) return;   // only the church's OWN signed relay-list is authoritative
+        // R2 newest-wins. Reject FUTURE-dated lists so a clock-skewed/replayed far-future list can never pin the
+        // high-water and lock out real updates (#6). Ignore STRICTLY-older lists (anti-downgrade/replay); an equal
+        // timestamp re-applies the CURRENT list, which is what makes adoption survive a restart (the persisted
+        // high-water gates NEW lists, not re-application of the current one — #3).
+        const at = e.created_at || 0;
+        if (at > Math.floor(Date.now() / 1000) + 600) return;
+        const seen = _churchList.has(cp) ? _churchList.get(cp).at : _loadHW(cp);
+        if (at < seen) return;
+        const want = new Set((e.tags || []).filter(t => t[0] === 'r' && /^wss:\/\//i.test(t[1] || '') && !CANONICAL_RELAYS.includes(t[1])).map(t => t[1]));
+        _churchList.set(cp, { at, want });
+        _applyChurchList(cp);   // async, idempotent, race-safe, re-drivable
       },
       oneose() {},
     });
-    return () => { try { sub.close(); } catch {} };
+    // #3 recovery: a transient NIP-11 probe timeout (routine on 2G — the target network) must not strand a
+    // self-hosted member. Re-drive the current list whenever the relay set churns (reconnect); _applyChurchList is a
+    // cheap no-op once fully adopted (relay info is cached).
+    const onchurn = () => { if (_churchList.has(cp)) _applyChurchList(cp); };
+    if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('trinity-relays', onchurn);
+    return () => { try { if (typeof window !== 'undefined') window.removeEventListener('trinity-relays', onchurn); } catch {} try { sub.close(); } catch {} };
   },
   // FEDERATION Phase 3b — discover relays that have OFFERED to host new churches. Probe a seed set (any
   // configured discovery relays + the canonical pool + relays we already use), read each one's NIP-11, and
