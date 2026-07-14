@@ -138,22 +138,36 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 function churchRelays() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
 // FEDERATION Phase 4 — decentralise the default. Track the enforcing relays each church declares as its OWN
 // (from its NIP-65 list, non-canonical), so we can read a self-hosted church WITHOUT the shared a8 fallback.
-const _churchRelays = new Map();   // churchPubHex -> Set(own enforcing wss relays) — the read union
-const _churchRelayIds = new Map(); // churchPubHex -> Set(relayPub) — DISTINCT own relay boxes (identity, not URL) for the self-sufficiency test (R3)
+const _churchRelays = new Map();   // churchPubHex -> Map(wssUrl -> relayPub|null): the church's OWN enforcing relays.
+                                   // Keys = the read union; distinct non-null values = distinct BOXES for self-sufficiency (R3).
+const _churchListAt = new Map();   // churchPubHex -> created_at of the newest kind:10002 we've honoured (R2 monotonic high-water)
+const LISTHW_KEY = 'trinityone.relaylist.hw';   // persisted {churchPub: created_at} so a replayed OLD list can't downgrade us across restarts
+function _loadListHW(cp) { try { return (JSON.parse(localStorage.getItem(LISTHW_KEY) || '{}')[cp]) || 0; } catch { return 0; } }
+function _saveListHW(cp, at) { try { const m = JSON.parse(localStorage.getItem(LISTHW_KEY) || '{}'); if (at > (m[cp] || 0)) { m[cp] = at; localStorage.setItem(LISTHW_KEY, JSON.stringify(m)); } } catch {} }
+// R2 revoke: a church dropped `url` from its newest relay-list → stop using it. Remove it from the global pool ONLY
+// when it's safe to: never drop the shared canonical pool, never the origin/invite bootstrap relay, and never a relay
+// another church still lists. Otherwise burning one church's relay would knock out an unrelated one.
+function _maybeDropRelay(url, exceptCp) {
+  if (CANONICAL_RELAYS.includes(url) || DEFAULT_RELAYS.includes(url)) return;
+  for (const [c, m] of _churchRelays) { if (c !== exceptCp && m.has(url)) return; }   // still in use by another church
+  try { window.Fellowship.removeRelay(url); } catch {}
+  try { pool.close([url]); } catch {}   // drop the live connection so we stop authing/subscribing to a burned relay
+}
 // relaysForChurch(cp): the read set for ONE church. If the church declares >=2 enforcing relays of its own it's
 // self-sufficient — drop the a8 fallback FOR THIS CHURCH (a8 no longer sees or gatekeeps its traffic, and it's
 // no longer dependent on a8). Otherwise keep a8 (the pilot, and any church still on the shared relay). Per-church
 // + reversible: dropping a8 for a self-hosted church never affects a church still using it, and a8 stays in code.
 function relaysForChurch(cp) {
-  const own = cp && _churchRelays.get(cp);
-  const ownIds = cp && _churchRelayIds.get(cp);
+  const own = cp && _churchRelays.get(cp);   // Map(url -> relayPub|null)
   const global = window.Fellowship.relays || [];
+  const ownUrls = own ? [...own.keys()] : [];
   // R3: "self-sufficient" (safe to drop the shared canonical fallback) requires >=2 DISTINCT relay BOXES of the
   // church's own — counted by identity key (relayPub), NOT by URL. Two routes to one relay (Cloudflare + Tailscale,
   // the a8 pattern) share a relayPub and count ONCE, so a church that only LOOKS redundant keeps its safety net.
-  // Relays too old to advertise an identity aren't counted, so this stays conservative (fallback retained).
-  if (own && ownIds && ownIds.size >= 2) return [...new Set([...own, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])];
-  return [...new Set([...global, ...(own ? [...own] : []), ...CANONICAL_RELAYS])];
+  // Relays too old to advertise an identity (null) aren't counted, so this stays conservative (fallback retained).
+  const distinctBoxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
+  if (distinctBoxes >= 2) return [...new Set([...ownUrls, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])];
+  return [...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])];
 }
 const RELAYS_KEY = 'trinityone.relays';
 function loadRelays() {
@@ -1614,19 +1628,24 @@ window.Fellowship = {
     const sub = pool.subscribeMany(churchRelays(), [{ kinds: [10002], authors: [cp] }], {
       onevent(e) {
         if (e.pubkey !== cp) return;   // only the church's own signed relay-list
-        for (const t of (e.tags || [])) {
-          if (t[0] !== 'r' || !/^wss:\/\//i.test(t[1] || '')) continue;
-          const u = t[1];
-          _relayInfo(u).then(info => {   // one cached probe yields BOTH the enforces gate and the relay's identity
+        // R2: NEWEST-WINS with a persisted monotonic high-water mark. A church's kind:10002 is replaceable, so the
+        // latest one it signed is authoritative — which is what lets a church REMOVE (burn) a relay. An older or
+        // replayed list can never win, even across app restarts (the high-water is persisted), so an attacker
+        // serving a stale-but-genuine list can't downgrade a member or resurrect a burned relay.
+        const hw = _churchListAt.has(cp) ? _churchListAt.get(cp) : _loadListHW(cp);
+        if ((e.created_at || 0) <= hw) return;
+        _churchListAt.set(cp, e.created_at); _saveListHW(cp, e.created_at);
+        const wanted = new Set((e.tags || []).filter(t => t[0] === 'r' && /^wss:\/\//i.test(t[1] || '')).map(t => t[1]));
+        // REVOKE: relays this church listed before but the NEW list omits — drop them (per-church, safely).
+        const own = _churchRelays.get(cp);
+        if (own) for (const u of [...own.keys()]) { if (!wanted.has(u)) { own.delete(u); _maybeDropRelay(u, cp); } }
+        // ADOPT/refresh each currently-listed relay, gated by enforces; one cached probe yields the gate + identity.
+        for (const u of wanted) {
+          if (CANONICAL_RELAYS.includes(u)) continue;   // the shared pool is always available; don't count it as "own"
+          _relayInfo(u).then(info => {
             if (!info || info.enforces !== true) return;   // capability gate: never route gated content to a non-enforcing relay (fail-closed)
-            // Phase 4: record this church's OWN (non-canonical) enforcing relay for the self-sufficiency check.
-            if (!CANONICAL_RELAYS.includes(u)) {
-              if (!_churchRelays.has(cp)) _churchRelays.set(cp, new Set()); _churchRelays.get(cp).add(u);
-              // R3: track the relay's IDENTITY so self-sufficiency counts distinct BOXES, not URLs. Only relays that
-              // advertise a relayPub count — an alias of an already-seen box adds nothing; an old relay without one
-              // simply doesn't tip us into "self-sufficient" (conservative: keep the fallback).
-              if (info.relayPub) { if (!_churchRelayIds.has(cp)) _churchRelayIds.set(cp, new Set()); _churchRelayIds.get(cp).add(info.relayPub); }
-            }
+            if (!_churchRelays.has(cp)) _churchRelays.set(cp, new Map());
+            _churchRelays.get(cp).set(u, info.relayPub || null);   // R3: value = identity, so self-sufficiency counts distinct boxes
             if (!considered.has(u)) { considered.add(u); window.Fellowship.addRelay(u); }   // adopt into the read union once
           });
         }

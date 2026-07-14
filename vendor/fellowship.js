@@ -5863,13 +5863,46 @@
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
   }
   var _churchRelays = /* @__PURE__ */ new Map();
-  var _churchRelayIds = /* @__PURE__ */ new Map();
+  var _churchListAt = /* @__PURE__ */ new Map();
+  var LISTHW_KEY = "trinityone.relaylist.hw";
+  function _loadListHW(cp) {
+    try {
+      return JSON.parse(localStorage.getItem(LISTHW_KEY) || "{}")[cp] || 0;
+    } catch {
+      return 0;
+    }
+  }
+  function _saveListHW(cp, at) {
+    try {
+      const m = JSON.parse(localStorage.getItem(LISTHW_KEY) || "{}");
+      if (at > (m[cp] || 0)) {
+        m[cp] = at;
+        localStorage.setItem(LISTHW_KEY, JSON.stringify(m));
+      }
+    } catch {
+    }
+  }
+  function _maybeDropRelay(url, exceptCp) {
+    if (CANONICAL_RELAYS.includes(url) || DEFAULT_RELAYS.includes(url)) return;
+    for (const [c, m] of _churchRelays) {
+      if (c !== exceptCp && m.has(url)) return;
+    }
+    try {
+      window.Fellowship.removeRelay(url);
+    } catch {
+    }
+    try {
+      pool.close([url]);
+    } catch {
+    }
+  }
   function relaysForChurch(cp) {
     const own = cp && _churchRelays.get(cp);
-    const ownIds = cp && _churchRelayIds.get(cp);
     const global = window.Fellowship.relays || [];
-    if (own && ownIds && ownIds.size >= 2) return [.../* @__PURE__ */ new Set([...own, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])];
-    return [.../* @__PURE__ */ new Set([...global, ...own ? [...own] : [], ...CANONICAL_RELAYS])];
+    const ownUrls = own ? [...own.keys()] : [];
+    const distinctBoxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
+    if (distinctBoxes >= 2) return [.../* @__PURE__ */ new Set([...ownUrls, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])];
+    return [.../* @__PURE__ */ new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])];
   }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
@@ -8364,19 +8397,24 @@
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [10002], authors: [cp] }], {
         onevent(e) {
           if (e.pubkey !== cp) return;
-          for (const t of e.tags || []) {
-            if (t[0] !== "r" || !/^wss:\/\//i.test(t[1] || "")) continue;
-            const u = t[1];
+          const hw = _churchListAt.has(cp) ? _churchListAt.get(cp) : _loadListHW(cp);
+          if ((e.created_at || 0) <= hw) return;
+          _churchListAt.set(cp, e.created_at);
+          _saveListHW(cp, e.created_at);
+          const wanted = new Set((e.tags || []).filter((t) => t[0] === "r" && /^wss:\/\//i.test(t[1] || "")).map((t) => t[1]));
+          const own = _churchRelays.get(cp);
+          if (own) for (const u of [...own.keys()]) {
+            if (!wanted.has(u)) {
+              own.delete(u);
+              _maybeDropRelay(u, cp);
+            }
+          }
+          for (const u of wanted) {
+            if (CANONICAL_RELAYS.includes(u)) continue;
             _relayInfo(u).then((info) => {
               if (!info || info.enforces !== true) return;
-              if (!CANONICAL_RELAYS.includes(u)) {
-                if (!_churchRelays.has(cp)) _churchRelays.set(cp, /* @__PURE__ */ new Set());
-                _churchRelays.get(cp).add(u);
-                if (info.relayPub) {
-                  if (!_churchRelayIds.has(cp)) _churchRelayIds.set(cp, /* @__PURE__ */ new Set());
-                  _churchRelayIds.get(cp).add(info.relayPub);
-                }
-              }
+              if (!_churchRelays.has(cp)) _churchRelays.set(cp, /* @__PURE__ */ new Map());
+              _churchRelays.get(cp).set(u, info.relayPub || null);
               if (!considered.has(u)) {
                 considered.add(u);
                 window.Fellowship.addRelay(u);
