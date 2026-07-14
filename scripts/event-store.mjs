@@ -62,18 +62,6 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // drop the now-redundant single-column indexes (the composite's leading column serves the same lookups) so writes
   // don't maintain duplicate b-trees. Idempotent + safe: composites above already cover kind/pubkey/church equality.
   db.exec(`DROP INDEX IF EXISTS idx_kind; DROP INDEX IF EXISTS idx_pubkey; DROP INDEX IF EXISTS idx_church;`);
-  // TAG INDEX (perf + security 2026-07-14): index single-letter tags (#t groups / #p DMs / #e replies / …) so those
-  // queries are an index lookup instead of a newest→oldest scan of a whole kind partition. This removes BOTH walls the
-  // network sims confirmed: (A3) the 200k scan cap silently dropping a quiet church's history on a big shared relay,
-  // and (E1) a crafted multi-#e REQ pinning the single thread ~20s. 'd'/'church' remain first-class columns. An AFTER
-  // DELETE trigger keeps the index consistent through cull + replaceable-supersede without hooking every delete site.
-  db.exec(`CREATE TABLE IF NOT EXISTS event_tags (
-    tag TEXT NOT NULL, val TEXT NOT NULL, event_id TEXT NOT NULL, created_at INTEGER NOT NULL
-  );`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_etags     ON event_tags(tag, val, created_at);
-           CREATE INDEX IF NOT EXISTS idx_etags_eid ON event_tags(event_id);`);
-  db.exec(`CREATE TRIGGER IF NOT EXISTS trg_events_del AFTER DELETE ON events
-             BEGIN DELETE FROM event_tags WHERE event_id = OLD.id; END;`);
 
   const qByRepl = db.prepare('SELECT id, created_at FROM events WHERE repl = ?');
   const qById   = db.prepare('SELECT 1 FROM events WHERE id = ?');
@@ -85,23 +73,6 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   const cullOldForChurch = db.prepare('DELETE FROM events WHERE id IN (SELECT id FROM events WHERE structured = 0 AND church = ? ORDER BY created_at ASC LIMIT ?)');
   const updChurch        = db.prepare('UPDATE events SET church = ? WHERE id = ?');
   const qUnattributed    = db.prepare("SELECT id, raw FROM events WHERE church = ''");
-  const insTag           = db.prepare('INSERT INTO event_tags (tag, val, event_id, created_at) VALUES (?,?,?,?)');
-  const delTagsByEid     = db.prepare('DELETE FROM event_tags WHERE event_id = ?');
-  // write an event's indexable (single-letter, non-'d') tags into the tag index. Idempotent: clears this id's rows
-  // first, so a re-store never double-indexes.
-  const indexTags = (e, id, ca) => {
-    delTagsByEid.run(id);
-    const seen = new Set();
-    for (const t of (e.tags || [])) { const n = t[0]; if (!n || n.length !== 1 || n === 'd' || t[1] == null) continue; const key = n + '\x00' + t[1]; if (seen.has(key)) continue; seen.add(key); insTag.run(n, String(t[1]), id, ca); }
-  };
-  // one-time backfill on upgrade: if the tag index is empty but events already exist, populate it from stored events.
-  try {
-    if (db.prepare('SELECT COUNT(*) AS n FROM event_tags').get().n === 0 && qCount.get().n > 0) {
-      db.exec('BEGIN');
-      for (const r of db.prepare('SELECT id, created_at, raw FROM events').iterate()) { let e; try { e = JSON.parse(r.raw); } catch { continue; } indexTags(e, r.id, r.created_at || 0); }
-      db.exec('COMMIT');
-    }
-  } catch (err) { try { db.exec('ROLLBACK'); } catch {} }
 
   // store an event. Returns 'stored' | 'have-newer' (a newer version of a replaceable doc already held) |
   // 'duplicate' (same id already stored). Replaceable docs replace older versions of the same key.
@@ -122,51 +93,33 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     }
     const ch = (church != null) ? church : churchOf(e);   // gateway passes the RESOLVED owning church; else the tag
     ins.run(e.id, e.pubkey, e.kind, e.created_at || 0, dtagOf(e), ch, rk, rk ? 1 : 0, JSON.stringify(e));
-    indexTags(e, e.id, e.created_at || 0);                 // populate the tag index (#t/#p/#e) for fast, truncation-free reads
     return 'stored';
   }
 
   // run one Nostr filter: narrow on indexed columns in SQL, then apply matchFilter for exactness
   // (ids + arbitrary #tags). Returns events newest-first.
   // `budget` (optional {left}) is a shared cross-filter scan allowance for one REQ: the gateway passes ONE budget to
-  // every filter so a crafted many-filter REQ can't force 32×200k row parses (E1). Only the scan fallback spends it;
-  // the tag-index + column paths don't touch it.
+  // every filter so a crafted many-filter REQ can't force 32×200k row parses (E1). Only the tag scan spends it.
   function query(f, budget) {
     if (!f || typeof f !== 'object' || Array.isArray(f)) return [];
-    // events-table narrowing (kind/author/id/dtag/church/since/until). Takes a column prefix so the same builder
-    // works for a plain events read AND for the `e.` side of the tag-index JOIN below.
-    const buildWhere = (px) => {
-      const where = [], args = [];
-      const inClause = (col, vals) => { where.push(px + col + ' IN (' + vals.map(() => '?').join(',') + ')'); for (const v of vals) args.push(v); };
-      if (Array.isArray(f.kinds) && f.kinds.length)   inClause('kind', f.kinds);
-      if (Array.isArray(f.authors) && f.authors.length) inClause('pubkey', f.authors);
-      if (Array.isArray(f.ids) && f.ids.length)       inClause('id', f.ids);
-      if (Array.isArray(f['#d']) && f['#d'].length)   inClause('dtag', f['#d']);
-      if (Array.isArray(f['#church']) && f['#church'].length) inClause('church', f['#church']);
-      if (f.since) { where.push(px + 'created_at >= ?'); args.push(f.since); }
-      if (f.until) { where.push(px + 'created_at <= ?'); args.push(f.until); }
-      return { where, args };
-    };
+    const where = [], args = [];
+    const inClause = (col, vals) => { where.push(col + ' IN (' + vals.map(() => '?').join(',') + ')'); for (const v of vals) args.push(v); };
+    if (Array.isArray(f.kinds) && f.kinds.length)   inClause('kind', f.kinds);
+    if (Array.isArray(f.authors) && f.authors.length) inClause('pubkey', f.authors);
+    if (Array.isArray(f.ids) && f.ids.length)       inClause('id', f.ids);
+    if (Array.isArray(f['#d']) && f['#d'].length)   inClause('dtag', f['#d']);
+    if (Array.isArray(f['#church']) && f['#church'].length) inClause('church', f['#church']);
+    if (f.since) { where.push('created_at >= ?'); args.push(f.since); }
+    if (f.until) { where.push('created_at <= ?'); args.push(f.until); }
     const lim = Math.max(1, Math.min(f.limit || 5000, 10000));
+    // Does the filter constrain a tag NOT indexed in SQL (#t/#p/#e/…)? Those are matched only by matchFilter AFTER
+    // the SQL rows come back — so a plain `ORDER BY created_at DESC LIMIT lim` would return the newest `lim` rows of
+    // the indexed set and then drop the matching-but-older ones (a quiet #t group's history drowned out by a chatty
+    // one, or old DMs past the cap — silent, permanent data loss). Stream newest→oldest and collect `lim` POST-match
+    // rows instead, bounded by the indexed WHERE + a hard scan cap so a pathological filter can't run away.
     const tagKeys = Object.keys(f).filter(k => k[0] === '#' && k !== '#d' && k !== '#church');
-    const idxTag = tagKeys.find(k => k.length === 2 && Array.isArray(f[k]) && f[k].length);   // '#' + single letter → the tag index serves it
     const out = [];
-    if (idxTag) {
-      // TAG-INDEX PATH: an index range-scan on (tag,val,created_at) yields ONLY the matching events, already ordered —
-      // no newest→oldest scan of the whole kind partition, so no 200k-cap truncation (A3) and no crafted-#e DoS (E1).
-      // GROUP BY dedups an event that repeats the tag value; the driving tag + all column narrowing are in SQL, and
-      // matchFilter enforces the remainder (ids, a second #tag) for exactness.
-      const tagName = idxTag.slice(1), vals = f[idxTag];
-      const { where, args } = buildWhere('e.');
-      const tw = ['t.tag = ?', 't.val IN (' + vals.map(() => '?').join(',') + ')'];
-      const sql = 'SELECT e.raw FROM event_tags t JOIN events e ON e.id = t.event_id WHERE ' + [...tw, ...where].join(' AND ') + ' GROUP BY e.id ORDER BY e.created_at DESC LIMIT ?';
-      for (const r of db.prepare(sql).all(tagName, ...vals, ...args, lim)) { let e; try { e = JSON.parse(r.raw); } catch { continue; } if (matchFilter(e, f)) out.push(e); }
-      return out;
-    }
     if (tagKeys.length) {
-      // only a NON-indexable (multi-letter) tag constrains the filter — rare/non-standard. Fall back to the bounded
-      // newest→oldest scan. The A3/E1 hot paths (#t/#p/#e) are single-letter and served by the index above.
-      const { where, args } = buildWhere('');
       const sql = 'SELECT raw FROM events' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC';
       let scanned = 0;
       for (const r of db.prepare(sql).iterate(...args)) {
@@ -177,7 +130,6 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
       }
       return out;
     }
-    const { where, args } = buildWhere('');
     const sql = 'SELECT raw FROM events' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ?';
     for (const r of db.prepare(sql).all(...args, lim)) { let e; try { e = JSON.parse(r.raw); } catch { continue; } if (matchFilter(e, f)) out.push(e); }
     return out;
