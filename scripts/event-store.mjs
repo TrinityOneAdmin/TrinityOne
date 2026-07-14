@@ -128,7 +128,10 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
 
   // run one Nostr filter: narrow on indexed columns in SQL, then apply matchFilter for exactness
   // (ids + arbitrary #tags). Returns events newest-first.
-  function query(f) {
+  // `budget` (optional {left}) is a shared cross-filter scan allowance for one REQ: the gateway passes ONE budget to
+  // every filter so a crafted many-filter REQ can't force 32×200k row parses (E1). Only the scan fallback spends it;
+  // the tag-index + column paths don't touch it.
+  function query(f, budget) {
     if (!f || typeof f !== 'object' || Array.isArray(f)) return [];
     // events-table narrowing (kind/author/id/dtag/church/since/until). Takes a column prefix so the same builder
     // works for a plain events read AND for the `e.` side of the tag-index JOIN below.
@@ -167,7 +170,8 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
       const sql = 'SELECT raw FROM events' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC';
       let scanned = 0;
       for (const r of db.prepare(sql).iterate(...args)) {
-        if (++scanned > 200000) break;   // safety: never examine more than 200k rows for one filter
+        if (++scanned > 200000) break;   // per-filter safety cap
+        if (budget && --budget.left <= 0) break;   // aggregate cross-filter budget — bounds a crafted many-filter REQ (E1)
         let e; try { e = JSON.parse(r.raw); } catch { continue; }
         if (matchFilter(e, f)) { out.push(e); if (out.length >= lim) break; }
       }

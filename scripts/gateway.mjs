@@ -2580,7 +2580,8 @@ wss.on('connection', ws => {
       // messages withheld from non-members per NIP-42)
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
       let _reqEvents = 0;
-      scan: for (const f of filters) for (const e of store.query(f)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd === MEALS_SETTINGS_D) wantsSafeguard = true; } continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
+      const _scanBudget = { left: 300000 };   // shared across ALL filters of this REQ: caps total fallback-scan rows so a crafted many-filter/multi-letter-tag REQ can't freeze the loop (E1)
+      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd === MEALS_SETTINGS_D) wantsSafeguard = true; } continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
@@ -2609,7 +2610,8 @@ wss.on('connection', ws => {
           const mine = subs.get(ws);
           if (mine) for (const [subId, filters] of mine) {
             const seen = new Set();
-            for (const f of filters) for (const e of store.query(f)) {
+            const _replayBudget = { left: 300000 };
+            for (const f of filters) for (const e of store.query(f, _replayBudget)) {
               if (seen.has(e.id)) continue; seen.add(e.id);
               if (BLOCKED.has(e.pubkey) || !canRead(e, ws._auth)) continue;
               if (!canRead(e, null)) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }
