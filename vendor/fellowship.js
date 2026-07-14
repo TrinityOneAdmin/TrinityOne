@@ -5863,10 +5863,12 @@
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
   }
   var _churchRelays = /* @__PURE__ */ new Map();
+  var _churchRelayIds = /* @__PURE__ */ new Map();
   function relaysForChurch(cp) {
     const own = cp && _churchRelays.get(cp);
+    const ownIds = cp && _churchRelayIds.get(cp);
     const global = window.Fellowship.relays || [];
-    if (own && own.size >= 2) return [.../* @__PURE__ */ new Set([...own, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])];
+    if (own && ownIds && ownIds.size >= 2) return [.../* @__PURE__ */ new Set([...own, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])];
     return [.../* @__PURE__ */ new Set([...global, ...own ? [...own] : [], ...CANONICAL_RELAYS])];
   }
   var RELAYS_KEY = "trinityone.relays";
@@ -5932,9 +5934,6 @@
     })();
     _relayInfoCache.set(wssUrl, p);
     return p;
-  }
-  function _verifyEnforcing(wssUrl) {
-    return _relayInfo(wssUrl).then((t) => !!(t && t.enforces === true));
   }
   if (typeof window !== "undefined") {
     window.addEventListener("unhandledrejection", (e) => {
@@ -6435,6 +6434,19 @@
     CANONICAL_RELAYS,
     toPub,
     // validate/normalise an npub-or-hex → 64-hex (or null on a bad bech32 checksum); used by the UI to reject a mistyped church code
+    // true if every relay we've opened is still connected. The member app's 90s reconnect tick only re-subscribes when
+    // this is FALSE — so a healthy socket never triggers the full re-REQ storm (perf #2). Mirrors the steward console.
+    relaysHealthy() {
+      try {
+        const st = pool.listConnectionStatus();
+        for (const url of churchRelays()) {
+          if (st.get(url) === false) return false;
+        }
+        return true;
+      } catch (e) {
+        return true;
+      }
+    },
     myPubkey: null,
     myProfile: null,
     churchPub: null,
@@ -8355,11 +8367,15 @@
           for (const t of e.tags || []) {
             if (t[0] !== "r" || !/^wss:\/\//i.test(t[1] || "")) continue;
             const u = t[1];
-            _verifyEnforcing(u).then((ok) => {
-              if (!ok) return;
+            _relayInfo(u).then((info) => {
+              if (!info || info.enforces !== true) return;
               if (!CANONICAL_RELAYS.includes(u)) {
                 if (!_churchRelays.has(cp)) _churchRelays.set(cp, /* @__PURE__ */ new Set());
                 _churchRelays.get(cp).add(u);
+                if (info.relayPub) {
+                  if (!_churchRelayIds.has(cp)) _churchRelayIds.set(cp, /* @__PURE__ */ new Set());
+                  _churchRelayIds.get(cp).add(info.relayPub);
+                }
               }
               if (!considered.has(u)) {
                 considered.add(u);

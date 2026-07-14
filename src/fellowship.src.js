@@ -138,15 +138,21 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 function churchRelays() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
 // FEDERATION Phase 4 — decentralise the default. Track the enforcing relays each church declares as its OWN
 // (from its NIP-65 list, non-canonical), so we can read a self-hosted church WITHOUT the shared a8 fallback.
-const _churchRelays = new Map();   // churchPubHex -> Set(own enforcing wss relays)
+const _churchRelays = new Map();   // churchPubHex -> Set(own enforcing wss relays) — the read union
+const _churchRelayIds = new Map(); // churchPubHex -> Set(relayPub) — DISTINCT own relay boxes (identity, not URL) for the self-sufficiency test (R3)
 // relaysForChurch(cp): the read set for ONE church. If the church declares >=2 enforcing relays of its own it's
 // self-sufficient — drop the a8 fallback FOR THIS CHURCH (a8 no longer sees or gatekeeps its traffic, and it's
 // no longer dependent on a8). Otherwise keep a8 (the pilot, and any church still on the shared relay). Per-church
 // + reversible: dropping a8 for a self-hosted church never affects a church still using it, and a8 stays in code.
 function relaysForChurch(cp) {
   const own = cp && _churchRelays.get(cp);
+  const ownIds = cp && _churchRelayIds.get(cp);
   const global = window.Fellowship.relays || [];
-  if (own && own.size >= 2) return [...new Set([...own, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])];
+  // R3: "self-sufficient" (safe to drop the shared canonical fallback) requires >=2 DISTINCT relay BOXES of the
+  // church's own — counted by identity key (relayPub), NOT by URL. Two routes to one relay (Cloudflare + Tailscale,
+  // the a8 pattern) share a relayPub and count ONCE, so a church that only LOOKS redundant keeps its safety net.
+  // Relays too old to advertise an identity aren't counted, so this stays conservative (fallback retained).
+  if (own && ownIds && ownIds.size >= 2) return [...new Set([...own, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])];
   return [...new Set([...global, ...(own ? [...own] : []), ...CANONICAL_RELAYS])];
 }
 const RELAYS_KEY = 'trinityone.relays';
@@ -1611,10 +1617,16 @@ window.Fellowship = {
         for (const t of (e.tags || [])) {
           if (t[0] !== 'r' || !/^wss:\/\//i.test(t[1] || '')) continue;
           const u = t[1];
-          _verifyEnforcing(u).then(ok => {
-            if (!ok) return;
+          _relayInfo(u).then(info => {   // one cached probe yields BOTH the enforces gate and the relay's identity
+            if (!info || info.enforces !== true) return;   // capability gate: never route gated content to a non-enforcing relay (fail-closed)
             // Phase 4: record this church's OWN (non-canonical) enforcing relay for the self-sufficiency check.
-            if (!CANONICAL_RELAYS.includes(u)) { if (!_churchRelays.has(cp)) _churchRelays.set(cp, new Set()); _churchRelays.get(cp).add(u); }
+            if (!CANONICAL_RELAYS.includes(u)) {
+              if (!_churchRelays.has(cp)) _churchRelays.set(cp, new Set()); _churchRelays.get(cp).add(u);
+              // R3: track the relay's IDENTITY so self-sufficiency counts distinct BOXES, not URLs. Only relays that
+              // advertise a relayPub count — an alias of an already-seen box adds nothing; an old relay without one
+              // simply doesn't tip us into "self-sufficient" (conservative: keep the fallback).
+              if (info.relayPub) { if (!_churchRelayIds.has(cp)) _churchRelayIds.set(cp, new Set()); _churchRelayIds.get(cp).add(info.relayPub); }
+            }
             if (!considered.has(u)) { considered.add(u); window.Fellowship.addRelay(u); }   // adopt into the read union once
           });
         }

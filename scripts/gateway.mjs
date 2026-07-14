@@ -1667,7 +1667,12 @@ function serveStatic(req, res) {
       supported_nips: [1, 42],
       limitation: { restricted_writes: true, max_message_length: 1024 * 1024 },
       trinityone: {
-        enforces: true, multiChurch: true,   // enforces = this relay applies TrinityOne's write/safeguard policy
+        // R4: enforces = this relay ACTUALLY applies TrinityOne's membership/safeguard write policy — true only
+        // when a church key is configured. An open/misconfigured/dev relay (no church) reports false, so a
+        // member's capability gate (_verifyEnforcing) refuses to adopt it and never routes gated reads (roster,
+        // care PII) to a box that would serve them to anyone. Was hardcoded true, which made the gate a no-op.
+        enforces: CHURCH_PUBS.size > 0, multiChurch: true,
+        relayPub: RELAY_PUB,                  // R3: this relay's identity key — lets a client tell two URLs apart as the SAME box (dedup the self-sufficiency count by failure-domain, not URL)
         media: !MEDIA_OFF,                    // does this relay host self-hosted media (blobs)? — the client hides the upload UI when false
         // OFFER fields (Phase 3a) appear ONLY when the operator opted in via RELAY_OPEN — a private relay omits
         // them entirely, so discovery/auto-pick never surfaces it. `full` lets a busy relay decline new churches
