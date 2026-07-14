@@ -5723,17 +5723,6 @@
   // node_modules/nostr-tools/lib/esm/nip04.js
   var utf8Decoder5 = new TextDecoder("utf-8");
   var utf8Encoder5 = new TextEncoder();
-  function encrypt3(secretKey, pubkey, text) {
-    const privkey = secretKey instanceof Uint8Array ? secretKey : hexToBytes(secretKey);
-    const key = secp256k1.getSharedSecret(privkey, hexToBytes("02" + pubkey));
-    const normalizedKey = getNormalizedX(key);
-    let iv = Uint8Array.from(randomBytes(16));
-    let plaintext = utf8Encoder5.encode(text);
-    let ciphertext = cbc(normalizedKey, iv).encrypt(plaintext);
-    let ctb64 = base64.encode(new Uint8Array(ciphertext));
-    let ivb64 = base64.encode(new Uint8Array(iv.buffer));
-    return `${ctb64}?iv=${ivb64}`;
-  }
   function decrypt3(secretKey, pubkey, data) {
     const privkey = secretKey instanceof Uint8Array ? secretKey : hexToBytes(secretKey);
     let [ctb64, ivb64] = data.split("?iv=");
@@ -5749,6 +5738,14 @@
   }
 
   // src/fellowship.src.js
+  var _dmEncrypt = (sk2, peerPub, text) => encrypt(text, getConversationKey(sk2, peerPub));
+  var _dmDecrypt = async (sk2, peerPub, ct) => {
+    try {
+      return decrypt(ct, getConversationKey(sk2, peerPub));
+    } catch {
+      return await decrypt3(sk2, peerPub, ct);
+    }
+  };
   function toPub(npubOrHex) {
     if (!npubOrHex) return null;
     if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase();
@@ -7035,7 +7032,7 @@
       if (!sk) await window.Fellowship.ready;
       let ciphertext;
       try {
-        ciphertext = await encrypt3(sk, peerPub, content);
+        ciphertext = _dmEncrypt(sk, peerPub, content);
       } catch (e) {
         console.warn("[fellowship] DM encrypt failed", e);
         return null;
@@ -7070,7 +7067,7 @@
         const mine = e.pubkey === pub;
         let content = "";
         try {
-          content = await decrypt3(sk, peerPub, e.content);
+          content = await _dmDecrypt(sk, peerPub, e.content);
         } catch (err) {
           content = "\u{1F512} (could not decrypt)";
         }
@@ -7140,7 +7137,7 @@
         if (prev && prev.lastTs >= e.created_at) return;
         let preview = "";
         try {
-          preview = await decrypt3(sk, peer, e.content);
+          preview = await _dmDecrypt(sk, peer, e.content);
         } catch (err) {
           preview = "\u{1F512}";
         }

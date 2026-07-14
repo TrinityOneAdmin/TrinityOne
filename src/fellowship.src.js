@@ -10,6 +10,14 @@ import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
 
+// DM crypto (Finding 5): SEND with NIP-44 (modern, authenticated, versioned padding) — NIP-04 is deprecated
+// (malleable, no MAC in older impls, no padding). DECRYPT tries NIP-44 first, then falls back to NIP-04 so
+// pre-upgrade DMs AND messages from a peer who hasn't updated yet still open during the transition. (The
+// ENVELOPE metadata is handled server-side by the deanon Finding-1 read-gate; NIP-17 gift-wrap is the roadmap
+// fix that hides it end-to-end.) nip44 encrypt/decrypt are sync (conversation-key based); nip04decrypt is async.
+const _dmEncrypt = (sk, peerPub, text) => nip44e(text, nip44ck(sk, peerPub));
+const _dmDecrypt = async (sk, peerPub, ct) => { try { return nip44d(ct, nip44ck(sk, peerPub)); } catch { return await nip04decrypt(sk, peerPub, ct); } };
+
 // a church is identified by its npub (or hex pubkey) -- resolve to a 32-byte hex pubkey
 function toPub(npubOrHex) {
   if (!npubOrHex) return null;
@@ -901,7 +909,7 @@ window.Fellowship = {
   // pubkeys are talking (full metadata privacy = NIP-17, a later/Stage-6 upgrade). Peer = a hex pubkey.
   async sendDM(peerPub, content) {
     if (!sk) await window.Fellowship.ready;
-    let ciphertext; try { ciphertext = await nip04encrypt(sk, peerPub, content); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
+    let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, content); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
     try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] DM publish failed', e); }
     return evt;
@@ -920,7 +928,7 @@ window.Fellowship = {
     const deliver = async (e) => {
       if (seen.has(e.id)) return; seen.add(e.id);
       const mine = e.pubkey === pub;
-      let content = ''; try { content = await nip04decrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
+      let content = ''; try { content = await _dmDecrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
       const m = { id: e.id, mine, content, ts: e.created_at, pubkey: e.pubkey };
       msgs.set(e.id, m); push(m);
     };
@@ -956,7 +964,7 @@ window.Fellowship = {
       if (!peer) return;
       const prev = byPeer.get(peer);
       if (prev && prev.lastTs >= e.created_at) return;
-      let preview = ''; try { preview = await nip04decrypt(sk, peer, e.content); } catch (err) { preview = '🔒'; }
+      let preview = ''; try { preview = await _dmDecrypt(sk, peer, e.content); } catch (err) { preview = '🔒'; }
       byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? 'You: ' : '') + preview });
       emit();
     };
