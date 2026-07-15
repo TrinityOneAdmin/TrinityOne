@@ -308,6 +308,181 @@ function FinanceImport({ book, F, onPost, onClose }) {
   );
 }
 
+// ---- share a period statement (quarter / year / custom) ----
+// Builds an AGGREGATE statement (totals by category + fund — no member names) the treasurer reviews, then
+// shares: download a printable doc, copy a plain-text summary (paste into email/WhatsApp), or — deliberately —
+// post it to members. The heavy lifting is the pure window.FinanceLedger.buildStatement/statementText/Html.
+function fsDownloadDoc(name, text, mime) {
+  try {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
+  } catch (e) {}
+}
+function fsSlug(s) { return String(s || 'statement').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'statement'; }
+
+// Lay the statement out as a real PDF (vendor jsPDF) so the download is shareable and prints cleanly. Mirrors
+// the invite-PDF pattern in stew-dashboard.jsx. Returns null if jsPDF isn't loaded (caller falls back to HTML).
+function fsBuildStatementPdf(model, F) {
+  const J = window.jspdf && window.jspdf.jsPDF; if (!J) return null;
+  const doc = new J({ unit: 'pt', format: 'a4' });
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 56;
+  const money = m => F.fmtMoney(m, model.currency, model.decimals);
+  let y = 64;
+  const need = h => { if (y + h > H - M) { doc.addPage(); y = M; } };
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.setTextColor(43, 39, 35); doc.text(model.title, M, y); y += 22;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(12); doc.setTextColor(138, 128, 120); doc.text(model.periodLabel, M, y); y += 12;
+  doc.setDrawColor(43, 39, 35); doc.setLineWidth(1.4); doc.line(M, y, W - M, y); y += 24;
+  const heading = t => { need(34); doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(138, 128, 120); doc.text(String(t).toUpperCase(), M, y); y += 7; doc.setDrawColor(231, 224, 213); doc.setLineWidth(0.7); doc.line(M, y, W - M, y); y += 15; };
+  const row = (label, val, bold, rule) => { need(22); doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(11.5); doc.setTextColor(43, 39, 35); doc.text(String(label), M, y); doc.text(money(val), W - M, y, { align: 'right' }); y += 8; if (rule) { doc.setDrawColor(231, 224, 213); doc.setLineWidth(0.6); doc.line(M, y, W - M, y); } y += 9; };
+  if (model.summary) { heading('Summary'); row('Total income', model.summary.income, false, true); row('Total spending', model.summary.expenditure, false, true); row(model.summary.surplus < 0 ? 'Deficit' : 'Surplus', model.summary.surplus, true, false); y += 8; }
+  if (model.income && model.income.length) { heading('Income by category'); model.income.forEach(r => row(r.name, r.amount, false, true)); y += 8; }
+  if (model.spending && model.spending.length) { heading('Spending by category'); model.spending.forEach(r => row(r.name, r.amount, false, true)); y += 8; }
+  if (model.funds && model.funds.length) { heading('Fund balances (closing)'); model.funds.forEach(r => row(r.name + (r.kind !== 'general' ? ' (' + r.kind + ')' : ''), r.balance, false, true)); y += 8; }
+  if (model.balance) { heading('Balance sheet'); row('Assets', model.balance.assets, false, true); row('Liabilities', model.balance.liabilities, false, true); row('Net funds', model.balance.funds, true, false); y += 8; }
+  if (model.note) { heading('Note'); doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(43, 39, 35); const lines = doc.splitTextToSize(model.note, W - 2 * M); need(lines.length * 14 + 6); doc.text(lines, M, y); y += lines.length * 14; }
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(138, 128, 120);
+  doc.text((model.generatedAt ? 'Generated ' + model.generatedAt + ' · ' : '') + 'Prepared with TrinityOne — aggregate figures only.', M, H - 30);
+  return doc;
+}
+// Desktop → direct download; Capacitor/Android → write to Cache then hand to the OS Share sheet (WebView has no
+// browser download). Same split as stew-dashboard.jsx savePdf.
+async function fsSavePdf(doc, fname) {
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  if (isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
+    const b64 = doc.output('datauristring').split(',')[1];
+    const P = window.Capacitor.Plugins;
+    const res = await P.Filesystem.writeFile({ path: fname, data: b64, directory: 'Cache' });
+    if (P.Share) await P.Share.share({ title: fname, text: 'Church financial statement', files: [res.uri], dialogTitle: 'Save or share statement' });
+  } else {
+    doc.save(fname);
+  }
+}
+
+function FinanceShareStatement({ book, F, churchName, canPost, onPostToMembers, onClose }) {
+  const now = new Date();
+  const curY = now.getFullYear(), curQ = Math.floor(now.getMonth() / 3) + 1;
+  const [title, setTitle] = React.useState(churchName || 'Financial statement');
+  const [preset, setPreset] = React.useState('this-q');
+  const [cFrom, setCFrom] = React.useState(F.quarterRange(curY, curQ).from);
+  const [cTo, setCTo] = React.useState(booksTodayISO());
+  const [secs, setSecs] = React.useState(() => { const o = {}; (F.STATEMENT_SECTIONS || []).forEach(s => { o[s.key] = s.on; }); return o; });
+  const [note, setNote] = React.useState('');
+  const [posting, setPosting] = React.useState(false);   // false | 'confirm' | 'done'
+  const [flash, setFlash] = React.useState('');
+
+  const period = React.useMemo(() => {
+    if (preset === 'this-q') return F.quarterRange(curY, curQ);
+    if (preset === 'last-q') return curQ === 1 ? F.quarterRange(curY - 1, 4) : F.quarterRange(curY, curQ - 1);
+    if (preset === 'this-y') return { ...F.yearRange(curY), label: 'Year to date ' + curY };
+    if (preset === 'last-y') return F.yearRange(curY - 1);
+    return { from: cFrom, to: cTo, label: F.rangeLabel(cFrom, cTo) };
+  }, [preset, cFrom, cTo, curY, curQ]);
+
+  const enabledKeys = (F.STATEMENT_SECTIONS || []).map(s => s.key).filter(k => secs[k]);
+  const model = React.useMemo(() => F.buildStatement(book, {
+    from: period.from, to: period.to, periodLabel: period.label, title, note,
+    sections: enabledKeys, generatedAt: booksTodayISO(),
+  }), [book, period, title, note, JSON.stringify(secs)]);
+
+  const doCopy = async () => { try { await navigator.clipboard.writeText(F.statementText(model)); setFlash('Summary copied — paste it into an email or message.'); setTimeout(() => setFlash(''), 2600); } catch (e) { setFlash('Could not copy on this device.'); } };
+  const doDownload = async () => {
+    const base = fsSlug(title) + '-' + fsSlug(period.label);
+    try { const doc = fsBuildStatementPdf(model, F); if (doc) { await fsSavePdf(doc, base + '.pdf'); setFlash('Statement downloaded — ready to print or share.'); setTimeout(() => setFlash(''), 2600); return; } } catch (e) {}
+    fsDownloadDoc(base + '.html', F.statementHtml(model), 'text/html;charset=utf-8');   // fallback: self-contained HTML
+    setFlash('Downloaded — open it to print or save as PDF.'); setTimeout(() => setFlash(''), 2600);
+  };
+  const doPost = async () => {
+    try { await onPostToMembers(model, F.statementText(model)); setPosting('done'); setFlash('Shared with members.'); }
+    catch (e) { setFlash(e && e.message ? e.message : 'Could not post to members.'); setPosting(false); }
+  };
+
+  const fmt = m => F.fmtMoney(m, book.baseCurrency, book.decimals);
+  const presetBtn = (v, label) => (
+    <button key={v} onClick={() => setPreset(v)} style={{ padding: '7px 12px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5,
+      border: '1px solid ' + (preset === v ? 'var(--clay)' : 'var(--line)'), background: preset === v ? 'var(--clay)' : 'transparent', color: preset === v ? '#fff' : 'var(--ink)' }}>{label}</button>
+  );
+  const prevRows = (rows, valKey, tag) => rows.map(r => (
+    <div key={r.fund || r.account} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}>
+      <span style={{ color: 'var(--ink-2, var(--ink))' }}>{r.name}{tag && r.kind !== 'general' ? ' · ' + r.kind : ''}</span><span style={{ fontWeight: 700 }}>{fmt(r[valKey])}</span>
+    </div>
+  ));
+
+  const dlgRef = useStewDialog(onClose);
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 64, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Share a statement" tabIndex={-1} style={{ ...bkCard, width: 560, maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 2px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Share a statement</h3>
+        <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>A summary for a quarter or year — totals only, no names. Review it, then share.</div>
+
+        <div style={{ overflow: 'auto', flex: 1, paddingRight: 2 }}>
+          <label style={bkLbl}>Statement title</label>
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Grace Community Church" style={{ ...bkFld, marginBottom: 14 }} />
+
+          <label style={bkLbl}>Period</label>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+            {presetBtn('this-q', 'This quarter')}{presetBtn('last-q', 'Last quarter')}{presetBtn('this-y', 'This year')}{presetBtn('last-y', 'Last year')}{presetBtn('custom', 'Custom')}
+          </div>
+          {preset === 'custom'
+            ? <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                <div style={{ flex: 1 }}><label style={bkLbl}>From</label><input type="date" value={cFrom} onChange={e => setCFrom(e.target.value)} style={bkFld} /></div>
+                <div style={{ flex: 1 }}><label style={bkLbl}>To</label><input type="date" value={cTo} onChange={e => setCTo(e.target.value)} style={bkFld} /></div>
+              </div>
+            : <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 14px' }}>{period.from} → {period.to}</div>}
+
+          <label style={bkLbl}>Include</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 4 }}>
+            {(F.STATEMENT_SECTIONS || []).map(s => (
+              <label key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, color: 'var(--ink)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!secs[s.key]} onChange={e => setSecs(o => ({ ...o, [s.key]: e.target.checked }))} /> {s.label}
+              </label>
+            ))}
+          </div>
+          {secs.note && <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="A short note for members / trustees (optional)…" rows={3} style={{ ...bkFld, height: 'auto', padding: 10, marginTop: 8, resize: 'vertical', lineHeight: 1.4 }} />}
+
+          {/* live preview of exactly what will be shared */}
+          <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 14, marginTop: 14, background: 'var(--surface-2, #f7f3ec)' }}>
+            <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display, var(--font-ui))' }}>{title || 'Financial statement'}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 8 }}>{period.label}</div>
+            {model.summary && <div style={{ borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}><span>Total income</span><span style={{ fontWeight: 700, color: 'var(--sage, #4f7a5e)' }}>{fmt(model.summary.income)}</span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}><span>Total spending</span><span style={{ fontWeight: 700, color: 'var(--clay-deep, #b4462f)' }}>{fmt(model.summary.expenditure)}</span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '5px 0 0', marginTop: 4, borderTop: '1px solid var(--line)', fontWeight: 800 }}><span>{model.summary.surplus < 0 ? 'Deficit' : 'Surplus'}</span><span>{fmt(model.summary.surplus)}</span></div>
+            </div>}
+            {model.income && model.income.length ? <div style={{ marginTop: 10 }}><div style={bkLbl}>Income by category</div>{prevRows(model.income, 'amount')}</div> : null}
+            {model.spending && model.spending.length ? <div style={{ marginTop: 10 }}><div style={bkLbl}>Spending by category</div>{prevRows(model.spending, 'amount')}</div> : null}
+            {model.funds && model.funds.length ? <div style={{ marginTop: 10 }}><div style={bkLbl}>Fund balances (closing)</div>{prevRows(model.funds, 'balance', true)}</div> : null}
+            {model.balance ? <div style={{ marginTop: 10 }}><div style={bkLbl}>Balance sheet</div>
+              {prevRows([{ account: 'a', name: 'Assets', amount: model.balance.assets }, { account: 'l', name: 'Liabilities', amount: model.balance.liabilities }, { account: 'n', name: 'Net funds', amount: model.balance.funds }], 'amount')}</div> : null}
+            {model.note ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--ink-3)', whiteSpace: 'pre-wrap' }}><span style={bkLbl}>Note</span>{model.note}</div> : null}
+            {!enabledKeys.length && <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Tick at least one section to include.</div>}
+          </div>
+        </div>
+
+        {flash && <p style={{ color: 'var(--sage, #4f7a5e)', fontSize: 12.5, margin: '10px 0 0', fontWeight: 600 }}>{flash}</p>}
+
+        {posting === 'confirm' ? (
+          <div style={{ marginTop: 14, border: '1px solid var(--clay)', borderRadius: 12, padding: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>Post this statement to every member?</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 12 }}>Members will see it in the church’s announcements. It contains totals only — no names.</div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setPosting(false)} style={{ flex: 1, height: 42, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+              <button onClick={doPost} style={{ flex: 2, height: 42, border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Yes, post to members</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
+            <button onClick={onClose} style={{ height: 44, padding: '0 16px', border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Close</button>
+            <button onClick={doCopy} disabled={!enabledKeys.length} style={{ height: 44, padding: '0 16px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Copy summary</button>
+            <button onClick={doDownload} disabled={!enabledKeys.length} style={{ height: 44, padding: '0 16px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Download</button>
+            {canPost && <button onClick={() => setPosting('confirm')} disabled={!enabledKeys.length} style={{ flex: 1, minWidth: 150, height: 44, padding: '0 16px', border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post to members</button>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- the main screen ----
 function DashFinance() {
   const F = window.FinanceLedger;
@@ -348,6 +523,18 @@ function DashFinance() {
   const [importing, setImporting] = React.useState(false);
   const [reports, setReports] = React.useState(false);
   const [donate, setDonate] = React.useState(false);
+  const [sharing, setSharing] = React.useState(false);
+  // church profile + groups (for the statement title + the "post to members" broadcast target). Relay-backed
+  // console only; in localStorage mode these are absent and the modal simply omits the "Post to members" button.
+  const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
+  const groups = window.useStewardGroups ? window.useStewardGroups() : [];
+  const broadcastGroup = groups.find(g => g.kind === 'broadcast');
+  const canPost = !!(useRelay && S && S.publishPost && broadcastGroup);
+  const postStatementToMembers = async (model, text) => {
+    if (!broadcastGroup) throw new Error('No announcements channel to post to. Create a broadcast group first.');
+    const lead = (model.title || 'Financial statement') + ' — ' + (model.periodLabel || '') + '\n\n';
+    await S.publishPost(lead + text, broadcastGroup.id);
+  };
   React.useEffect(() => {   // gentle donation nudge — once per session, unless hidden for ~3 months after giving
     if (_booksDonateShown || Date.now() < booksDonateHiddenUntil()) return;
     _booksDonateShown = true; setDonate(true);
@@ -432,7 +619,10 @@ function DashFinance() {
       <div style={{ ...bkCard, marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Recent transactions</div>
-          <button onClick={exportCsv} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export CSV</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setSharing(true)} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="share" size={14} color="var(--ink)" /> Share statement</button>
+            <button onClick={exportCsv} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export CSV</button>
+          </div>
         </div>
         {recent.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 14, padding: '10px 0' }}>No transactions yet — record your first with the button above.</div>}
         {recent.map(e => { const v = booksEntryView(book, e); return (
@@ -472,6 +662,7 @@ function DashFinance() {
       {recording && <BooksRecord book={book} onRecord={record} onClose={() => setRecording(false)} />}
       {importing && <FinanceImport book={book} F={F} onPost={importStatement} onClose={() => setImporting(false)} />}
       {donate && <BooksDonate onGave={() => { booksDonateGave(); setDonate(false); }} onClose={() => setDonate(false)} />}
+      {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} canPost={canPost} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
     </div>
   );
 }

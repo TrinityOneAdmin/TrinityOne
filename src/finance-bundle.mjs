@@ -3,3 +3,4 @@
 export * from './finance-ledger.mjs';
 export * from './finance-store.mjs';
 export * from './finance-import.mjs';
+export * from './finance-statement.mjs';
