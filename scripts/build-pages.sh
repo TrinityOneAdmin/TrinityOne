@@ -67,6 +67,13 @@ cat > "$OUT/_headers" <<HDR
   Content-Type: text/javascript; charset=utf-8
 HDR
 
+# Root → homepage. The marketing landing is welcome.html; serve it AT / as a 200 rewrite (clean URL, not a
+# redirect). Keeping this in the deploy means the root never depends on an external Cloudflare dashboard rule —
+# so renaming the homepage can't silently 404 it. (This Pages deploy is marketing-only; the app lives on a8.)
+cat > "$OUT/_redirects" <<'RDR'
+/    /welcome.html    200
+RDR
+
 # Both APKs ship with the site so apks.html's (relative) download links resolve on Pages and the
 # marketing CTA can hand Android visitors the app. They're build artifacts (gitignored), copied in
 # after the git-archive. Each is only shipped if under Cloudflare's 25 MiB/file cap — otherwise it's
