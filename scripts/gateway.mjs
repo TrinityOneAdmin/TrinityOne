@@ -325,6 +325,11 @@ const NEED_D = 'trinityone/care:';        // a care need — d=care:<id> (church
 const SLOT_D = 'trinityone/careslot:';    // a member's fill for one (need,date) — d=careslot:<careId>:<iso> (member-signed, addressable per author)
 const SKIP_D = 'trinityone/careskip:';    // recipient marks a day they don't need help — d=careskip:<careId>:<iso> (RECIPIENT-only)
 const AVAIL_D = 'trinityone/careavail:';  // a member's "I'm here to help" availability — d=careavail:<churchpub> (member-signed, one per member per church; non-minors only)
+// SAFETY CHECK ("mark as safe" — emergency roll-call after a raid/disaster). A check is one active doc per
+// church (church/steward/care-team authored); each member replies with their OWN response doc, whose content
+// is NIP-44-encrypted to the check's CREATOR (p-tagged) so even a seized relay can't read who's safe / in danger.
+const SAFETY_D = 'trinityone/safetycheck:';  // d=safetycheck:<churchpub> — the active check; gated to members (roster-style)
+const SAFE_D   = 'trinityone/safe:';         // d=safe:<churchpub> — a member's response; read only by self + the check creator + church/stewards
 function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch { return null; } }
 // the relay can host MULTIPLE churches — each manages its own data, scoped by author. Configure via
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
@@ -774,6 +779,31 @@ function maybePushSermon(evt) {
     }
   } catch {}
 }
+// SAFETY CHECK push: alert every member when a check OPENS ("are you safe?"), and nudge the check's creator
+// when responses arrive (collapsed to one alert — the creator opens the roll call to see who's safe/in danger).
+const SAFETY_PUSHED = new Set();
+function maybePushSafety(evt) {
+  try {
+    if (evt.kind !== 30078 || (evt.id && SAFETY_PUSHED.has(evt.id))) return;
+    const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
+    if (d.startsWith(SAFETY_D)) {
+      const cp = d.slice(SAFETY_D.length);
+      if (!CHURCH_PUBS.has(cp) || (evt.pubkey !== cp && !stewardOf(evt.pubkey, cp) && !careAdmin(evt.pubkey, cp))) return;
+      let open = true; try { open = !!(JSON.parse(evt.content) || {}).open; } catch {}
+      if (!open) return;                                                     // a check being CLOSED → no alert
+      SAFETY_PUSHED.add(evt.id);
+      const cname = CHURCH_NAMES.get(cp) || displayName(cp) || 'Your church';
+      for (const m of MEMBERS) { if (m === evt.pubkey || MEMBER_CHURCH.get(m) !== cp) continue;
+        pushTo(m, { title: cname, body: 'Are you safe? Tap to let your church know.', url: '/?safety=1', tag: 'safety-' + cp }, 'announce'); }
+    } else if (d.startsWith(SAFE_D)) {
+      const cp = d.slice(SAFE_D.length); if (!CHURCH_PUBS.has(cp)) return;
+      const p = (evt.tags.find(t => t[0] === 'p') || [])[1]; const creator = p ? (toHexPub(p) || p) : '';
+      if (!creator || creator === evt.pubkey) return;
+      SAFETY_PUSHED.add(evt.id);
+      pushTo(creator, { title: 'Safety check', body: 'Someone responded — open the roll call.', url: '/?safety=rollcall', tag: 'safety-resp-' + cp }, 'announce');
+    }
+  } catch {}
+}
 const dtag = (e) => { const t = (e.tags || []).find(t => t[0] === 'd'); return t ? t[1] : ''; };
 // (replaceable/addressable dedup + smart retention now live in event-store.mjs — the durable store owns them.)
 const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
@@ -989,6 +1019,8 @@ function accept(e) {
       return !!careId && (e.pubkey === CARE_RECIPIENT.get(careId) || isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp));
     }
     if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)
+    if (d.startsWith(SAFETY_D)) { const cp = d.slice(SAFETY_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }   // start/close a safety check: church, steward, or care-team admin
+    if (d.startsWith(SAFE_D)) { const cp = d.slice(SAFE_D.length); return CHURCH_PUBS.has(cp) && isMember; }   // mark yourself safe / needing help: any member (minors included — safety matters most)
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
@@ -1043,6 +1075,11 @@ function canRead(e, authed) {
   }
   if (e.kind === 30078) {
     const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+    if (d.startsWith(SAFE_D)) {   // a member's safety response: only the author, the check's CREATOR (p-tag), and the church + its stewards/care-admins may read it (content is NIP-44-encrypted to the creator)
+      const cp = d.slice(SAFE_D.length);
+      const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
+      return !!authed && (authed === e.pubkey || authed === pHex || CHURCH_PUBS.has(authed) || stewardOf(authed, cp) || careAdmin(authed, cp));
+    }
     // PRIVATE church docs — readable ONLY by an authenticated EFFECTIVE MEMBER of the owning church (lazy NIP-42),
     // NEVER by an anonymous internet client. Covers: the roster (member/admitted/stewards/blocked), the safeguarding
     // lists (minors/approved/guardians), the media key, and the Care module (who's sick/vulnerable + notes + meal-
@@ -1057,7 +1094,7 @@ function canRead(e, authed) {
     // ['church',cp]-tagged (accept() guarantees one), so CHURCH_PUBS.has(author)?author:namedChurch(e) resolves all.
     {
       let cp = '';
-      const suf = [MEMBER_D, ADMITTED_D, STEWARDS_D, BLOCKED_D, MINORS_D, APPROVED_D, GUARDIANS_D, MEDIAKEY_D, AVAIL_D].find(p => d.startsWith(p));
+      const suf = [MEMBER_D, ADMITTED_D, STEWARDS_D, BLOCKED_D, MINORS_D, APPROVED_D, GUARDIANS_D, MEDIAKEY_D, AVAIL_D, SAFETY_D].find(p => d.startsWith(p));
       if (suf) cp = d.slice(suf.length);
       else if (d === MEALS_SETTINGS_D || d === RELAYS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) cp = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : namedChurch(e);   // RELAYS_D (trinityone/relays): the church's relay-topology / sync-peers doc — gate to members, not world-readable (D2 auto-publishes it)
       if (cp) {
@@ -2588,6 +2625,7 @@ wss.on('connection', ws => {
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
       maybePushMessage(evt);   // notify on a new DM (recipient) or church announcement (members)
       maybePushSermon(evt);    // notify members when the church features a new sermon (video/audio)
+      maybePushSafety(evt);    // safety check: alert members on open, nudge the creator on responses
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       let _evtJson = null;   // E6: serialize the event ONCE (lazily, on first match) and reuse for every matching subscriber — was N JSON.stringify(evt) for N subs
       for (const [client, m] of subs) { if (client.readyState !== 1) continue;
@@ -2605,7 +2643,7 @@ wss.on('connection', ws => {
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
       let _reqEvents = 0;
       const _scanBudget = { left: 300000 };   // shared across ALL filters of this REQ: caps total fallback-scan rows so a crafted many-filter/multi-letter-tag REQ can't freeze the loop (E1)
-      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd === MEALS_SETTINGS_D || dd === RELAYS_D) wantsSafeguard = true; } else if (!ws._auth && e.kind === 4) wantsSafeguard = true; /* Finding 1: withheld DM envelope → challenge so the actual party can auth + read their own DMs */ continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
+      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd.startsWith(SAFETY_D) || dd.startsWith(SAFE_D) || dd === MEALS_SETTINGS_D || dd === RELAYS_D) wantsSafeguard = true; } else if (!ws._auth && e.kind === 4) wantsSafeguard = true; /* Finding 1: withheld DM envelope → challenge so the actual party can auth + read their own DMs */ continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
