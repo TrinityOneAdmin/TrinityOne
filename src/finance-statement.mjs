@@ -54,7 +54,8 @@ function closingFunds(book, to = '￿') {
 }
 
 // Build the statement MODEL (numbers only — rendering is separate). `sections` = array of enabled keys.
-export function buildStatement(book, { from = '', to = '￿', title = '', note = '', sections = null, periodLabel = '', generatedAt = '' } = {}) {
+const validHex = c => (typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c.trim())) ? c.trim() : '';
+export function buildStatement(book, { from = '', to = '￿', title = '', note = '', sections = null, periodLabel = '', generatedAt = '', accent = '' } = {}) {
   const enabled = sections || STATEMENT_SECTIONS.filter(s => s.on).map(s => s.key);
   const has = k => enabled.includes(k);
   const nameOf = id => (book.accounts.get(id) || {}).name || id;
@@ -74,6 +75,7 @@ export function buildStatement(book, { from = '', to = '￿', title = '', note =
     from: from || '', to: (to && to !== '￿') ? to : '',
     currency: book.baseCurrency, decimals: book.decimals,
     generatedAt, sections: enabled,
+    accent: validHex(accent),   // the church's brand accent (hex) — colours the statement header/rules; '' → default
   };
   if (has('summary'))  model.summary  = { income: ie.income, expenditure: ie.expenditure, surplus: ie.surplus };
   if (has('income'))   model.income   = incomeRows;
@@ -148,11 +150,11 @@ export function statementHtml(model) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(model.title)} — ${esc(model.periodLabel)}</title>
 <style>
-  :root { --ink:#2b2723; --ink3:#8a8078; --line:#e7e0d5; --clay:#b4462f; --sage:#4f7a5e; }
+  :root { --ink:#2b2723; --ink3:#8a8078; --line:#e7e0d5; --accent:${model.accent || '#2b2723'}; }
   * { box-sizing:border-box; }
   body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:var(--ink); max-width:640px; margin:0 auto; padding:40px 28px; line-height:1.5; }
-  header { border-bottom:2px solid var(--ink); padding-bottom:14px; margin-bottom:8px; }
-  h1 { font-size:26px; margin:0 0 2px; }
+  header { border-bottom:2px solid var(--accent); padding-bottom:14px; margin-bottom:8px; }
+  h1 { font-size:26px; margin:0 0 2px; color:var(--accent); }
   .period { color:var(--ink3); font-size:15px; font-weight:600; }
   section { margin-top:26px; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--ink3); border-bottom:1px solid var(--line); padding-bottom:6px; margin:0 0 8px; }
@@ -160,7 +162,7 @@ export function statementHtml(model) {
   table.t { width:100%; border-collapse:collapse; font-size:15px; }
   table.t td { padding:6px 0; border-bottom:1px solid var(--line); }
   table.t td.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
-  tr.tot td { font-weight:800; border-bottom:none; border-top:2px solid var(--ink); padding-top:9px; }
+  tr.tot td { font-weight:800; border-bottom:none; border-top:2px solid var(--accent); padding-top:9px; }
   .note { white-space:pre-wrap; }
   footer { margin-top:34px; padding-top:12px; border-top:1px solid var(--line); color:var(--ink3); font-size:12px; }
   @media print { body { padding:0; } @page { margin:18mm; } }

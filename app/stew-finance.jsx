@@ -320,6 +320,13 @@ function fsDownloadDoc(name, text, mime) {
   } catch (e) {}
 }
 function fsSlug(s) { return String(s || 'statement').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'statement'; }
+// parse a #rgb / #rrggbb brand accent to [r,g,b] for jsPDF; fall back to `fb` when unset/unparseable
+function fsHexRgb(hex, fb) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || '').trim()) || /^#?([0-9a-fA-F]{3})$/.exec(String(hex || '').trim());
+  if (!m) return fb;
+  let h = m[1]; if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
 
 // Lay the statement out as a real PDF (vendor jsPDF) so the download is shareable and prints cleanly. Mirrors
 // the invite-PDF pattern in stew-dashboard.jsx. Returns null if jsPDF isn't loaded (caller falls back to HTML).
@@ -330,9 +337,10 @@ function fsBuildStatementPdf(model, F) {
   const money = m => F.fmtMoney(m, model.currency, model.decimals);
   let y = 64;
   const need = h => { if (y + h > H - M) { doc.addPage(); y = M; } };
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.setTextColor(43, 39, 35); doc.text(model.title, M, y); y += 22;
+  const [ar, ag, ab] = fsHexRgb(model.accent, [43, 39, 35]);   // church brand accent (or ink) for the title + rule
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.setTextColor(ar, ag, ab); doc.text(model.title, M, y); y += 22;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(12); doc.setTextColor(138, 128, 120); doc.text(model.periodLabel, M, y); y += 12;
-  doc.setDrawColor(43, 39, 35); doc.setLineWidth(1.4); doc.line(M, y, W - M, y); y += 24;
+  doc.setDrawColor(ar, ag, ab); doc.setLineWidth(1.4); doc.line(M, y, W - M, y); y += 24;
   const heading = t => { need(34); doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(138, 128, 120); doc.text(String(t).toUpperCase(), M, y); y += 7; doc.setDrawColor(231, 224, 213); doc.setLineWidth(0.7); doc.line(M, y, W - M, y); y += 15; };
   const row = (label, val, bold, rule) => { need(22); doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(11.5); doc.setTextColor(43, 39, 35); doc.text(String(label), M, y); doc.text(money(val), W - M, y, { align: 'right' }); y += 8; if (rule) { doc.setDrawColor(231, 224, 213); doc.setLineWidth(0.6); doc.line(M, y, W - M, y); } y += 9; };
   if (model.summary) { heading('Summary'); row('Total income', model.summary.income, false, true); row('Total spending', model.summary.expenditure, false, true); row(model.summary.surplus < 0 ? 'Deficit' : 'Surplus', model.summary.surplus, true, false); y += 8; }
@@ -359,7 +367,7 @@ async function fsSavePdf(doc, fname) {
   }
 }
 
-function FinanceShareStatement({ book, F, churchName, canPost, onPostToMembers, onClose }) {
+function FinanceShareStatement({ book, F, churchName, accent, canPost, onPostToMembers, onClose }) {
   const now = new Date();
   const curY = now.getFullYear(), curQ = Math.floor(now.getMonth() / 3) + 1;
   const [title, setTitle] = React.useState(churchName || 'Financial statement');
@@ -382,8 +390,8 @@ function FinanceShareStatement({ book, F, churchName, canPost, onPostToMembers, 
   const enabledKeys = (F.STATEMENT_SECTIONS || []).map(s => s.key).filter(k => secs[k]);
   const model = React.useMemo(() => F.buildStatement(book, {
     from: period.from, to: period.to, periodLabel: period.label, title, note,
-    sections: enabledKeys, generatedAt: booksTodayISO(),
-  }), [book, period, title, note, JSON.stringify(secs)]);
+    sections: enabledKeys, generatedAt: booksTodayISO(), accent,
+  }), [book, period, title, note, accent, JSON.stringify(secs)]);
 
   const doCopy = async () => { try { await navigator.clipboard.writeText(F.statementText(model)); setFlash('Summary copied — paste it into an email or message.'); setTimeout(() => setFlash(''), 2600); } catch (e) { setFlash('Could not copy on this device.'); } };
   const doDownload = async () => {
@@ -442,7 +450,7 @@ function FinanceShareStatement({ book, F, churchName, canPost, onPostToMembers, 
 
           {/* live preview of exactly what will be shared */}
           <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 14, marginTop: 14, background: 'var(--surface-2, #f7f3ec)' }}>
-            <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display, var(--font-ui))' }}>{title || 'Financial statement'}</div>
+            <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display, var(--font-ui))', color: accent || undefined, borderTop: '3px solid ' + (accent || 'var(--ink)'), paddingTop: 8 }}>{title || 'Financial statement'}</div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 8 }}>{period.label}</div>
             {model.summary && <div style={{ borderTop: '1px solid var(--line)', paddingTop: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}><span>Total income</span><span style={{ fontWeight: 700, color: 'var(--sage, #4f7a5e)' }}>{fmt(model.summary.income)}</span></div>
@@ -662,7 +670,7 @@ function DashFinance() {
       {recording && <BooksRecord book={book} onRecord={record} onClose={() => setRecording(false)} />}
       {importing && <FinanceImport book={book} F={F} onPost={importStatement} onClose={() => setImporting(false)} />}
       {donate && <BooksDonate onGave={() => { booksDonateGave(); setDonate(false); }} onClose={() => setDonate(false)} />}
-      {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} canPost={canPost} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
+      {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} canPost={canPost} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
     </div>
   );
 }

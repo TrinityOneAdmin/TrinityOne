@@ -104,6 +104,16 @@ test('statementText carries the headline figures', () => {
   assert.match(t, /Building fund \(designated\) — £600\.00/);
 });
 
+test('brand accent: a valid hex is kept + rendered; anything else falls back to ink', () => {
+  const b = book();
+  const teal = buildStatement(b, { ...yearRange(2026), accent: '#2a9d8f', sections: ['summary'] });
+  assert.equal(teal.accent, '#2a9d8f');
+  assert.match(statementHtml(teal), /--accent:#2a9d8f/);
+  const bad = buildStatement(b, { ...yearRange(2026), accent: 'teal', sections: ['summary'] });
+  assert.equal(bad.accent, '');                          // unparseable → dropped
+  assert.match(statementHtml(bad), /--accent:#2b2723/);  // ink fallback, so no-brand statements look unchanged
+});
+
 test('statementHtml is self-contained and escapes user text', () => {
   const m = buildStatement(book(), { ...yearRange(2026), title: '<script>x</script>', sections: ['summary', 'note'], note: 'a & b <c>' });
   const h = statementHtml(m);
