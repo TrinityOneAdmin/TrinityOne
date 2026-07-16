@@ -372,7 +372,7 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
   // resolve the church dp/logo to a self-contained data: URI (invImgDataUrl lives in stew-dashboard.jsx; shared
   // steward bundle). Kept in state so the live preview, the HTML download and the PDF all embed the same image.
   const [logoData, setLogoData] = React.useState('');
-  React.useEffect(() => { let ok = true; if (logo && typeof invImgDataUrl === 'function') { invImgDataUrl(logo).then(d => { if (ok) setLogoData(d || ''); }); } else setLogoData(''); return () => { ok = false; }; }, [logo]);
+  React.useEffect(() => { let ok = true; if (typeof churchMarkDataUrl === 'function') { churchMarkDataUrl({ picture: logo, name: churchName, accent }).then(d => { if (ok) setLogoData(d || ''); }); } else setLogoData(''); return () => { ok = false; }; }, [logo, churchName, accent]);
   const now = new Date();
   const curY = now.getFullYear(), curQ = Math.floor(now.getMonth() / 3) + 1;
   const [title, setTitle] = React.useState(churchName || 'Financial statement');

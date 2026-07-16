@@ -684,6 +684,17 @@ function invImgDataUrl(src) {
     } catch (e) { res(null); }
   });
 }
+// The church's "mark" (its display picture) as a raster data: URI for embedding in <img> or jsPDF: the
+// uploaded dp if there is one, else the SAME initials-on-accent badge the app shows — so an artifact always
+// carries the church's mark exactly as it appears in-app, even when no photo was uploaded.
+async function churchMarkDataUrl({ picture, name, accent } = {}) {
+  const pic = await invImgDataUrl(picture);
+  if (pic) return pic;
+  const initials = (String(name || '').trim().split(/\s+/).map(w => w[0] || '').join('').slice(0, 2).toUpperCase()) || 'CH';
+  const acc = (typeof accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(accent.trim())) ? accent.trim() : '#b4462f';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="#ffffff"/><circle cx="60" cy="60" r="60" fill="' + acc + '"/><text x="60" y="76" font-family="Georgia, serif" font-size="46" fill="#ffffff" text-anchor="middle">' + initials.replace(/[<>&]/g, '') + '</text></svg>';
+  try { return await svgToPng(svg, 240); } catch (e) { return null; }
+}
 // build the printable invite as a real PDF (A4) — CHURCH-branded (name + accent + logo), then QR + steps.
 async function buildInvitePdf({ name, url, svg, accent, logo }) {
   const J = window.jspdf && window.jspdf.jsPDF; if (!J) return null;
@@ -833,7 +844,7 @@ function InvitePosterModal({ church, url, svg, onClose }) {
   const savePdf = async () => {
     setPdfBusy(true);
     try {
-      const logo = await invImgDataUrl(church.picture);   // church logo (if uploaded + loadable), else null
+      const logo = await churchMarkDataUrl({ picture: church.picture, name: church.name, accent: church.accent });   // dp, or the initials badge
       const doc = await buildInvitePdf({ name: church.name, url, svg, accent: church.accent, logo });
       if (!doc) { window.print(); return; }   // jsPDF missing → fall back to browser print
       const fname = 'TrinityOne-invite-' + ((church.name || 'church').replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'church') + '.pdf';
