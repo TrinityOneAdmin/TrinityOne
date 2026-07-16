@@ -168,11 +168,12 @@ function SafetyCheckPanel() {
   const [composing, setComposing] = React.useState(false);
   const [msg, setMsg] = React.useState('Are you safe? Please let us know.');
   const [busy, setBusy] = React.useState(false);
+  const [confirmEnd, setConfirmEnd] = React.useState(false);   // ending a LIVE check is deliberate, never a stray "close"
   React.useEffect(() => { if (!(window.Steward && window.Steward.subscribeSafetyCheck)) return; const u = window.Steward.subscribeSafetyCheck(setCheck); return () => { try { u(); } catch (e) {} }; }, []);
   React.useEffect(() => { if (!check || !(window.Steward && window.Steward.subscribeSafetyResponses)) { setResponses([]); return; } const u = window.Steward.subscribeSafetyResponses(check.id, setResponses); return () => { try { u(); } catch (e) {} }; }, [check && check.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   const nameOf = pk => (dir[pk] && dir[pk].name) || ((members.find(m => m.pubkey === pk) || {}).name) || (pk ? pk.slice(0, 8) + '…' : '?');
   const start = async () => { if (busy) return; setBusy(true); try { await window.Steward.startSafetyCheck(msg); } catch (e) {} setBusy(false); setComposing(false); };
-  const closeCheck = async () => { if (busy) return; setBusy(true); try { await window.Steward.closeSafetyCheck(check && check.id); } catch (e) {} setBusy(false); };
+  const closeCheck = async () => { if (busy) return; setBusy(true); try { await window.Steward.closeSafetyCheck(check && check.id); } catch (e) {} setBusy(false); setConfirmEnd(false); };
 
   const roster = (members || []).filter(m => m && m.pubkey);
   const byPk = {}; (responses || []).forEach(r => { byPk[r.pubkey] = r; });
@@ -185,24 +186,21 @@ function SafetyCheckPanel() {
   const nameRow = (p, tone) => <div key={p.pubkey} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)', fontSize: 13.5 }}><span style={{ fontWeight: 600, color: tone || 'var(--ink)' }}>{p.name}{p.note ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> — {p.note}</span> : ''}</span></div>;
 
   if (!check) {
+    // dormant: just a small button, not a full-width banner (a safety check is a rare emergency action)
+    if (!composing) return (
+      <div style={{ margin: '2px 0 14px' }}>
+        <button onClick={() => setComposing(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 13, gap: 7 }} title="Ask everyone to mark themselves safe after a raid/disaster — replies are encrypted to you"><Icon name="shield" size={15} color="currentColor" /> Safety check</button>
+      </div>
+    );
     return (
-      <div style={{ ...card, borderColor: 'color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ minWidth: 220, flex: 1 }}>
-            <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display)' }}>Safety check</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2, lineHeight: 1.45 }}>After a raid, disaster or emergency, ask everyone to mark themselves safe. Replies are private to you — encrypted so even the relay can’t read who’s safe or in danger.</div>
-          </div>
-          <button onClick={() => setComposing(true)} className="sk-btn sk-btn--clay" style={{ padding: '10px 15px', fontSize: 14, whiteSpace: 'nowrap' }}>Start a safety check</button>
+      <div style={{ ...card, borderColor: 'var(--clay)' }}>
+        <div style={{ fontWeight: 800, fontSize: 14.5, fontFamily: 'var(--font-display)' }}>Start a safety check</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-2)', margin: '3px 0 0', lineHeight: 1.45 }}>Ask everyone to mark themselves safe after a raid/disaster. Replies are encrypted to you.</div>
+        <textarea value={msg} onChange={e => setMsg(e.target.value)} rows={2} maxLength={280} style={{ width: '100%', boxSizing: 'border-box', padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical', lineHeight: 1.4, marginTop: 10 }} />
+        <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+          <button onClick={() => setComposing(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 10 }}>Cancel</button>
+          <button onClick={start} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 10 }}>{busy ? 'Sending…' : 'Send to everyone'}</button>
         </div>
-        {composing && (
-          <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
-            <textarea value={msg} onChange={e => setMsg(e.target.value)} rows={2} maxLength={280} style={{ width: '100%', boxSizing: 'border-box', padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical', lineHeight: 1.4 }} />
-            <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-              <button onClick={() => setComposing(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
-              <button onClick={start} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11 }}>{busy ? 'Sending…' : 'Send to everyone'}</button>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -213,7 +211,15 @@ function SafetyCheckPanel() {
           <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display)', color: 'var(--clay-deep, #b4462f)' }}>Safety check is live</div>
           <div style={{ fontSize: 13, color: 'var(--ink)', marginTop: 3 }}>{check.message}</div>
         </div>
-        <button onClick={closeCheck} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13, whiteSpace: 'nowrap' }}>Close</button>
+        {confirmEnd ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+            <span style={{ fontSize: 12, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>End for everyone?</span>
+            <button onClick={() => setConfirmEnd(false)} className="sk-btn sk-btn--ghost" style={{ padding: '6px 10px', fontSize: 12.5 }}>Keep live</button>
+            <button onClick={closeCheck} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '6px 10px', fontSize: 12.5 }}>End check</button>
+          </div>
+        ) : (
+          <button onClick={() => setConfirmEnd(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13, whiteSpace: 'nowrap' }}>End check</button>
+        )}
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         {stat(help.length, 'Need help', 'var(--clay-deep, #b4462f)')}
