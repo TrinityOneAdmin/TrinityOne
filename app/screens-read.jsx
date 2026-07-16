@@ -776,7 +776,7 @@ function ReadScreen({ ctx }) {
   const sheetCtx = {
     toast: ctx.toast,
     _bm: () => { const k = keyOf(sel0); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
-    _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + selText); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
+    _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + selText).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
     _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: selText, version }); },
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: ctx.notes[keyOf(sel0)] || '' }); },
     // extend/shrink the selection into a contiguous passage from inside the sheet (the backdrop blocks tapping more verses)

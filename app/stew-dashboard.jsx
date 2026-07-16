@@ -631,15 +631,20 @@ function nameHandle(m) { return m ? handleLocal(m.nip05, m.name) : ''; }
 function churchHandle(church) { const l = church ? handleLocal(church.nip05, church.name) : ''; return l ? '@' + l : ''; }
 function copyText(t) {
   if (!t) return false;
-  // navigator.clipboard only works in a secure context (https / localhost). Over plain http on the
-  // LAN it's undefined, so fall back to a hidden-textarea execCommand copy (works everywhere).
-  try { if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(String(t)); return true; } } catch (e) {}
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = String(t); ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '-9999px'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, String(t).length);
-    const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok;
-  } catch (e) { return false; }
+  // hidden-textarea execCommand copy — works in a non-secure context (plain http on the LAN, where
+  // navigator.clipboard is undefined) AND when clipboard.writeText is denied (no user gesture / permission).
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = String(t); ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '-9999px'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, String(t).length);
+      const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok;
+    } catch (e) { return false; }
+  };
+  // clipboard.writeText returns a PROMISE that rejects ASYNC (permission denied / no gesture) — a plain
+  // try/catch can't catch that, so attach .catch() and fall back, else it's an unhandled rejection.
+  try { if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(String(t)).catch(fallback); return true; } } catch (e) {}
+  return fallback();
 }
 
 // The printable paper invite (church QR + steps + blank recovery-phrase grid) is generated on demand

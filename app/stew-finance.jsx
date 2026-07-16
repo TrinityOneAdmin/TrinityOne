@@ -129,7 +129,7 @@ function BooksRecord({ book, onRecord, onClose }) {
 // ---- the "support TrinityOne" donation nudge (shown on open; no paywall) ----
 function BooksDonate({ onGave, onClose }) {
   const [copied, setCopied] = React.useState(false);
-  const copyLn = () => { try { navigator.clipboard.writeText(DONATE.ln); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch (e) {} };
+  const copyLn = () => { try { navigator.clipboard.writeText(DONATE.ln).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch (e) {} };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70, padding: 16 }} onClick={onClose}>

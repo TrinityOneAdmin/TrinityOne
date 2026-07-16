@@ -22,7 +22,11 @@ const since = () => { const s = exc.length; return () => exc.slice(s); };
 const clickText = t => ev(`(function(){var el=[...document.querySelectorAll("button,div,a,span")].filter(e=>(e.textContent||"").trim()===${JSON.stringify(t)}&&e.offsetHeight>0);var e=el[el.length-1];if(!e)return false;for(var n=e,i=0;n&&i<5;n=n.parentElement,i++)n.dispatchEvent(new MouseEvent("click",{bubbles:true}));return true})()`);
 const nav = async t => { const ok = await clickText(t); await sleep(1100); return ok; };
 
-const TABS = ['Today', 'Read', 'Community', 'Library', 'You'];
+// The two apps have different navigation. Detect which one is attached and crawl its real tabs, so the console
+// (leaders' app) gets true coverage instead of failing on member tab names that don't exist there.
+const MEMBER_TABS = ['Today', 'Read', 'Community', 'Library', 'You'];
+const STEWARD_TABS = ['Overview', 'Groups', 'Rota', 'Calendar', 'Rooms', 'Resources', 'Members', 'Finance', 'Care', 'Check-in', 'Settings'];
+let TABS = MEMBER_TABS, isMember = true;
 const findings = [];
 
 async function run() {
@@ -34,6 +38,15 @@ async function run() {
   await sleep(1200);
   if ((await nodes()) < 15) findings.push('app BLANK on attach');
 
+  // Detect the app + keep only tabs that are actually present (steward conditional tabs — Finance/Care/Check-in
+  // — appear only when enabled), so an off module isn't mis-reported as a missing nav.
+  const isPresent = t => ev(`[...document.querySelectorAll("button,div,a,span")].some(e=>(e.textContent||"").trim()===${JSON.stringify(t)}&&e.offsetHeight>0)`);
+  isMember = !((await isPresent('Overview')) && (await isPresent('Members')));
+  const candidate = isMember ? MEMBER_TABS : STEWARD_TABS;
+  TABS = [];
+  for (const t of candidate) if (await isPresent(t)) TABS.push(t);
+  if (!TABS.length) findings.push('no known nav tabs found (unrecognised app state)');
+
   // Phase 1 — every tab renders without error
   for (const tab of TABS) {
     const s = since(); const ok = await nav(tab); const n = await nodes(); const e = s();
@@ -42,8 +55,10 @@ async function run() {
     if (e.length) findings.push(`tab "${tab}": ${e[0]}`);
   }
 
-  // Phase 2 — open every chat group (the ChatRoom path), verify the composer renders, exercise composer + menu
+  // Phase 2 — open every chat group (the ChatRoom path), verify the composer renders, exercise composer + menu.
+  // Member app only — the console's group management is a different surface, crawled as controls in Phase 3.
   let groupsOpened = 0;
+  if (isMember) {
   await nav('Community');
   const groupCount = await ev(`[...document.querySelectorAll("*")].filter(e=>/·\\s*\\d+\\s*member|No messages yet|Broadcast|^Group$/.test((e.textContent||"").trim())&&e.offsetHeight>44&&e.offsetHeight<140).length`);
   for (let g = 0; g < Math.min(groupCount, 8); g++) {
@@ -67,6 +82,7 @@ async function run() {
     if (s2().length) findings.push(`group "${name}" composer/menu: ${s2()[0]}`);
     await esc();
   }
+  }   // end member-only Phase 2
 
   // Phase 3 — click every OUTERMOST clickable (cursor:pointer, not nested in another) on each tab
   let clicked = 0;
@@ -87,7 +103,7 @@ async function run() {
     }
   }
 
-  console.log(`SMOKE-DEVICE: ${TABS.length} tabs · ${groupsOpened} groups opened · ${clicked} controls clicked. Total exceptions/errors: ${exc.length}.`);
+  console.log(`SMOKE-DEVICE (${isMember ? 'member' : 'steward'}): ${TABS.length} tabs [${TABS.join(', ')}] · ${groupsOpened} groups opened · ${clicked} controls clicked. Total exceptions/errors: ${exc.length}.`);
   if (!findings.length) console.log('  ✓ every tab, group and control rendered with no crash or uncaught error.');
   else { console.log('  ✗ issues:'); findings.forEach(f => console.log('    • ' + f)); }
   ws.close(); process.exit(findings.length ? 1 : 0);

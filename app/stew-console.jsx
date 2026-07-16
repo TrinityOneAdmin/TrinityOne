@@ -208,7 +208,7 @@ function WizKey({ saved, setSaved }) {
   const name = church.name || 'Your church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
   const [copied, setCopied] = React.useState(false);
-  const copyNpub = () => { try { copyText(church.npub || ''); } catch (e) { try { navigator.clipboard.writeText(church.npub || ''); } catch {} } setCopied(true); setTimeout(() => setCopied(false), 1400); };
+  const copyNpub = () => { try { copyText(church.npub || ''); } catch (e) { try { navigator.clipboard.writeText(church.npub || '').catch(() => {}); } catch {} } setCopied(true); setTimeout(() => setCopied(false), 1400); };
   return (
     <div style={{ marginTop: 18 }}>
       <p style={{ fontSize: 16, color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>This creates your church’s own secure key. Every group and notice you post is <b style={{ color: 'var(--ink)' }}>signed</b> with it — so members know a message is really from you.</p>
