@@ -13,9 +13,22 @@ function svIsoLocal(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1)
 function svTodayIso() { return svIsoLocal(new Date()); }
 // next n Sundays as LOCAL dates (toISOString shifts to UTC and can land on Saturday in +TZ zones)
 function svNextSundays(n) { const out = []; const d = new Date(); d.setHours(0, 0, 0, 0); let guard = 0; while (out.length < n && guard < 60) { if (d.getDay() === 0) { const iso = svIsoLocal(d); out.push({ iso, ...svParts(iso) }); } d.setDate(d.getDate() + 1); guard++; } return out; }
-function svDownloadICS(it) {
+const svIcsEsc = s => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+function svDownloadICS(it, churchName) {
   const dt = (it.date || '').replace(/-/g, ''); const [hh, mm] = (it.time || '10:00').split(':');
-  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT', 'SUMMARY:Serving — ' + (it.teamName || '') + ' (' + (it.role || '') + ')', 'DTSTART:' + dt + 'T' + (hh || '10') + (mm || '00') + '00', 'DESCRIPTION:' + (it.service || ''), 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+  const start = dt + 'T' + (hh || '10') + (mm || '00') + '00';
+  const ch = String(churchName || '').trim();
+  // brand: the calendar is named after the church, and the church leads the event title, so a member's phone
+  // calendar reads "Trinity LA — Serving …" rather than a nameless entry.
+  const summary = (ch ? ch + ' — ' : '') + 'Serving' + (it.teamName ? ' — ' + it.teamName : '') + (it.role ? ' (' + it.role + ')' : '');
+  const p = n => String(n).padStart(2, '0'); const d = new Date();
+  const stamp = d.getUTCFullYear() + p(d.getUTCMonth() + 1) + p(d.getUTCDate()) + 'T' + p(d.getUTCHours()) + p(d.getUTCMinutes()) + p(d.getUTCSeconds()) + 'Z';
+  const uid = 'trinityone-' + start + '-' + String(it.teamName || 'serving').replace(/\s+/g, '') + '@trinityone.church';
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//TrinityOne//Church//EN', 'CALSCALE:GREGORIAN',
+    ch ? 'X-WR-CALNAME:' + svIcsEsc(ch) : '',
+    'BEGIN:VEVENT', 'UID:' + uid, 'DTSTAMP:' + stamp, 'SUMMARY:' + svIcsEsc(summary), 'DTSTART:' + start,
+    'DESCRIPTION:' + svIcsEsc((it.service || '') + (ch ? (it.service ? ' · ' : '') + ch : '')),
+    'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n');
   try { const u = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' })); window.open(u, '_blank'); } catch (e) {}
 }
 
@@ -145,7 +158,7 @@ function SwapSheet({ open, item, onClose, ctx }) {
 function ManageSheet({ open, item, onClose, onSwap, ctx }) {
   if (!item) return null;
   const rows = [
-    { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => { svDownloadICS(item); ctx.toast('Added — you’ll be reminded the day before'); onClose(); } },
+    { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => { svDownloadICS(item, ctx.church && ctx.church.name); ctx.toast('Added — you’ll be reminded the day before'); onClose(); } },
     { ic: 'swap', t: 'Ask someone to swap', s: 'Send a friendly ask to a teammate', go: () => onSwap(item) },
     { ic: 'calendar', t: 'I’m away — take me off', s: 'Let your leader know you can’t make it', go: () => { ctx.respondServing(item, 'decline'); ctx.toast('Taken off — thanks for letting us know'); onClose(); } },
   ];
@@ -524,7 +537,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   ) : null}
 
                   <div style={{ display: 'flex', gap: 9, marginTop: 16 }}>
-                    <button onClick={() => { svDownloadICS(next); ctx.toast('Added — you’ll be reminded the day before'); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', cursor: 'pointer', background: '#fff', color: '#3C6E57', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={17} color="#3C6E57" /> Add to calendar</button>
+                    <button onClick={() => { svDownloadICS(next, ctx.church && ctx.church.name); ctx.toast('Added — you’ll be reminded the day before'); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', cursor: 'pointer', background: '#fff', color: '#3C6E57', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={17} color="#3C6E57" /> Add to calendar</button>
                     <button onClick={() => setSheet({ kind: 'manage', item: next })} style={{ flexShrink: 0, padding: '13px 16px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,.2)', color: '#fff', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, backdropFilter: 'blur(4px)' }}><Icon name="swap" size={17} color="#fff" /> Change</button>
                   </div>
                   {(ctx.churchRunsheets || []).some(r => r.service === next.serviceId && (r.items || []).length) ? (
@@ -638,7 +651,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{s.name || 'Sunday Gathering'}</div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}><Icon name="clock" size={13} color="var(--ink-3)" /> {s.time || ''}</div>
                         </div>
-                        <button onClick={() => { svDownloadICS({ date: s.date, time: s.time, teamName: s.name || 'Gathering', role: '', service: s.name || '' }); ctx.toast('Added to your calendar'); }} title="Add to calendar" style={{ flexShrink: 0, width: 40, height: 40, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="calPlus" size={18} /></button>
+                        <button onClick={() => { svDownloadICS({ date: s.date, time: s.time, teamName: s.name || 'Gathering', role: '', service: s.name || '' }, ctx.church && ctx.church.name); ctx.toast('Added to your calendar'); }} title="Add to calendar" style={{ flexShrink: 0, width: 40, height: 40, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="calPlus" size={18} /></button>
                       </div>
                     ))}
                   </div>
