@@ -2655,24 +2655,28 @@ function BulkInviteModal({ onClose }) {
     };
     rdr.readAsText(f);
   };
-  const printSlips = () => {
+  const printSlips = async () => {
     if (!list.length || !window.Steward.joinUrl) return;
     const base = window.Steward.joinUrl().replace('/?follow=', '/join?follow=');   // the smart /join landing (offers the app, or instant-web)
     const cn = church.name ? '&c=' + encodeURIComponent(church.name) : '';
-    const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+    const acc = (typeof church.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(church.accent.trim())) ? church.accent.trim() : '#b4533f';
+    const mark = await churchMarkDataUrl({ picture: church.picture, name: church.name, accent: church.accent });   // church dp/badge
+    const markImg = mark ? `<img class="mark" src="${esc(mark)}" alt="">` : '';
     const slips = list.map(name => {
       const link = base + '&name=' + encodeURIComponent(name) + cn;
       const qr = window.Steward.qrSVG ? window.Steward.qrSVG(link) : '';
-      return `<div class="slip"><div class="qr">${qr}</div><div class="nm">${esc(name)}</div><div class="ch">Join ${esc(church.name || 'our church')} on TrinityOne</div><div class="hint">Point your phone camera at this code — no app to download, no password. Then tap “Add to Home Screen” to keep it handy.</div></div>`;
+      return `<div class="slip">${markImg}<div class="qr">${qr}</div><div class="nm">${esc(name)}</div><div class="ch">Join ${esc(church.name || 'our church')} on TrinityOne</div><div class="hint">Point your phone camera at this code — no app to download, no password. Then tap “Add to Home Screen” to keep it handy.</div></div>`;
     }).join('');
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Join slips · ${esc(church.name || '')}</title><style>`
       + `body{font-family:system-ui,sans-serif;margin:0;padding:14px;color:#1b1714}`
       + `.bar{background:#f4efe6;border:1px solid #e6ddcb;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px;display:flex;gap:12px;align-items:center}`
-      + `.bar button{font:inherit;background:#b4533f;color:#fff;border:none;border-radius:8px;padding:7px 13px;cursor:pointer;font-weight:700}`
+      + `.bar button{font:inherit;background:${acc};color:#fff;border:none;border-radius:8px;padding:7px 13px;cursor:pointer;font-weight:700}`
       + `.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}`
-      + `.slip{border:1px dashed #bbb;border-radius:12px;padding:16px 14px;text-align:center;page-break-inside:avoid;display:flex;flex-direction:column;align-items:center;gap:6px}`
+      + `.slip{border:1px dashed #bbb;border-top:4px solid ${acc};border-radius:12px;padding:16px 14px;text-align:center;page-break-inside:avoid;display:flex;flex-direction:column;align-items:center;gap:6px}`
+      + `.mark{width:46px;height:46px;border-radius:999px;object-fit:cover}`
       + `.qr{width:150px;height:150px}.qr svg{width:100%;height:100%}`
-      + `.nm{font-weight:800;font-size:18px;margin-top:4px}.ch{font-size:12px;color:#777}`
+      + `.nm{font-weight:800;font-size:18px;margin-top:2px}.ch{font-size:12px;color:${acc};font-weight:600}`
       + `.hint{font-size:11px;color:#555;max-width:230px;line-height:1.35;margin-top:4px}`
       + `@media print{.bar{display:none}}`
       + `</style></head><body><div class="bar"><span>${list.length} join slip${list.length === 1 ? '' : 's'} for ${esc(church.name || 'your church')}. Print, cut along the dashes, and hand them out.</span><button onclick="window.print()">Print / Save as PDF</button></div><div class="grid">${slips}</div></body></html>`;
