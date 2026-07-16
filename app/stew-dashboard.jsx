@@ -672,16 +672,33 @@ function svgToPng(svgStr, size) {
   });
 }
 
-// build the printable invite as a real PDF (A4) — QR + link + steps + recovery-phrase write-in lines.
-async function buildInvitePdf({ name, url, svg }) {
+// load any image src (data: URI or URL) → a PNG data URL for embedding; null on failure (CORS / 404 / none).
+function invImgDataUrl(src) {
+  return new Promise(res => {
+    if (!src) return res(null);
+    if (/^data:image\//i.test(src)) return res(src);   // already embeddable
+    try {
+      const img = new Image(); img.crossOrigin = 'anonymous';
+      img.onload = () => { try { const c = document.createElement('canvas'); c.width = img.naturalWidth || 128; c.height = img.naturalHeight || 128; c.getContext('2d').drawImage(img, 0, 0); res(c.toDataURL('image/png')); } catch (e) { res(null); } };
+      img.onerror = () => res(null); img.src = src;
+    } catch (e) { res(null); }
+  });
+}
+// build the printable invite as a real PDF (A4) — CHURCH-branded (name + accent + logo), then QR + steps.
+async function buildInvitePdf({ name, url, svg, accent, logo }) {
   const J = window.jspdf && window.jspdf.jsPDF; if (!J) return null;
   const doc = new J({ unit: 'pt', format: 'a4' });
   const W = doc.internal.pageSize.getWidth(), M = 56; let y = 66;
   const nm = name || 'your church';
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(184, 82, 52);
-  doc.text('TRINITYONE', W / 2, y, { align: 'center', charSpace: 2 }); y += 28;
-  doc.setFontSize(26); doc.setTextColor(34, 28, 22);
-  doc.text(doc.splitTextToSize('Join ' + nm, W - 2 * M), W / 2, y, { align: 'center' }); y += 30;
+  // church brand accent → rgb (falls back to TrinityOne clay when unset); the church is the hero, TO the footer.
+  const hx = String(accent || '').match(/^#?([0-9a-fA-F]{6})$/) || String(accent || '').match(/^#?([0-9a-fA-F]{3})$/);
+  let ar = 184, ag = 82, ab = 52;
+  if (hx) { let h = hx[1]; if (h.length === 3) h = h.split('').map(c => c + c).join(''); ar = parseInt(h.slice(0, 2), 16); ag = parseInt(h.slice(2, 4), 16); ab = parseInt(h.slice(4, 6), 16); }
+  if (logo) { try { const ls = 58; doc.addImage(logo, 'PNG', (W - ls) / 2, y - 8, ls, ls); y += ls + 8; } catch (e) {} }
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(26); doc.setTextColor(ar, ag, ab);
+  doc.text(doc.splitTextToSize('Join ' + nm, W - 2 * M), W / 2, y, { align: 'center' }); y += 26;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(150, 140, 124);
+  doc.text('on TrinityOne', W / 2, y, { align: 'center', charSpace: 1 }); y += 20;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(107, 96, 82);
   doc.text(doc.splitTextToSize('A private, offline-first place to read and belong — no sign-up, no tracking.', W - 2 * M), W / 2, y, { align: 'center' }); y += 26;
   try { const png = await svgToPng(svg, 600); const qs = 168; doc.addImage(png, 'PNG', (W - qs) / 2, y, qs, qs); y += qs + 16; } catch (e) { y += 6; }
@@ -816,7 +833,8 @@ function InvitePosterModal({ church, url, svg, onClose }) {
   const savePdf = async () => {
     setPdfBusy(true);
     try {
-      const doc = await buildInvitePdf({ name: church.name, url, svg });
+      const logo = await invImgDataUrl(church.picture);   // church logo (if uploaded + loadable), else null
+      const doc = await buildInvitePdf({ name: church.name, url, svg, accent: church.accent, logo });
       if (!doc) { window.print(); return; }   // jsPDF missing → fall back to browser print
       const fname = 'TrinityOne-invite-' + ((church.name || 'church').replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'church') + '.pdf';
       if (isNative) {
