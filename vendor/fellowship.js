@@ -5773,6 +5773,8 @@
   var CARESLOT_D = "trinityone/careslot:";
   var CARESKIP_D = "trinityone/careskip:";
   var CAREAVAIL_D = "trinityone/careavail:";
+  var SAFETY_D = "trinityone/safetycheck:";
+  var SAFE_D = "trinityone/safe:";
   var FAMILY_KEY = "trinityone.family";
   function _loadChildren() {
     try {
@@ -8052,6 +8054,58 @@
       try {
         await Promise.any(pool.publish(churchRelays(), evt));
       } catch {
+      }
+      return evt;
+    },
+    // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
+    // {id, message, by, at}, or cb(null) when there's none / it was closed. The relay only serves it to
+    // authenticated members (roster-gated), so an outsider never learns the church declared an emergency.
+    subscribeSafetyCheck(cb) {
+      const cp = window.Fellowship.churchPub;
+      if (!cp) return () => {
+      };
+      let best = null;
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], "#d": [SAFETY_D + cp] }], {
+        onevent(e) {
+          try {
+            const o = JSON.parse(e.content || "{}");
+            if (best && e.created_at < best.createdAt) return;
+            best = { id: o.id || e.id, message: String(o.message || ""), by: o.by || e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at };
+            cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null);
+          } catch {
+          }
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // mark yourself SAFE or NEEDING HELP for `check`. The response body is NIP-44-encrypted to the check's
+    // CREATOR (check.by) — only they can read who's safe / in danger; not the relay, not other members.
+    async markSafe(check, status, note) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      if (!sk || !cp || !check || !check.by) return null;
+      const body = JSON.stringify({ status: status === "help" ? "help" : "safe", note: String(note || "").trim().slice(0, 240), at: Math.floor(Date.now() / 1e3), checkId: check.id });
+      let ct = "";
+      try {
+        ct = _dmEncrypt(sk, check.by, body);
+      } catch (e) {
+        return null;
+      }
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", SAFE_D + cp], ["t", NET], ["church", cp], ["p", check.by]], content: ct }, sk);
+      try {
+        await Promise.any(pool.publish(churchRelays(), evt));
+      } catch (e) {
+        console.warn("[fellowship] markSafe publish failed", e);
       }
       return evt;
     },

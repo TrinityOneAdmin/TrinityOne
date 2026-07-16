@@ -66,6 +66,8 @@ const NET = 'trinityone';
 const KEY_LS = 'trinityone.steward.church-key';     // localStorage seed (pilot)
 const FUND_D = 'trinityone/fund:';
 const GROUP_D = 'trinityone/group:';
+const SAFETY_D = 'trinityone/safetycheck:';   // the church's active safety check ("are you safe?")
+const SAFE_D = 'trinityone/safe:';            // a member's response (content NIP-44-encrypted to the check's creator)
 const CATEGORY_D = 'trinityone/category:';  // a named container that groups together (e.g. "Lifegroups"), d=category:<id>
 const PLAN_D = 'trinityone/plan:';
 const DEVO_D = 'trinityone/devotional:';
@@ -992,6 +994,48 @@ window.Steward = {
     const gkey = group && _skeys[group];   // encrypted group → seal the post
     if (gkey) { try { body = nip44e(content || '', gkey); encTag = [['enc', '1']]; } catch (e) {} }
     return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag], content: body }));
+  },
+  // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
+  // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
+  async startSafetyCheck(message) {
+    const cp = actingChurch || pub; if (!sk || !cp) return null;
+    const id = 'sc' + now() + Math.random().toString(36).slice(2, 6);
+    const content = JSON.stringify({ id, message: String(message || 'Are you safe?').trim().slice(0, 280), by: pub, at: now(), open: true });
+    try { await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SAFETY_D + cp], ['t', NET]], content })); } catch (e) { return null; }
+    return { id, by: pub };
+  },
+  async closeSafetyCheck(id) {
+    const cp = actingChurch || pub; if (!sk || !cp) return null;
+    const content = JSON.stringify({ id: id || '', by: pub, at: now(), open: false });
+    try { await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SAFETY_D + cp], ['t', NET]], content })); } catch (e) { return null; }
+    return true;
+  },
+  // the current active check (so the console shows it + can close it). cb(check|null).
+  subscribeSafetyCheck(cb) {
+    const cp = actingChurch || pub; if (!cp) return () => {};
+    let best = null;
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [SAFETY_D + cp] }], {
+      onevent(e) { try { const o = JSON.parse(e.content || '{}'); if (best && e.created_at < best.createdAt) return; best = { id: o.id || e.id, message: String(o.message || ''), by: o.by || e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at }; cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null); } catch {} },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // members' responses to the roll-call, decrypted (each is encrypted to us). cb(list of {pubkey,status,note,at}).
+  subscribeSafetyResponses(checkId, cb) {
+    const cp = actingChurch || pub; if (!cp) return () => {};
+    const byPub = new Map();
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [SAFE_D + cp] }], {
+      onevent(e) {
+        if (!sk) return;
+        try {
+          const o = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey)));
+          if (checkId && o.checkId && o.checkId !== checkId) return;         // ignore responses to an earlier check
+          const prev = byPub.get(e.pubkey); if (prev && prev.at >= (o.at || e.created_at)) return;
+          byPub.set(e.pubkey, { pubkey: e.pubkey, status: o.status === 'help' ? 'help' : 'safe', note: String(o.note || ''), at: o.at || e.created_at });
+          cb([...byPub.values()]);
+        } catch {}
+      },
+    });
+    return () => { try { sub.close(); } catch {} };
   },
   // read a group/team's chat (kind-1 tagged with the group id, scoped to this church) — for the console chat view.
   // Folds in kind-7 reactions (same shape the member app posts) so the console shows + sets reactions too.
