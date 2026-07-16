@@ -347,7 +347,7 @@ function TodayScreen({ ctx }) {
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-3)', letterSpacing: '.3px', textTransform: 'uppercase' }}>{dateStr}</div>
           <h1 style={{ margin: '4px 0 0', fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, letterSpacing: '-.3px', lineHeight: 1.05 }}>{greet}</h1>
-          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 7, padding: '3px 10px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 220, boxShadow: 'var(--shadow)' }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} /><span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
+          {ctx.church ? <button onClick={ctx.openChurchSwitcher} title="Your church" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 7, padding: '3px 12px 3px 3px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, cursor: 'pointer', maxWidth: 220, boxShadow: 'var(--shadow)' }}>{window.ChurchBadge ? <ChurchBadge church={ctx.church} size={20} radius={999} /> : <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />}<span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ctx.church.name}</span></button> : null}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {(() => {
