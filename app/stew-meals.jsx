@@ -181,14 +181,14 @@ function SafetyCheckPanel() {
   roster.forEach(m => { const r = byPk[m.pubkey]; if (!r) noResp.push({ pubkey: m.pubkey, name: m.name || nameOf(m.pubkey) }); else if (r.status === 'help') help.push({ ...r, name: m.name || nameOf(m.pubkey) }); else safe.push({ ...r, name: m.name || nameOf(m.pubkey) }); });
   (responses || []).forEach(r => { if (!roster.find(m => m.pubkey === r.pubkey)) (r.status === 'help' ? help : safe).push({ ...r, name: nameOf(r.pubkey) }); });
 
-  const card = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: 16, marginBottom: 16 };
+  const card = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: 16, marginTop: 20, marginBottom: 20 };
   const stat = (n, label, tone) => <div style={{ flex: 1, textAlign: 'center', padding: '10px 6px', borderRadius: 12, background: 'var(--surface-2)' }}><div style={{ fontSize: 26, fontWeight: 800, color: tone, fontFamily: 'var(--font-display)' }}>{n}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px' }}>{label}</div></div>;
   const nameRow = (p, tone) => <div key={p.pubkey} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)', fontSize: 13.5 }}><span style={{ fontWeight: 600, color: tone || 'var(--ink)' }}>{p.name}{p.note ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> — {p.note}</span> : ''}</span></div>;
 
   if (!check) {
     // dormant: just a small button, not a full-width banner (a safety check is a rare emergency action)
     if (!composing) return (
-      <div style={{ margin: '2px 0 14px' }}>
+      <div style={{ margin: '18px 0 20px' }}>
         <button onClick={() => setComposing(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 13, gap: 7 }} title="Ask everyone to mark themselves safe after a raid/disaster — replies are encrypted to you"><Icon name="shield" size={15} color="currentColor" /> Safety check</button>
       </div>
     );
