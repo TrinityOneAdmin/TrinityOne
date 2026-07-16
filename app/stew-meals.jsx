@@ -158,6 +158,75 @@ window.DashMealsPanel = DashMealsPanel;
 // ────────────────────────────────────────────────────────────────────────────────
 // Main console tab
 // ────────────────────────────────────────────────────────────────────────────────
+// Emergency "mark as safe" roll-call — start a check (church/steward/care-team), then watch who's safe / needs
+// help / hasn't responded. Responses are encrypted to us; we decrypt them here for the roll call.
+function SafetyCheckPanel() {
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const dir = window.useStewardDirectory ? window.useStewardDirectory() : {};
+  const [check, setCheck] = React.useState(null);
+  const [responses, setResponses] = React.useState([]);
+  const [composing, setComposing] = React.useState(false);
+  const [msg, setMsg] = React.useState('Are you safe? Please let us know.');
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => { if (!(window.Steward && window.Steward.subscribeSafetyCheck)) return; const u = window.Steward.subscribeSafetyCheck(setCheck); return () => { try { u(); } catch (e) {} }; }, []);
+  React.useEffect(() => { if (!check || !(window.Steward && window.Steward.subscribeSafetyResponses)) { setResponses([]); return; } const u = window.Steward.subscribeSafetyResponses(check.id, setResponses); return () => { try { u(); } catch (e) {} }; }, [check && check.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const nameOf = pk => (dir[pk] && dir[pk].name) || ((members.find(m => m.pubkey === pk) || {}).name) || (pk ? pk.slice(0, 8) + '…' : '?');
+  const start = async () => { if (busy) return; setBusy(true); try { await window.Steward.startSafetyCheck(msg); } catch (e) {} setBusy(false); setComposing(false); };
+  const closeCheck = async () => { if (busy) return; setBusy(true); try { await window.Steward.closeSafetyCheck(check && check.id); } catch (e) {} setBusy(false); };
+
+  const roster = (members || []).filter(m => m && m.pubkey);
+  const byPk = {}; (responses || []).forEach(r => { byPk[r.pubkey] = r; });
+  const safe = [], help = [], noResp = [];
+  roster.forEach(m => { const r = byPk[m.pubkey]; if (!r) noResp.push({ pubkey: m.pubkey, name: m.name || nameOf(m.pubkey) }); else if (r.status === 'help') help.push({ ...r, name: m.name || nameOf(m.pubkey) }); else safe.push({ ...r, name: m.name || nameOf(m.pubkey) }); });
+  (responses || []).forEach(r => { if (!roster.find(m => m.pubkey === r.pubkey)) (r.status === 'help' ? help : safe).push({ ...r, name: nameOf(r.pubkey) }); });
+
+  const card = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: 16, marginBottom: 16 };
+  const stat = (n, label, tone) => <div style={{ flex: 1, textAlign: 'center', padding: '10px 6px', borderRadius: 12, background: 'var(--surface-2)' }}><div style={{ fontSize: 26, fontWeight: 800, color: tone, fontFamily: 'var(--font-display)' }}>{n}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px' }}>{label}</div></div>;
+  const nameRow = (p, tone) => <div key={p.pubkey} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)', fontSize: 13.5 }}><span style={{ fontWeight: 600, color: tone || 'var(--ink)' }}>{p.name}{p.note ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> — {p.note}</span> : ''}</span></div>;
+
+  if (!check) {
+    return (
+      <div style={{ ...card, borderColor: 'color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 220, flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display)' }}>Safety check</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2, lineHeight: 1.45 }}>After a raid, disaster or emergency, ask everyone to mark themselves safe. Replies are private to you — encrypted so even the relay can’t read who’s safe or in danger.</div>
+          </div>
+          <button onClick={() => setComposing(true)} className="sk-btn sk-btn--clay" style={{ padding: '10px 15px', fontSize: 14, whiteSpace: 'nowrap' }}>Start a safety check</button>
+        </div>
+        {composing && (
+          <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+            <textarea value={msg} onChange={e => setMsg(e.target.value)} rows={2} maxLength={280} style={{ width: '100%', boxSizing: 'border-box', padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical', lineHeight: 1.4 }} />
+            <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+              <button onClick={() => setComposing(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
+              <button onClick={start} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11 }}>{busy ? 'Sending…' : 'Send to everyone'}</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div style={{ ...card, borderColor: 'var(--clay)' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display)', color: 'var(--clay-deep, #b4462f)' }}>Safety check is live</div>
+          <div style={{ fontSize: 13, color: 'var(--ink)', marginTop: 3 }}>{check.message}</div>
+        </div>
+        <button onClick={closeCheck} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13, whiteSpace: 'nowrap' }}>Close</button>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        {stat(help.length, 'Need help', 'var(--clay-deep, #b4462f)')}
+        {stat(safe.length, 'Safe', 'var(--sage, #4f7a5e)')}
+        {stat(noResp.length, 'No reply', 'var(--ink-3)')}
+      </div>
+      {help.length > 0 && <div style={{ marginTop: 12 }}><div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--clay-deep, #b4462f)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Need help</div>{help.map(p => nameRow(p, 'var(--clay-deep, #b4462f)'))}</div>}
+      {safe.length > 0 && <div style={{ marginTop: 12 }}><div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--sage, #4f7a5e)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Safe</div>{safe.map(p => nameRow(p))}</div>}
+      {noResp.length > 0 && <div style={{ marginTop: 12 }}><div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>No reply yet</div>{noResp.map(p => nameRow(p, 'var(--ink-3)'))}</div>}
+    </div>
+  );
+}
+
 function DashMeals() {
   const needs = window.useMealsNeeds ? window.useMealsNeeds() : [];
   const slots = window.useMealsSlots ? window.useMealsSlots() : [];
@@ -177,6 +246,8 @@ function DashMeals() {
         </div>
         <button onClick={() => setEditing('new')} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14 }}><Icon name="plus" size={15} color="#fff" /> Start care</button>
       </div>
+
+      <SafetyCheckPanel />
 
       {detail ? (
         <MealsNeedDetail need={detail} slots={slots.filter(s => s.needId === detail.id)} skips={skips.filter(s => s.needId === detail.id)} onClose={() => setOpenId(null)} onEdit={() => setEditing(detail)} />

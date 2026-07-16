@@ -266,6 +266,52 @@ function CareCard({ ctx, embedded }) {
   );
 }
 
+// Emergency "mark as safe" banner — shown at the very top of Today when the church has an active safety
+// check. One tap tells the church you're safe (or that you need help); the response is encrypted to the
+// leader who started the check. Deliberately the most prominent thing on the screen while a check is open.
+function SafetyBanner({ ctx }) {
+  const [check, setCheck] = React.useState(null);
+  const [status, setStatus] = React.useState('');   // '' | 'safe' | 'help' (what I've told them)
+  const [note, setNote] = React.useState('');
+  const [sending, setSending] = React.useState(false);
+  React.useEffect(() => {
+    if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeSafetyCheck)) return;
+    let unsub = null;
+    try { unsub = window.Fellowship.subscribeSafetyCheck(c => { setCheck(c); if (!c) setStatus(''); }); } catch (e) {}
+    return () => { try { unsub && unsub(); } catch (e) {} };
+  }, [ctx.church && ctx.church.npub]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!check) return null;
+  const churchName = (ctx.church && ctx.church.name) || 'your church';
+  const respond = async (s) => {
+    if (sending) return; setSending(true);
+    try { await window.Fellowship.markSafe(check, s, note); setStatus(s); } catch (e) {}
+    setSending(false);
+  };
+  const wrap = { borderRadius: 16, padding: 16, marginBottom: 18, animation: 'trinityFade .4s ease both' };
+  const btn = (extra) => ({ flex: 1, height: 46, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 15, ...extra });
+  if (status) {
+    const help = status === 'help';
+    return (
+      <div style={{ ...wrap, background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + (help ? 'var(--clay)' : 'var(--sage, #4f7a5e)') }}>
+        <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--ink)' }}>{help ? 'You asked ' + churchName + ' for help' : 'You told ' + churchName + ' you’re safe'}</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{help ? 'Someone will reach out. You can change this if things change.' : 'Thank you. You can change this if things change.'}</div>
+        <button onClick={() => respond(help ? 'safe' : 'help')} disabled={sending} style={{ marginTop: 11, height: 40, padding: '0 15px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>{help ? 'Actually, I’m safe' : 'I need help instead'}</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ ...wrap, background: 'var(--clay-soft)', border: '2px solid var(--clay)' }}>
+      <div style={{ fontWeight: 800, fontSize: 16.5, color: 'var(--clay-deep, #b4462f)', fontFamily: 'var(--font-display, var(--font-ui))' }}>{churchName} is checking everyone is safe</div>
+      <div style={{ fontSize: 14.5, color: 'var(--ink)', marginTop: 5, lineHeight: 1.45 }}>{check.message || 'Are you safe?'}</div>
+      <input value={note} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" maxLength={240} style={{ width: '100%', boxSizing: 'border-box', height: 42, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', margin: '12px 0 0' }} />
+      <div style={{ display: 'flex', gap: 10, marginTop: 11 }}>
+        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)', color: '#fff' })}>I’m safe</button>
+        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: '#fff' })}>I need help</button>
+      </div>
+    </div>
+  );
+}
+
 function TodayScreen({ ctx }) {
   const D = window.TrinityData;
   const Bible = window.Bible;
@@ -342,6 +388,7 @@ function TodayScreen({ ctx }) {
 
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
+      <SafetyBanner ctx={ctx} />
       {/* greeting */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
         <div>
