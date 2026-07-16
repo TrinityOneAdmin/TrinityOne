@@ -75,11 +75,14 @@ Self-hosted video is the heaviest thing you'll upload, and members feel it twice
 *(On-device automatic compression is on the roadmap — for now these steps do the same job.)*
 
 ### Finance  *(optional — turn on in Settings)*
-A treasurer's ledger for the church: record giving, keep **donor records**, categorise
-funds, and **import a bank statement** (it matches deposits to donors), then **export a CSV or
-year-end statements**. With the optional **UK Gift Aid** add-on, it also builds the HMRC claim schedule. Every record is **encrypted to your church key** — nothing leaves the device in the clear.
+A treasurer's double-entry ledger for the church: **record money in and out** against clear categories,
+keep **general / designated / restricted funds** apart, **import a bank statement** (upload the CSV your
+bank exports, tick the lines to bring in — already-imported ones are flagged so nothing double-counts), and
+**export a CSV** for your accountant. Every record is **encrypted to your church key** — the relay only holds
+ciphertext, and only this console can open it.
 (This is record-keeping; in-app **Lightning giving** is a separate, not-yet-shipped feature — see *Where this is heading*.)
-- **Year-end giving statements** — *Donors* tab → **Statements** → pick a year → a printable, per-donor statement (itemised gifts, total) opens for print / save-as-PDF — what you send each donor for their records.
+- **Share a statement** — the Finance desk → **Share statement** → pick a quarter or year and tick the sections to include → a summary (totals by category and fund, **no member names**) that you can **download as a PDF, copy into a message, or post to members**.
+- *On the roadmap (all free):* a balance sheet + trustees' report, budgets, and regional giving‑relief packs such as **UK Gift Aid**.
 
 ### Members
 Everyone who's joined.
