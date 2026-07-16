@@ -338,6 +338,7 @@ function fsBuildStatementPdf(model, F) {
   let y = 64;
   const need = h => { if (y + h > H - M) { doc.addPage(); y = M; } };
   const [ar, ag, ab] = fsHexRgb(model.accent, [43, 39, 35]);   // church brand accent (or ink) for the title + rule
+  if (model.logo) { try { const fmt = /^data:image\/jpe?g/i.test(model.logo) ? 'JPEG' : 'PNG'; doc.addImage(model.logo, fmt, M, y - 4, 42, 42); y += 50; } catch (e) {} }   // church dp/logo letterhead
   doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.setTextColor(ar, ag, ab); doc.text(model.title, M, y); y += 22;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(12); doc.setTextColor(138, 128, 120); doc.text(model.periodLabel, M, y); y += 12;
   doc.setDrawColor(ar, ag, ab); doc.setLineWidth(1.4); doc.line(M, y, W - M, y); y += 24;
@@ -367,7 +368,11 @@ async function fsSavePdf(doc, fname) {
   }
 }
 
-function FinanceShareStatement({ book, F, churchName, accent, canPost, onPostToMembers, onClose }) {
+function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onPostToMembers, onClose }) {
+  // resolve the church dp/logo to a self-contained data: URI (invImgDataUrl lives in stew-dashboard.jsx; shared
+  // steward bundle). Kept in state so the live preview, the HTML download and the PDF all embed the same image.
+  const [logoData, setLogoData] = React.useState('');
+  React.useEffect(() => { let ok = true; if (logo && typeof invImgDataUrl === 'function') { invImgDataUrl(logo).then(d => { if (ok) setLogoData(d || ''); }); } else setLogoData(''); return () => { ok = false; }; }, [logo]);
   const now = new Date();
   const curY = now.getFullYear(), curQ = Math.floor(now.getMonth() / 3) + 1;
   const [title, setTitle] = React.useState(churchName || 'Financial statement');
@@ -390,8 +395,8 @@ function FinanceShareStatement({ book, F, churchName, accent, canPost, onPostToM
   const enabledKeys = (F.STATEMENT_SECTIONS || []).map(s => s.key).filter(k => secs[k]);
   const model = React.useMemo(() => F.buildStatement(book, {
     from: period.from, to: period.to, periodLabel: period.label, title, note,
-    sections: enabledKeys, generatedAt: booksTodayISO(), accent,
-  }), [book, period, title, note, accent, JSON.stringify(secs)]);
+    sections: enabledKeys, generatedAt: booksTodayISO(), accent, logo: logoData,
+  }), [book, period, title, note, accent, logoData, JSON.stringify(secs)]);
 
   const doCopy = async () => { try { await navigator.clipboard.writeText(F.statementText(model)); setFlash('Summary copied — paste it into an email or message.'); setTimeout(() => setFlash(''), 2600); } catch (e) { setFlash('Could not copy on this device.'); } };
   const doDownload = async () => {
@@ -450,6 +455,7 @@ function FinanceShareStatement({ book, F, churchName, accent, canPost, onPostToM
 
           {/* live preview of exactly what will be shared */}
           <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 14, marginTop: 14, background: 'var(--surface-2, #f7f3ec)' }}>
+            {logoData ? <img src={logoData} alt="" style={{ height: 34, maxWidth: 130, objectFit: 'contain', display: 'block', marginBottom: 8 }} /> : null}
             <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display, var(--font-ui))', color: accent || undefined, borderTop: '3px solid ' + (accent || 'var(--ink)'), paddingTop: 8 }}>{title || 'Financial statement'}</div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 8 }}>{period.label}</div>
             {model.summary && <div style={{ borderTop: '1px solid var(--line)', paddingTop: 8 }}>
@@ -670,7 +676,7 @@ function DashFinance() {
       {recording && <BooksRecord book={book} onRecord={record} onClose={() => setRecording(false)} />}
       {importing && <FinanceImport book={book} F={F} onPost={importStatement} onClose={() => setImporting(false)} />}
       {donate && <BooksDonate onGave={() => { booksDonateGave(); setDonate(false); }} onClose={() => setDonate(false)} />}
-      {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} canPost={canPost} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
+      {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} canPost={canPost} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
     </div>
   );
 }

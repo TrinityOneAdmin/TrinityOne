@@ -114,6 +114,16 @@ test('brand accent: a valid hex is kept + rendered; anything else falls back to 
   assert.match(statementHtml(bad), /--accent:#2b2723/);  // ink fallback, so no-brand statements look unchanged
 });
 
+test('brand logo: only a data: image is embedded (anti-beacon), a remote URL is dropped', () => {
+  const b = book();
+  const ok = buildStatement(b, { ...yearRange(2026), logo: 'data:image/png;base64,AAAA', sections: ['summary'] });
+  assert.equal(ok.logo, 'data:image/png;base64,AAAA');
+  assert.match(statementHtml(ok), /<img class="logo"/);
+  const beacon = buildStatement(b, { ...yearRange(2026), logo: 'https://evil.example/track.png', sections: ['summary'] });
+  assert.equal(beacon.logo, '');                       // remote URL refused
+  assert.ok(!statementHtml(beacon).includes('<img'));
+});
+
 test('statementHtml is self-contained and escapes user text', () => {
   const m = buildStatement(book(), { ...yearRange(2026), title: '<script>x</script>', sections: ['summary', 'note'], note: 'a & b <c>' });
   const h = statementHtml(m);
