@@ -250,10 +250,15 @@ function DashMeals() {
           <h2 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800 }}>Care</h2>
           <p style={{ margin: '4px 0 0', color: 'var(--ink-2)', fontSize: 13.5 }}>Open a need; the church signs up to help. Meals, rides, errands, visits, childcare.</p>
         </div>
-        <button onClick={() => setEditing('new')} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14 }}><Icon name="plus" size={15} color="#fff" /> Start care</button>
       </div>
 
       <SafetyCheckPanel />
+
+      {!detail && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+          <button onClick={() => setEditing('new')} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14 }}><Icon name="plus" size={15} color="#fff" /> Start care</button>
+        </div>
+      )}
 
       {detail ? (
         <MealsNeedDetail need={detail} slots={slots.filter(s => s.needId === detail.id)} skips={skips.filter(s => s.needId === detail.id)} onClose={() => setOpenId(null)} onEdit={() => setEditing(detail)} />
