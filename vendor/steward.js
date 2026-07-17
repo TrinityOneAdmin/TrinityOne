@@ -11878,7 +11878,7 @@ zoo`.split("\n");
       const cp = actingChurch || pub;
       if (!sk || !cp) return null;
       const id = "sc" + now() + Math.random().toString(36).slice(2, 6);
-      const content = JSON.stringify({ id, message: String(message || "Are you safe?").trim().slice(0, 280), by: pub, at: now(), open: true });
+      const content = JSON.stringify({ id, message: String(message || "Are you safe?").trim().slice(0, 280), at: now(), open: true });
       try {
         await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SAFETY_D + cp], ["t", NET]], content }));
       } catch (e) {
@@ -11889,7 +11889,7 @@ zoo`.split("\n");
     async closeSafetyCheck(id) {
       const cp = actingChurch || pub;
       if (!sk || !cp) return null;
-      const content = JSON.stringify({ id: id || "", by: pub, at: now(), open: false });
+      const content = JSON.stringify({ id: id || "", at: now(), open: false });
       try {
         await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SAFETY_D + cp], ["t", NET]], content }));
       } catch (e) {
@@ -11908,11 +11908,12 @@ zoo`.split("\n");
           try {
             const o = JSON.parse(e.content || "{}");
             if (best && e.created_at < best.createdAt) return;
-            best = { id: o.id || e.id, message: String(o.message || ""), by: o.by || e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at };
+            best = { id: o.id || e.id, message: String(o.message || ""), by: e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at };
             cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null);
           } catch {
           }
         }
+        // by = SIGNER, never content (see fellowship markSafe)
       });
       return () => {
         try {
@@ -11927,11 +11928,22 @@ zoo`.split("\n");
       if (!cp) return () => {
       };
       const byPub = /* @__PURE__ */ new Map();
+      const seenIds = /* @__PURE__ */ new Set();
+      const ckCache = /* @__PURE__ */ new Map();
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [SAFE_D + cp] }], {
         onevent(e) {
           if (!sk) return;
+          if (e.id) {
+            if (seenIds.has(e.id)) return;
+            seenIds.add(e.id);
+          }
           try {
-            const o = JSON.parse(decrypt3(e.content, getConversationKey(sk, e.pubkey)));
+            let ck = ckCache.get(e.pubkey);
+            if (!ck) {
+              ck = getConversationKey(sk, e.pubkey);
+              ckCache.set(e.pubkey, ck);
+            }
+            const o = JSON.parse(decrypt3(e.content, ck));
             if (checkId && o.checkId && o.checkId !== checkId) return;
             const prev = byPub.get(e.pubkey);
             if (prev && prev.at >= (o.at || e.created_at)) return;

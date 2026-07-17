@@ -76,3 +76,5 @@ reference/TrinityOne.zip
 reference/nas-relay/
 payments-options.html
 relay/blobs/
+relay/relay-names.json
+relay/relay-names.json.tmp

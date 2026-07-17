@@ -1481,7 +1481,10 @@ window.Fellowship = {
         try {
           const o = JSON.parse(e.content || '{}');
           if (best && e.created_at < best.createdAt) return;                 // keep the newest check only
-          best = { id: o.id || e.id, message: String(o.message || ''), by: o.by || e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at };
+          // SECURITY: the creator we encrypt our response to is the event's SIGNER (e.pubkey) — which the relay's
+          // accept() already proved is the church / a steward / a care-admin — NEVER a self-declared content field
+          // (a spoofed `by` would redirect every member's safe/in-danger status to an attacker's key).
+          best = { id: o.id || e.id, message: String(o.message || ''), by: e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at };
           cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null);
         } catch {}
       },
@@ -1493,12 +1496,14 @@ window.Fellowship = {
   async markSafe(check, status, note) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
-    if (!sk || !cp || !check || !check.by) return null;
+    if (!sk || !cp || !check || !check.by) return false;
     const body = JSON.stringify({ status: status === 'help' ? 'help' : 'safe', note: String(note || '').trim().slice(0, 240), at: Math.floor(Date.now() / 1000), checkId: check.id });
-    let ct = ''; try { ct = _dmEncrypt(sk, check.by, body); } catch (e) { return null; }
+    let ct = ''; try { ct = _dmEncrypt(sk, check.by, body); } catch (e) { return false; }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', SAFE_D + cp], ['t', NET], ['church', cp], ['p', check.by]], content: ct }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] markSafe publish failed', e); }
-    return evt;
+    // Return TRUE only on a real relay ACK. The member's "you're safe" confirmation must reflect DELIVERY —
+    // a false "help is coming" when the send actually failed (offline / dead relay, the target environment) is
+    // the worst failure this feature can have. Promise.any resolves iff ≥1 relay accepted the event.
+    try { await Promise.any(pool.publish(churchRelays(), evt)); return true; } catch (e) { console.warn('[fellowship] markSafe publish failed', e); return false; }
   },
   // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
   async markCareSkip(careId, iso, reason) {

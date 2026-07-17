@@ -55,6 +55,20 @@ function closingFunds(book, to = '￿') {
 
 // Build the statement MODEL (numbers only — rendering is separate). `sections` = array of enabled keys.
 const validHex = c => (typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c.trim())) ? c.trim() : '';
+// Accent used as INK (title + rules) on white paper: a pale brand colour would render near-invisible, so
+// darken it until it clears a legibility threshold on white. '' / invalid → the default near-black ink.
+export function accentInk(hex) {
+  const h = validHex(hex); if (!h) return '#2b2723';
+  let c = h.slice(1);
+  if (c.length === 3) c = c.split('').map(x => x + x).join('');
+  if (c.length >= 6) c = c.slice(0, 6); else return '#2b2723';
+  let r = parseInt(c.slice(0, 2), 16), g = parseInt(c.slice(2, 4), 16), b = parseInt(c.slice(4, 6), 16);
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;   // sRGB relative luminance (0..1)
+  if (lum > 0.62) { const k = 0.62 / lum; r = Math.round(r * k); g = Math.round(g * k); b = Math.round(b * k); }   // only pale/pastel accents; mid-tones pass through
+
+  const hx = n => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0');
+  return '#' + hx(r) + hx(g) + hx(b);
+}
 // only ever embed a data: image, never a remote URL (anti-beacon — mirrors the member app's safeImgUrl).
 const validLogo = s => /^data:image\//i.test(String(s || '').trim()) ? String(s).trim() : '';
 export function buildStatement(book, { from = '', to = '￿', title = '', note = '', sections = null, periodLabel = '', generatedAt = '', accent = '', logo = '' } = {}) {
@@ -153,7 +167,7 @@ export function statementHtml(model) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(model.title)} — ${esc(model.periodLabel)}</title>
 <style>
-  :root { --ink:#2b2723; --ink3:#8a8078; --line:#e7e0d5; --accent:${model.accent || '#2b2723'}; }
+  :root { --ink:#2b2723; --ink3:#8a8078; --line:#e7e0d5; --accent:${accentInk(model.accent)}; }
   * { box-sizing:border-box; }
   body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:var(--ink); max-width:640px; margin:0 auto; padding:40px 28px; line-height:1.5; }
   header { border-bottom:2px solid var(--accent); padding-bottom:14px; margin-bottom:8px; }

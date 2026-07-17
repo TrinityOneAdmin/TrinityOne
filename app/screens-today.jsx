@@ -274,6 +274,7 @@ function SafetyBanner({ ctx }) {
   const [status, setStatus] = React.useState('');   // '' | 'safe' | 'help' (what I've told them)
   const [note, setNote] = React.useState('');
   const [sending, setSending] = React.useState(false);
+  const [err, setErr] = React.useState('');   // delivery failed → retry prompt, never a false confirmation
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeSafetyCheck)) return;
     let unsub = null;
@@ -283,16 +284,18 @@ function SafetyBanner({ ctx }) {
   if (!check) return null;
   const churchName = (ctx.church && ctx.church.name) || 'your church';
   const respond = async (s) => {
-    if (sending) return; setSending(true);
-    try { await window.Fellowship.markSafe(check, s, note); setStatus(s); } catch (e) {}
+    if (sending) return; setSending(true); setErr('');
+    let ok = false;
+    try { ok = await window.Fellowship.markSafe(check, s, note); } catch (e) {}
     setSending(false);
+    if (ok) setStatus(s); else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery
   };
   const wrap = { borderRadius: 16, padding: 16, marginBottom: 18, animation: 'trinityFade .4s ease both' };
   const btn = (extra) => ({ flex: 1, height: 46, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 15, ...extra });
   if (status) {
     const help = status === 'help';
     return (
-      <div style={{ ...wrap, background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + (help ? 'var(--clay)' : 'var(--sage, #4f7a5e)') }}>
+      <div role="status" style={{ ...wrap, background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + (help ? 'var(--clay)' : 'var(--sage, #4f7a5e)') }}>
         <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--ink)' }}>{help ? 'You asked ' + churchName + ' for help' : 'You told ' + churchName + ' you’re safe'}</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{help ? 'Someone will reach out. You can change this if things change.' : 'Thank you. You can change this if things change.'}</div>
         <button onClick={() => respond(help ? 'safe' : 'help')} disabled={sending} style={{ marginTop: 11, height: 40, padding: '0 15px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>{help ? 'Actually, I’m safe' : 'I need help instead'}</button>
@@ -300,14 +303,16 @@ function SafetyBanner({ ctx }) {
     );
   }
   return (
-    <div style={{ ...wrap, background: 'var(--clay-soft)', border: '2px solid var(--clay)' }}>
+    <div role="alert" style={{ ...wrap, background: 'var(--clay-soft)', border: '2px solid var(--clay)' }}>
       <div style={{ fontWeight: 800, fontSize: 16.5, color: 'var(--clay-deep, #b4462f)', fontFamily: 'var(--font-display, var(--font-ui))' }}>{churchName} is checking everyone is safe</div>
       <div style={{ fontSize: 14.5, color: 'var(--ink)', marginTop: 5, lineHeight: 1.45 }}>{check.message || 'Are you safe?'}</div>
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" maxLength={240} style={{ width: '100%', boxSizing: 'border-box', height: 42, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', margin: '12px 0 0' }} />
       <div style={{ display: 'flex', gap: 10, marginTop: 11 }}>
-        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)', color: '#fff' })}>I’m safe</button>
-        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: '#fff' })}>I need help</button>
+        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)', color: '#fff' })}>{sending ? 'Sending…' : 'I’m safe'}</button>
+        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: '#fff' })}>{sending ? 'Sending…' : 'I need help'}</button>
       </div>
+      {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 9 }}>{err}</div> : null}
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only {churchName}’s leaders can see your reply — not other members, and not the server.</div>
     </div>
   );
 }

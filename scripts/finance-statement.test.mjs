@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createBook, addAccount, addFund, post } from '../src/finance-ledger.mjs';
-import { buildStatement, statementText, statementHtml, quarterRange, yearRange, rangeLabel, fmtMoney, STATEMENT_SECTIONS } from '../src/finance-statement.mjs';
+import { buildStatement, statementText, statementHtml, quarterRange, yearRange, rangeLabel, fmtMoney, STATEMENT_SECTIONS, accentInk } from '../src/finance-statement.mjs';
 
 function book() {
   const b = createBook({ baseCurrency: 'GBP', decimals: 2 });
@@ -131,4 +131,26 @@ test('statementHtml is self-contained and escapes user text', () => {
   assert.ok(!h.includes('<script>x</script>'));          // title escaped
   assert.match(h, /&lt;script&gt;/);
   assert.match(h, /a &amp; b &lt;c&gt;/);                 // note escaped
+});
+
+test('accentInk: passes through a dark accent, darkens a pale one, defaults on empty/invalid', () => {
+  assert.equal(accentInk(''), '#2b2723');                // unset → default near-black ink
+  assert.equal(accentInk('not-a-hex'), '#2b2723');       // invalid → default
+  assert.equal(accentInk('#b4462f').toLowerCase(), '#b4462f');   // already-dark clay: unchanged
+  // a pale brand colour must be darkened so it stays legible as text/rules on white paper
+  const pale = accentInk('#ffee66');
+  const c = pale.slice(1);
+  const r = parseInt(c.slice(0, 2), 16), g = parseInt(c.slice(2, 4), 16), b = parseInt(c.slice(4, 6), 16);
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  assert.ok(lum <= 0.63, 'pale accent clamped to a legible luminance, got ' + lum);
+  assert.equal(accentInk('#2a9d8f').toLowerCase(), '#2a9d8f');   // a saturated mid-tone passes through unchanged
+  assert.equal(accentInk('#fff'), accentInk('#ffffff')); // #rgb shorthand expands
+});
+
+test('statementHtml uses the clamped accent, never a near-white --accent', () => {
+  const b = book();
+  const m = buildStatement(b, { from: '2026-01-01', to: '2026-12-31', accent: '#ffffff' });
+  const h = statementHtml(m);
+  assert.ok(!/--accent:\s*#ffffff/i.test(h), 'white accent must be clamped, not emitted raw');
+  assert.match(h, /--accent:#/);
 });

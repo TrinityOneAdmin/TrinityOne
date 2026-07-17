@@ -393,10 +393,18 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
   }, [preset, cFrom, cTo, curY, curQ]);
 
   const enabledKeys = (F.STATEMENT_SECTIONS || []).map(s => s.key).filter(k => secs[k]);
-  const model = React.useMemo(() => F.buildStatement(book, {
-    from: period.from, to: period.to, periodLabel: period.label, title, note,
+  // Heavy: the journal scan (income/expenditure/funds/balance). Keyed only on inputs that change the numbers —
+  // NOT title/note, so typing in those fields doesn't re-scan the ledger on every keystroke.
+  const baseModel = React.useMemo(() => F.buildStatement(book, {
+    from: period.from, to: period.to, periodLabel: period.label, title: '', note: '',
     sections: enabledKeys, generatedAt: booksTodayISO(), accent, logo: logoData,
-  }), [book, period, title, note, accent, logoData, JSON.stringify(secs)]);
+  }), [book, period, accent, logoData, JSON.stringify(secs)]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Cheap: fold in the presentation-only title/note (respecting whether the 'note' section is enabled).
+  const model = React.useMemo(() => {
+    const m = { ...baseModel, title: title || 'Financial statement' };
+    if (baseModel.sections.includes('note') && note && note.trim()) m.note = note.trim(); else delete m.note;
+    return m;
+  }, [baseModel, title, note]);
 
   const doCopy = async () => { try { await navigator.clipboard.writeText(F.statementText(model)); setFlash('Summary copied — paste it into an email or message.'); setTimeout(() => setFlash(''), 2600); } catch (e) { setFlash('Could not copy on this device.'); } };
   const doDownload = async () => {

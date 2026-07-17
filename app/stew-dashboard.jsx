@@ -672,17 +672,12 @@ function svgToPng(svgStr, size) {
   });
 }
 
-// load any image src (data: URI or URL) → a PNG data URL for embedding; null on failure (CORS / 404 / none).
+// SECURITY (anti-beacon, mirrors app/screens-church.jsx safeImgUrl): only ever embed a data: image, NEVER
+// fetch a remote URL. church.picture is UNTRUSTED relay-published content; loading a URL here (img.src=url)
+// would leak the steward's IP/geo/online-time — the exact persecuted-church deanonymisation the app forbids
+// everywhere else. A non-data src returns null; churchMarkDataUrl then falls back to the initials badge.
 function invImgDataUrl(src) {
-  return new Promise(res => {
-    if (!src) return res(null);
-    if (/^data:image\//i.test(src)) return res(src);   // already embeddable
-    try {
-      const img = new Image(); img.crossOrigin = 'anonymous';
-      img.onload = () => { try { const c = document.createElement('canvas'); c.width = img.naturalWidth || 128; c.height = img.naturalHeight || 128; c.getContext('2d').drawImage(img, 0, 0); res(c.toDataURL('image/png')); } catch (e) { res(null); } };
-      img.onerror = () => res(null); img.src = src;
-    } catch (e) { res(null); }
-  });
+  return Promise.resolve(/^data:image\//i.test(String(src || '')) ? String(src) : null);
 }
 // The church's "mark" (its display picture) as a raster data: URI for embedding in <img> or jsPDF: the
 // uploaded dp if there is one, else the SAME initials-on-accent badge the app shows — so an artifact always
@@ -705,6 +700,8 @@ async function buildInvitePdf({ name, url, svg, accent, logo }) {
   const hx = String(accent || '').match(/^#?([0-9a-fA-F]{6})$/) || String(accent || '').match(/^#?([0-9a-fA-F]{3})$/);
   let ar = 184, ag = 82, ab = 52;
   if (hx) { let h = hx[1]; if (h.length === 3) h = h.split('').map(c => c + c).join(''); ar = parseInt(h.slice(0, 2), 16); ag = parseInt(h.slice(2, 4), 16); ab = parseInt(h.slice(4, 6), 16); }
+  // the heading prints as accent-coloured text on white paper — darken a too-pale brand colour so "Join …" stays legible
+  { const lum = (0.2126 * ar + 0.7152 * ag + 0.0722 * ab) / 255; if (lum > 0.62) { const k = 0.62 / lum; ar = Math.round(ar * k); ag = Math.round(ag * k); ab = Math.round(ab * k); } }
   if (logo) { try { const ls = 58; doc.addImage(logo, 'PNG', (W - ls) / 2, y - 8, ls, ls); y += ls + 8; } catch (e) {} }
   doc.setFont('helvetica', 'bold'); doc.setFontSize(26); doc.setTextColor(ar, ag, ab);
   doc.text(doc.splitTextToSize('Join ' + nm, W - 2 * M), W / 2, y, { align: 'center' }); y += 26;

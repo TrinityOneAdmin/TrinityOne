@@ -182,11 +182,13 @@ function SafetyCheckPanel() {
   const byPk = {}; (responses || []).forEach(r => { byPk[r.pubkey] = r; });
   const safe = [], help = [], noResp = [];
   roster.forEach(m => { const r = byPk[m.pubkey]; if (!r) noResp.push({ pubkey: m.pubkey, name: m.name || nameOf(m.pubkey) }); else if (r.status === 'help') help.push({ ...r, name: m.name || nameOf(m.pubkey) }); else safe.push({ ...r, name: m.name || nameOf(m.pubkey) }); });
-  (responses || []).forEach(r => { if (!roster.find(m => m.pubkey === r.pubkey)) (r.status === 'help' ? help : safe).push({ ...r, name: nameOf(r.pubkey) }); });
+  // a response from someone not in the current directory (sync lag / just-joined) — name it honestly rather than showing raw hex
+  (responses || []).forEach(r => { if (!roster.find(m => m.pubkey === r.pubkey)) { const nm = (dir[r.pubkey] && dir[r.pubkey].name) || ((members.find(m => m.pubkey === r.pubkey) || {}).name) || null; (r.status === 'help' ? help : safe).push({ ...r, name: nm || 'A member (not in your directory)' }); } });
 
   const card = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: 16, marginTop: 20, marginBottom: 20 };
   const stat = (n, label, tone) => <div style={{ flex: 1, textAlign: 'center', padding: '10px 6px', borderRadius: 12, background: 'var(--surface-2)' }}><div style={{ fontSize: 26, fontWeight: 800, color: tone, fontFamily: 'var(--font-display)' }}>{n}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px' }}>{label}</div></div>;
   const nameRow = (p, tone) => <div key={p.pubkey} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)', fontSize: 13.5 }}><span style={{ fontWeight: 600, color: tone || 'var(--ink)' }}>{p.name}{p.note ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> — {p.note}</span> : ''}</span></div>;
+  const rollList = { maxHeight: 288, overflowY: 'auto', marginTop: 2 };   // a whole-church roll-call can be long — cap height + scroll rather than a giant DOM list
 
   if (!check) {
     // dormant: just a small button, not a full-width banner (a safety check is a rare emergency action)
@@ -242,9 +244,9 @@ function SafetyCheckPanel() {
         {stat(safe.length, 'Safe', 'var(--sage, #4f7a5e)')}
         {stat(noResp.length, 'No reply', 'var(--ink-3)')}
       </div>
-      {help.length > 0 && <div style={{ marginTop: 12 }}><div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--clay-deep, #b4462f)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Need help</div>{help.map(p => nameRow(p, 'var(--clay-deep, #b4462f)'))}</div>}
-      {safe.length > 0 && <div style={{ marginTop: 12 }}><div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--sage, #4f7a5e)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Safe</div>{safe.map(p => nameRow(p))}</div>}
-      {noResp.length > 0 && <div style={{ marginTop: 12 }}><div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>No reply yet</div>{noResp.map(p => nameRow(p, 'var(--ink-3)'))}</div>}
+      {help.length > 0 && <div style={{ marginTop: 12 }}><div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--clay-deep, #b4462f)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Need help</div><div style={rollList}>{help.map(p => nameRow(p, 'var(--clay-deep, #b4462f)'))}</div></div>}
+      {safe.length > 0 && <div style={{ marginTop: 12 }}><div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--sage, #4f7a5e)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Safe</div><div style={rollList}>{safe.map(p => nameRow(p))}</div></div>}
+      {noResp.length > 0 && <div style={{ marginTop: 12 }}><div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>No reply yet</div><div style={rollList}>{noResp.map(p => nameRow(p, 'var(--ink-3)'))}</div></div>}
     </div>
   );
 }

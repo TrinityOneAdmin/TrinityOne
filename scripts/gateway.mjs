@@ -799,9 +799,12 @@ function maybePushSafety(evt) {
       const cp = d.slice(SAFE_D.length); if (!CHURCH_PUBS.has(cp)) return;
       const p = (evt.tags.find(t => t[0] === 'p') || [])[1]; const creator = p ? (toHexPub(p) || p) : '';
       if (!creator || creator === evt.pubkey) return;
+      // only notify an actual check-creator (church / steward / care-team) — a member can't p-tag an arbitrary victim into a push
+      if (creator !== cp && !stewardOf(creator, cp) && !careAdmin(creator, cp)) return;
       SAFETY_PUSHED.add(evt.id);
       pushTo(creator, { title: 'Safety check', body: 'Someone responded — open the roll call.', url: '/?safety=rollcall', tag: 'safety-resp-' + cp }, 'announce');
     }
+    if (SAFETY_PUSHED.size > 5000) SAFETY_PUSHED.clear();   // bounded: dedup only needs recent ids, not unbounded growth
   } catch {}
 }
 const dtag = (e) => { const t = (e.tags || []).find(t => t[0] === 'd'); return t ? t[1] : ''; };
@@ -2649,7 +2652,10 @@ wss.on('connection', ws => {
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
       // is NOT challenged — those messages are just silently withheld — so ordinary reads pay no auth cost.
       const wantsInvite = !ws._auth && filters.some(f => (f['#t'] || []).some(t => GROUP_VIS.get(t) === 'invite'));
-      if (wantsInvite || wantsSafeguard) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }   // safeguarding: challenge so a member's client auths + gets the lists (AUTH-success re-delivers)
+      // Emergency-timing oracle: challenge from the FILTER (not only a found event) so an anon REQ for a safety d-tag
+      // gets an identical AUTH whether or not a check is live — no "is this church under attack right now?" distinguisher.
+      const wantsSafetyD = !ws._auth && filters.some(f => (f['#d'] || []).some(d => typeof d === 'string' && (d.startsWith(SAFETY_D) || d.startsWith(SAFE_D))));
+      if (wantsInvite || wantsSafeguard || wantsSafetyD) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }   // safeguarding: challenge so a member's client auths + gets the lists (AUTH-success re-delivers)
       const lim = Math.max(0, ...filters.map(f => f.limit || 0));
       if (lim) matched = matched.slice(-lim);
       for (const e of matched) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }   // backpressure: a client that isn't reading can't make us buffer unbounded

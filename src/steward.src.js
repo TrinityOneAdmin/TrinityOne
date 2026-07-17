@@ -1000,13 +1000,13 @@ window.Steward = {
   async startSafetyCheck(message) {
     const cp = actingChurch || pub; if (!sk || !cp) return null;
     const id = 'sc' + now() + Math.random().toString(36).slice(2, 6);
-    const content = JSON.stringify({ id, message: String(message || 'Are you safe?').trim().slice(0, 280), by: pub, at: now(), open: true });
+    const content = JSON.stringify({ id, message: String(message || 'Are you safe?').trim().slice(0, 280), at: now(), open: true });   // no `by` — members encrypt to the event SIGNER, not a content field
     try { await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SAFETY_D + cp], ['t', NET]], content })); } catch (e) { return null; }
     return { id, by: pub };
   },
   async closeSafetyCheck(id) {
     const cp = actingChurch || pub; if (!sk || !cp) return null;
-    const content = JSON.stringify({ id: id || '', by: pub, at: now(), open: false });
+    const content = JSON.stringify({ id: id || '', at: now(), open: false });
     try { await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SAFETY_D + cp], ['t', NET]], content })); } catch (e) { return null; }
     return true;
   },
@@ -1015,7 +1015,7 @@ window.Steward = {
     const cp = actingChurch || pub; if (!cp) return () => {};
     let best = null;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [SAFETY_D + cp] }], {
-      onevent(e) { try { const o = JSON.parse(e.content || '{}'); if (best && e.created_at < best.createdAt) return; best = { id: o.id || e.id, message: String(o.message || ''), by: o.by || e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at }; cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null); } catch {} },
+      onevent(e) { try { const o = JSON.parse(e.content || '{}'); if (best && e.created_at < best.createdAt) return; best = { id: o.id || e.id, message: String(o.message || ''), by: e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at }; cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null); } catch {} },   // by = SIGNER, never content (see fellowship markSafe)
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -1023,11 +1023,15 @@ window.Steward = {
   subscribeSafetyResponses(checkId, cb) {
     const cp = actingChurch || pub; if (!cp) return () => {};
     const byPub = new Map();
+    const seenIds = new Set();   // dedupe multi-relay re-delivery BEFORE the (costly) NIP-44 decrypt
+    const ckCache = new Map();   // pubkey -> conversation key, computed once per responder
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [SAFE_D + cp] }], {
       onevent(e) {
         if (!sk) return;
+        if (e.id) { if (seenIds.has(e.id)) return; seenIds.add(e.id); }
         try {
-          const o = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey)));
+          let ck = ckCache.get(e.pubkey); if (!ck) { ck = nip44ck(sk, e.pubkey); ckCache.set(e.pubkey, ck); }
+          const o = JSON.parse(nip44d(e.content, ck));
           if (checkId && o.checkId && o.checkId !== checkId) return;         // ignore responses to an earlier check
           const prev = byPub.get(e.pubkey); if (prev && prev.at >= (o.at || e.created_at)) return;
           byPub.set(e.pubkey, { pubkey: e.pubkey, status: o.status === 'help' ? 'help' : 'safe', note: String(o.note || ''), at: o.at || e.created_at });
