@@ -311,7 +311,7 @@ function SafetyDock({ ctx, onOpenToday }) {
   return (
     <div role="alert" style={{
       position: 'absolute', left: 12, right: 12, zIndex: 27,
-      bottom: 'calc(max(12px, env(safe-area-inset-bottom)) + 74px)',
+      bottom: 'calc(max(12px, env(safe-area-inset-bottom)) + 68px)',   // hug the 66px nav pill (2px gap) so it reads as an extension of it
       background: 'color-mix(in oklab, var(--clay-soft) 92%, transparent)',
       backdropFilter: 'blur(20px) saturate(160%)', WebkitBackdropFilter: 'blur(20px) saturate(160%)',
       border: '1.5px solid var(--clay)', borderRadius: 22, boxShadow: 'var(--shadow-lg)',
