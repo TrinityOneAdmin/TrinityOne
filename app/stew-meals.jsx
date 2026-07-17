@@ -174,6 +174,9 @@ function SafetyCheckPanel() {
   const nameOf = pk => (dir[pk] && dir[pk].name) || ((members.find(m => m.pubkey === pk) || {}).name) || (pk ? pk.slice(0, 8) + '…' : '?');
   const start = async () => { if (busy) return; setBusy(true); try { await window.Steward.startSafetyCheck(msg); } catch (e) {} setBusy(false); setComposing(false); };
   const closeCheck = async () => { if (busy) return; setBusy(true); try { await window.Steward.closeSafetyCheck(check && check.id); } catch (e) {} setBusy(false); setConfirmEnd(false); };
+  const [minimized, setMinimized] = React.useState(false);   // collapse a live check to a slim bar so other care work isn't blocked (persisted per check)
+  React.useEffect(() => { if (!check) { setMinimized(false); return; } try { setMinimized(localStorage.getItem('trinityone.safetymin.' + check.id) === '1'); } catch (e) {} }, [check && check.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleMin = () => setMinimized(m => { const nm = !m; try { if (check) localStorage.setItem('trinityone.safetymin.' + check.id, nm ? '1' : '0'); } catch (e) {} return nm; });
 
   const roster = (members || []).filter(m => m && m.pubkey);
   const byPk = {}; (responses || []).forEach(r => { byPk[r.pubkey] = r; });
@@ -204,6 +207,16 @@ function SafetyCheckPanel() {
       </div>
     );
   }
+  if (minimized) return (
+    <div style={{ ...card, padding: '11px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderColor: 'var(--clay)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} />
+        <span style={{ fontWeight: 800, fontSize: 13.5, color: 'var(--clay-deep, #b4462f)' }}>Safety check live</span>
+        <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>{help.length ? <b style={{ color: 'var(--clay-deep, #b4462f)' }}>{help.length} need help</b> : '0 need help'} · {safe.length} safe · {noResp.length} no reply</span>
+      </div>
+      <button onClick={toggleMin} className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5, flexShrink: 0 }}>Expand</button>
+    </div>
+  );
   return (
     <div style={{ ...card, borderColor: 'var(--clay)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
@@ -218,7 +231,10 @@ function SafetyCheckPanel() {
             <button onClick={closeCheck} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '6px 10px', fontSize: 12.5 }}>End check</button>
           </div>
         ) : (
-          <button onClick={() => setConfirmEnd(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13, whiteSpace: 'nowrap' }}>End check</button>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+            <button onClick={toggleMin} className="sk-btn sk-btn--ghost" style={{ padding: '8px 11px', fontSize: 13, whiteSpace: 'nowrap' }}>Minimise</button>
+            <button onClick={() => setConfirmEnd(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13, whiteSpace: 'nowrap' }}>End check</button>
+          </div>
         )}
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
