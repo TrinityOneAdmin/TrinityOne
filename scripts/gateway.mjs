@@ -1133,7 +1133,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.wasm': 'application/wasm', '.woff2': 'font/woff2', '.woff': 'font/woff',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
-  '.gz': 'application/gzip', '.zip': 'application/zip', '.txt': 'text/plain; charset=utf-8',
+  '.gz': 'application/gzip', '.zip': 'application/zip', '.txt': 'text/plain; charset=utf-8', '.pdf': 'application/pdf',
   '.ico': 'image/x-icon', '.map': 'application/json',
   '.apk': 'application/vnd.android.package-archive', '.webmanifest': 'application/manifest+json',
 };
