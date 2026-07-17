@@ -269,6 +269,71 @@ function CareCard({ ctx, embedded }) {
 // Emergency "mark as safe" banner — shown at the very top of Today when the church has an active safety
 // check. One tap tells the church you're safe (or that you need help); the response is encrypted to the
 // leader who started the check. Deliberately the most prominent thing on the screen while a check is open.
+// Shared answered-state for a safety check, so the Today banner and the app-wide dock agree: answering in one
+// settles both, and it survives a tab switch / app reopen. Get: safetyAck(id) → 'safe'|'help'|''. Set: safetyAck(id, s).
+function safetyAck(id, set) {
+  const k = 'trinityone.safetyack.' + id;
+  try { if (set === undefined) return localStorage.getItem(k) || ''; localStorage.setItem(k, set); } catch (e) {}
+  return set || '';
+}
+
+// App-wide safety dock: a slim card that grows out of the bottom nav on ANY tab (the full banner with a note field
+// lives on Today). Stays until the member answers or dismisses it. Docks in the same slot the MiniPlayer uses.
+function SafetyDock({ ctx, onOpenToday }) {
+  const [check, setCheck] = React.useState(null);
+  const [answered, setAnswered] = React.useState('');
+  const [dismissed, setDismissed] = React.useState(false);
+  const [sending, setSending] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  React.useEffect(() => {
+    if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeSafetyCheck)) return;
+    let unsub = null;
+    try {
+      unsub = window.Fellowship.subscribeSafetyCheck(c => {
+        setCheck(c); setErr('');
+        setAnswered(c ? (safetyAck(c.id) || '') : '');
+        try { setDismissed(!!c && localStorage.getItem('trinityone.safetydockx.' + c.id) === '1'); } catch (e) { setDismissed(false); }
+      });
+    } catch (e) {}
+    return () => { try { unsub && unsub(); } catch (e) {} };
+  }, [ctx.church && ctx.church.npub]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!check || answered || dismissed) return null;   // gone once answered or X'd
+  const churchName = (ctx.church && ctx.church.name) || 'your church';
+  const dismiss = () => { setDismissed(true); try { localStorage.setItem('trinityone.safetydockx.' + check.id, '1'); } catch (e) {} };
+  const respond = async (s) => {
+    if (sending) return; setSending(true); setErr('');
+    let ok = false;
+    try { ok = await window.Fellowship.markSafe(check, s, ''); } catch (e) {}
+    setSending(false);
+    if (ok) { safetyAck(check.id, s); setAnswered(s); } else setErr('Couldn’t send — try again.');
+  };
+  const btn = (extra) => ({ flex: 1, height: 40, border: 'none', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14, color: '#fff', ...extra });
+  return (
+    <div role="alert" style={{
+      position: 'absolute', left: 12, right: 12, zIndex: 27,
+      bottom: 'calc(max(12px, env(safe-area-inset-bottom)) + 74px)',
+      background: 'color-mix(in oklab, var(--clay-soft) 92%, transparent)',
+      backdropFilter: 'blur(20px) saturate(160%)', WebkitBackdropFilter: 'blur(20px) saturate(160%)',
+      border: '1.5px solid var(--clay)', borderRadius: 22, boxShadow: 'var(--shadow-lg)',
+      padding: '12px 14px 13px', animation: 'trinityFade .35s ease both',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+        <div style={{ marginTop: 1, flexShrink: 0, color: 'var(--clay-deep, #b4462f)' }}><Icon name="shield" size={17} color="currentColor" /></div>
+        <div style={{ flex: 1, minWidth: 0 }} onClick={onOpenToday} role="button" title="Open to add a note">
+          <div style={{ fontWeight: 800, fontSize: 14, color: 'var(--clay-deep, #b4462f)', fontFamily: 'var(--font-display, var(--font-ui))' }}>{churchName} is checking you’re safe</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{check.message || 'Are you safe?'}</div>
+        </div>
+        <button onClick={dismiss} aria-label="Dismiss" style={{ flexShrink: 0, width: 28, height: 28, border: 'none', background: 'none', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, marginTop: -2, marginRight: -4 }}><Icon name="x" size={17} color="currentColor" /></button>
+      </div>
+      <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
+        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)' })}>{sending ? 'Sending…' : 'I’m safe'}</button>
+        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)' })}>{sending ? 'Sending…' : 'I need help'}</button>
+      </div>
+      {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 8 }}>{err}</div> : null}
+    </div>
+  );
+}
+
 function SafetyBanner({ ctx }) {
   const [check, setCheck] = React.useState(null);
   const [status, setStatus] = React.useState('');   // '' | 'safe' | 'help' (what I've told them)
@@ -278,7 +343,8 @@ function SafetyBanner({ ctx }) {
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeSafetyCheck)) return;
     let unsub = null;
-    try { unsub = window.Fellowship.subscribeSafetyCheck(c => { setCheck(c); if (!c) setStatus(''); }); } catch (e) {}
+    // seed the answered state from storage so the Today banner + the app-wide dock agree (answer once, both settle)
+    try { unsub = window.Fellowship.subscribeSafetyCheck(c => { setCheck(c); setStatus(c ? (safetyAck(c.id) || '') : ''); }); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [ctx.church && ctx.church.npub]);   // eslint-disable-line react-hooks/exhaustive-deps
   if (!check) return null;
@@ -288,7 +354,7 @@ function SafetyBanner({ ctx }) {
     let ok = false;
     try { ok = await window.Fellowship.markSafe(check, s, note); } catch (e) {}
     setSending(false);
-    if (ok) setStatus(s); else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery
+    if (ok) { setStatus(s); safetyAck(check.id, s); } else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery
   };
   const wrap = { borderRadius: 16, padding: 16, marginBottom: 18, animation: 'trinityFade .4s ease both' };
   const btn = (extra) => ({ flex: 1, height: 46, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 15, ...extra });
@@ -638,4 +704,4 @@ function TodayScreen({ ctx }) {
   );
 }
 
-Object.assign(window, { TodayScreen, ScreenScroll, ProgressRing });
+Object.assign(window, { TodayScreen, ScreenScroll, ProgressRing, SafetyDock });

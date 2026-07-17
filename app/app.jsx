@@ -1341,6 +1341,8 @@ function App() {
               <React.Fragment>
                 <div style={{ position: 'absolute', inset: 0 }}>{screens[tab]}</div>
                 <MiniPlayer ctx={ctx} />
+                {/* app-wide safety dock: on any tab but Today (Today shows the full banner with a note field) */}
+                {tab !== 'today' && <SafetyDock ctx={ctx} onOpenToday={() => setTab('today')} />}
                 <TabBar active={tab} onChange={setTab} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} onProfile={commLocked ? undefined : () => ctx.openProfile()} profileAv={identity.avatar} profileName={identity.name} />
               </React.Fragment>
             )}
