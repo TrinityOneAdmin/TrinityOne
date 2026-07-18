@@ -440,10 +440,23 @@ function ChatScreen({ ctx }) {
         <div style={{ textAlign: 'center', padding: '40px 24px', animation: 'trinityFade .4s ease both' }}>
           <div style={{ width: 76, height: 76, borderRadius: 22, margin: '0 auto 18px', background: 'color-mix(in oklab, var(--gold) 16%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a6717' }}><Icon name="shield" size={38} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, marginBottom: 10 }}>Waiting for approval</div>
-          <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 340, margin: '0 auto' }}>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been sent. A steward will let you in shortly — you'll be able to see groups and join the conversation once you're approved.</p>
+          <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 340, margin: '0 auto' }}>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been sent. A steward will let you in shortly — <b>we’ll let you know the moment you’re approved</b>, so you can close the app until then.</p>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 20, padding: '10px 16px', borderRadius: 999, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, transparent)', color: '#8a6717', fontWeight: 700, fontSize: 13.5 }}>
             <span style={{ width: 8, height: 8, borderRadius: 999, background: '#c2913a' }} /> Pending steward approval
           </div>
+          {ctx.joinState && ctx.joinState.offline ? (
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 14, lineHeight: 1.5 }}>You’re offline right now — this is your last saved status.</div>
+          ) : null}
+          <div style={{ marginTop: 16 }}>
+            <button onClick={() => ctx.retryConnection && ctx.retryConnection()} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}><Icon name="refresh" size={14} /> Check again</button>
+          </div>
+        </div>
+      ) : (ctx.joinState && ctx.joinState.offline && ctx.joinState.unknown) ? (
+        <div style={{ textAlign: 'center', padding: '48px 24px', animation: 'trinityFade .4s ease both' }}>
+          <div style={{ width: 72, height: 72, borderRadius: 20, margin: '0 auto 16px', background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)' }}><Icon name="globe" size={34} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, marginBottom: 9 }}>Can’t reach your church</div>
+          <p style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 330, margin: '0 auto 20px' }}>We couldn’t connect to <b>{(ctx.church && ctx.church.name) || 'your church'}</b> just now — you may be offline, or its relay may be down. We’ll keep trying.</p>
+          <button onClick={() => ctx.retryConnection && ctx.retryConnection()} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '11px 20px', borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, boxShadow: 'var(--shadow)' }}><Icon name="refresh" size={16} /> Try again</button>
         </div>
       ) : (
       <React.Fragment>
