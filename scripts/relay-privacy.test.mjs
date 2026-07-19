@@ -18,6 +18,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 const PORT = 8837;                                   // isolated high port (memory: adversarial/local tests live at 8811+)
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;   // the relay ws endpoint is /relay (root gets socket.destroy())
 const MEMBER_D = 'trinityone/member:';
+const SLOT_D = 'trinityone/careslot:';   // a member's offer to help — care-participation metadata (who's caring for whom)
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -67,7 +68,11 @@ before(async () => {
   const publicNote = finalizeEvent({ kind: 1, created_at: now(), tags: [], content: 'public: service at 10am' }, aSk);
   const dm = finalizeEvent({ kind: 4, created_at: now(), tags: [['p', bPub]], content: 'nip04-ciphertext-of-a-secret' }, aSk);
   const roster = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MEMBER_D + churchPub]], content: JSON.stringify({ members: [aPub, bPub] }) }, churchSk);
-  for (const e of [publicNote, dm, roster]) { const r = await publish(pub, e); assert.equal(r, true, 'seed event stored: kind ' + e.kind); }
+  // care-participation: member A offers to help on a need. Two variants — one correctly ['church']-tagged, and one
+  // WITHOUT the church tag (the H1 fall-through case). BOTH must be withheld from anon (SECURITY-AUDIT-2026-07-18).
+  const careSlotTagged = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', SLOT_D + 'need1:2026-07-20'], ['church', churchPub]], content: JSON.stringify({ careId: 'need1', note: 'I can bring dinner' }) }, aSk);
+  const careSlotUntagged = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', SLOT_D + 'need2:2026-07-21']], content: JSON.stringify({ careId: 'need2', note: 'I can drive them' }) }, aSk);
+  for (const e of [publicNote, dm, roster, careSlotTagged, careSlotUntagged]) { const r = await publish(pub, e); assert.equal(r, true, 'seed event stored: kind ' + e.kind); }
   pub.close();
 });
 
@@ -116,5 +121,21 @@ test('Roster: anonymous client CANNOT read a member: doc (audit-III arrest-list 
   const r = await reqCollect(ws, 'ros', { kinds: [30078], '#d': [MEMBER_D + churchPub] });
   assert.equal(kinds(r, 30078).length, 0, 'the membership list is not world-readable');
   assert.equal(r.gotAuth, true, 'relay challenged (roster doc present but withheld from anon)');
+  ws.close();
+});
+
+test('Care: anonymous client CANNOT read a church-tagged careslot (who is caring for whom)', async () => {
+  const ws = await connect();
+  const r = await reqCollect(ws, 'cs1', { kinds: [30078], '#d': [SLOT_D + 'need1:2026-07-20'] });
+  assert.equal(kinds(r, 30078).length, 0, 'care-participation metadata is not world-readable');
+  ws.close();
+});
+
+test('Care: anonymous client CANNOT read an UNTAGGED careslot (SECURITY-AUDIT-2026-07-18 H1 fall-through)', async () => {
+  const ws = await connect();
+  // A careslot with no ['church'] tag resolved cp='' and fell through to world-readable `return true`. The fix
+  // default-DENIES a private care doc whose owning church can't be resolved. This pins that regression shut.
+  const r = await reqCollect(ws, 'cs2', { kinds: [30078], '#d': [SLOT_D + 'need2:2026-07-21'] });
+  assert.equal(kinds(r, 30078).length, 0, 'an untagged careslot must not leak to an anonymous observer');
   ws.close();
 });

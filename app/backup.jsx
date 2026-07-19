@@ -14,22 +14,47 @@
       throw new Error('Backups need a secure connection. Open this over https (your church’s https link) — over plain http the browser disables encryption.');
     }
   }
-  const KDF_ITER = 600000;   // OWASP-2023 minimum for PBKDF2-SHA256 (older backups carry their own count)
-  async function deriveKey(pass, salt, iter) {
-    ensureCrypto();
+  const KDF_ITER = 600000;   // legacy PBKDF2-SHA256 iteration count (older backups carry their own count)
+  // Import 32 raw bytes as the AES-GCM key.
+  async function importAesKey(raw) { return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']); }
+  async function pbkdf2Key(pass, salt, iter) {
     const base = await crypto.subtle.importKey('raw', TE.encode(pass), 'PBKDF2', false, ['deriveKey']);
     return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iter || KDF_ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   }
+  // SECURITY-AUDIT-2026-07-18: prefer memory-hard Argon2id (window.TrinityRecovery.argon2Raw, from noble-hashes)
+  // for the derivation. PBKDF2 is GPU-friendly, so a short PIN on a cloud-stored backup would be cheap to
+  // brute-force; Argon2id's memory-hardness is what makes a 6-digit PIN actually costly to crack offline. Falls
+  // back to PBKDF2 only if the recovery bundle isn't present (so a backup can always be made).
+  const haveArgon = () => !!(window.TrinityRecovery && window.TrinityRecovery.argon2Raw);
   async function encryptObj(obj, pass) {
+    ensureCrypto();
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await deriveKey(pass, salt, KDF_ITER);
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, TE.encode(JSON.stringify(obj)));
-    return JSON.stringify({ v: 2, app: 'trinityone-backup', kdf: 'PBKDF2-SHA256', iter: KDF_ITER, salt: b64(salt), iv: b64(iv), data: b64(ct) }, null, 0);
+    const payload = TE.encode(JSON.stringify(obj));
+    let env;
+    if (haveArgon()) {
+      const { raw, params } = await window.TrinityRecovery.argon2Raw(pass, salt);
+      const key = await importAesKey(raw);
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload);
+      env = { v: 2, app: 'trinityone-backup', kdf: 'argon2id', t: params.t, m: params.m, p: params.p, salt: b64(salt), iv: b64(iv), data: b64(ct) };
+    } else {
+      const key = await pbkdf2Key(pass, salt, KDF_ITER);
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload);
+      env = { v: 2, app: 'trinityone-backup', kdf: 'PBKDF2-SHA256', iter: KDF_ITER, salt: b64(salt), iv: b64(iv), data: b64(ct) };
+    }
+    return JSON.stringify(env, null, 0);
   }
   async function decryptStr(str, pass) {
+    ensureCrypto();
     let env; try { env = JSON.parse(str); } catch { throw new Error('That isn’t a TrinityOne backup file.'); }
     if (!env || env.app !== 'trinityone-backup') throw new Error('That isn’t a TrinityOne backup file.');
-    const key = await deriveKey(pass, unb64(env.salt), env.iter || 150000);
+    let key;
+    if (env.kdf === 'argon2id') {
+      if (!haveArgon()) throw new Error('This backup needs the recovery module — reopen the app and try again.');
+      const { raw } = await window.TrinityRecovery.argon2Raw(pass, unb64(env.salt), { t: env.t, m: env.m, p: env.p });
+      key = await importAesKey(raw);
+    } else {
+      key = await pbkdf2Key(pass, unb64(env.salt), env.iter || 150000);   // legacy PBKDF2 backups still restore
+    }
     let pt; try { pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data)); }
     catch { throw new Error('Wrong passphrase, or the file is damaged.'); }
     return JSON.parse(TD.decode(pt));

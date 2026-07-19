@@ -23,6 +23,7 @@ How we version and ship. Keep it short; update when the policy changes.
 ## Gates for 1.0 (don't ship 1.0 until these are done)
 
 - [ ] **Security audit** of key custody, invite links, relay write-policy, exposure, backups (see `reference/SPINE.md` → Security audit).
+- [ ] **Signing keys backed up off-box + restore-verified** (see "Signing keys" below) — loss is unrecoverable.
 - [ ] **Giving decision**: ship Lightning giving, or formally scope it out of 1.0 (it's parked now).
 - [ ] **Relay resilience**: more than one canonical node so a church can't go dark (SPINE → Relay resilience).
 - [ ] Onboarding + first-launch wizard solid across a clean install.
@@ -46,6 +47,28 @@ Artifacts (repo root, served by the gateway at `/apks.html`; the steward one als
 - `trinityone-steward.apk` — steward console
 
 **Never hand-run `gradlew` without `sync-web.sh` first.** A bare gradle build packages the *last-synced* web assets and silently ships stale code (`sync-web.sh` ends with `npx cap sync`, which copies `www/` into the native project). This is what `release.sh` does for you.
+
+## Signing keys — BACK THESE UP (loss is unrecoverable)
+
+Two irreplaceable secrets live **only** on the dev/release box (both gitignored, disk-only). If either is
+lost, you cannot ship again to existing installs — Android rejects an APK signed by a different key, and relays
+reject a self-update signed by a different release key. There is no recovery.
+
+| Key | File (gitignored, disk-only) | Loss = | Fingerprint |
+|---|---|---|---|
+| **APK signing keystore** | `android/app/*.keystore` + `android/app/keystore.properties` | every member's app can never update again (must uninstall/reinstall, losing local data) | `9A:51:21…` |
+| **Relay release key** | `relay/release-key.pem` (+ public `relay-app/release-pubkey.pem`) | no church relay can receive a signed self-update again | — |
+
+**Do this now and re-verify each release:**
+
+- [ ] Both keys are backed up **off this box** (encrypted: e.g. `age`/`gpg` to an offline drive **and** a
+      password manager / sealed secret). One copy on one machine is not a backup.
+- [ ] The keystore password is stored with the backup (it's separate from the keystore file; without it the
+      keystore is useless).
+- [ ] After a restore drill, confirm the restored keystore reproduces fingerprint `9A:51:21…`
+      (`keytool -list -v -keystore <file>`) and the release key still verifies a known bundle signature.
+
+> `ARCHITECTURE.md:112` carries the same warning for the keystore; this is the operational checklist for it.
 
 ## Channels
 

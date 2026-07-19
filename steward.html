@@ -55,6 +55,8 @@
 
 <!-- church identity + Nostr publishing (church key, funds, profile); exposes window.Steward -->
 <script src="vendor/steward.js"></script>
+<!-- memory-hard Argon2id KDF (window.TrinityRecovery.argon2Raw) so the church-key backup file uses it too -->
+<script src="vendor/recovery.js"></script>
 <!-- double-entry ledger engine (FINANCE-MODULE.md); exposes window.FinanceLedger -->
 <script src="vendor/finance-ledger.js"></script>
 <!-- optional Manna module (money-out / disbursements; encrypted to the church key); exposes window.StewardManna -->

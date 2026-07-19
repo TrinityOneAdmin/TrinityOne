@@ -321,7 +321,8 @@ function App() {
   const [help, setHelp] = useA(helpParam || null);
   const idParam = new URLSearchParams(location.search).get('id');   // profile|recovery|invite|relays|newid|member
   const followParam = new URLSearchParams(location.search).get('follow');   // follow a church by its npub
-  const inviteParam = new URLSearchParams(location.search).get('invite');   // a steward invite: adopt a ready-made identity + join
+  const inviteParam = new URLSearchParams(location.search).get('invite')     // a steward/guardian invite: adopt a ready-made identity + join
+    || (() => { try { return new URLSearchParams((location.hash || '').replace(/^#/, '')).get('invite'); } catch (e) { return null; } })();   // SECURITY-AUDIT-2026-07-18: also accept the seed from the URL fragment (#invite=), which never hits the server; ?invite= still accepted for old links
   const churchParam = new URLSearchParams(location.search).get('church');   // '1' / 'follow' opens the switcher
   const dmParam = new URLSearchParams(location.search).get('dm');   // inbox | <peer pubkey> (verification deep-link)
   const servingParam = new URLSearchParams(location.search).get('serving');   // '1' opens the Serving overlay
@@ -493,7 +494,7 @@ function App() {
       const _search = (typeof location !== 'undefined' && location.search) || '';
       const _inviteSeed = inviteParam ? decodeURIComponent(inviteParam) : '';
       let _nameP = ''; try { _nameP = new URLSearchParams(_search).get('name') || ''; } catch (e) {}
-      try { const u = new URL(location.href); ['invite', 'follow', 'relay', 'name'].forEach(k => u.searchParams.delete(k)); const q = u.searchParams.toString(); history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + u.hash); } catch (e) {}
+      try { const u = new URL(location.href); ['invite', 'follow', 'relay', 'name'].forEach(k => u.searchParams.delete(k)); let hash = u.hash; try { if (/[#&]invite=/.test(hash)) { const hp = new URLSearchParams(hash.replace(/^#/, '')); hp.delete('invite'); const hs = hp.toString(); hash = hs ? '#' + hs : ''; } } catch (e) {} const q = u.searchParams.toString(); history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + hash); } catch (e) {}   // SECURITY-AUDIT-2026-07-18: also strip #invite= from the fragment
       // a steward invite hands the recipient a ready-made anonymous identity — adopt it first, then join
       if (inviteParam && window.TrinityIdentity && window.TrinityIdentity.importMnemonic) {
         // SECURITY-AUDIT-2026-07-06 L4: a seed-carrying `?invite=` is now ONLY the guardian→child handoff — a

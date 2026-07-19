@@ -29,7 +29,7 @@ Known and tracked (see `reference/SPINE.md` → Security audit):
 
 ## What we've already hardened
 
-- **Strict CSP** on the production app shells (`script-src 'self'`, no `eval`).
+- **Strict CSP** on the Cloudflare Pages app shells (`pages-dist/_headers`: `script-src 'self'`, no `eval`). Note: the self-hosted **gateway** (`scripts/gateway.mjs`) serves the in-browser-transpiled build and therefore defaults to a looser CSP (`'unsafe-inline' 'unsafe-eval'`) unless started with `STRICT_CSP=1`; tightening the self-host path to a pre-transpiled, eval-free bundle is tracked for go-live.
 - **SSRF guard** on the feed proxies (blocks localhost/LAN/CGNAT/cloud-metadata, re-checked per redirect).
 - **Security headers** on the app and gateway (`X-Content-Type-Options`, `Referrer-Policy: no-referrer`, `X-Frame-Options`).
 - **Signature verification** on every relay event, plus per-connection rate limiting.

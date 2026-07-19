@@ -1050,7 +1050,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ textAlign: 'center', margin: '2px 0 4px' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '6px 13px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
-            <Icon name="lock" size={13} /> {group && group.encrypted ? 'End-to-end encrypted · not even the relay can read this' : 'Private to your church · no account needed'}</span>
+            <Icon name="lock" size={13} /> {group && group.encrypted ? 'End-to-end encrypted · not even the relay can read this' : 'Church room · not end-to-end encrypted, so the relay can read messages here'}</span>
         </div>
         {groupEvents.length ? (
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>

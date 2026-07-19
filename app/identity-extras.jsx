@@ -77,12 +77,13 @@ function RecoverySheet({ open, onClose, ctx }) {
   const [bkErr, setBkErr] = useIx('');
   const [file, setFile] = useIx(null);
   useIxE(() => { if (!open) { setBk(null); setPass(''); setBkErr(''); setFile(null); } }, [open]);
+  const markSaved = () => { try { const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub; if (np) localStorage.setItem('trinityone.backedup.' + np, '1'); } catch (e) {} };
   const doExport = async () => {
-    // SECURITY-AUDIT-2026-06-24 L5: raised the floor from 6 → 10. PBKDF2-600k is already strong;
-    // the bottleneck is the user's passphrase choice. 6 alnum chars ≈ 36 bits keyspace —
-    // GPU-crackable in hours against a leaked encrypted blob. 10 chars (~60 bits) is meaningfully
-    // harder. The user-facing hint says so plainly.
-    if (pass.length < 10) { setBkErr('Use a passphrase of at least 10 characters — your backup is only as strong as this.'); return; }
+    // SECURITY-AUDIT-2026-07-18: floor lowered 10 → 6 because the KDF is now memory-hard Argon2id (backup.jsx),
+    // which makes a 6-digit PIN genuinely costly to brute-force even against a leaked/cloud-stored file — the
+    // GPU-cheapness of PBKDF2 was what forced the old 10-char floor. The UI still nudges toward a longer
+    // passphrase, which is meaningfully stronger for anyone who stores the backup somewhere it could be seized.
+    if (pass.length < 6) { setBkErr('Use at least 6 characters. A few words are much stronger than a short PIN — worth it if this backup will live in the cloud.'); return; }
     setBusy('export'); setBkErr('');
     try {
       const obj = await window.TrinityBackup.collectMember();
@@ -122,63 +123,81 @@ function RecoverySheet({ open, onClose, ctx }) {
   }, [open]);
   const copyPhrase = () => { if (navigator.clipboard) navigator.clipboard.writeText(words.join(' ')).catch(() => {}); ctx.toast('Phrase copied — paste somewhere safe'); };
   return (
-    <BottomSheet open={open} onClose={onClose} maxHeight="86%" z={60}>
+    <BottomSheet open={open} onClose={onClose} maxHeight="88%" z={60}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={20} /></div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>Recovery phrase</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>Secure your account</div>
         </div>
         <IconBtn name="x" onClick={onClose} />
       </div>
-      <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 16px', textWrap: 'pretty' }}>
-        These 12 words are the <b style={{ color: 'var(--ink)' }}>only</b> way to restore your identity if you lose this device. Write them down and keep them somewhere safe — never share them.</p>
+      <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 16px', textWrap: 'pretty' }}>
+        There’s no password to reset here — so let’s make sure you can always get back in. The <b style={{ color: 'var(--ink)' }}>safest way is to write your words on paper</b> and keep them somewhere safe. Prefer something easier? A backup file works too — just mind where you keep it.</p>
 
-      <div style={{ position: 'relative', borderRadius: 18, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: 4, filter: shown ? 'none' : 'blur(7px)', transition: 'filter .25s' }}>
-          {words.map((w, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-              <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--ink-3)', width: 16 }}>{i + 1}</span>
-              <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>{w}</span>
-            </div>
-          ))}
+      {/* ── RECOMMENDED: the recovery words on paper — nothing stored anywhere else ──────────── */}
+      <div style={{ borderRadius: 16, border: '1.5px solid color-mix(in oklab, var(--sage) 40%, var(--line))', background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', padding: 15 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16 }}>Write down your 12 words</div>
+          <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: .3, textTransform: 'uppercase', color: 'var(--sage)', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', padding: '2px 7px', borderRadius: 999 }}>Safest</span>
         </div>
-        {!shown ? (
-          <button onClick={() => setShown(true)} style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
-            border: 'none', background: 'rgba(20,14,8,.04)', cursor: 'pointer', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
-            <Icon name="key" size={26} color="var(--ink)" /> Tap to reveal</button>
-        ) : null}
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '5px 0 12px' }}>Nothing is stored anywhere else — so nothing can be stolen from a cloud or handed over. Write them on paper and keep it somewhere safe (not a photo). Anyone with these words <i>is</i> you.</p>
+        <div style={{ position: 'relative', borderRadius: 18, overflow: 'hidden' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: 4, filter: shown ? 'none' : 'blur(7px)', transition: 'filter .25s' }}>
+            {words.map((w, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--ink-3)', width: 16 }}>{i + 1}</span>
+                <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>{w}</span>
+              </div>
+            ))}
+          </div>
+          {!shown ? (
+            <button onClick={() => setShown(true)} style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
+              border: 'none', background: 'rgba(20,14,8,.06)', cursor: 'pointer', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
+              <Icon name="key" size={26} color="var(--ink)" /> Tap to reveal</button>
+          ) : null}
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+          <button onClick={copyPhrase} style={{ flex: 1, padding: 12, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: 'var(--shadow)' }}>
+            <Icon name="copy" size={16} /> Copy</button>
+          <button onClick={() => { markSaved(); onClose(); ctx.toast('Saved — your 12 words can restore this identity'); }} style={{ flex: 1, padding: 12, borderRadius: 14, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+            {/* SECURITY-AUDIT-2026-07-18: persist a durable, per-npub "backed up" flag (was a cosmetic toast). */}
+            <Icon name="check" size={16} stroke={2.4} color="#fff" /> I’ve written them down</button>
+        </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-        <button onClick={copyPhrase} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: 'var(--shadow)' }}>
-          <Icon name="copy" size={16} /> Copy</button>
-        <button onClick={() => { onClose(); ctx.toast('Backed up'); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
-          <Icon name="check" size={16} stroke={2.4} color="#fff" /> I’ve saved it</button>
-      </div>
-
-      {/* full encrypted backup file (key + your highlights, notes, journal, plans) */}
+      {/* ── EASIER: encrypted backup file — cloud OR local, with the risk stated plainly ─────── */}
       <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Encrypted backup file</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 12px' }}>One file with your identity <i>and</i> your highlights, notes, journal and plans — protected by a passphrase. Save it to Drive, OneDrive or Files; restore it on a new phone.</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Save an encrypted backup</div>
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '2px 7px', borderRadius: 999 }}>Easier</span>
+        </div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 8px' }}>One file with your account <i>and</i> your notes, journal and plans — locked with a PIN or passphrase you choose. Restore it on any phone.</p>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 12px', padding: '9px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px dashed var(--line)' }}>
+          <b>Where you keep it matters.</b> Kept on your phone or a USB stick, only someone holding that device can try to open it — a short PIN is fine. Kept in the cloud (Drive, iCloud) it survives a lost phone — but if anyone got into your cloud they’d have the file to try your PIN against, so <b>use a few words, not a short PIN</b>.</div>
         {!bk ? (
           <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={() => { setBk('export'); setPass(''); setBkErr(''); }} style={{ flex: 1, padding: 12, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: 'var(--shadow)' }}><Icon name="share" size={15} /> Back up</button>
-            <button onClick={() => { setBk('restore'); setPass(''); setBkErr(''); setFile(null); }} style={{ flex: 1, padding: 12, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: 'var(--shadow)' }}><Icon name="refresh" size={15} /> Restore</button>
+            <button onClick={() => { setBk('export'); setPass(''); setBkErr(''); }} style={{ flex: 2, padding: 12, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: 'var(--shadow)' }}><Icon name="share" size={15} /> Save a backup</button>
+            <button onClick={() => { setBk('restore'); setPass(''); setBkErr(''); setFile(null); }} style={{ flex: 1, padding: 12, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="refresh" size={15} /> Restore</button>
           </div>
         ) : (
           <div style={{ padding: 13, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             {bk === 'restore' ? (
               <input type="file" accept=".json,application/json" onChange={e => setFile(e.target.files && e.target.files[0])} style={{ width: '100%', fontSize: 13, marginBottom: 10, fontFamily: 'var(--font-ui)' }} />
             ) : null}
-            <input type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? 'Choose a passphrase' : 'Your backup passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+            <input type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? 'Choose a PIN or passphrase (6+)' : 'Your backup PIN or passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             {bkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{bkErr}</div> : null}
             <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
               <button onClick={() => { setBk(null); setBkErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-              <button onClick={bk === 'export' ? doExport : doRestore} disabled={!!busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: bk === 'restore' ? 'var(--clay)' : 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : (bk === 'export' ? 'Create backup' : 'Restore')}</button>
+              <button onClick={bk === 'export' ? async () => { await doExport(); markSaved(); } : doRestore} disabled={!!busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: bk === 'restore' ? 'var(--clay)' : 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : (bk === 'export' ? 'Create backup' : 'Restore')}</button>
             </div>
           </div>
         )}
       </div>
+
+      {/* Guardian (2-of-3 social recovery) is DEFERRED to post-pilot — the setup ceremony is too heavy for the
+          pilot and needs auto-delivery of a share to a chosen steward to be worth it over paper. The tested Shamir
+          core (src/recovery-core.mjs + scripts/recovery.test.mjs, exposed as window.TrinityRecovery.split/combine)
+          stays parked on the branch; only the UI is held back. See onboarding-friction memory. */}
     </BottomSheet>
   );
 }
@@ -312,7 +331,13 @@ function joinLinkFor(ctx) {
 // device confirms before adopting (app.jsx), so a crafted link can't silently take over a fresh phone.
 function inviteUrlFor(mnemonic, ctx) {
   const np = _inviteChurchNp(ctx);
-  return _inviteBase() + '/?invite=' + encodeURIComponent(mnemonic) + (np ? '&follow=' + np : '') + '&relay=' + encodeURIComponent(_inviteRelay());
+  // SECURITY-AUDIT-2026-07-18: carry the BIP-39 seed in the URL FRAGMENT (#invite=), not the query (?invite=).
+  // The fragment is never sent over the wire, so the cleartext seed no longer reaches the server / Cloudflare
+  // tunnel / access logs on the initial GET (the client-side scrub only ran AFTER that request). follow/relay
+  // stay in the query — they're not secret and the join flow reads them from location.search. app.jsx accepts
+  // BOTH forms so previously-shared ?invite= links still work.
+  const q = (np ? 'follow=' + np + '&' : '') + 'relay=' + encodeURIComponent(_inviteRelay());
+  return _inviteBase() + '/?' + q + '#invite=' + encodeURIComponent(mnemonic);
 }
 
 function InviteSheet({ open, onClose, identity, ctx }) {

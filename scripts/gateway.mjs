@@ -1096,10 +1096,15 @@ function canRead(e, authed) {
     // member needs to read it. Care <cp>: careavail carries it in the d-tag; the rest are church-authored OR
     // ['church',cp]-tagged (accept() guarantees one), so CHURCH_PUBS.has(author)?author:namedChurch(e) resolves all.
     {
-      let cp = '';
+      let cp = '', priv = false;
       const suf = [MEMBER_D, ADMITTED_D, STEWARDS_D, BLOCKED_D, MINORS_D, APPROVED_D, GUARDIANS_D, MEDIAKEY_D, AVAIL_D, SAFETY_D].find(p => d.startsWith(p));
-      if (suf) cp = d.slice(suf.length);
-      else if (d === MEALS_SETTINGS_D || d === RELAYS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) cp = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : namedChurch(e);   // RELAYS_D (trinityone/relays): the church's relay-topology / sync-peers doc — gate to members, not world-readable (D2 auto-publishes it)
+      if (suf) { cp = d.slice(suf.length); priv = true; }
+      else if (d === MEALS_SETTINGS_D || d === RELAYS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) { priv = true; cp = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : namedChurch(e); }   // RELAYS_D (trinityone/relays): the church's relay-topology / sync-peers doc — gate to members, not world-readable (D2 auto-publishes it)
+      // SECURITY-AUDIT-2026-07-18 H1: a private care/roster doc whose owning church can't be resolved (a careslot:/
+      // careskip:/need: with no ['church'] tag → namedChurch()='' ) MUST default-DENY, not fall through to the
+      // world-readable `return true` below. accept() does not enforce the church tag, so the read-gate can't assume
+      // it. Legit clients always church-tag these (fellowship.src.js), so this only bites untagged/forged docs.
+      if (priv && !cp) return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed));
       if (cp) {
         const md = MEMBER_DOCS.get(cp);
         const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
@@ -2572,6 +2577,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024,   // 
   // permessage-deflate: ~70% off wire bytes for members on a thin pipe. Negotiated per-connection (clients that
   // don't support it just skip it). No-context-takeover keeps per-connection memory bounded for many members.
   perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true, concurrencyLimit: 10 } });
+const MAX_CONNS = 5000;         // SECURITY-AUDIT-2026-07-18 M1: global concurrent-WebSocket ceiling (FD/memory-exhaustion guard). Deliberately NO per-IP cap — persecuted-church members routinely share one exit IP (VPN/Tor/national NAT/church WiFi), so a per-IP cap would throttle a legitimate congregation.
 const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (members, chat, profiles, etc.)
 const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is a cheap unauthenticated CPU-DoS — cap it
 const MAX_REQ_EVENTS = 20000;   // aggregate events one REQ may materialize+serialize across all its filters (DoS ceiling; real reads are far smaller)
@@ -2579,6 +2585,7 @@ const MAX_WS_BUFFER = 16 * 1024 * 1024; // if a client isn't draining and our so
 let _gossipMergeBusy = false;   // one /relay-names/sync merge at a time (bounds unauthenticated schnorr-verify CPU)
 server.on('upgrade', (req, socket, head) => {
   if ((req.url || '').split('?')[0] !== '/relay') { socket.destroy(); return; }
+  if (wss.clients.size >= MAX_CONNS) { try { socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n'); } catch {} socket.destroy(); return; }   // SECURITY-AUDIT-2026-07-18 M1: shed new connections past the ceiling rather than exhaust FDs/memory
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
 });
 wss.on('connection', ws => {
@@ -2676,9 +2683,11 @@ wss.on('connection', ws => {
           // degraded). Re-send anything withheld-when-unauthed (`!canRead(e,null)`) — public events already
           // went out at REQ time, so `canRead(e,null)===true` skips them and no duplicate is sent.
           const mine = subs.get(ws);
+          // SECURITY-AUDIT-2026-07-18 M1: ONE replay budget shared across ALL subs of this connection — was created
+          // per-sub, so a connection holding the max subs could drive subs×300k row-parses on a single cheap AUTH.
+          const _replayBudget = { left: 300000 };
           if (mine) for (const [subId, filters] of mine) {
             const seen = new Set();
-            const _replayBudget = { left: 300000 };
             for (const f of filters) for (const e of store.query(f, _replayBudget)) {
               if (seen.has(e.id)) continue; seen.add(e.id);
               if (BLOCKED.has(e.pubkey) || !canRead(e, ws._auth)) continue;

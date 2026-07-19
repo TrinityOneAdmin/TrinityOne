@@ -465,6 +465,29 @@ function SafetyBanner({ ctx, persistent }) {
   );
 }
 
+// Gentle "secure your account" nudge — shown on Today while the CURRENT identity has no backup recorded (the
+// durable per-npub flag RecoverySheet writes). Tapping opens the recovery hub; dismiss snoozes ~3 days so it
+// reminds without nagging. This is what makes a skipped backup recoverable-not-fatal (SECURITY-AUDIT-2026-07-18).
+function RecoveryNudge({ ctx }) {
+  const np = (window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub) || '';
+  const SNOOZE_KEY = 'trinityone.backupnudge.snooze';
+  const backedUp = (() => { try { return !!(np && localStorage.getItem('trinityone.backedup.' + np) === '1'); } catch (e) { return false; } })();
+  const [snoozed, setSnoozed] = React.useState(() => { try { return Date.now() < parseInt(localStorage.getItem(SNOOZE_KEY) || '0', 10); } catch (e) { return false; } });
+  if (!np || backedUp || !ctx.openRecovery || snoozed) return null;
+  const snooze = (e) => { if (e) e.stopPropagation(); try { localStorage.setItem(SNOOZE_KEY, String(Date.now() + 3 * 24 * 3600 * 1000)); } catch (e2) {} setSnoozed(true); };
+  return (
+    <div onClick={() => ctx.openRecovery()} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 14px', marginBottom: 14, cursor: 'pointer', borderRadius: 15, border: '1px solid color-mix(in oklab, var(--gold) 34%, var(--line))', background: 'color-mix(in oklab, var(--gold) 10%, var(--surface))', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both' }}>
+      <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'color-mix(in oklab, var(--gold) 22%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={18} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 13.5, color: 'var(--ink)' }}>Secure your account</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.4 }}>Set up recovery so you never lose access if you change phones.</div>
+      </div>
+      <button onClick={snooze} aria-label="Not now" style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 9, border: 'none', background: 'transparent', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="x" size={16} /></button>
+    </div>
+  );
+}
+window.RecoveryNudge = RecoveryNudge;
+
 function TodayScreen({ ctx }) {
   const D = window.TrinityData;
   const Bible = window.Bible;
@@ -542,6 +565,7 @@ function TodayScreen({ ctx }) {
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
       <SafetyBanner ctx={ctx} />
+      <RecoveryNudge ctx={ctx} />
       {/* greeting */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
         <div>

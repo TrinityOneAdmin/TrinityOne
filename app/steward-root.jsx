@@ -255,7 +255,7 @@ function StewardWelcome() {
   const [pinBusy, setPinBusy] = useSt(false);
   // a steward key can act for a church → encrypt it at rest behind a PIN before entering the console.
   const finishWithPin = async () => {
-    if (pinVal.length < 4) { setErr('Use at least 4 characters.'); return; }
+    if (pinVal.length < 6) { setErr('Use at least 6 characters — a short PIN is quick to guess. A memorable passphrase is stronger still.'); return; }   // SECURITY-AUDIT-2026-07-18: raised 4→6 (a 4-digit PIN is ~10^4, brute-forceable offline from a copied blob even at PBKDF2-600k)
     setPinBusy(true);
     try { await window.Steward.setPin(pinVal); } catch (e) {}
     setPinBusy(false);
@@ -299,9 +299,9 @@ function StewardWelcome() {
         ) : mode === 'steward-pin' ? (
           <div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Set a PIN to protect this device. Your steward key can act for a church, so it’s <b>encrypted on this device</b> and the PIN unlocks it — a lost or shared phone can’t act as a church without it.</div>
-            <input type="password" inputMode="numeric" value={pinVal} onChange={e => { setPinVal(e.target.value); setErr(''); }} autoFocus placeholder="Choose a PIN (or a longer passphrase)" onKeyDown={e => { if (e.key === 'Enter' && pinVal.length >= 4 && !pinBusy) finishWithPin(); }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
+            <input type="password" inputMode="numeric" value={pinVal} onChange={e => { setPinVal(e.target.value); setErr(''); }} autoFocus placeholder="Choose a PIN (6+ chars, or a longer passphrase)" onKeyDown={e => { if (e.key === 'Enter' && pinVal.length >= 6 && !pinBusy) finishWithPin(); }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{err}</div> : null}
-            <button onClick={finishWithPin} disabled={pinVal.length < 4 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 4 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="#fff" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
+            <button onClick={finishWithPin} disabled={pinVal.length < 6 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 6 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="#fff" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
             <button onClick={() => { setErr(''); setMode('steward'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 8 }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
             {/* SECURITY-AUDIT-2026-06-25 Critical-2: Skip is gone — PIN is mandatory. If the user
                 bypasses this screen anyway (back-button, refresh), the StewardForcedPin modal will
@@ -401,25 +401,42 @@ window.StewardForcedPin = StewardForcedPin;
 
 // PIN unlock gate — shown when the church key is encrypted at rest and not yet unlocked this session
 function StewardUnlock() {
+  // SECURITY-AUDIT-2026-07-18: throttle on-device PIN guessing (grab-and-guess). After 5 misses, impose an
+  // escalating cooldown persisted across reloads so a reload can't reset it. NB this defends the on-device
+  // attacker; offline brute-force of a copied blob is bounded by PIN length + PBKDF2-600k, not by this guard.
+  const GUARD_KEY = 'trinityone.steward.pinguard';
+  const readGuard = () => { try { return JSON.parse(localStorage.getItem(GUARD_KEY) || '{}') || {}; } catch { return {}; } };
   const [pin, setPin] = useSt('');
   const [busy, setBusy] = useSt(false);
   const [err, setErr] = useSt('');
+  const [waitLeft, setWaitLeft] = useSt(() => { const g = readGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
+  useStE(() => { if (waitLeft <= 0) return; const t = setInterval(() => { const g = readGuard(); const left = Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); setWaitLeft(left); if (left <= 0) { setErr(''); clearInterval(t); } }, 500); return () => clearInterval(t); }, [waitLeft > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
   const submit = async () => {
-    if (!pin || busy) return; setBusy(true); setErr('');
+    if (!pin || busy) return;
+    const g0 = readGuard();
+    if ((g0.until || 0) > Date.now()) { setErr('Too many attempts — wait a moment.'); return; }
+    setBusy(true); setErr('');
     const ok = await window.Steward.unlock(pin);   // fires steward-key on success → StewardRoot re-renders
-    if (!ok) { setBusy(false); setErr('Wrong PIN — try again.'); setPin(''); }
+    if (ok) { try { localStorage.removeItem(GUARD_KEY); } catch {} return; }
+    const fails = (g0.fails || 0) + 1;
+    const until = fails >= 5 ? Date.now() + Math.min(30 * Math.pow(2, fails - 5), 3600) * 1000 : 0;   // 30s,60s,120s… cap 1h from the 5th miss
+    try { localStorage.setItem(GUARD_KEY, JSON.stringify({ fails, until })); } catch {}
+    setBusy(false); setPin('');
+    if (until > Date.now()) { setWaitLeft(Math.ceil((until - Date.now()) / 1000)); setErr('Too many attempts — locked briefly.'); }
+    else setErr('Wrong PIN — try again.' + (fails >= 3 ? ' (' + fails + ' tries)' : ''));
   };
+  const blocked = waitLeft > 0;
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
       <div style={{ width: 'min(380px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28, textAlign: 'center' }}>
         <Halo size={40} color="var(--ink)" spark="var(--clay)" />
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Console locked</div>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 18 }}>Enter the PIN to unlock this church on this device.</div>
-        <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+        <input type="password" value={pin} autoFocus disabled={blocked} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && !blocked) submit(); }}
           placeholder="PIN" inputMode="numeric" autoComplete="off"
-          style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
-        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
-        <button onClick={submit} disabled={!pin || busy} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || busy) ? .5 : 1 }}>{busy ? 'Unlocking…' : 'Unlock'}</button>
+          style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)', opacity: blocked ? .6 : 1 }} />
+        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}{blocked ? ' (' + waitLeft + 's)' : ''}</div> : null}
+        <button onClick={submit} disabled={!pin || busy || blocked} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || busy || blocked) ? .5 : 1 }}>{blocked ? 'Locked — wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
       </div>
     </div>
   );
