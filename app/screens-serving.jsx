@@ -440,7 +440,9 @@ function ServingScreen({ open, onClose, ctx, docked }) {
       .map(s => ({ iso: s.isoDate, note: s.note || '', need: needs.find(n => n.id === s.needId) })).filter(x => x.need && x.iso)
       .sort((a, b) => (a.iso || '').localeCompare(b.iso || ''));
   })();
-  const careOn = !!(ctx.care && ctx.care.settings && ctx.care.settings.enabled);   // show the Care tab only when the church runs practical care
+  // The Care tab is also the permanent home for a live safety check's "I'm safe / I need help" — which is what
+  // lets the Today banner be dismissible. The safety check rides on this same toggle: care off = no check at all.
+  const careOn = !!(ctx.care && ctx.care.settings && ctx.care.settings.enabled);
   const close = () => setSheet(null);
 
   return (
@@ -688,7 +690,10 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             </div>
           </React.Fragment>
         ) : tab === 'care' ? (
-          <CareCard ctx={ctx} embedded />
+          <React.Fragment>
+            <SafetyBanner ctx={ctx} persistent />
+            <CareCard ctx={ctx} embedded />
+          </React.Fragment>
         ) : (
           <MyMonth ctx={ctx} onManage={(it) => setSheet({ kind: 'manage', item: it })} onRunsheet={(it) => setSheet({ kind: 'runsheet', item: it })} />
         )}

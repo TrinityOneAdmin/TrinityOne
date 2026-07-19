@@ -297,6 +297,9 @@ function SafetyDock({ ctx, onOpenToday }) {
     } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [ctx.church && ctx.church.npub]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // The safety check rides on the practical-care toggle: a church with Care off doesn't run check-ins either.
+  // (Care is also where the persistent "I'm safe / I need help" lives, so the two can't be separated.)
+  if (!(ctx.care && ctx.care.settings && ctx.care.settings.enabled)) return null;
   if (!check || answered || dismissed) return null;   // gone once answered or X'd
   const churchName = (ctx.church && ctx.church.name) || 'your church';
   const dismiss = () => { setDismissed(true); try { localStorage.setItem('trinityone.safetydockx.' + check.id, '1'); } catch (e) {} };
@@ -334,7 +337,10 @@ function SafetyDock({ ctx, onOpenToday }) {
   );
 }
 
-function SafetyBanner({ ctx }) {
+// `persistent` = this copy is the permanent home (the Care tab), so it ignores the Today dismissal. That's what
+// makes the X on Today safe to offer: clearing it there tidies the day's screen without ever costing the member
+// their route to say "actually, I need help".
+function SafetyBanner({ ctx, persistent }) {
   const [check, setCheck] = React.useState(null);
   const [status, setStatus] = React.useState('');   // '' | 'safe' | 'help' (what I've told them)
   const [note, setNote] = React.useState('');
@@ -345,6 +351,10 @@ function SafetyBanner({ ctx }) {
   // the full card briefly, then collapse to a slim line. Escalation stays one tap away in both — someone who
   // marked themselves safe and then isn't must always be able to say so.
   const [collapsed, setCollapsed] = React.useState(false);
+  // The member can clear the collapsed line outright (X), remembered per check like the dock's own dismiss.
+  // Note this is the last IN-APP one-tap route to escalate, so it's offered only as a deliberate choice and
+  // never applied for them — the ordinary ways to reach the church (DM a steward, Community) are unaffected.
+  const [hidden, setHidden] = React.useState(false);
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeSafetyCheck)) return;
     let unsub = null;
@@ -357,6 +367,7 @@ function SafetyBanner({ ctx }) {
         // already answered before this session (tab switch / reopen) → start collapsed; don't re-confirm
         // something they told us minutes or hours ago.
         setCollapsed(!!ack);
+        try { setHidden(!!c && localStorage.getItem('trinityone.safetytodayx.' + c.id) === '1'); } catch (e) { setHidden(false); }
       });
     } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
@@ -366,6 +377,7 @@ function SafetyBanner({ ctx }) {
     const t = setTimeout(() => setCollapsed(true), 5000);
     return () => clearTimeout(t);
   }, [status, collapsed]);
+  if (!(ctx.care && ctx.care.settings && ctx.care.settings.enabled)) return null;   // care off → no check-ins (see SafetyDock)
   if (!check) return null;
   const churchName = (ctx.church && ctx.church.name) || 'your church';
   const respond = async (s) => {
@@ -381,9 +393,11 @@ function SafetyBanner({ ctx }) {
     const help = status === 'help';
     const tone = help ? 'var(--clay)' : 'var(--sage, #4f7a5e)';
     if (collapsed) {
+      if (hidden && !persistent) return null;                    // cleared on Today — but Care always keeps it
+      const hide = () => { setHidden(true); try { localStorage.setItem('trinityone.safetytodayx.' + check.id, '1'); } catch (e) {} };
       return (
         <div role="status" style={{
-          display: 'flex', alignItems: 'center', gap: 9, borderRadius: 12, padding: '7px 8px 7px 11px', marginBottom: 14,
+          display: 'flex', alignItems: 'center', gap: 8, borderRadius: 12, padding: '7px 6px 7px 11px', marginBottom: 14,
           background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + tone,
           animation: 'trinityFade .35s ease both',
         }}>
@@ -395,6 +409,10 @@ function SafetyBanner({ ctx }) {
             flexShrink: 0, border: 'none', background: 'none', padding: '5px 4px', cursor: 'pointer',
             fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: tone, textDecoration: 'underline',
           }}>{sending ? 'Sending…' : (help ? 'I’m safe' : 'I need help')}</button>
+          {persistent ? null : <button onClick={hide} aria-label="Dismiss" title="Dismiss" style={{
+            flexShrink: 0, width: 30, height: 30, border: 'none', background: 'none', cursor: 'pointer',
+            color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8,
+          }}><Icon name="x" size={15} color="currentColor" /></button>}
         </div>
       );
     }
