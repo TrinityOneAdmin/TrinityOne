@@ -340,13 +340,32 @@ function SafetyBanner({ ctx }) {
   const [note, setNote] = React.useState('');
   const [sending, setSending] = React.useState(false);
   const [err, setErr] = React.useState('');   // delivery failed → retry prompt, never a false confirmation
+  // The answered state is a MOMENT of confirmation, not a fixture: it used to sit at full height on Today for as
+  // long as the check stayed open, pushing the day's content down long after it had said all it had to say. Show
+  // the full card briefly, then collapse to a slim line. Escalation stays one tap away in both — someone who
+  // marked themselves safe and then isn't must always be able to say so.
+  const [collapsed, setCollapsed] = React.useState(false);
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeSafetyCheck)) return;
     let unsub = null;
     // seed the answered state from storage so the Today banner + the app-wide dock agree (answer once, both settle)
-    try { unsub = window.Fellowship.subscribeSafetyCheck(c => { setCheck(c); setStatus(c ? (safetyAck(c.id) || '') : ''); }); } catch (e) {}
+    try {
+      unsub = window.Fellowship.subscribeSafetyCheck(c => {
+        setCheck(c);
+        const ack = c ? (safetyAck(c.id) || '') : '';
+        setStatus(ack);
+        // already answered before this session (tab switch / reopen) → start collapsed; don't re-confirm
+        // something they told us minutes or hours ago.
+        setCollapsed(!!ack);
+      });
+    } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [ctx.church && ctx.church.npub]);   // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    if (!status || collapsed) return;
+    const t = setTimeout(() => setCollapsed(true), 5000);
+    return () => clearTimeout(t);
+  }, [status, collapsed]);
   if (!check) return null;
   const churchName = (ctx.church && ctx.church.name) || 'your church';
   const respond = async (s) => {
@@ -354,14 +373,33 @@ function SafetyBanner({ ctx }) {
     let ok = false;
     try { ok = await window.Fellowship.markSafe(check, s, note); } catch (e) {}
     setSending(false);
-    if (ok) { setStatus(s); safetyAck(check.id, s); } else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery
+    if (ok) { setStatus(s); safetyAck(check.id, s); setCollapsed(false); } else setErr('Couldn’t send — check your connection and try again.');   // confirm ONLY on real delivery; expand so the confirmation is seen
   };
   const wrap = { borderRadius: 16, padding: 16, marginBottom: 18, animation: 'trinityFade .4s ease both' };
   const btn = (extra) => ({ flex: 1, height: 46, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 15, ...extra });
   if (status) {
     const help = status === 'help';
+    const tone = help ? 'var(--clay)' : 'var(--sage, #4f7a5e)';
+    if (collapsed) {
+      return (
+        <div role="status" style={{
+          display: 'flex', alignItems: 'center', gap: 9, borderRadius: 12, padding: '7px 8px 7px 11px', marginBottom: 14,
+          background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + tone,
+          animation: 'trinityFade .35s ease both',
+        }}>
+          <span style={{ flexShrink: 0, display: 'flex', color: tone }}><Icon name={help ? 'shield' : 'check'} size={15} color="currentColor" /></span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {help ? 'You asked for help' : 'You told ' + churchName + ' you’re safe'}
+          </span>
+          <button onClick={() => respond(help ? 'safe' : 'help')} disabled={sending} style={{
+            flexShrink: 0, border: 'none', background: 'none', padding: '5px 4px', cursor: 'pointer',
+            fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: tone, textDecoration: 'underline',
+          }}>{sending ? 'Sending…' : (help ? 'I’m safe' : 'I need help')}</button>
+        </div>
+      );
+    }
     return (
-      <div role="status" style={{ ...wrap, background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + (help ? 'var(--clay)' : 'var(--sage, #4f7a5e)') }}>
+      <div role="status" style={{ ...wrap, background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + tone }}>
         <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--ink)' }}>{help ? 'You asked ' + churchName + ' for help' : 'You told ' + churchName + ' you’re safe'}</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{help ? 'Someone will reach out. You can change this if things change.' : 'Thank you. You can change this if things change.'}</div>
         <button onClick={() => respond(help ? 'safe' : 'help')} disabled={sending} style={{ marginTop: 11, height: 40, padding: '0 15px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>{help ? 'Actually, I’m safe' : 'I need help instead'}</button>
