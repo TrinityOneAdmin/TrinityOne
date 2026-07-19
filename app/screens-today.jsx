@@ -301,7 +301,9 @@ function SafetyDock({ ctx, onOpenToday }) {
   // (Care is also where the persistent "I'm safe / I need help" lives, so the two can't be separated.)
   if (!(ctx.care && ctx.care.settings && ctx.care.settings.enabled)) return null;
   if (!check || answered || dismissed) return null;   // gone once answered or X'd
-  const churchName = (ctx.church && ctx.church.name) || 'your church';
+  // The safety surfaces deliberately say "your church", never the church's NAME: it keeps the line short
+  // enough not to truncate on a narrow screen, and it keeps the congregation unnamed on a lock screen or
+  // over someone's shoulder — which matters most to exactly the churches this feature exists for.
   const dismiss = () => { setDismissed(true); try { localStorage.setItem('trinityone.safetydockx.' + check.id, '1'); } catch (e) {} };
   const respond = async (s) => {
     if (sending) return; setSending(true); setErr('');
@@ -323,7 +325,7 @@ function SafetyDock({ ctx, onOpenToday }) {
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
         <div style={{ marginTop: 1, flexShrink: 0, color: 'var(--clay-deep, #b4462f)' }}><Icon name="shield" size={17} color="currentColor" /></div>
         <div style={{ flex: 1, minWidth: 0 }} onClick={onOpenToday} role="button" title="Open to add a note">
-          <div style={{ fontWeight: 800, fontSize: 14, color: 'var(--clay-deep, #b4462f)', fontFamily: 'var(--font-display, var(--font-ui))' }}>{churchName} is checking you’re safe</div>
+          <div style={{ fontWeight: 800, fontSize: 14, color: 'var(--clay-deep, #b4462f)', fontFamily: 'var(--font-display, var(--font-ui))' }}>Your church is checking you’re safe</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{check.message || 'Are you safe?'}</div>
         </div>
         <button onClick={dismiss} aria-label="Dismiss" style={{ flexShrink: 0, width: 28, height: 28, border: 'none', background: 'none', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, marginTop: -2, marginRight: -4 }}><Icon name="x" size={17} color="currentColor" /></button>
@@ -355,6 +357,12 @@ function SafetyBanner({ ctx, persistent }) {
   // Note this is the last IN-APP one-tap route to escalate, so it's offered only as a deliberate choice and
   // never applied for them — the ordinary ways to reach the church (DM a steward, Community) are unaffected.
   const [hidden, setHidden] = React.useState(false);
+  // Someone who asked for help must never watch their request simply VANISH when the leader closes the
+  // check — silent removal reads as "it was dismissed", which is the worst thing to tell a frightened
+  // person. So we remember the check we were answering and, if the answer was 'help', keep a closing
+  // card until they acknowledge it. (Answering 'safe' needs no send-off: nothing is outstanding.)
+  const closedRef = React.useRef('');
+  const [closedHelp, setClosedHelp] = React.useState('');
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeSafetyCheck)) return;
     let unsub = null;
@@ -368,6 +376,12 @@ function SafetyBanner({ ctx, persistent }) {
         // something they told us minutes or hours ago.
         setCollapsed(!!ack);
         try { setHidden(!!c && localStorage.getItem('trinityone.safetytodayx.' + c.id) === '1'); } catch (e) { setHidden(false); }
+        if (c) { closedRef.current = c.id; setClosedHelp(''); return; }
+        // the check just closed (or none is open) — was the last thing we said "I need help"?
+        const id = closedRef.current;
+        let seen = false;
+        try { seen = !!id && localStorage.getItem('trinityone.safetyclosed.' + id) === '1'; } catch (e) {}
+        setClosedHelp(id && safetyAck(id) === 'help' && !seen ? id : '');
       });
     } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
@@ -378,8 +392,20 @@ function SafetyBanner({ ctx, persistent }) {
     return () => clearTimeout(t);
   }, [status, collapsed]);
   if (!(ctx.care && ctx.care.settings && ctx.care.settings.enabled)) return null;   // care off → no check-ins (see SafetyDock)
-  if (!check) return null;
-  const churchName = (ctx.church && ctx.church.name) || 'your church';
+  if (!check) {
+    if (!closedHelp) return null;
+    const ackClosed = () => { setClosedHelp(''); try { localStorage.setItem('trinityone.safetyclosed.' + closedHelp, '1'); } catch (e) {} };
+    return (
+      <div role="status" style={{
+        borderRadius: 16, padding: 16, marginBottom: 18, animation: 'trinityFade .4s ease both',
+        background: 'var(--sage-soft, #dbe7dd)', border: '1px solid var(--sage, #4f7a5e)',
+      }}>
+        <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--ink)' }}>Your message has been passed on</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3, lineHeight: 1.45 }}>Your church family knows you asked for help, and will be in touch as soon as they can.</div>
+        <button onClick={ackClosed} style={{ marginTop: 11, height: 40, padding: '0 15px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>Got it</button>
+      </div>
+    );
+  }
   const respond = async (s) => {
     if (sending) return; setSending(true); setErr('');
     let ok = false;
@@ -403,7 +429,7 @@ function SafetyBanner({ ctx, persistent }) {
         }}>
           <span style={{ flexShrink: 0, display: 'flex', color: tone }}><Icon name={help ? 'shield' : 'check'} size={15} color="currentColor" /></span>
           <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {help ? 'You asked for help' : 'You told ' + churchName + ' you’re safe'}
+            {help ? 'You asked for help' : 'You told your church you’re safe'}
           </span>
           <button onClick={() => respond(help ? 'safe' : 'help')} disabled={sending} style={{
             flexShrink: 0, border: 'none', background: 'none', padding: '5px 4px', cursor: 'pointer',
@@ -418,7 +444,7 @@ function SafetyBanner({ ctx, persistent }) {
     }
     return (
       <div role="status" style={{ ...wrap, background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + tone }}>
-        <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--ink)' }}>{help ? 'You asked ' + churchName + ' for help' : 'You told ' + churchName + ' you’re safe'}</div>
+        <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--ink)' }}>{help ? 'You asked your church for help' : 'You told your church you’re safe'}</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{help ? 'Someone will reach out. You can change this if things change.' : 'Thank you. You can change this if things change.'}</div>
         <button onClick={() => respond(help ? 'safe' : 'help')} disabled={sending} style={{ marginTop: 11, height: 40, padding: '0 15px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>{help ? 'Actually, I’m safe' : 'I need help instead'}</button>
       </div>
@@ -426,7 +452,7 @@ function SafetyBanner({ ctx, persistent }) {
   }
   return (
     <div role="alert" style={{ ...wrap, background: 'var(--clay-soft)', border: '2px solid var(--clay)' }}>
-      <div style={{ fontWeight: 800, fontSize: 16.5, color: 'var(--clay-deep, #b4462f)', fontFamily: 'var(--font-display, var(--font-ui))' }}>{churchName} is checking everyone is safe</div>
+      <div style={{ fontWeight: 800, fontSize: 16.5, color: 'var(--clay-deep, #b4462f)', fontFamily: 'var(--font-display, var(--font-ui))' }}>Your church is checking everyone is safe</div>
       <div style={{ fontSize: 14.5, color: 'var(--ink)', marginTop: 5, lineHeight: 1.45 }}>{check.message || 'Are you safe?'}</div>
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" maxLength={240} style={{ width: '100%', boxSizing: 'border-box', height: 42, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', margin: '12px 0 0' }} />
       <div style={{ display: 'flex', gap: 10, marginTop: 11 }}>
@@ -434,7 +460,7 @@ function SafetyBanner({ ctx, persistent }) {
         <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: '#fff' })}>{sending ? 'Sending…' : 'I need help'}</button>
       </div>
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 9 }}>{err}</div> : null}
-      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only {churchName}’s leaders can see your reply — not other members, and not the server.</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only your church’s leaders can see your reply — not other members, and not the server.</div>
     </div>
   );
 }
