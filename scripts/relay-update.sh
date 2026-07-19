@@ -42,6 +42,25 @@ else
   exit 1
 fi
 
+# ── anti-rollback: refuse a validly-signed but OLDER bundle ────────────────────────────────────
+# SECURITY-AUDIT-2026-07-18 M2: the signature proves authenticity, not freshness. A compromised origin/DNS/TLS
+# could serve a previously-released (still validly signed) bundle to roll the fleet back onto a since-patched
+# vuln (e.g. the pre-2026-07-13 world-readable roster). version.txt line 2 is the build's git commit ISO date
+# (stamped by build-relay-payload.sh); require the incoming build to be no older than the installed one.
+NEW_STAMP="$( { tar -xzOf "$TARBALL" version.txt 2>/dev/null || tar -xzOf "$TARBALL" ./version.txt 2>/dev/null; } | sed -n 2p )"
+CUR_STAMP="$(sed -n 2p "$DIR/version.txt" 2>/dev/null || true)"
+NEW_E="$(date -d "$NEW_STAMP" +%s 2>/dev/null || echo 0)"
+CUR_E="$(date -d "$CUR_STAMP" +%s 2>/dev/null || echo 0)"
+if [ "$NEW_E" -gt 0 ] && [ "$CUR_E" -gt 0 ]; then
+  if [ "$NEW_E" -lt "$CUR_E" ]; then
+    log "VERIFY ABORT: incoming build ($NEW_STAMP) is OLDER than installed ($CUR_STAMP) — refusing downgrade (anti-rollback)"
+    exit 1
+  fi
+  log "freshness ok: incoming $NEW_STAMP >= installed $CUR_STAMP"
+else
+  log "freshness check skipped (no comparable version stamp) — proceeding on signature alone (first update / unstamped build)"
+fi
+
 # back up the current CODE (not relay/ data — that's preserved in place) so a bad build can roll back
 BACKUP="$DIR/relay/.code-backup.tgz"
 tar -czf "$BACKUP" -C "$DIR" --exclude='./relay' --exclude='./node_modules' . 2>/dev/null || true

@@ -24,12 +24,38 @@ case "$TRIPLE" in
   *) echo "fetch-cloudflared: unsupported target triple '$TRIPLE'" >&2; exit 2 ;;
 esac
 
-URL="https://github.com/cloudflare/cloudflared/releases/latest/download/${ASSET}"
+# SECURITY-AUDIT-2026-07-18: pin the version rather than tracking `latest`. `/releases/latest/` silently follows
+# whatever Cloudflare (or an attacker who compromises the release channel) publishes next, into every church's
+# signed installer. Set CLOUDFLARED_VERSION (e.g. 2024.8.3) in the release/CI env to pin a reviewed build; only
+# falls back to `latest` with a loud warning for local dev.
+CLOUDFLARED_VERSION="${CLOUDFLARED_VERSION:-}"
+if [ -n "$CLOUDFLARED_VERSION" ]; then
+  URL="https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${ASSET}"
+else
+  echo "fetch-cloudflared: WARNING — CLOUDFLARED_VERSION not set; tracking 'latest' (unpinned). Pin it for release builds." >&2
+  URL="https://github.com/cloudflare/cloudflared/releases/latest/download/${ASSET}"
+fi
 OUT="$BIN_DIR/trinityone-cloudflared-${TRIPLE}"
 [ "$KIND" = exe ] && OUT="${OUT}.exe"
 echo "fetch-cloudflared: $URL"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 curl -fsSL "$URL" -o "$TMP/dl"
+
+# Verify the download if an expected SHA-256 is provided (CLOUDFLARED_SHA256 env, or a committed
+# relay-app/desktop/cloudflared-checksums.txt line "<sha256>  <asset>"). Cloudflare doesn't ship a stable
+# per-asset checksum file, so this is opt-in — but when set it hard-fails on any tampering, and when absent it
+# WARNS rather than silently trusting the binary.
+EXPECT="${CLOUDFLARED_SHA256:-}"
+CKFILE="$HERE/relay-app/desktop/cloudflared-checksums.txt"
+[ -z "$EXPECT" ] && [ -f "$CKFILE" ] && EXPECT="$(awk -v f="$ASSET" '$2==f{print $1}' "$CKFILE")"
+if [ -n "$EXPECT" ]; then
+  if command -v sha256sum >/dev/null 2>&1; then ACTUAL="$(sha256sum "$TMP/dl" | awk '{print $1}')"
+  else ACTUAL="$(shasum -a 256 "$TMP/dl" | awk '{print $1}')"; fi
+  [ "$ACTUAL" = "$EXPECT" ] || { echo "fetch-cloudflared: CHECKSUM MISMATCH for ${ASSET} (expected $EXPECT, got $ACTUAL) — refusing" >&2; exit 3; }
+  echo "fetch-cloudflared: sha256 verified ($EXPECT)"
+else
+  echo "fetch-cloudflared: WARNING — no expected SHA-256 (set CLOUDFLARED_SHA256 or add $CKFILE); binary is UNVERIFIED." >&2
+fi
 if [ "$KIND" = tgz ]; then
   tar -xzf "$TMP/dl" -C "$TMP"
   cp "$TMP/cloudflared" "$OUT"

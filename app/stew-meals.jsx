@@ -168,11 +168,20 @@ function SafetyCheckPanel() {
   const [composing, setComposing] = React.useState(false);
   const [msg, setMsg] = React.useState('Are you safe? Please let us know.');
   const [busy, setBusy] = React.useState(false);
+  const [sendErr, setSendErr] = React.useState('');   // SECURITY-AUDIT-2026-07-18: surface a failed send so the steward doesn't believe the church was alerted when it wasn't
   const [confirmEnd, setConfirmEnd] = React.useState(false);   // ending a LIVE check is deliberate, never a stray "close"
   React.useEffect(() => { if (!(window.Steward && window.Steward.subscribeSafetyCheck)) return; const u = window.Steward.subscribeSafetyCheck(setCheck); return () => { try { u(); } catch (e) {} }; }, []);
   React.useEffect(() => { if (!check || !(window.Steward && window.Steward.subscribeSafetyResponses)) { setResponses([]); return; } const u = window.Steward.subscribeSafetyResponses(check.id, setResponses); return () => { try { u(); } catch (e) {} }; }, [check && check.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   const nameOf = pk => (dir[pk] && dir[pk].name) || ((members.find(m => m.pubkey === pk) || {}).name) || (pk ? pk.slice(0, 8) + '…' : '?');
-  const start = async () => { if (busy) return; setBusy(true); try { await window.Steward.startSafetyCheck(msg); } catch (e) {} setBusy(false); setComposing(false); };
+  const start = async () => {
+    if (busy) return; setBusy(true); setSendErr('');
+    let ok = null; try { ok = await window.Steward.startSafetyCheck(msg); } catch (e) {}
+    setBusy(false);
+    // SECURITY-AUDIT-2026-07-18: only dismiss the composer on a real ACK; on failure keep it open and TELL the
+    // steward, so a silent all-relays-down failure can't masquerade as "everyone was alerted".
+    if (ok) setComposing(false);
+    else setSendErr("Couldn't send — you may be offline or every relay is unreachable. Nobody was alerted. Try again.");
+  };
   const closeCheck = async () => { if (busy) return; setBusy(true); try { await window.Steward.closeSafetyCheck(check && check.id); } catch (e) {} setBusy(false); setConfirmEnd(false); };
   const [minimized, setMinimized] = React.useState(false);   // collapse a live check to a slim bar so other care work isn't blocked (persisted per check)
   React.useEffect(() => { if (!check) { setMinimized(false); return; } try { setMinimized(localStorage.getItem('trinityone.safetymin.' + check.id) === '1'); } catch (e) {} }, [check && check.id]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -202,6 +211,7 @@ function SafetyCheckPanel() {
         <div style={{ fontWeight: 800, fontSize: 14.5, fontFamily: 'var(--font-display)' }}>Start a safety check</div>
         <div style={{ fontSize: 12, color: 'var(--ink-2)', margin: '3px 0 0', lineHeight: 1.45 }}>Ask everyone to mark themselves safe after a raid/disaster. Replies are encrypted to you.</div>
         <textarea value={msg} onChange={e => setMsg(e.target.value)} rows={2} maxLength={280} style={{ width: '100%', boxSizing: 'border-box', padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical', lineHeight: 1.4, marginTop: 10 }} />
+        {sendErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 700, margin: '8px 0 0', lineHeight: 1.45 }}>{sendErr}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
           <button onClick={() => setComposing(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 10 }}>Cancel</button>
           <button onClick={start} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 10 }}>{busy ? 'Sending…' : 'Send to everyone'}</button>

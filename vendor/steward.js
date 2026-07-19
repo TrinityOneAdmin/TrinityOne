@@ -11879,23 +11879,16 @@ zoo`.split("\n");
       if (!sk || !cp) return null;
       const id = "sc" + now() + Math.random().toString(36).slice(2, 6);
       const content = JSON.stringify({ id, message: String(message || "Are you safe?").trim().slice(0, 280), at: now(), open: true });
-      try {
-        await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SAFETY_D + cp], ["t", NET]], content }));
-      } catch (e) {
-        return null;
-      }
+      const r = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SAFETY_D + cp], ["t", NET]], content }));
+      if (!r) return null;
       return { id, by: pub };
     },
     async closeSafetyCheck(id) {
       const cp = actingChurch || pub;
       if (!sk || !cp) return null;
       const content = JSON.stringify({ id: id || "", at: now(), open: false });
-      try {
-        await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SAFETY_D + cp], ["t", NET]], content }));
-      } catch (e) {
-        return null;
-      }
-      return true;
+      const r = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SAFETY_D + cp], ["t", NET]], content }));
+      return r ? true : null;
     },
     // the current active check (so the console shows it + can close it). cb(check|null).
     subscribeSafetyCheck(cb) {
@@ -13233,7 +13226,6 @@ zoo`.split("\n");
       const MEMBER_D = "trinityone/member:";
       const CACHE_KEY = "trinityone.steward.members." + (pub || "");
       const byPub = /* @__PURE__ */ new Map();
-      const profSubs = /* @__PURE__ */ new Map();
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
@@ -13244,7 +13236,8 @@ zoo`.split("\n");
         }
       } catch {
       }
-      const emit = () => {
+      let emitTimer = null;
+      const emitNow = () => {
         const arr = [...byPub.values()].sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
@@ -13252,14 +13245,24 @@ zoo`.split("\n");
         }
         onMembers(arr);
       };
+      const emit = () => {
+        if (emitTimer) return;
+        emitTimer = setTimeout(() => {
+          emitTimer = null;
+          emitNow();
+        }, 150);
+      };
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: "", picture: "", count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
-      const ensureProfile = (pk) => {
-        if (profSubs.has(pk)) return;
-        const s = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pk] }], {
+      const profWanted = /* @__PURE__ */ new Set();
+      let profSub = null, profTimer = null;
+      const rebuildProfSub = () => {
+        profTimer = null;
+        if (!profWanted.size) return;
+        const next = pool.subscribeMany(relays(), [{ kinds: [0], authors: [...profWanted] }], {
           onevent(e) {
             try {
               const meta = JSON.parse(e.content);
-              const m = byPub.get(pk);
+              const m = byPub.get(e.pubkey);
               if (m) {
                 m.name = meta.name || meta.display_name || "";
                 m.picture = meta.picture || "";
@@ -13274,7 +13277,18 @@ zoo`.split("\n");
           oneose() {
           }
         });
-        profSubs.set(pk, s);
+        if (profSub) {
+          try {
+            profSub.close();
+          } catch {
+          }
+        }
+        profSub = next;
+      };
+      const ensureProfile = (pk) => {
+        if (profWanted.has(pk)) return;
+        profWanted.add(pk);
+        if (!profTimer) profTimer = setTimeout(rebuildProfSub, 400);
       };
       const sub = pool.subscribeMany(relays(), [{ kinds: [1], "#p": [pub] }, { kinds: [30078], "#p": [pub] }], {
         onevent(e) {
@@ -13321,9 +13335,21 @@ zoo`.split("\n");
           sub.close();
         } catch {
         }
-        for (const s of profSubs.values()) {
+        if (emitTimer) {
           try {
-            s.close();
+            clearTimeout(emitTimer);
+          } catch {
+          }
+        }
+        if (profTimer) {
+          try {
+            clearTimeout(profTimer);
+          } catch {
+          }
+        }
+        if (profSub) {
+          try {
+            profSub.close();
           } catch {
           }
         }

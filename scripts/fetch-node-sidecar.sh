@@ -41,6 +41,17 @@ echo "fetch-node-sidecar: $URL"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 curl -fsSL "$URL" -o "$TMP/node.${EXT}"
 
+# SECURITY-AUDIT-2026-07-18: verify the download against Node's published SHASUMS256.txt before trusting it — a
+# compromised mirror/CDN or a MITM against the build runner otherwise ships a trojaned Node runtime (which holds
+# each church's entire relay + data) inside every signed desktop installer. Checksum-match is the minimum bar and
+# catches CDN/MITM tampering; Node also publishes SHASUMS256.txt.asc (GPG) for a stronger check as a follow-up.
+EXPECT="$(curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" | awk -v f="${STEM}.${EXT}" '$2==f{print $1}')"
+[ -n "$EXPECT" ] || { echo "fetch-node-sidecar: no published checksum for ${STEM}.${EXT} — refusing" >&2; exit 3; }
+if command -v sha256sum >/dev/null 2>&1; then ACTUAL="$(sha256sum "$TMP/node.${EXT}" | awk '{print $1}')"
+else ACTUAL="$(shasum -a 256 "$TMP/node.${EXT}" | awk '{print $1}')"; fi   # macOS ships shasum, not sha256sum
+[ "$ACTUAL" = "$EXPECT" ] || { echo "fetch-node-sidecar: CHECKSUM MISMATCH for ${STEM}.${EXT} (expected $EXPECT, got $ACTUAL) — refusing" >&2; exit 3; }
+echo "fetch-node-sidecar: sha256 verified ($EXPECT)"
+
 if [ "$EXT" = "zip" ]; then
   ( cd "$TMP" && { unzip -q "node.zip" || tar -xf "node.zip"; } )   # bsdtar (win/mac) reads zip; unzip if present
   cp "$TMP/$STEM/node.exe" "$OUT"

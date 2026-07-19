@@ -54,7 +54,7 @@
 <body>
   <div class="bar">
     <span class="t">Print this on one page (A5) — or save as PDF. Designed to print clean in black &amp; white.</span>
-    <button class="printbtn" onclick="window.print()">
+    <button class="printbtn" id="printBtn">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z"/></svg>
       Print card
     </button>
@@ -103,5 +103,8 @@
     </div>
   </div>
 
+  <!-- SECURITY-AUDIT-2026-07-18: external handler (was inline onclick="window.print()"). Inline on*= handlers are
+       blocked under the strict CSP (script-src 'self'), which silently disabled the print button. -->
+  <script src="quick-card.js"></script>
 </body>
 </html>

@@ -1001,14 +1001,19 @@ window.Steward = {
     const cp = actingChurch || pub; if (!sk || !cp) return null;
     const id = 'sc' + now() + Math.random().toString(36).slice(2, 6);
     const content = JSON.stringify({ id, message: String(message || 'Are you safe?').trim().slice(0, 280), at: now(), open: true });   // no `by` — members encrypt to the event SIGNER, not a content field
-    try { await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SAFETY_D + cp], ['t', NET]], content })); } catch (e) { return null; }
+    // SECURITY-AUDIT-2026-07-18: publish() RESOLVES with `false` when every relay rejected (it doesn't throw), so
+    // the old try/catch never fired and this returned success even when nothing was sent — in the raid/disaster
+    // conditions this feature exists for, the steward believed the church was alerted when it wasn't. Honour the
+    // ACK: return null unless at least one relay accepted, so the UI can show "couldn't send — try again".
+    const r = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SAFETY_D + cp], ['t', NET]], content }));
+    if (!r) return null;
     return { id, by: pub };
   },
   async closeSafetyCheck(id) {
     const cp = actingChurch || pub; if (!sk || !cp) return null;
     const content = JSON.stringify({ id: id || '', at: now(), open: false });
-    try { await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SAFETY_D + cp], ['t', NET]], content })); } catch (e) { return null; }
-    return true;
+    const r = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SAFETY_D + cp], ['t', NET]], content }));   // SECURITY-AUDIT-2026-07-18: honour the publish ACK (was always returning true)
+    return r ? true : null;
   },
   // the current active check (so the console shows it + can close it). cb(check|null).
   subscribeSafetyCheck(cb) {
@@ -1829,18 +1834,36 @@ window.Steward = {
     const MEMBER_D = 'trinityone/member:';
     const CACHE_KEY = 'trinityone.steward.members.' + (pub || '');
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, picture, count, lastTs, firstTs, joined }
-    const profSubs = new Map();       // pubkey -> kind-0 sub (resolve display name)
     // paint the last-known roster instantly so the Members list doesn't flash empty→list on reload
     try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(m => { if (m && m.pubkey) byPub.set(m.pubkey, m); }); if (cached.length) onMembers(cached); } } catch {}
-    const emit = () => { const arr = [...byPub.values()].sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0))); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr); };
+    // SECURITY-AUDIT-2026-07-18 (perf): debounce the heavy roster serialize. emit() ran a full sort +
+    // JSON.stringify(entire roster) + localStorage write + setState on EVERY incoming event; on a large church's
+    // load that was thousands of full-roster serializations. Coalesce to ~150ms (trailing fire keeps final state).
+    let emitTimer = null;
+    const emitNow = () => { const arr = [...byPub.values()].sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0))); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr); };
+    const emit = () => { if (emitTimer) return; emitTimer = setTimeout(() => { emitTimer = null; emitNow(); }, 150); };
     const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: '', picture: '', count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
-    const ensureProfile = (pk) => {
-      if (profSubs.has(pk)) return;
-      const s = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pk] }], {
-        onevent(e) { try { const meta = JSON.parse(e.content); const m = byPub.get(pk); if (m) { m.name = meta.name || meta.display_name || ''; m.picture = meta.picture || ''; m.nip05 = meta.nip05 || ''; m.av = meta.av || undefined; m.hasPhoto = !!(meta.av && meta.av.kind === 'photo' && meta.av.photo); emit(); } } catch {} },
+    // SECURITY-AUDIT-2026-07-18 (perf — "names blank = sub cap"): resolve profiles with ONE batched kind-0
+    // subscription (authors:[…]) instead of one sub PER member. Past ~64 members the per-member fan-out saturated
+    // the relay's ~64-REQ-per-connection cap: names rendered blank AND co-tenant subs (chat/events) on the same
+    // socket starved. The member hub was already batched; the steward roster was not. Debounce so a burst of
+    // arrivals coalesces into a single re-subscribe, and keep exactly ONE profile sub open at a time.
+    const profWanted = new Set();
+    let profSub = null, profTimer = null;
+    const rebuildProfSub = () => {
+      profTimer = null;
+      if (!profWanted.size) return;
+      const next = pool.subscribeMany(relays(), [{ kinds: [0], authors: [...profWanted] }], {
+        onevent(e) { try { const meta = JSON.parse(e.content); const m = byPub.get(e.pubkey); if (m) { m.name = meta.name || meta.display_name || ''; m.picture = meta.picture || ''; m.nip05 = meta.nip05 || ''; m.av = meta.av || undefined; m.hasPhoto = !!(meta.av && meta.av.kind === 'photo' && meta.av.photo); emit(); } } catch {} },
         oneose() {},
       });
-      profSubs.set(pk, s);
+      if (profSub) { try { profSub.close(); } catch {} }   // open the widened sub, THEN close the old one (no gap)
+      profSub = next;
+    };
+    const ensureProfile = (pk) => {
+      if (profWanted.has(pk)) return;
+      profWanted.add(pk);
+      if (!profTimer) profTimer = setTimeout(rebuildProfSub, 400);   // coalesce a burst of new members into one re-sub
     };
     // kind-1 = participation (message count); kind-30078 member:<pub> = an explicit join (even if quiet)
     const sub = pool.subscribeMany(relays(), [{ kinds: [1], '#p': [pub] }, { kinds: [30078], '#p': [pub] }], {
@@ -1861,7 +1884,7 @@ window.Steward = {
       },
       oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} for (const s of profSubs.values()) { try { s.close(); } catch {} } };
+    return () => { try { sub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
   },
 
   // ---- church profile (kind-0): name etc. shown to members and in the console ----
