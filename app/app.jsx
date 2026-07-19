@@ -159,6 +159,15 @@ const PATIENCE_VERSES = [
   { t: 'In your patience possess ye your souls.', r: 'Luke 21:19' },
 ];
 
+// Is this failure really "no connection"? Don't ask navigator.onLine: in the Capacitor WebView it stays TRUE
+// with the radio physically off (verified on-device 2026-07-19, airplane mode), which made the offline hint
+// below unreachable in the APK — a member with no signal got a raw technical error instead of being told to
+// connect. Treat a network-SHAPED failure as the signal instead. That's also truer on the web, where onLine is
+// `true` behind a captive portal or against a dead host while nothing can actually load.
+const NETWORK_ERROR_RE = /failed to fetch|load failed|networkerror|net::|err_(internet|network|name|connection|address|timed)|timed? ?out|connection (refused|reset|closed)|unable to resolve/i;
+const looksOffline = (error) =>
+  (typeof navigator !== 'undefined' && navigator.onLine === false) || NETWORK_ERROR_RE.test(String(error || ''));
+
 function EmptyState({ loading, error, onBrowse }) {
   const [verse] = useA(() => PATIENCE_VERSES[Math.floor(Math.random() * PATIENCE_VERSES.length)]);
   return (
@@ -198,7 +207,7 @@ function EmptyState({ loading, error, onBrowse }) {
         </React.Fragment>
       )}
       {error ? <p style={{ color: 'var(--clay-ink)', fontSize: 13, marginTop: 18, fontWeight: 600, lineHeight: 1.5 }}>
-        {(typeof navigator !== 'undefined' && navigator.onLine === false)
+        {looksOffline(error)
           ? 'You appear to be offline. Connect to the internet and your Bible will download automatically.'
           : error}
       </p> : null}
