@@ -103,6 +103,29 @@
     list.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => removeChurch(cfgChurches[+b.dataset.rm]));
   }
 
+  // Themed dialog to replace window.confirm — same surface/buttons as the Steward console, and reliable in
+  // a webview. Resolves to the chosen action's id, or null if dismissed. Esc cancels; focus lands on the
+  // safe choice, never the destructive one.
+  function askDialog({ title, body, actions }) {
+    return new Promise((resolve) => {
+      const back = document.createElement('div');
+      back.className = 'modal-back';
+      back.innerHTML = '<div class="modal" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">' +
+        '<h3>' + esc(title) + '</h3><div class="body">' + body + '</div>' +
+        '<div class="acts">' + actions.map((a2, i) =>
+          '<button class="' + (a2.danger ? 'btn-clay' : 'btn-ghost') + '" data-i="' + i + '">' + esc(a2.label) + '</button>').join('') +
+        '</div></div>';
+      const done = (v) => { try { document.removeEventListener('keydown', onKey); back.remove(); } catch (e) {} resolve(v); };
+      const onKey = (e) => { if (e.key === 'Escape') done(null); };
+      back.onclick = (e) => { if (e.target === back) done(null); };
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(back);
+      back.querySelectorAll('[data-i]').forEach(b2 => { b2.onclick = () => done(actions[+b2.dataset.i].id); });
+      const safe = back.querySelector('.btn-ghost') || back.querySelector('button');
+      if (safe) safe.focus();
+    });
+  }
+
   // Remove is now a real, immediate, two-stage action. Stage one asks the relay what this church actually
   // HOLDS (a dry run that changes nothing) so the operator is never guessing; stage two offers the two
   // genuinely different outcomes, because "remove" meant only "stop accepting their posts" and nothing on
@@ -120,13 +143,22 @@
     } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ could not reach the relay'; return; }
 
     const w = d.wouldDelete || { events: 0, blobs: 0, bytes: 0 };
-    const held = w.events ? `${w.events.toLocaleString()} stored message${w.events === 1 ? '' : 's'}${w.bytes ? ' and ' + fmtBytes(w.bytes) + ' of files' : ''}` : 'nothing stored';
-    if (!window.confirm(`Stop ${who} posting to this relay?\n\nThey have ${held} here.\n\nOK = stop them posting, KEEP their data.\nCancel = change nothing.`)) return;
-
-    let purge = false;
-    if (w.events || w.blobs) {
-      purge = window.confirm(`Also ERASE ${who}'s ${held}?\n\nOK = erase it permanently. This cannot be undone and it frees the space.\nCancel = keep the data on this relay (they just can't post).`);
-    }
+    const hasData = !!(w.events || w.blobs);
+    const held = hasData
+      ? `<b>${w.events.toLocaleString()} message${w.events === 1 ? '' : 's'}</b>${w.bytes ? ' and <b>' + fmtBytes(w.bytes) + '</b> of files' : ''}`
+      : '<b>nothing</b>';
+    // One dialog, three outcomes — rather than two chained yes/no prompts where "Cancel" meant something
+    // different each time. Erasing is the only clay (destructive) button; it is never the default focus.
+    const choice = await askDialog({
+      title: 'Remove ' + who + '?',
+      body: `<p style="margin:0 0 10px">They currently have ${held} stored on this relay.</p>` +
+            `<p style="margin:0">Removing them stops them posting here. It does <b>not</b> delete what they have already stored — choose <b>Remove and erase</b> if you want that space back.</p>`,
+      actions: hasData
+        ? [{ id: null, label: 'Cancel' }, { id: 'keep', label: 'Remove, keep their data' }, { id: 'purge', label: 'Remove and erase', danger: true }]
+        : [{ id: null, label: 'Cancel' }, { id: 'keep', label: 'Remove', danger: true }],
+    });
+    if (!choice) return;
+    const purge = choice === 'purge';
     msg.style.color = 'var(--ink-3)'; msg.textContent = purge ? 'Erasing…' : 'Removing…';
     try {
       const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ removeChurch: { npub: c.npub, confirm: true, purge } }) });

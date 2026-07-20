@@ -1637,7 +1637,16 @@ function serveStatic(req, res) {
       // C1: on a RELEASE HOST, what this box would hand the fleet if a relay pulled right now. Absent on an
       // ordinary relay. Surfaced so "which code is being released?" is answerable without shell access —
       // a8 ran a parked branch's WIP commit for a day and nothing anywhere said so.
-      ...(existsSync(RELEASE_KEY) ? { releases: { ref: process.env.RELEASE_REF || 'main', sha: (() => { try { const g = spawnSync('git', ['-C', ROOT, 'rev-parse', '--short', '--verify', '--quiet', (process.env.RELEASE_REF || 'main') + '^{commit}'], { encoding: 'utf8' }); return g.status === 0 ? g.stdout.trim() : null; } catch { return null; } })() } } : {}),
+      ...(existsSync(RELEASE_KEY) ? { releases: (() => {
+        const ref = process.env.RELEASE_REF || 'main';
+        try {
+          const g = spawnSync('git', ['-C', ROOT, 'rev-parse', '--verify', '--quiet', ref + '^{commit}'], { encoding: 'utf8' });
+          if (g.status !== 0 || !g.stdout.trim()) return { ref, sha: null };
+          const sha = g.stdout.trim();
+          const d = spawnSync('git', ['-C', ROOT, 'show', '-s', '--format=%cI', sha], { encoding: 'utf8' });
+          return { ref, sha, short: sha.slice(0, 7), builtAt: d.status === 0 ? d.stdout.trim() : '' };
+        } catch { return { ref, sha: null }; }
+      })() } : {}),
       sync: { ..._lastSync, running: _syncing, peers: PEER_URLS.size },   // is auto-sync actually working?
       relayPub: RELAY_PUB,   // this relay's identity pubkey — a church authorises it as a trusted sync peer
       writePolicy: CHURCH_PUBS.size > 0,
@@ -2374,7 +2383,12 @@ function serveStatic(req, res) {
           try {
             const r = await fetch(ORIGIN.replace(/\/+$/, '') + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
             const s = await r.json();
-            if (s && s.version) latest = { version: s.version, versionShort: s.versionShort, builtAt: s.builtAt };
+            // Prefer what the origin would actually SERVE (its release ref) over the version of the
+            // process it happens to be running. Since the bundle is built from RELEASE_REF rather than
+            // the release host's checkout, those diverge — and comparing against the running process
+            // told relays a build was 'available' that was in fact OLDER than the one they had.
+            if (s && s.releases && s.releases.sha) latest = { version: s.releases.sha, versionShort: s.releases.short || s.releases.sha.slice(0, 7), builtAt: s.releases.builtAt || '' };
+            else if (s && s.version) latest = { version: s.version, versionShort: s.versionShort, builtAt: s.builtAt };
           } catch {}
         }
         res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, pending, stalled, last, latest }));

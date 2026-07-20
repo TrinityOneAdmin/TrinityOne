@@ -91,6 +91,19 @@
     .row .v { white-space:normal; word-break:break-all; }
     .btn-ghost, .btn-clay { padding:11px 15px; }   /* ≥44px touch targets */
   }
+  /* themed dialog — window.confirm() can't be styled, and the codebase already notes it is unreliable in a
+     webview (Update and Restore use a two-click armed pattern for exactly that reason). This matches the
+     console's modal: same surface, radii, shadow and button family. */
+  .modal-back { position:fixed; inset:0; background:rgba(34,28,22,.55); display:flex; align-items:center;
+    justify-content:center; padding:24px; z-index:80; animation:mFade .16s var(--ease) both; }
+  .modal { width:min(460px,100%); background:var(--surface); border-radius:var(--r-md); box-shadow:var(--shadow-md);
+    padding:22px; animation:mRise .2s var(--ease) both; }
+  .modal h3 { margin:0 0 10px; font-size:17px; letter-spacing:-.2px; }
+  .modal .body { font-size:13.5px; color:var(--ink-2); line-height:1.55; }
+  .modal .body b { color:var(--ink); }
+  .modal .acts { display:flex; gap:9px; justify-content:flex-end; margin-top:18px; flex-wrap:wrap; }
+  @keyframes mFade { from { opacity:0 } to { opacity:1 } }
+  @keyframes mRise { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:none } }
   @media (prefers-reduced-motion: reduce) { * { transition-duration:.001ms !important; animation-duration:.001ms !important; } }
 </style>
 </head>
