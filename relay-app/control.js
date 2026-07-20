@@ -78,29 +78,36 @@
   const fmtBytes = (n) => !n ? '' : n > 1048576 ? (n / 1048576).toFixed(n > 10485760 ? 0 : 1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   const ago = (t) => { if (!t) return ''; const d = Math.floor((Date.now() / 1000 - t) / 86400);
     return d < 1 ? 'today' : d === 1 ? 'yesterday' : d < 31 ? d + ' days ago' : d < 365 ? Math.round(d / 30) + ' months ago' : Math.round(d / 365) + ' years ago'; };
-  function rowMeta(c) {
+  const COPY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"></rect><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path></svg>';
+  // counts a row can be judged by BEFORE it is removed — "2,180 messages · 340 MB" vs "nothing stored"
+  function rowCounts(c) {
     const bits = [];
-    // provenance: "you added this" vs "it registered itself" is the single most useful thing on the row
-    if (c.by === 'self') bits.push('registered itself' + (c.at ? ' ' + ago(c.at) : ''));
-    else if (c.by === 'operator') bits.push('you added this' + (c.at ? ' ' + ago(c.at) : ''));
     if (typeof c.events === 'number') bits.push(c.events ? c.events.toLocaleString() + (c.events === 1 ? ' message' : ' messages') : 'nothing stored');
     const b = fmtBytes(c.bytes); if (b) bits.push(b + ' of files');
     return bits.join(' · ');
   }
   function renderCfg() {
     const list = document.getElementById('cfgList');
-    list.innerHTML = cfgChurches.length ? cfgChurches.map((c, i) =>
-      '<div class="ch" style="align-items:flex-start">' +
-        '<div class="badge">'+initials(c.name)+'</div>' +
-        '<div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:4px">' +
-          '<div style="font-weight:700; font-size:14px">'+(c.name ? esc(c.name) : '<span class="muted">Unnamed church</span>')+'</div>' +
-          '<div class="muted" style="font-family:var(--mono); font-size:11px; word-break:break-all">'+esc(c.npub)+'</div>' +
-          (rowMeta(c) ? '<div class="muted" style="font-size:11.5px">'+esc(rowMeta(c))+'</div>' : '') +
+    const count = document.getElementById('cfgCount');
+    if (count) count.textContent = cfgChurches.length === 1 ? '1 church' : cfgChurches.length + ' churches';
+    list.innerHTML = cfgChurches.length ? cfgChurches.map((c, i) => {
+      // provenance — "you added this" vs "it registered itself" is the most useful thing on the row
+      const src = c.by === 'self' ? '<span class="src src-self">Registered itself' + (c.at ? ' ' + esc(ago(c.at)) : '') + '</span>'
+                : c.by === 'operator' ? '<span class="src src-you">You added this' + (c.at ? ' ' + esc(ago(c.at)) : '') + '</span>' : '';
+      return '<div class="crow">' +
+        '<div class="cr-badge">' + esc(c.name ? initials(c.name) : '—') + '</div>' +
+        '<div class="cr-main">' +
+          '<div class="cr-top">' + (c.name ? '<span class="cr-name">' + esc(c.name) + '</span>' : '<span class="cr-name unnamed">Unnamed church</span>') + src + '</div>' +
+          '<div class="cr-npub"><span class="mono cr-key">' + esc(c.npub) + '</span>' +
+            '<button class="iconbtn" data-copyurl="' + esc(c.npub) + '" aria-label="Copy this church’s key" title="Copy key">' + COPY_SVG + '</button></div>' +
+          (rowCounts(c) ? '<div class="cr-counts">' + esc(rowCounts(c)) + '</div>' : '') +
         '</div>' +
-        '<button class="btn-ghost" data-rm="'+i+'">Remove…</button>' +
-      '</div>').join('')
-      : '<div class="warn" style="margin-bottom:8px"><span>⚠</span><span><b>No churches yet.</b> Until you add one, this relay accepts messages from anyone on the internet. Add your church below.</span></div>';
+        '<div class="cr-action"><button class="btn btn-ghost btn-sm cr-remove" data-rm="' + i + '">Remove…</button></div>' +
+      '</div>';
+    }).join('')
+      : '<div class="warn"><span>⚠</span><span><b>No churches yet.</b> Until you add one, this relay accepts messages from anyone on the internet. Add your church above.</span></div>';
     list.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => removeChurch(cfgChurches[+b.dataset.rm]));
+    wireCopyUrls(list);
   }
 
   // Themed dialog to replace window.confirm — same surface/buttons as the Steward console, and reliable in
@@ -171,15 +178,23 @@
     await loadConfig();   // never trust the write's own echo — re-read the server
   }
 
+  // The lock now replaces the WHOLE Settings tab rather than hiding cards one by one — a locked operator
+  // used to get a tab of invisible cards plus a warning buried inside the churches card.
+  function setLocked(locked) {
+    const g = document.getElementById('setGate'), b = document.getElementById('setBody');
+    if (g) g.style.display = locked ? 'block' : 'none';
+    if (b) b.style.display = locked ? 'none' : 'block';
+    syncSettingsLock(locked);   // the Dashboard's activity cards are gated by the same token
+  }
+
   async function loadConfig() {
-    const gate = document.getElementById('cfgGate'), body = document.getElementById('cfgBody'), st = document.getElementById('cfgStatus');
+    const st = document.getElementById('cfgStatus');
     try {
       const r = await fetch('/config?stats=1', { headers: authHeaders(), cache: 'no-store' });   // stats so each row shows what it holds
-      if (r.status === 401) { gate.style.display = 'block'; body.style.display = 'none'; document.getElementById('cfgList').innerHTML = ''; st.textContent = '· locked'; document.getElementById('servesCard').style.display = 'none'; document.getElementById('updateCard').style.display = 'none'; syncSettingsLock(true); return; }
+      if (r.status === 401) { setLocked(true); document.getElementById('cfgList').innerHTML = ''; return; }
       const s = await r.json();
-      gate.style.display = 'none'; body.style.display = 'block';
-      syncSettingsLock(false);
-      st.textContent = s.configured ? '' : '· not set up yet';
+      setLocked(false);
+      st.textContent = s.configured ? '' : '— not set up yet';
       cfgChurches = (s.churches || []).map(c => ({ npub: c.npub, name: c.name, by: c.by, at: c.at, events: c.events, blobs: c.blobs, bytes: c.bytes }));
       renderCfg();
       loadServes();
@@ -196,7 +211,8 @@
       if (r.status === 401) { card.style.display = 'none'; return; }
       const s = await r.json();
       subsCache = s.subscribers || [];
-      document.getElementById('subsCount').textContent = (s.count || 0) + (s.count === 1 ? ' email' : ' emails');
+      document.getElementById('subsCount').textContent = (s.count || 0).toLocaleString();
+      document.getElementById('subsLabel').textContent = s.count === 1 ? 'subscriber' : 'subscribers';
       card.style.display = (s.count > 0) ? 'block' : 'none';   // only surface once someone has signed up
     } catch (e) { card.style.display = 'none'; }
   }
@@ -226,8 +242,34 @@
       const dlb = document.getElementById('dlBackup'); if (dlb) dlb.href = '/relay-backup?token=' + encodeURIComponent(adminToken);
       const used = j.mediaUsed || 0;
       document.getElementById('mediaUsed').textContent = used ? '· ' + (Math.round(used / 1e9 * 100) / 100) + ' GB used' : '';
+      servesBaseline = servesSnapshot();   // what's on the server right now — the thing "unsaved" is measured against
+      renderServesDirty();
     } catch (e) { /* relay down — the hero card shows it */ }
   }
+
+  // ── staged save ────────────────────────────────────────────────────────────────────────────────
+  // This is the ONE card where a change waits, so it has to say so unmistakably. The card previously
+  // carried a bare Save button with no indication of whether anything was pending, next to toggles
+  // elsewhere on the page that applied instantly.
+  const SERVES_FIELDS = ['t-app', 't-modules', 't-audio', 't-appurl', 't-mediacap', 't-churchcap'];
+  let servesBaseline = null;
+  const servesSnapshot = () => SERVES_FIELDS.map(id => { const el = document.getElementById(id);
+    return !el ? '' : (el.type === 'checkbox' ? (el.checked ? '1' : '0') : String(el.value || '').trim()); });
+  function servesChanged() {
+    if (!servesBaseline) return [];
+    const now = servesSnapshot();
+    return SERVES_FIELDS.filter((id, i) => now[i] !== servesBaseline[i]);
+  }
+  function renderServesDirty() {
+    const n = servesChanged().length;
+    const note = document.getElementById('servesDirtyNote'), foot = document.getElementById('servesFooter'), cnt = document.getElementById('servesCount');
+    if (note) note.style.display = n ? 'flex' : 'none';
+    if (foot) foot.style.display = n ? 'flex' : 'none';
+    if (cnt) cnt.textContent = n === 1 ? '1 change waiting' : n + ' changes waiting';
+  }
+  SERVES_FIELDS.forEach(id => { const el = document.getElementById(id); if (!el) return;
+    el.addEventListener('change', renderServesDirty); el.addEventListener('input', renderServesDirty); });
+  document.getElementById('discardServes').onclick = () => { loadServes(); };   // re-read the server, never a local undo
   async function saveServes() {
     const msg = document.getElementById('servesMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = '· saving…';
     const capBytes = (id) => Math.round((parseFloat(document.getElementById(id).value) || 0) * 1e9);
@@ -237,6 +279,7 @@
       const s = await r.json();
       if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (s.error || 'save failed'); return; }
       msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ saved'; setTimeout(() => { msg.textContent = ''; }, 2400);
+      await loadServes();   // re-read: the success state must reflect the server, never the write's own echo
     } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   }
   document.getElementById('saveServes').onclick = saveServes;
@@ -265,9 +308,9 @@
   document.getElementById('doRestore').onclick = async () => {
     const btn = document.getElementById('doRestore'), msg = document.getElementById('restoreMsg');
     const f = (document.getElementById('restoreFile').files || [])[0];
-    if (!f) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· choose a backup file first'; return; }
-    if (!restoreArmed) { restoreArmed = true; btn.textContent = 'Confirm — replace everything'; msg.style.color = 'var(--clay-ink)'; msg.textContent = '· this REPLACES all data on this relay'; return; }
-    restoreArmed = false; btn.textContent = 'Restore';
+    if (!f) { msg.style.color = 'var(--clay-ink)'; msg.textContent = 'Choose a backup file first.'; return; }
+    if (!restoreArmed) { restoreArmed = true; btn.textContent = 'Confirm — replace everything'; msg.style.color = 'var(--clay-ink)'; msg.textContent = 'Click again to overwrite every church’s data on this relay. Click anywhere else to cancel.'; return; }
+    restoreArmed = false; btn.textContent = 'Restore…';
     msg.style.color = 'var(--ink-3)'; msg.textContent = '· uploading…';
     try {
       const r = await fetch('/relay-restore', { method: 'POST', headers: authHeaders(), body: f });
@@ -301,8 +344,10 @@
     } catch (e) { body.innerHTML = '<div class="muted">Couldn’t load the relay name.</div>'; }
   }
   // Cloudflare quick tunnel "go public" — lives in the Reach-members card (see renderGoPublic). One click, no account.
-  const cfGoHtml = '<div class="muted" style="margin-bottom:11px">Make this relay reachable from anywhere — <b>free, no account</b>, no fixed IP. One click.</div>'
-    + '<button class="btn-clay" id="cfGo">Go public — no account →</button> <span class="muted" id="cfMsg"></span>'
+  const cfGoHtml = '<div class="wzcard tone-clay"><div class="wz-badge">Not public yet</div>'
+    + '<div class="wz-title">Only reachable on this network</div>'
+    + '<p class="wz-p">Members outside your building can’t connect. Turn on a secure tunnel — <b>free, no account</b>, no router or port setup.</p>'
+    + '<div class="wz-actions"><button class="btn btn-clay" id="cfGo">Make it public</button> <span class="wz-meta" id="cfMsg"></span></div></div>'
     + '<pre id="cfDetail" style="display:none;margin-top:10px;padding:10px 12px;background:var(--surface-2,#f2efe8);border:1px solid var(--line);border-radius:8px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--ink-3);max-height:180px;overflow:auto"></pre>';
   function wireCfGo() { const cf = document.getElementById('cfGo'); if (cf) cf.onclick = goPublicCloudflare; }
   async function goPublicCloudflare() {
@@ -331,14 +376,13 @@
     } catch (e) { if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; } if (btn) btn.disabled = false; }
   }
   function renderCfPublic(cf) {
-    const body = document.getElementById('gpBody'), st = document.getElementById('gpStatus');
+    const body = document.getElementById('gpBody');
     publicBase = cf.url; try { refreshReach(); } catch (e) {}
-    st.textContent = '';
-    body.innerHTML =
-      '<div class="row" style="background:color-mix(in oklab,var(--sage) 9%,var(--surface));border-color:color-mix(in oklab,var(--sage) 28%,transparent)"><span style="color:var(--sage);font-weight:700;font-size:13px">✓ Public via Cloudflare — reachable from anywhere</span></div>' +
-      '<div class="row"><span class="k">Public URL</span><span class="v">' + esc(cf.url) + '</span><button class="btn-ghost" data-copyurl="' + esc(cf.url) + '">Copy</button></div>' +
-      '<div class="muted" style="margin-top:6px">Members connect by the <b>name</b> you claim below — it stays the same even if this URL changes. Test from your phone on <b>mobile data</b>: <a href="' + esc(cf.url) + '/status" target="_blank">' + esc(cf.url) + '/status</a>.</div>' +
-      '<div class="row" style="margin-top:12px;background:color-mix(in oklab,var(--clay) 7%,var(--surface));border-color:color-mix(in oklab,var(--clay) 22%,transparent)"><span style="font-size:13px;line-height:1.5"><b>Serve the wider church.</b> Your relay can also <b>host other churches that can’t self-host</b> — add their <code>npub</code> in “Churches on this relay” below, and they get a home on your infrastructure. One box can carry many congregations.</span></div>';
+    gpTag(true, 'On · public');
+    body.innerHTML = wz('sage', 'On · public', 'Reachable from anywhere',
+      '<div class="urlbox"><span class="mono">' + esc(cf.url) + '</span>' +
+      '<button class="btn btn-ghost btn-sm" data-copyurl="' + esc(cf.url) + '">Copy</button></div>' +
+      '<div class="wz-meta">Members connect by the <b>name</b> you claim, so it keeps working even if this URL changes. Test from your phone on <b>mobile data</b>: <a href="' + esc(cf.url) + '/status" target="_blank">' + esc(cf.url) + '/status</a>.</div>');
     wireCopyUrls(body);   // strict-CSP: no inline onclick — wire the Copy button here
   }
   // wire any [data-copyurl] Copy button inside a freshly-rendered container (used instead of inline onclick,
@@ -455,20 +499,38 @@
   // array and relied on a Save that silently dropped any row still missing an npub.
   document.getElementById('addCh').onclick = async () => {
     const msg = document.getElementById('cfgMsg');
-    const npub = (window.prompt('Paste the church\u2019s public key.\n\nIt starts with npub1\u2026 and is on the Settings screen of their Steward console.') || '').trim();
-    if (!npub) return;
-    const name = (window.prompt('What is this church called?\n\nThis is just a label so you can recognise it here.') || '').trim();
+    const inp = document.getElementById('addNpub');
+    const npub = (inp.value || '').trim();
+    // inline field, not window.prompt: prompt() is unreliable in the desktop webview (the same reason
+    // Restore and Update use armed buttons), and it gave no way to see or correct a mistyped key.
+    if (!npub) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '\u2717 paste the church\u2019s npub first'; inp.focus(); return; }
+    const name = '';   // the label resolves from the church's own profile once it publishes one
     msg.style.color = 'var(--ink-3)'; msg.textContent = 'Adding\u2026';
     try {
       const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ addChurch: { npub, name } }) });
       const s2 = await r.json();
       if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '\u2717 ' + (s2.error || 'could not add that church'); return; }
-      msg.style.color = 'var(--sage-ink)'; msg.textContent = '\u2713 ' + (name || 'Church') + ' can now post to this relay';
+      msg.style.color = 'var(--sage-ink)'; msg.textContent = '\u2713 added \u2014 this church can now post to the relay';
+      document.getElementById('addNpub').value = '';
       setTimeout(() => { msg.textContent = ''; }, 5000);
     } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '\u2717 ' + e.message; }
     await loadConfig();   // re-read: never render the write's own echo
   };
-  document.getElementById('tokGo').onclick = () => { adminToken = document.getElementById('tok').value.trim(); if (adminToken) localStorage.setItem(TOKEN_KEY, adminToken); loadConfig(); gpTick(); loadRelayName(); };
+  document.getElementById('addNpub').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('addCh').click(); });
+  document.getElementById('tokGo').onclick = async () => {
+    const gm = document.getElementById('gateMsg');
+    const t = document.getElementById('tok').value.trim();
+    if (!t) { if (gm) { gm.style.color = 'var(--clay-ink)'; gm.textContent = 'Enter the token to unlock.'; } return; }
+    if (gm) { gm.style.color = 'var(--ink-3)'; gm.textContent = 'Checking\u2026'; }
+    // verify BEFORE storing, so a wrong token says so here instead of silently leaving the tab locked
+    try {
+      const r = await fetch('/config', { headers: { 'Authorization': 'Bearer ' + t }, cache: 'no-store' });
+      if (r.status === 401) { if (gm) { gm.style.color = 'var(--clay-ink)'; gm.textContent = '\u2717 That token wasn\u2019t accepted.'; } return; }
+    } catch (e) { if (gm) { gm.style.color = 'var(--clay-ink)'; gm.textContent = '\u2717 Couldn\u2019t reach the relay.'; } return; }
+    adminToken = t; localStorage.setItem(TOKEN_KEY, adminToken);
+    if (gm) gm.textContent = '';
+    loadConfig(); gpTick(); loadRelayName();
+  };
   document.getElementById('tok').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('tokGo').click(); });
   // When this panel is opened ON the relay machine (e.g. the TrinityOne Suite's own window), the relay hands
   // us its admin token automatically — no hunting in logs. /local-token only answers genuine same-machine
@@ -485,42 +547,58 @@
   let tsBusy = false;       // pause polling while an action is mid-flight (so it can't clobber the view)
   let cfHold = false;       // freeze the 4s refresh while a Go-public attempt runs OR its error+log is on screen
   let lastAuthUrl = '';     // the login link from `tailscale up`, until the node reports connected
-  const gpWarn = (h) => '<div class="warn">'+h+'</div>';
   const gpCopy = (t, b) => { navigator.clipboard.writeText(t).then(()=>{ b.textContent='Copied'; setTimeout(()=>b.textContent='Copy',1400); }).catch(()=>{}); };
   window.gpTick = gpTick; window.gpCopy = gpCopy;
 
+  // The tunnel card is one card with many states. Each renders as a tone card (a coloured left rule +
+  // a state badge) so "checking", "needs you", "on" and "failed" are distinguishable at a glance instead
+  // of all arriving as the same block of grey prose.
+  const SPIN = '<span class="ic-spin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9" opacity="0.9"></path></svg></span>';
+  const wz = (tone, badge, title, inner) => '<div class="wzcard tone-' + tone + '">' +
+    '<div class="wz-badge">' + badge + '</div><div class="wz-title">' + title + '</div>' + (inner || '') + '</div>';
+  function gpTag(on, text) {
+    const st = document.getElementById('gpStatus'); if (!st) return;
+    st.innerHTML = text ? (on ? '<span class="d"></span>' : '') + esc(text) : '';
+    st.style.color = on ? 'var(--sage-ink)' : 'var(--ink-3)';
+  }
   function renderGoPublic(s) {
-    const body = document.getElementById('gpBody'), st = document.getElementById('gpStatus');
-    if (s.locked)         { st.textContent='· locked';   body.innerHTML = gpWarn('🔒 Enter the <b>admin token</b> in the Churches card below — it unlocks one-click public access too.'); return; }
-    if (s.installed === false) { st.textContent='· not public yet'; body.innerHTML = cfGoHtml; wireCfGo(); return; }   // no Tailscale (e.g. desktop app) → the bundled Cloudflare tunnel is the path
-    if (s.needsOperator)  { st.textContent='· needs a nudge'; body.innerHTML = gpWarn('The relay can’t manage Tailscale yet. On the relay box, run once:<br><br><code>sudo tailscale set --operator=trinityone</code><br><br>then <button class="btn-ghost" id="gpRefreshOp">refresh</button>.'); var _rb = document.getElementById('gpRefreshOp'); if (_rb) _rb.onclick = gpTick; return; }
+    const body = document.getElementById('gpBody');
+    if (s.locked) { gpTag(false, 'Locked'); body.innerHTML = wz('ink', 'Locked', 'Unlock settings first',
+      '<p class="wz-p">Enter the admin token above — it unlocks one-click public access too.</p>'); return; }
+    if (s.installed === false) { gpTag(false, 'Not public yet'); body.innerHTML = cfGoHtml; wireCfGo(); return; }   // no Tailscale (e.g. desktop app) → the bundled Cloudflare tunnel is the path
+    if (s.needsOperator) { gpTag(false, 'Needs a nudge');
+      body.innerHTML = wz('gold', 'One step on the relay box', 'The relay can’t manage Tailscale yet',
+        '<p class="wz-p">On the relay box, run this once, then refresh:</p><p class="wz-p"><code>sudo tailscale set --operator=trinityone</code></p>' +
+        '<div class="wz-actions"><button class="btn btn-ghost" id="gpRefreshOp">Refresh</button></div>');
+      var _rb = document.getElementById('gpRefreshOp'); if (_rb) _rb.onclick = gpTick; return; }
     if (s.funnelOn && s.publicUrl) {
-      st.textContent=''; publicBase = s.publicUrl; refreshReach();
-      body.innerHTML =
-        '<div class="row" style="background:color-mix(in oklab,var(--sage) 9%,var(--surface));border-color:color-mix(in oklab,var(--sage) 28%,transparent)"><span style="color:var(--sage);font-weight:700;font-size:13px">✓ Reachable from anywhere — no terminal needed</span></div>' +
-        '<div class="row"><span class="k">Public URL</span><span class="v">'+esc(s.publicUrl)+'</span><button class="btn-ghost" data-copyurl="'+esc(s.publicUrl)+'">Copy</button></div>' +
-        '<div class="muted" style="margin-top:6px">Test it from your phone on <b>mobile data</b> (Wi-Fi off): <a href="'+esc(s.publicUrl)+'/status" target="_blank">'+esc(s.publicUrl)+'/status</a> — JSON means it’s live worldwide.</div>';
+      gpTag(true, 'On · public'); publicBase = s.publicUrl; refreshReach();
+      body.innerHTML = wz('sage', 'On · public', 'Reachable from anywhere',
+        '<div class="urlbox"><span class="mono">' + esc(s.publicUrl) + '</span>' +
+        '<button class="btn btn-ghost btn-sm" data-copyurl="' + esc(s.publicUrl) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"></rect><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div>' +
+        '<div class="wz-meta">Test it from your phone on <b>mobile data</b> (Wi-Fi off): <a href="' + esc(s.publicUrl) + '/status" target="_blank">' + esc(s.publicUrl) + '/status</a> — JSON means it’s live worldwide.</div>');
       wireCopyUrls(body);
       return;
     }
     if (s.loggedIn) {
-      st.textContent='· on your network';
-      body.innerHTML =
-        '<div class="muted" style="margin-bottom:11px">✓ This relay is on your Tailscale network'+(s.dnsName?' as <code>'+esc(s.dnsName)+'</code>':'')+'. One more click to let members reach it over the internet.</div>' +
-        '<button class="btn-clay" id="gpFunnel">Make it public (HTTPS) →</button> <span class="muted" id="gpMsg"></span>';
+      gpTag(false, 'On your network');
+      body.innerHTML = wz('gold', 'Almost there', 'On your network, but not public yet',
+        '<p class="wz-p">This relay is on your Tailscale network' + (s.dnsName ? ' as <code>' + esc(s.dnsName) + '</code>' : '') + '. One more click lets members reach it over the internet.</p>' +
+        '<div class="wz-actions"><button class="btn btn-clay" id="gpFunnel">Make it public (HTTPS)</button> <span class="wz-meta" id="gpMsg"></span></div>');
       document.getElementById('gpFunnel').onclick = doFunnel;
       return;
     }
     if (lastAuthUrl) {
-      st.textContent='· waiting for sign-in';
-      body.innerHTML =
-        '<a class="btn-clay" href="'+esc(lastAuthUrl)+'" target="_blank" style="display:inline-block;text-decoration:none">Authorize this machine ↗</a>' +
-        '<div class="muted" style="margin-top:11px">A Tailscale tab opened — sign in (same account as your other devices) and approve this machine. This updates on its own once it’s connected… ⏳</div>';
+      gpTag(false, 'Action needed');
+      body.innerHTML = wz('gold', 'Action needed', 'Finish in the browser tab we opened',
+        '<p class="wz-p">Sign in to Tailscale (same account as your other devices) and approve this machine — this updates on its own.</p>' +
+        '<div class="wz-actions"><a class="btn btn-ghost" href="' + esc(lastAuthUrl) + '" target="_blank" style="text-decoration:none">Reopen that tab ↗</a>' +
+        '<span class="wz-line" style="font-size:12px">' + SPIN + ' Waiting for you to authorise…</span></div>');
       return;
     }
-    st.textContent='· not public yet';
+    gpTag(false, 'Not public yet');
     body.innerHTML = cfGoHtml +
-      '<div class="muted" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">Prefer a stable address on your own Tailscale? <button class="btn-ghost" id="gpUp">Use Tailscale instead →</button> <span class="muted" id="gpMsg"></span></div>';
+      '<div class="hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line-2)">Prefer a stable address on your own Tailscale? <button class="btn btn-ghost btn-sm" id="gpUp">Use Tailscale instead</button> <span class="wz-meta" id="gpMsg"></span></div>';
     wireCfGo();
     document.getElementById('gpUp').onclick = doUp;
   }

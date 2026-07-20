@@ -20,7 +20,7 @@
     --ink:#221C16; --ink-2:#6B6052; --ink-3:#736958;
     --line:rgba(34,28,22,0.10); --line-2:rgba(34,28,22,0.05);
     --clay:#C25A38; --clay-deep:#9C4327; --clay-ink:#A8462A; --clay-soft:#F3DECF;
-    --gold:#C8962E; --gold-tint:#F3E4C4;
+    --gold:#C8962E; --gold-tint:#F3E4C4; --gold-ink:#8A6410;   /* -ink variant clears 4.5:1 on surface; raw --gold does not */
     --sage:#5E8C6A; --sage-soft:#D8E6DC; --sage-ink:#3E6B4A;
     --r-sm:10px; --r-md:16px; --r-lg:24px;
     --shadow-sm:0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);
@@ -131,6 +131,143 @@
   @keyframes mFade { from { opacity:0 } to { opacity:1 } }
   @keyframes mRise { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:none } }
   @media (prefers-reduced-motion: reduce) { * { transition-duration:.001ms !important; animation-duration:.001ms !important; } }
+
+  /* ══ Settings, per the design mock ═══════════════════════════════════════════════════════════════
+     Three interaction registers, made visible: applies-immediately (sage), needs-Save (gold), and
+     can't-be-undone (clay-deep). Previously an instant checkbox and "Restore — replaces everything"
+     sat in the same visual register, and the difference was carried only by prose. */
+  .legend { display:flex; gap:20px; flex-wrap:wrap; align-items:center; padding:12px 18px; border:1px solid var(--line);
+            border-radius:var(--r-md); background:var(--surface); box-shadow:var(--shadow-sm); margin-bottom:26px; }
+  .legend-item { display:flex; align-items:center; gap:9px; font-size:12.5px; color:var(--ink-2); font-weight:600; }
+  .legend-swatch { width:14px; height:14px; border-radius:5px; flex-shrink:0; }
+  .ls-instant { background:var(--sage); } .ls-save { background:var(--gold); } .ls-danger { background:var(--clay-deep); }
+  .legend b { color:var(--ink); font-weight:700; }
+  .group { margin-bottom:30px; }
+  .group-head { display:flex; align-items:baseline; gap:10px; margin:0 2px 13px; flex-wrap:wrap; }
+  .group-title { font-weight:800; font-size:13px; letter-spacing:1.2px; text-transform:uppercase; color:var(--ink-3); }
+  .group-hint { font-size:12.5px; color:var(--ink-3); }
+  .span-wide { grid-column:1/-1; }
+  .row2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(310px, 1fr)); gap:16px; align-items:start; }
+  .row2 > .card { margin-bottom:0; }
+  .card-head { display:flex; align-items:flex-start; gap:12px; margin-bottom:16px; }
+  .hd-ic { width:34px; height:34px; border-radius:10px; background:var(--surface-2); color:var(--clay);
+           display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .hd-ic svg { width:18px; height:18px; display:block; }
+  .card-titles { flex:1; min-width:0; }
+  .card-title { font-weight:700; font-size:16px; letter-spacing:-.2px; }
+  .card-desc { font-size:13px; color:var(--ink-2); line-height:1.45; margin-top:3px; }
+  .apply-tag { font-size:11px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:var(--sage-ink);
+               display:inline-flex; align-items:center; gap:5px; flex-shrink:0; margin-top:3px; }
+  .apply-tag .d { width:7px; height:7px; border-radius:999px; background:var(--sage); }
+  .btn { display:inline-flex; align-items:center; gap:7px; font-weight:700; font-size:13.5px; padding:10px 16px;
+         border-radius:10px; border:1px solid transparent; cursor:pointer; line-height:1; }
+  .btn svg { width:15px; height:15px; display:block; }
+  .btn-danger { background:var(--clay-deep); color:#fff; }
+  .btn-caution { color:var(--clay-ink); box-shadow:inset 0 0 0 1.4px var(--clay-soft); }
+  .btn-caution:hover:not(:disabled) { box-shadow:inset 0 0 0 1.4px var(--clay); }
+  .btn-sm { padding:7px 12px; font-size:12.5px; }
+  .iconbtn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:8px;
+             box-shadow:inset 0 0 0 1.4px var(--line); background:var(--surface); color:var(--ink-2); flex-shrink:0; padding:0; }
+  .iconbtn svg { width:14px; height:14px; display:block; }
+  .iconbtn:hover:not(:disabled) { box-shadow:inset 0 0 0 1.4px var(--ink-2); transform:none; }
+  .field { margin-bottom:14px; }
+  .field-l { font-size:11.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:var(--ink-3); margin-bottom:7px; }
+  .input-row { display:flex; gap:10px; align-items:stretch; }
+  .input-row input { flex:1; min-width:0; }
+  .mono { font-family:var(--mono); }
+  input.mono { font-size:12.5px; }
+  .hint { font-size:12px; color:var(--ink-3); margin-top:7px; line-height:1.45; }
+  /* A REAL checkbox styled as a switch — not a div with role=switch. Keeps .checked, keyboard, and the
+     existing onchange handlers working untouched. */
+  .sw { appearance:none; -webkit-appearance:none; width:42px; height:24px; border-radius:999px; background:var(--line);
+        position:relative; flex-shrink:0; cursor:pointer; padding:0; border:none; transition:background .18s var(--ease); }
+  .sw::after { content:''; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:999px;
+               background:#fff; box-shadow:var(--shadow-sm); transition:left .18s var(--ease); }
+  .sw:checked { background:var(--sage); }
+  .sw:checked::after { left:21px; }
+  .toggle-row { display:flex; align-items:center; gap:13px; padding:13px 0; border-top:1px solid var(--line-2); }
+  .toggle-row:first-of-type { border-top:none; }
+  .toggle-main { flex:1; min-width:0; }
+  .toggle-t { font-size:14px; font-weight:700; }
+  .toggle-s { font-size:12.5px; color:var(--ink-2); margin-top:2px; line-height:1.4; }
+  .ch-toggles { padding:2px 0 10px; margin-bottom:6px; border-bottom:1px solid var(--line-2); }
+  .ch-add { display:flex; gap:10px; margin:14px 0; }
+  .ch-list { max-height:372px; overflow-y:auto; margin:0 -8px; padding:0 8px; display:flex; flex-direction:column; }
+  .crow { display:flex; gap:13px; padding:14px 10px; border-radius:12px; border-bottom:1px solid var(--line-2); }
+  .crow:last-child { border-bottom:none; }
+  .cr-badge { width:38px; height:38px; border-radius:11px; background:var(--surface-2); color:var(--clay-ink);
+              display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; flex-shrink:0; }
+  .cr-main { flex:1; min-width:0; }
+  .cr-top { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .cr-name { font-size:14px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+  .cr-name.unnamed { color:var(--ink-2); font-style:italic; font-weight:600; }
+  .src { font-size:11px; font-weight:700; letter-spacing:.3px; padding:3px 8px; border-radius:999px; }
+  .src-you { background:var(--clay-soft); color:var(--clay-ink); }
+  .src-self { background:var(--surface-2); color:var(--ink-3); box-shadow:inset 0 0 0 1px var(--line); }
+  .cr-npub { display:flex; align-items:center; gap:7px; margin:5px 0 4px; max-width:100%; }
+  .cr-key { font-size:11.5px; color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .cr-counts { font-size:12px; color:var(--ink-2); }
+  .cr-action { flex-shrink:0; display:flex; align-items:center; }
+  .cr-remove { color:var(--clay-ink); box-shadow:none; background:transparent; }
+  .cr-remove:hover:not(:disabled) { box-shadow:inset 0 0 0 1.4px var(--clay-soft); background:var(--surface); }
+  /* staged card: the ONE place a change waits for Save, so it says so loudly */
+  .card-save { border-color:color-mix(in oklab, var(--gold) 40%, var(--line)); }
+  .save-note { display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--gold-ink); font-weight:700; margin-bottom:14px; }
+  .save-note svg { width:15px; height:15px; display:block; }
+  .storage-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:4px; }
+  .save-footer { display:flex; align-items:center; gap:12px; margin:18px -24px -22px; padding:16px 24px;
+                 border-top:1px solid color-mix(in oklab, var(--gold) 35%, var(--line));
+                 background:color-mix(in oklab, var(--gold) 8%, var(--surface)); border-radius:0 0 var(--r-md) var(--r-md); flex-wrap:wrap; }
+  .save-footer .sf-text { font-size:13px; font-weight:700; color:var(--gold-ink); flex:1; }
+  .danger-zone { box-shadow:inset 0 0 0 1px var(--clay-soft); border-left:4px solid var(--clay-deep); border-radius:var(--r-md);
+                 background:color-mix(in oklab, var(--clay) 4%, var(--surface)); padding:18px 20px; margin-top:14px; }
+  .dz-head { display:flex; align-items:center; gap:9px; margin-bottom:8px; }
+  .dz-ic { color:var(--clay-deep); display:flex; } .dz-ic svg { width:17px; height:17px; display:block; }
+  .dz-title { font-weight:800; font-size:14px; color:var(--clay-deep); }
+  .dz-body { font-size:13px; color:var(--ink-2); line-height:1.5; margin-bottom:14px; }
+  .dz-body b { color:var(--clay-deep); }
+  .dz-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .urlbox { display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:var(--r-sm);
+            background:var(--surface-2); border:1px solid var(--line); margin:4px 0 14px; }
+  .urlbox .mono { flex:1; min-width:0; font-size:13px; overflow-wrap:anywhere; line-height:1.4; }
+  .sub-row { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  .sub-count { display:flex; align-items:baseline; gap:10px; flex:1; min-width:0; }
+  .sub-n { font-weight:800; font-size:28px; letter-spacing:-.5px; }
+  .sub-l { font-size:13.5px; color:var(--ink-2); font-weight:600; }
+  /* the tunnel wizard: one card, many states — a left rule carries the tone so the state is readable at a glance */
+  .wzcard { box-shadow:inset 0 0 0 1px var(--line); border-left:4px solid var(--line); border-radius:var(--r-md);
+            background:var(--surface); padding:16px 18px; }
+  .wzcard.tone-sage { border-left-color:var(--sage); }
+  .wzcard.tone-clay { border-left-color:var(--clay); }
+  .wzcard.tone-gold { border-left-color:var(--gold); }
+  .wzcard.tone-ink { border-left-color:var(--ink-3); }
+  .wzcard.tone-danger { border-left-color:var(--clay-deep); }
+  .wz-badge { font-size:11px; font-weight:800; letter-spacing:.6px; text-transform:uppercase; color:var(--ink-3); }
+  .tone-sage .wz-badge { color:var(--sage-ink); } .tone-clay .wz-badge { color:var(--clay-ink); }
+  .tone-gold .wz-badge { color:var(--gold-ink); } .tone-danger .wz-badge { color:var(--clay-deep); }
+  .wz-title { font-weight:700; font-size:15px; letter-spacing:-.2px; margin:9px 0; }
+  .wz-p { font-size:13px; color:var(--ink-2); line-height:1.5; margin:0 0 13px; }
+  .wz-p.danger-text { color:var(--clay-deep); }
+  .wz-actions { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+  .wz-meta { font-size:11.5px; color:var(--ink-3); line-height:1.4; }
+  .wz-line { display:flex; align-items:center; gap:9px; font-size:13px; color:var(--ink-2); }
+  .ic-spin { width:16px; height:16px; color:var(--clay); flex-shrink:0; animation:spin 1.1s linear infinite; display:flex; }
+  .ic-spin svg { width:16px; height:16px; display:block; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .ic-spin { animation:none; } }
+  /* locked: a first-class state that replaces the whole tab, not a warning box inside one card */
+  .gate { max-width:460px; margin:20px auto 8px; background:var(--surface); border:1px solid var(--line);
+          border-radius:var(--r-lg); box-shadow:var(--shadow-md); padding:34px 32px; text-align:center; }
+  .gate-ic { width:56px; height:56px; border-radius:18px; background:var(--surface-2); color:var(--clay);
+             display:flex; align-items:center; justify-content:center; margin:0 auto 16px; }
+  .gate-ic svg { width:26px; height:26px; display:block; }
+  .gate-title { font-weight:800; font-size:21px; letter-spacing:-.4px; }
+  .gate-desc { font-size:14px; color:var(--ink-2); line-height:1.55; margin:9px 0 20px; }
+  .gate .field { text-align:left; }
+  .gate .btn { width:100%; justify-content:center; padding:13px; }
+  .gate-foot { display:flex; align-items:center; justify-content:center; gap:7px; font-size:12.5px; color:var(--ink-3); margin-top:14px; }
+  .gate-foot svg { width:14px; height:14px; color:var(--sage); display:block; }
+  @media (max-width:560px) { .storage-grid { grid-template-columns:1fr; } .ch-add { flex-wrap:wrap; } }
 </style>
 </head>
 <body>
@@ -218,101 +355,181 @@
   </div><!-- /panel-dash -->
 
   <div class="panel" id="panel-set" role="tabpanel" aria-labelledby="tab-set" hidden>
-  <div class="deck">
 
-  <div class="card" id="goPublic">
-    <h2>Reach members from anywhere <span class="muted" id="gpStatus" style="font-weight:600"></span></h2>
-    <div id="gpBody"><div class="muted">Checking…</div></div>
+  <!-- LOCKED: a first-class state that replaces the whole tab. It used to be a warning box inside the
+       churches card, which left the rest of Settings looking mysteriously empty. -->
+  <div id="setGate" style="display:none">
+    <div class="gate">
+      <div class="gate-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2.5"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg></div>
+      <div class="gate-title">This relay is locked</div>
+      <div class="gate-desc">Enter the admin token to view and change settings. On the relay's own computer this fills in automatically; otherwise find it in the TrinityOne Suite window or the install output.</div>
+      <div class="field"><div class="field-l">Admin token</div><input id="tok" class="mono" type="password" autocomplete="off" aria-label="Admin token" /></div>
+      <button class="btn btn-clay" id="tokGo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2.5"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>Unlock settings</button>
+      <div class="muted" id="gateMsg" style="margin-top:10px" role="status" aria-live="polite"></div>
+      <div class="gate-foot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg> The token stays on this device</div>
+    </div>
   </div>
 
-  <div class="card card--wide">
-    <h2>Churches on this relay <span class="muted" id="cfgStatus" style="font-weight:600"></span></h2>
-    <!-- token gate: shown only when configuring from another device (loopback is trusted) -->
-    <div id="cfgGate" style="display:none">
-      <div class="warn" style="margin-bottom:10px">⚠ Enter the relay's <b>admin token</b> to manage churches. If you're on the relay's own computer this fills in automatically. Otherwise find it in the TrinityOne Suite window, or the install output. <span style="opacity:.75">(Self-hosted on a Linux server? <code>journalctl -u trinityone-relay | grep "admin token"</code>.)</span></div>
-      <div style="display:flex; gap:8px; margin-bottom:6px"><input id="tok" type="password" placeholder="admin token" autocomplete="off" /><button class="btn-clay" id="tokGo" style="white-space:nowrap">Connect</button></div>
+  <div id="setBody">
+
+  <!-- the three interaction registers, made learnable instead of guessable -->
+  <div class="legend">
+    <span class="legend-item"><span class="legend-swatch ls-instant"></span><b>Applies immediately</b>&nbsp;— confirmed by the relay</span>
+    <span class="legend-item"><span class="legend-swatch ls-save"></span><b>Needs Save</b>&nbsp;— review, then apply together</span>
+    <span class="legend-item"><span class="legend-swatch ls-danger"></span><b>Can't be undone</b>&nbsp;— asks you to confirm</span>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="group-title">Getting connected</span><span class="group-hint">How members reach this relay</span></div>
+    <div class="row2">
+      <section class="card" id="goPublic" aria-label="Reach members from anywhere">
+        <div class="card-head">
+          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18"></path></svg></span>
+          <div class="card-titles">
+            <div class="card-title">Reach members from anywhere</div>
+            <div class="card-desc">Put this relay on the public internet over a secure tunnel — no router setup.</div>
+          </div>
+          <span class="apply-tag" id="gpStatus"></span>
+        </div>
+        <div id="gpBody"><div class="muted">Checking…</div></div>
+      </section>
+
+      <section class="card" id="relayNameCard" aria-label="Your relay's name">
+        <div class="card-head">
+          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V5a2 2 0 0 1 2-2h7l9 9-9 9-9-9Z"></path><circle cx="7.5" cy="7.5" r="1.4"></circle></svg></span>
+          <div class="card-titles">
+            <div class="card-title">Your relay's name</div>
+            <div class="card-desc">A memorable handle so members connect by name, not a URL.</div>
+          </div>
+        </div>
+        <div id="relayNameBody"><div class="muted">Checking…</div></div>
+      </section>
     </div>
-    <div class="ch-scroll"><div id="cfgList"><div class="muted">Loading…</div></div></div>
-    <div id="cfgBody" style="display:none">
-      <div style="display:flex; align-items:center; gap:8px">
-        <button class="btn-clay" id="addCh">+ Add a church</button>
-        <button class="btn-ghost" id="refreshCh" title="Pull the latest list — includes any church that self-registered">↻ Refresh</button>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="group-title">Churches on this relay</span><span class="group-hint">The allow-list — who this server carries</span></div>
+    <section class="card" aria-label="Churches on this relay">
+      <div class="card-head">
+        <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"></circle><path d="M3.5 20a5.5 5.5 0 0 1 11 0"></path><path d="M16 5.2a3.4 3.4 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-2.7-4.7"></path></svg></span>
+        <div class="card-titles">
+          <div class="card-title" id="cfgCount">Churches</div>
+          <div class="card-desc">Each church here can publish to and read from this relay. <span id="cfgStatus"></span></div>
+        </div>
+        <span class="apply-tag"><span class="d"></span>Changes apply immediately</span>
       </div>
-      <!-- No Save button: every row acts immediately and the list re-reads the server afterwards. A Save
-           over a locally-edited array is what let the dashboard report a list the relay never agreed to. -->
-      <div style="margin-top:12px"><span class="muted" id="cfgMsg" role="status" aria-live="polite"></span></div>
-      <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-top:16px; padding-top:14px; border-top:1px solid var(--line)"><span><b>Invite-only</b> — only churches you add above can join.<br><span class="muted">When off, a church can add <b>itself</b> by signing in from its Steward console (up to 200). Turn on to lock this relay to your list — self-registration is refused.</span></span><input type="checkbox" id="t-inviteonly" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
-      <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line)"><span><b>Offer to host other churches</b> — list this relay for discovery.<br><span class="muted">When on, other churches can find this relay with <b>“Auto-find relays”</b> in their console and join it. Off = private; it never advertises itself. (Turn this on <b>and</b> leave Invite-only off to accept new churches automatically.)</span></span><input type="checkbox" id="t-offer" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
-    </div>
-    <div class="muted" style="margin-top:10px">The relay only accepts writes from churches listed here — applied instantly, no restart. Add your own church's <code>npub</code> (from the Steward console), <b>and any other church you want to host</b> — a way to give churches that can't run their own relay a home on yours.</div>
-  </div>
-
-  <div class="card" id="subsCard" style="display:none">
-    <h2>Email subscribers <span class="muted" id="subsMsg" style="font-weight:600"></span></h2>
-    <div class="row"><span class="k">On the list</span><span class="v" id="subsCount">—</span></div>
-    <div class="muted" style="margin:4px 0 10px; font-size:13px">People who opted in via the website's “Stay updated” form. Export to send your update emails from your own mail tool.</div>
-    <button class="btn-clay" id="dlSubs">Download CSV</button>
-  </div>
-
-  <div class="card" id="relayNameCard">
-    <h2>Your relay's name</h2>
-    <div id="relayNameBody"><div class="muted">Checking…</div></div>
-  </div>
-
-  <div class="card" id="servesCard" style="display:none">
-    <h2>What this relay serves <span class="muted" id="servesMsg" style="font-weight:600"></span></h2>
-    <div class="muted" style="margin-bottom:14px">Beyond carrying your church's messages, this box can also host extras. Switch off anything you don't want it to serve — applied instantly, no restart.</div>
-    <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:12px 0; border-top:1px solid var(--line)"><span><b>The web app</b><br><span class="muted">A copy of TrinityOne served from this box, so your church can use it at your own web address.</span></span><input type="checkbox" id="t-app" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
-    <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:12px 0; border-top:1px solid var(--line)"><span><b>Bible &amp; dictionary downloads</b><br><span class="muted">Members download study modules from this box.</span></span><input type="checkbox" id="t-modules" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
-    <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:12px 0; border-top:1px solid var(--line)"><span><b>Audio Bibles &amp; media</b><br><span class="muted">The audio-Bible / podcast proxy. Uses the most bandwidth.</span></span><input type="checkbox" id="t-audio" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
-    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line)">
-      <div class="muted" style="margin-bottom:6px">Your church's web address (optional) — where members reach the app, e.g. <code>https://grace.org</code>. Point that domain's DNS at this box and the app, joining codes and handles all read as yours.</div>
-      <input id="t-appurl" placeholder="https://yourchurch.org" spellcheck="false" autocapitalize="none" style="width:100%; box-sizing:border-box; font-size:13px" />
-    </div>
-    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line)">
-      <div style="font-weight:700; margin-bottom:4px">Storage limits <span class="muted" id="mediaUsed" style="font-weight:600"></span></div>
-      <div class="muted" style="margin-bottom:10px">For a public relay hosting several churches — cap total media storage, and optionally per church. <code>0</code> = unlimited. Uploads past a limit are refused; messages are unaffected.</div>
-      <div style="display:flex; gap:16px; flex-wrap:wrap">
-        <label style="flex:1; min-width:150px"><span class="muted" style="font-size:12px">Total media (GB)</span><br><input id="t-mediacap" type="number" min="0" step="1" placeholder="0 = unlimited" style="width:100%; box-sizing:border-box; font-size:13px"></label>
-        <label style="flex:1; min-width:150px"><span class="muted" style="font-size:12px">Per church (GB)</span><br><input id="t-churchcap" type="number" min="0" step="1" placeholder="0 = unlimited" style="width:100%; box-sizing:border-box; font-size:13px"></label>
+      <div class="ch-toggles">
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Invite-only</div><div class="toggle-s">New churches can't register themselves — you add each one. When off, a church can add itself from its Steward console.</div></div><input type="checkbox" class="sw" id="t-inviteonly" aria-label="Invite-only"></div>
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Offer to host other churches</div><div class="toggle-s">Let congregations without their own server find this relay with “Auto-find relays” and ask to join.</div></div><input type="checkbox" class="sw" id="t-offer" aria-label="Offer to host other churches"></div>
       </div>
-    </div>
-    <div style="margin-top:14px"><button class="btn-clay" id="saveServes">Save</button></div>
-  </div>
-
-  <div class="card" id="backupCard" style="display:none">
-    <h2>Back up &amp; restore this relay <span class="muted" id="backupMsg" style="font-weight:600"></span></h2>
-    <div class="muted" style="margin-bottom:12px">A complete snapshot of this box — <b>every church's</b> messages, records and media, plus this relay's own identity. Download it to a drive or cloud <b>you</b> control (USB, Google Drive, OneDrive). <span style="color:var(--clay-ink)">⚠ It contains keys — keep it as safe as your recovery phrase.</span></div>
-    <a class="btn-clay" id="dlBackup" href="#" style="display:inline-block; text-decoration:none">⬇ Download backup</a>
-    <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--line)">
-      <div style="font-weight:700; margin-bottom:4px">Restore from a backup</div>
-      <div class="muted" style="margin-bottom:10px">Replaces <b>everything</b> on this relay with the file, then <b>restart the app</b> to apply. Use this to move the relay to a new computer, or roll back.</div>
-      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
-        <input type="file" id="restoreFile" accept=".tgz,.tar.gz,application/gzip" style="font-size:13px" />
-        <button class="btn-ghost" id="doRestore">Restore</button>
-        <span class="muted" id="restoreMsg"></span>
+      <div class="ch-add">
+        <input class="mono" id="addNpub" placeholder="Paste an npub to add a church…" autocomplete="off" spellcheck="false" aria-label="Add a church by npub" />
+        <button class="btn btn-clay" id="addCh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>Add</button>
+        <button class="btn btn-ghost" id="refreshCh" title="Pull the latest list — includes any church that self-registered">↻</button>
       </div>
+      <div class="muted" id="cfgMsg" role="status" aria-live="polite" style="margin-bottom:8px"></div>
+      <div class="ch-list" id="cfgList"><div class="muted">Loading…</div></div>
+    </section>
+  </div>
+
+  <div class="group">
+    <div class="group-head"><span class="group-title">What this relay does</span><span class="group-hint">Services and limits</span></div>
+    <div class="row2">
+      <section class="card card-save" id="servesCard" style="display:none" aria-label="What this relay serves">
+        <div class="card-head">
+          <span class="hd-ic" style="color:var(--gold-ink)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"></path></svg></span>
+          <div class="card-titles">
+            <div class="card-title">What this relay serves</div>
+            <div class="card-desc">These settings are staged. Review them, then Save to apply together. <span id="servesMsg"></span></div>
+          </div>
+        </div>
+        <div class="save-note" id="servesDirtyNote" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v4M12 17.5v.5"></path></svg> You have unsaved changes</div>
+        <div class="ch-toggles" style="border-bottom:none; padding-bottom:0">
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">The web app</div><div class="toggle-s">A copy of TrinityOne served from this box, so your church can use it at your own web address.</div></div><input type="checkbox" class="sw" id="t-app" aria-label="Serve the web app"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Bible &amp; dictionary downloads</div><div class="toggle-s">Members download study modules from this box.</div></div><input type="checkbox" class="sw" id="t-modules" aria-label="Serve Bible downloads"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Audio Bibles &amp; media</div><div class="toggle-s">The audio-Bible / podcast proxy. Uses the most bandwidth.</div></div><input type="checkbox" class="sw" id="t-audio" aria-label="Serve audio and media"></div>
+        </div>
+        <div class="field" style="margin-top:16px">
+          <div class="field-l">Church web address (optional)</div>
+          <input id="t-appurl" placeholder="https://yourchurch.org" spellcheck="false" autocapitalize="none" aria-label="Church web address" />
+          <div class="hint">Where members reach the app. Point that domain's DNS at this box and the app, joining codes and handles all read as yours.</div>
+        </div>
+        <div class="field">
+          <div class="field-l">Storage limits <span id="mediaUsed" style="text-transform:none; letter-spacing:0"></span></div>
+          <div class="storage-grid">
+            <input id="t-mediacap" type="number" min="0" step="1" placeholder="Total GB (0 = unlimited)" aria-label="Total media storage limit in GB" />
+            <input id="t-churchcap" type="number" min="0" step="1" placeholder="Per church GB (0 = unlimited)" aria-label="Per-church storage limit in GB" />
+          </div>
+          <div class="hint">For a relay hosting several churches — cap total media, and optionally per church. Uploads past a limit are refused; messages are unaffected.</div>
+        </div>
+        <div class="save-footer" id="servesFooter" style="display:none">
+          <span class="sf-text" id="servesCount">Changes waiting</span>
+          <button class="btn btn-ghost" id="discardServes">Discard</button>
+          <button class="btn btn-clay" id="saveServes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Save changes</button>
+        </div>
+      </section>
+
+      <section class="card" id="subsCard" style="display:none" aria-label="Email subscribers">
+        <div class="card-head">
+          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"></rect><path d="m4 7 8 6 8-6"></path></svg></span>
+          <div class="card-titles">
+            <div class="card-title">Email subscribers</div>
+            <div class="card-desc">People who opted in via the website's “Stay updated” form. Export to send from your own mail tool. <span id="subsMsg"></span></div>
+          </div>
+        </div>
+        <div class="sub-row">
+          <div class="sub-count"><span class="sub-n" id="subsCount">—</span><span class="sub-l" id="subsLabel">subscribers</span></div>
+          <button class="btn btn-ghost" id="dlSubs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download CSV</button>
+        </div>
+      </section>
     </div>
   </div>
 
-  <div class="card" id="updateCard" style="display:none">
-    <h2>Relay software <span class="muted" id="updateMsg" style="font-weight:600"></span></h2>
-    <!-- the build number and sync status read as HEALTH, so they live on the Dashboard; what stays here
-         is the actions. Their ids (u-current, syncMsg, syncWhen) moved with them — duplicating the ids
-         in both places would have left loadUpdate() writing to whichever element parsed first. -->
-    <div id="u-body" class="muted" style="margin-top:10px">Checking for updates…</div>
-    <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)">
-      <div class="row"><span class="k">APK downloads</span><span class="v" id="apkMsg" style="font-weight:600">—</span></div>
-      <div class="muted" style="margin:4px 0 9px; font-size:13px">Pull the latest member + steward APK from the build source, so the website's “Download the APK” buttons serve the current build.</div>
-      <button class="btn-clay" id="fetchApk">Fetch latest APK</button>
-    </div>
-    <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)">
-      <div class="muted" style="margin:0 0 9px; font-size:13px">This box keeps itself level with the other relays each church trusts, automatically, every few minutes — <b>Relay health</b> on the Dashboard shows whether that's working. Use this to check right now.</div>
-      <button class="btn-ghost" id="syncNow">Check now</button>
+  <div class="group">
+    <div class="group-head"><span class="group-title">Maintenance</span><span class="group-hint">Updates and your relay's data</span></div>
+    <div class="row2">
+      <section class="card" id="updateCard" style="display:none" aria-label="Relay software">
+        <div class="card-head">
+          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg></span>
+          <div class="card-titles">
+            <div class="card-title">Relay software</div>
+            <div class="card-desc">Health and the current build are on the Dashboard. <span id="updateMsg"></span></div>
+          </div>
+        </div>
+        <div id="u-body" class="muted">Checking for updates…</div>
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line-2)">
+          <div class="wz-actions">
+            <button class="btn btn-ghost" id="syncNow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg>Check sync now</button>
+            <button class="btn btn-ghost" id="fetchApk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Fetch latest APK</button>
+          </div>
+          <div class="hint"><span id="apkMsg">—</span> · pulls the latest member + steward APK so the website's download buttons serve the current build.</div>
+        </div>
+      </section>
+
+      <section class="card" id="backupCard" style="display:none" aria-label="Back up and restore">
+        <div class="card-head">
+          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg></span>
+          <div class="card-titles">
+            <div class="card-title">Back up &amp; restore</div>
+            <div class="card-desc">A snapshot is everything on this relay in one file — every church's messages, records and media, plus this relay's identity. <span id="backupMsg"></span></div>
+          </div>
+        </div>
+        <a class="btn btn-ghost" id="dlBackup" href="#" style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download a backup</a>
+        <div class="hint">⚠ It contains keys — keep it as safe as your recovery phrase.</div>
+        <div class="danger-zone">
+          <div class="dz-head"><span class="dz-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v4M12 17.5v.5"></path></svg></span><span class="dz-title">Restore from a backup</span></div>
+          <div class="dz-body"><b>This replaces everything</b> — every church's messages, files and lists are overwritten by the snapshot, and you must restart the app to apply. It cannot be undone.</div>
+          <div class="dz-actions">
+            <input type="file" id="restoreFile" accept=".tgz,.tar.gz,application/gzip" style="font-size:12.5px; width:auto; flex:1; min-width:180px" />
+            <button class="btn btn-danger" id="doRestore">Restore…</button>
+          </div>
+          <div class="hint" id="restoreMsg"></div>
+        </div>
+      </section>
     </div>
   </div>
 
-  </div><!-- /deck -->
+  </div><!-- /setBody -->
   </div><!-- /panel-set -->
 </div>
 
