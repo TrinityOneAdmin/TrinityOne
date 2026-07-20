@@ -247,11 +247,27 @@ const BUNDLE_CACHE_DIR = join(DATA_DIR,'.bundle-cache'); // per-HEAD cached bund
 // as before, and signed verification only kicks in once a key is present). Cheap on the hot path: if the
 // files for this sha already exist, we return immediately without spawning anything.
 function ensureSignedBundle() {
-  // Key the cache by the LIVE git HEAD, not the sha read at startup — so a new commit auto-invalidates the cache
-  // and the next pull rebuilds. Without this the release host froze on its startup sha and every deploy needed a
-  // manual `rm relay/.bundle-cache/*` (the "clear .bundle-cache to deploy" gotcha). Falls back to BUILD.sha/HEAD.
-  let sha = BUILD.sha && !BUILD.sha.startsWith('$Format') ? BUILD.sha : 'HEAD';
-  try { const g = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }); if (g.status === 0 && g.stdout && g.stdout.trim()) sha = g.stdout.trim(); } catch {}
+  // Key the cache by the RELEASE REF's commit — so a new commit on that ref auto-invalidates the cache and the
+  // next pull rebuilds (no manual `rm relay/.bundle-cache/*`), while an unrelated branch checked out here does
+  // NOT become a release.
+  //
+  // RELEASE-2026-07-20 C1 (CRITICAL): this used to resolve the live `git rev-parse HEAD`. Whatever commit this
+  // box happened to have checked out when a relay clicked "Update now" was tarred, signed with the real release
+  // key, and installed fleet-wide — no branch check, no ancestry check, and `relay-update.sh` verifies only the
+  // signature and the commit DATE. That is exactly how a8 came to run 8086caa, a WIP commit from the parked
+  // push branch that predates every 2026-07-20 security fix, with no way for the operator to tell. Worse, the
+  // date-only anti-rollback means a parked branch whose HEAD is newer than main can make it IMPOSSIBLE to
+  // update to main: the relay refuses it as a downgrade and reports nothing.
+  // Override with RELEASE_REF only when you genuinely mean to ship something else (e.g. a release-* tag).
+  const RELEASE_REF = process.env.RELEASE_REF || 'main';
+  let sha = null;
+  try { const g = spawnSync('git', ['-C', ROOT, 'rev-parse', '--verify', '--quiet', RELEASE_REF + '^{commit}'], { encoding: 'utf8' }); if (g.status === 0 && g.stdout && g.stdout.trim()) sha = g.stdout.trim(); } catch {}
+  if (!sha) {
+    // No release ref (a self-host clone with no `main`, a detached CI checkout). Fall back to the sha stamped
+    // into version.txt by git-archive — never to a live HEAD, which is the failure mode above.
+    sha = BUILD.sha && !BUILD.sha.startsWith('$Format') ? BUILD.sha : null;
+    if (!sha) { console.error('[relay] no release ref (' + RELEASE_REF + ') and no stamped build sha — refusing to serve a bundle'); return null; }
+  }
   const tgz = join(BUNDLE_CACHE_DIR, sha + '.tgz');
   const sig = join(BUNDLE_CACHE_DIR, sha + '.tgz.sig');
   if (existsSync(tgz)) return { tgz, sig: existsSync(sig) ? sig : null, sha };
@@ -268,7 +284,7 @@ function ensureSignedBundle() {
     const strictWanted = process.env.STRICT_WEB_BUNDLE !== '0' && existsSync(join(ROOT, 'node_modules', '.bin', 'esbuild'));
     let strictOK = false;
     if (strictWanted) {
-      const bs = spawnSync('bash', [join(ROOT, 'scripts', 'build-strict-tgz.sh'), tmp], { maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'ignore', 'inherit'] });
+      const bs = spawnSync('bash', [join(ROOT, 'scripts', 'build-strict-tgz.sh'), tmp, sha], { maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'ignore', 'inherit'] });   // C1: build the RELEASE ref's commit, not the checkout
       strictOK = bs.status === 0 && existsSync(tmp);
     }
     if (!strictOK) {
@@ -276,7 +292,7 @@ function ensureSignedBundle() {
       // which flips every self-host's CSP back to lax (unsafe-eval) with no other signal. Make it LOUD so a release
       // isn't cut with a silently-degraded security posture (the sha-frozen bundle would carry it fleet-wide).
       if (strictWanted) console.error('\n[31m✗✗ STRICT WEB BUNDLE FAILED — falling back to the RAW Babel bundle. Served CSP will be LAX (unsafe-eval) for every relay pulling this bundle. Fix build-strict-tgz.sh + clear relay/.bundle-cache before releasing.[0m\n');
-      const ar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', 'HEAD'], { maxBuffer: 512 * 1024 * 1024 });
+      const ar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', sha], { maxBuffer: 512 * 1024 * 1024 });   // C1: the release ref's commit, never the checkout
       if (ar.status !== 0 || !ar.stdout || !ar.stdout.length) return null;
       writeFileSync(tmp, ar.stdout);
     }
@@ -1580,6 +1596,10 @@ function serveStatic(req, res) {
     res.end(JSON.stringify({
       ok: true, port: PORT, uptimeMs: Date.now() - STARTED_AT,
       version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN,   // for the dashboard's update check
+      // C1: on a RELEASE HOST, what this box would hand the fleet if a relay pulled right now. Absent on an
+      // ordinary relay. Surfaced so "which code is being released?" is answerable without shell access —
+      // a8 ran a parked branch's WIP commit for a day and nothing anywhere said so.
+      ...(existsSync(RELEASE_KEY) ? { releases: { ref: process.env.RELEASE_REF || 'main', sha: (() => { try { const g = spawnSync('git', ['-C', ROOT, 'rev-parse', '--short', '--verify', '--quiet', (process.env.RELEASE_REF || 'main') + '^{commit}'], { encoding: 'utf8' }); return g.status === 0 ? g.stdout.trim() : null; } catch { return null; } })() } } : {}),
       relayPub: RELAY_PUB,   // this relay's identity pubkey — a church authorises it as a trusted sync peer
       writePolicy: CHURCH_PUBS.size > 0,
       // church npubs/names are intentionally NOT exposed here (unauthenticated) — the dashboard reads

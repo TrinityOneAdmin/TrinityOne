@@ -4,19 +4,27 @@
 # the web app loads plain <script> tags (no 3 MB @babel/standalone, no per-load in-browser transpile) and the
 # gateway can serve a strict CSP with no 'unsafe-eval' — the D1 audit fix.
 #
-# Usage: build-strict-tgz.sh <output.tgz>
-# Same content as `git archive HEAD` except: app/*.jsx -> app/*.js, the app shells load .js (Babel dropped),
+# Usage: build-strict-tgz.sh <output.tgz> [git-ref]
+# Same content as `git archive <ref>` except: app/*.jsx -> app/*.js, the app shells load .js (Babel dropped),
 # and vendor/babel.min.js is removed. Everything else (relay-app, modules, assets, steward, etc.) is untouched.
+#
+# RELEASE-2026-07-20 C1: the ref is now an explicit ARGUMENT, defaulting to `main`, and is no longer the
+# release host's live HEAD. Building from HEAD meant whatever branch this box happened to have checked out
+# got signed with the real release key and installed fleet-wide — which is exactly how a8 ended up running a
+# WIP commit from the parked push branch, months of security fixes behind, with nobody able to tell.
 set -euo pipefail
-OUT="${1:?usage: build-strict-tgz.sh <output.tgz>}"
+OUT="${1:?usage: build-strict-tgz.sh <output.tgz> [git-ref]}"
+REF="${2:-main}"
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ESBUILD="$DIR/node_modules/.bin/esbuild"
 [ -x "$ESBUILD" ] || { echo "build-strict-tgz: esbuild not found at $ESBUILD" >&2; exit 2; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# 1. the exact tracked tree at HEAD (matches what the plain bundle would ship)
-git -C "$DIR" archive --format=tar HEAD | tar -x -C "$TMP"
+# 1. the exact tracked tree at the RELEASE REF (not the working tree, and not whatever is checked out) —
+#    so an in-progress branch or a dirty tree on the release host can never reach the fleet.
+git -C "$DIR" rev-parse --verify --quiet "$REF^{commit}" >/dev/null || { echo "build-strict-tgz: release ref '$REF' does not resolve" >&2; exit 3; }
+git -C "$DIR" archive --format=tar "$REF" | tar -x -C "$TMP"
 
 # 2. transpile every app JSX -> plain JS, then drop the .jsx source from the bundle
 for f in "$TMP"/app/*.jsx; do
