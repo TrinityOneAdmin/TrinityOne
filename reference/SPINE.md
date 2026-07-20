@@ -297,8 +297,16 @@ A module for stewards to author quizzes / challenges tied to a passage or a read
 > rules in `gateway.mjs` (careskip is recipient-enforced). The "optional encrypted notes" the shape below
 > proposed were **never encrypted** — recipient name and free-text notes publish in cleartext. The read gate
 > restricts them to authenticated members, so they are not public, but the relay operator and every member
-> can read them and nothing can be rotated away from someone who leaves. Being fixed now on the Manna
-> pattern (per-church care key wrapped per member; type + dates stay clear so the grid renders undecrypted).
+> can read them and nothing can be rotated away from someone who leaves. **Still open.** A first attempt
+> (per-church care key wrapped per member, sealing only the identifying half so type + dates still render
+> undecrypted) is parked on `care/seal-needs-wip`: the sealing shape is right, but the key lifecycle loses
+> data — it mints on a race, a delegated steward forks a competing key every console open, and sealing
+> `recipient` silently breaks the recipient's own "I don't need help that day". See that branch's revert
+> commit for what the rework needs.
+>
+> Note also that **`careskip` is only recipient-enforced while `recipient` is in the clear** — the relay
+> reads that field to know whose skip to accept. Any encryption of it has to replace that check with a
+> non-identifying commitment the relay can still verify, or move the skip behind a steward request.
 
 
 Steward opens a **need** ("Sarah just had a baby — meals through next Sunday") and the church fills date-keyed slots: a meal on Tuesday, a ride on Thursday, errands Saturday. The community-glue version of "I prayed for you" — *practical* showing-up that strengthens bonds in the way no engagement metric can. **Doc shape (proposed):** kind-30078 `care:<id>` church-signed (the need, dates, type — meals/rides/errands/visits/childcare, optional encrypted notes), with `careslot:<id>:<isoDate>:<memberPub>` member-signed for each fill (member's name → steward; encrypted-to-church for the recipient's privacy). Member surface: a "Care" card on Today showing open needs with my-church → one-tap "I'll bring Tuesday dinner." Steward surface: see who signed up for what, send reminders, mark complete. **Plugin via the seam ([[Add-ons / plugins]]):** the church enables the module via `plugins:<churchpub>`; core only renders generic `care:` events.
