@@ -12390,7 +12390,8 @@ zoo`.split("\n");
           } else {
             try {
               const c = JSON.parse(e.content);
-              byChild.set(child, { child, parent: c.parent || e.pubkey, parentName: c.parentName || "", childName: c.childName || "", ts: e.created_at });
+              if (c.child && c.child !== child) return;
+              byChild.set(child, { child, parent: e.pubkey, claimedParentName: c.parentName || "", claimedChildName: c.childName || "", ts: e.created_at });
             } catch {
             }
           }

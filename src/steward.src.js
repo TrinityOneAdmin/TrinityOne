@@ -1317,7 +1317,14 @@ window.Steward = {
         if (!d.startsWith(GUARDREQ_D)) return;
         const child = d.slice(GUARDREQ_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byChild.delete(child); }
-        else { try { const c = JSON.parse(e.content); byChild.set(child, { child, parent: c.parent || e.pubkey, parentName: c.parentName || '', childName: c.childName || '', ts: e.created_at }); } catch {} }
+        // SECURITY-AUDIT-2026-07-20 C1 (CRITICAL): `parent` came from the event CONTENT, so any member could
+        // publish guardreq:<someone else's pubkey> naming themselves as the parent — and one routine-looking
+        // "Confirm" made them that child's guardian (guardianLinked() is checked BEFORE the minor gate, so it
+        // bought DM access to a child without youth clearance). Naming an ADULT as the child silently marked
+        // that adult a minor. The parent is now ALWAYS the signer, which is the one field a forger can't lie
+        // about. The claimed names stay untrusted display strings — the UI labels them "claims to be" and
+        // shows both npubs, exactly as the steward-approval card already does.
+        else { try { const c = JSON.parse(e.content); if (c.child && c.child !== child) return; byChild.set(child, { child, parent: e.pubkey, claimedParentName: c.parentName || '', claimedChildName: c.childName || '', ts: e.created_at }); } catch {} }
         onReqs([...byChild.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       },
       oneose() { onReqs([...byChild.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))); },
