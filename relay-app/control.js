@@ -105,12 +105,12 @@
     try {
       const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ churches }) });
       const s = await r.json();
-      if (!r.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '✗ ' + (s.error || 'save failed'); return; }
+      if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (s.error || 'save failed'); return; }
       cfgChurches = s.churches.map(c => ({ npub: c.npub, name: c.name })); renderCfg();
       document.getElementById('cfgStatus').textContent = '';
-      msg.style.color = 'var(--sage)'; msg.textContent = '✓ Saved — members can join now';
+      msg.style.color = 'var(--sage-ink)'; msg.textContent = '✓ Saved — members can join now';
       setTimeout(() => { msg.textContent = ''; }, 2600);
-    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '✗ ' + e.message; }
+    } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + e.message; }
   }
 
   // ── what this relay serves (audio / modules / web-app mirror + church URL) via /settings ──
@@ -145,9 +145,9 @@
     try {
       const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
       const s = await r.json();
-      if (!r.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (s.error || 'save failed'); return; }
-      msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ saved'; setTimeout(() => { msg.textContent = ''; }, 2400);
-    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
+      if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (s.error || 'save failed'); return; }
+      msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ saved'; setTimeout(() => { msg.textContent = ''; }, 2400);
+    } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   }
   document.getElementById('saveServes').onclick = saveServes;
   // access mode: invite-only saves live (its own switch, not tied to the church-list Save button)
@@ -157,8 +157,8 @@
     try {
       const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ inviteOnly: on }) });
       if (!r.ok) throw new Error('save failed');
-      if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = on ? '· ✓ invite-only — only churches you add can join' : '· ✓ open — churches can self-register'; setTimeout(() => { msg.textContent = ''; }, 3000); }
-    } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
+      if (msg) { msg.style.color = 'var(--sage-ink)'; msg.textContent = on ? '· ✓ invite-only — only churches you add can join' : '· ✓ open — churches can self-register'; setTimeout(() => { msg.textContent = ''; }, 3000); }
+    } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
   };
   document.getElementById('refreshCh').onclick = loadConfig;   // pull the latest church list (self-registered churches included)
   document.getElementById('t-offer').onchange = async (e) => {
@@ -167,24 +167,24 @@
     try {
       const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ offerHosting: on }) });
       if (!r.ok) throw new Error('save failed');
-      if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = on ? '· ✓ discoverable — other churches can auto-find this relay' : '· ✓ private — not advertised'; setTimeout(() => { msg.textContent = ''; }, 3000); }
-    } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
+      if (msg) { msg.style.color = 'var(--sage-ink)'; msg.textContent = on ? '· ✓ discoverable — other churches can auto-find this relay' : '· ✓ private — not advertised'; setTimeout(() => { msg.textContent = ''; }, 3000); }
+    } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
   };
   // restore: two-click confirm (webview confirm() is unreliable), then stream the file to /relay-restore.
   let restoreArmed = false;
   document.getElementById('doRestore').onclick = async () => {
     const btn = document.getElementById('doRestore'), msg = document.getElementById('restoreMsg');
     const f = (document.getElementById('restoreFile').files || [])[0];
-    if (!f) { msg.style.color = 'var(--clay)'; msg.textContent = '· choose a backup file first'; return; }
-    if (!restoreArmed) { restoreArmed = true; btn.textContent = 'Confirm — replace everything'; msg.style.color = 'var(--clay)'; msg.textContent = '· this REPLACES all data on this relay'; return; }
+    if (!f) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· choose a backup file first'; return; }
+    if (!restoreArmed) { restoreArmed = true; btn.textContent = 'Confirm — replace everything'; msg.style.color = 'var(--clay-ink)'; msg.textContent = '· this REPLACES all data on this relay'; return; }
     restoreArmed = false; btn.textContent = 'Restore';
     msg.style.color = 'var(--ink-3)'; msg.textContent = '· uploading…';
     try {
       const r = await fetch('/relay-restore', { method: 'POST', headers: authHeaders(), body: f });
       const s = await r.json();
-      if (!r.ok || !s.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (s.error || 'restore failed'); return; }
-      msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ staged — now fully close and reopen the app to apply';
-    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
+      if (!r.ok || !s.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (s.error || 'restore failed'); return; }
+      msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ staged — now fully close and reopen the app to apply';
+    } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   };
 
   // ── relay's memorable name: a pet-name from its key (recognition) + a claimable directory handle stewards type ──
@@ -225,7 +225,7 @@
       const r = await fetch('/tunnel/up', { method: 'POST', headers: authHeaders() });
       const j = await r.json();
       if (!r.ok) {
-        if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); }
+        if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); }
         if (btn) btn.disabled = false;
         // pull cloudflared's own last lines so a stubborn failure is diagnosable without hunting for a log file
         try {
@@ -235,10 +235,10 @@
         } catch (e) {}
         return;   // keep cfHold=true: the error+log stay put until the user clicks Go public again
       }
-      if (msg) { msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ public!'; }
+      if (msg) { msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ public!'; }
       cfHold = false;   // success — let the refresh render the public card
       setTimeout(() => { gpTick(); loadRelayName(); }, 900);
-    } catch (e) { if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; } if (btn) btn.disabled = false; }
+    } catch (e) { if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; } if (btn) btn.disabled = false; }
   }
   function renderCfPublic(cf) {
     const body = document.getElementById('gpBody'), st = document.getElementById('gpStatus');
@@ -263,9 +263,9 @@
     try {
       const r = await fetch('/relay-names/mine', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ handle }) });
       const j = await r.json();
-      if (!r.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); return; }
-      msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ claimed “' + j.handle + '”'; setTimeout(loadRelayName, 1200);
-    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
+      if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); return; }
+      msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ claimed “' + j.handle + '”'; setTimeout(loadRelayName, 1200);
+    } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   }
 
   // ── relay software updates (version check + one-click "Update now") via /update + /status ──
@@ -295,16 +295,16 @@
   async function doUpdate() {
     const btn = document.getElementById('doUpdate'), msg = document.getElementById('updateMsg');
     // two-click armed confirm — webview confirm() is unreliable (same reason Restore uses this pattern)
-    if (btn && btn.dataset.armed !== '1') { btn.dataset.armed = '1'; btn.dataset.orig = btn.textContent; btn.textContent = 'Confirm — restart the relay'; if (msg) { msg.style.color = 'var(--clay)'; msg.textContent = '· click again — the relay briefly restarts'; } return; }
+    if (btn && btn.dataset.armed !== '1') { btn.dataset.armed = '1'; btn.dataset.orig = btn.textContent; btn.textContent = 'Confirm — restart the relay'; if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· click again — the relay briefly restarts'; } return; }
     if (btn) { btn.dataset.armed = ''; if (btn.dataset.orig) btn.textContent = btn.dataset.orig; }
     msg.style.color = 'var(--ink-3)'; msg.textContent = '· starting…';
     try {
       const r = await fetch('/update', { method: 'POST', headers: authHeaders() });
       const s = await r.json();
-      if (!r.ok) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + (s.error || 'failed'); return; }
+      if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (s.error || 'failed'); return; }
       document.getElementById('u-body').innerHTML = '⏳ Updating — the relay restarts shortly…';
       pollUpdate();
-    } catch (e) { msg.style.color = 'var(--clay)'; msg.textContent = '· ✗ ' + e.message; }
+    } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   }
   function pollUpdate() {
     const msg = document.getElementById('updateMsg'); let n = 0;
@@ -312,7 +312,7 @@
       n++;
       try {
         const s = await (await fetch('/status', { cache: 'no-store' })).json();
-        if (s.version && relayVersion && s.version !== relayVersion) { clearInterval(iv); msg.style.color = 'var(--sage)'; msg.textContent = '· ✓ updated'; setTimeout(loadUpdate, 800); }
+        if (s.version && relayVersion && s.version !== relayVersion) { clearInterval(iv); msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ updated'; setTimeout(loadUpdate, 800); }
       } catch (e) { /* restarting — keep polling */ }
       if (n > 40) { clearInterval(iv); msg.textContent = '· taking a while — fully close and reopen the app, then check this card again.'; }
     }, 3000);
