@@ -64,7 +64,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
       <button onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '12px 13px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
         <div style={{ width: 40, height: 40, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', color: accent }}><Icon name={CARE_TYPE_ICON[need.type] || 'heart'} size={19} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{need._sealed ? 'Someone in our church' : (need.displayLabel || 'A member in our church')}</div>
+          <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
           <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{CARE_TYPE_LABEL[need.type] || 'Care'} · {openDays.length > 0 ? openDays.length + ' day' + (openDays.length === 1 ? '' : 's') + ' still open' : 'all covered'}</div>
         </div>
         <div style={{ fontSize: 12, fontWeight: 700, color: openDays.length === 0 ? accent : 'var(--ink-3)' }}>{filledDays}/{dates.length}</div>

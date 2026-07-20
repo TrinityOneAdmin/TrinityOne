@@ -5762,7 +5762,6 @@
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
   var MEDIAKEY_D = "trinityone/mediakey:";
-  var CAREKEY_D = "trinityone/carekey:";
   var PINSERMON_D = "trinityone/pinsermon:";
   async function _sha256hex(u82) {
     const d = await crypto.subtle.digest("SHA-256", u82);
@@ -5812,31 +5811,6 @@
       if (mine && sk) _gkeys[k] = _unhex(decrypt(mine, getConversationKey(sk, e.pubkey)));
       else if (!mine) delete _gkeys[k];
     } catch {
-    }
-  }
-  var _carekeys = {};
-  var _carekeyTs = {};
-  function _ingestCareKey(cp, e) {
-    if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
-    const ts = e.created_at || 0;
-    if (ts > Math.floor(Date.now() / 1e3) + FUTURE_SKEW) return;
-    if (ts < (_carekeyTs[cp] || 0)) return;
-    _carekeyTs[cp] = ts;
-    try {
-      const env = JSON.parse(e.content || "{}");
-      const mine = env.keys && pub && env.keys[pub];
-      if (mine && sk) _carekeys[cp] = _unhex(decrypt(mine, getConversationKey(sk, e.pubkey)));
-      else if (!mine) delete _carekeys[cp];
-    } catch {
-    }
-  }
-  function _careOpen(cp, ct) {
-    const key = _carekeys[cp];
-    if (!key) return null;
-    try {
-      return JSON.parse(decrypt(ct, key));
-    } catch {
-      return null;
     }
   }
   function _decEvt(cp, e) {
@@ -6225,9 +6199,7 @@
     }
     for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);
     for (const e of hub.buf.values()) {
-      const d = _dtag(e);
-      if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e);
-      else if (d === CAREKEY_D + cp) _ingestCareKey(cp, e);
+      if (_dtag(e).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e);
     }
     return hub;
   }
@@ -6250,9 +6222,7 @@
         _docsHubSaveSoon(hub);
         if (_absorbRoster(cp, d, e)) {
           for (const e2 of hub.buf.values()) {
-            const d2 = _dtag(e2);
-            if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2);
-            else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2);
+            if (_dtag(e2).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2);
           }
           for (const h of [...hub.handlers]) {
             try {
@@ -6265,16 +6235,6 @@
         }
         if (d.startsWith(GROUPKEY_D)) {
           _ingestGroupKey(cp, e);
-          return;
-        }
-        if (d === CAREKEY_D + cp) {
-          _ingestCareKey(cp, e);
-          for (const h of [...hub.handlers]) {
-            try {
-              h.onroster && h.onroster();
-            } catch (err) {
-            }
-          }
           return;
         }
         for (const h of [...hub.handlers]) {
@@ -6510,7 +6470,6 @@
       for (const e of hub.buf.values()) {
         const d = _dtag(e);
         if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e);
-        else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e);
       }
     }
     try {

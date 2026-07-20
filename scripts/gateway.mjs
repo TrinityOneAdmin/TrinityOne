@@ -1094,8 +1094,9 @@ function accept(e) {
       } catch { return false; }
     }
     // the per-church CARE key envelope (d=carekey:<churchpub>) — church key or a current steward of it.
-    // Same shape and same authority as the media key: it wraps one symmetric key to each member, so its
-    // object keys ARE the roster and it is read-gated to effective members by CP_SUFFIXED_D.
+    // The care-need sealing that consumes this is deferred (see care/seal-needs-wip: the key lifecycle needs
+    // rework before it is safe to ship). The namespace is reserved and gated NOW so no member can squat the
+    // d-tag in the meantime, and CP_SUFFIXED_D already read-gates it to effective members.
     if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
     // moderation: photo-suppression list — d=nophoto:<churchpub>, owner or a CURRENT steward of that church.
     // (Previously unlisted, so it fell to the generic member rule: any member could rewrite it.)

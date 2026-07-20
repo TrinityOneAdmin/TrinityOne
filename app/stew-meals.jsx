@@ -341,7 +341,7 @@ function MealsNeedCard({ need, slots, skips, onOpen }) {
         <Icon name={MEALS_TYPE_ICON[need.type] || 'heart'} size={20} color="var(--sage)" />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 15, color: need._sealed ? 'var(--ink-3)' : 'var(--ink)' }}>{need._sealed ? 'Details hidden — no care key on this device' : (need.displayLabel || 'A member in our church')}</div>
+        <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
       </div>
       <div style={{ textAlign: 'right' }}>
@@ -376,7 +376,7 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
             <Icon name={MEALS_TYPE_ICON[need.type] || 'heart'} size={24} color="var(--sage)" />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21, color: need._sealed ? 'var(--ink-3)' : undefined }}>{need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church')}</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21 }}>{need.displayLabel || 'A member in our church'}</div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
           </div>
           <button onClick={onEdit} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>

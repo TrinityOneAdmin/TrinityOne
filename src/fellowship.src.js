@@ -30,7 +30,6 @@ const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the grou
 const GUARDNOTICE_D = 'trinityone/guardnotice:';   // church->parent notice of a steward-made guardian link, p-tagged + NIP-44-encrypted to the parent
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a church-signed self-hosted media item — references a content-addressed blob by sha256 + host(s)
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: per-church AES-GCM media key, wrapped (NIP-44) to each member
-const CAREKEY_D = 'trinityone/carekey:';     // per-church CARE key, wrapped (NIP-44) to each member — seals the identifying half of a care need
 const PINSERMON_D = 'trinityone/pinsermon:';   // the church's currently-featured sermon → Today card + notification
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 // Meal trains / Care module (optional, per church). meals-settings is church-signed; care: needs come from
@@ -77,34 +76,6 @@ function _ingestGroupKey(cp, e) {
     if (mine && sk) _gkeys[k] = _unhex(nip44d(mine, nip44ck(sk, e.pubkey)));
     else if (!mine) delete _gkeys[k];   // dropped from the group (rotation) → lose the key
   } catch {}
-}
-// ── care key (SECURITY-AUDIT-2026-07-20 H3) ───────────────────────────────────────────────────────
-// Same envelope as the group/media key: one symmetric key per church, wrapped to each member with NIP-44,
-// church-signed. It seals the identifying half of a care need (who it's for, the free-text notes, the
-// recipient pubkey, dietary needs) so the relay operator, a non-enforcing relay, and anyone who leaves the
-// church can't read it — while the clear half (type/dates) still renders for everyone so members can
-// volunteer. Author discipline mirrors _ingestGroupKey: accept only from the church key or one of its
-// CURRENT rostered stewards, so an attacker-signed envelope on a shared relay can't substitute the key.
-const _carekeys = {};    // churchPub -> Uint8Array(32)
-const _carekeyTs = {};   // churchPub -> newest envelope created_at accepted (stale-drop for replays)
-function _ingestCareKey(cp, e) {
-  if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;   // untrusted author
-  const ts = e.created_at || 0;
-  if (ts > Math.floor(Date.now() / 1000) + FUTURE_SKEW) return;   // a far-future envelope must not wedge future rotations
-  if (ts < (_carekeyTs[cp] || 0)) return;                          // a lagging relay can't resurrect a rotated-out key
-  _carekeyTs[cp] = ts;
-  try {
-    const env = JSON.parse(e.content || '{}');
-    const mine = env.keys && pub && env.keys[pub];
-    if (mine && sk) _carekeys[cp] = _unhex(nip44d(mine, nip44ck(sk, e.pubkey)));
-    else if (!mine) delete _carekeys[cp];   // no longer keyed (left the church / rotation) → lose the key
-  } catch {}
-}
-// open the sealed half of a care need for church `cp`; null if we hold no key (UI shows "details hidden").
-function _careOpen(cp, ct) {
-  const key = _carekeys[cp];
-  if (!key) return null;
-  try { return JSON.parse(nip44d(ct, key)); } catch { return null; }
 }
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
@@ -435,7 +406,7 @@ function _docsHub(cp) {
   // (so _churchVoice trusts steward-authored docs immediately) and group-key envelopes (so encrypted
   // groups decrypt) — both are in-memory only, and the since-cursor means they won't re-arrive.
   for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);   // absorb the full roster FIRST so the group-key author check can trust roster stewards regardless of buffer order
-  for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d === CAREKEY_D + cp) _ingestCareKey(cp, e); }
+  for (const e of hub.buf.values()) { if (_dtag(e).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); }
   return hub;
 }
 function _docsHubOpen(hub) {
@@ -462,11 +433,10 @@ function _docsHubOpen(hub) {
         // LIVE path BEFORE this roster was rejected by _ingestGroupKey (author not yet trusted) and — unlike the
         // boot path — was never retried, so the encrypted group stayed blank until the next app start. Now that
         // the roster establishes trust, re-ingest the buffered envelopes (mirrors the boot-replay loop).
-        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); }
+        for (const e2 of hub.buf.values()) { if (_dtag(e2).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); }
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return;
       }
       if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(cp, e); return; }
-      if (d === CAREKEY_D + cp) { _ingestCareKey(cp, e); for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) {} } return; }   // re-emit: needs already rendered as _sealed can now open
       for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { console.error(err); } }
     },
     oneose() {
@@ -605,7 +575,7 @@ async function deriveFromIdentity() {
   if (_loadChildren().length) _needAuth = true;
   // group-key envelopes can replay from the persisted docs buffer BEFORE the signing key exists —
   // re-unwrap them now that sk/pub are known, so invite-group decryption never needs a reload.
-  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); } }
+  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); } }
   // signal that the signing key is now ready, so listeners (e.g. the app's serving subscriptions,
   // which bail when myPubkey is null) re-run with a valid pubkey instead of needing a restart.
   try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch {}
