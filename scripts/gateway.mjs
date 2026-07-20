@@ -362,16 +362,22 @@ function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).
 const CHURCH_PUBS = new Set();
 const CHURCH_NAMES = new Map();   // hex pub -> display name (for the Relay app dashboard)
+// hex pub -> { by: 'operator' | 'self', at: unix-seconds } — PROVENANCE. Nothing recorded how a church came
+// to be on a relay, so an operator faced with rows they never added had no way to tell which were theirs,
+// when the others arrived, or which were safe to remove. That is the state that made a bulk delete look
+// attractive, and a bulk delete is what silently de-provisioned real congregations. Persisted in church.json.
+const CHURCH_META = new Map();
 // Churches GRANTED media hosting on this relay (a self-hoster, or one the operator vouches for). A church can be
 // provisioned for conversations + text resources WITHOUT this grant. Only consulted when mediaRequiresHost() is on
 // (the community-relay policy) — see the blob PUT gate. Grant via church.json ({churches:[{npub,media:true}]} or a
 // top-level {media:true}) or the RELAY_MEDIA_CHURCHES env (comma-separated npubs).
 const MEDIA_HOSTS = new Set();
-const addChurch = (s, name, media) => { const h = toHexPub(s); if (h) { CHURCH_PUBS.add(h); if (name) CHURCH_NAMES.set(h, name); if (media) MEDIA_HOSTS.add(h); } };
+const addChurch = (s, name, media, meta) => { const h = toHexPub(s); if (h) { CHURCH_PUBS.add(h); if (name) CHURCH_NAMES.set(h, name); if (media) MEDIA_HOSTS.add(h);
+  if (meta && (meta.by || meta.at)) CHURCH_META.set(h, { by: meta.by === 'self' ? 'self' : 'operator', at: meta.at | 0 }); } };
 const CHURCH_FILE = join(DATA_DIR,'church.json');
 // (re)load the write policy from env + church.json — called at startup and after a browser config save
 function loadChurches() {
-  CHURCH_PUBS.clear(); CHURCH_NAMES.clear(); MEDIA_HOSTS.clear();
+  CHURCH_PUBS.clear(); CHURCH_NAMES.clear(); MEDIA_HOSTS.clear(); CHURCH_META.clear();
   // RELAY-AUDIT-2026-07-20 C2: CHURCH_NPUB used to be re-applied on EVERY reload, including the one that
   // runs immediately after the operator saves the church list. So a church supplied by env could never be
   // removed from the dashboard: the save wrote church.json without it, loadChurches() put it straight back,
@@ -390,7 +396,7 @@ function loadChurches() {
   (process.env.RELAY_MEDIA_CHURCHES || '').split(',').map(s => s.trim()).filter(Boolean).forEach(s => { const h = toHexPub(s); if (h) MEDIA_HOSTS.add(h); });
   try {
     const cj = JSON.parse(readFileSync(CHURCH_FILE, 'utf8'));
-    if (cj) { if (cj.npub) addChurch(cj.npub, cj.name, cj.media === true); (cj.npubs || []).forEach(s => addChurch(s)); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c), c && c.name, !!(c && c.media === true))); }
+    if (cj) { if (cj.npub) addChurch(cj.npub, cj.name, cj.media === true); (cj.npubs || []).forEach(s => addChurch(s)); (cj.churches || []).forEach(c => addChurch(c && (c.npub || c), c && c.name, !!(c && c.media === true), c && { by: c.by, at: c.at })); }
   } catch {}
 }
 loadChurches();
@@ -2038,7 +2044,8 @@ function serveStatic(req, res) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS, ...CORS };
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
     const isAdmin = adminOK(req);
-    const curChurches = () => [...CHURCH_PUBS].map(p => ({ npub: npubEncode(p), name: CHURCH_NAMES.get(p) || '' }));
+    const curChurches = () => [...CHURCH_PUBS].map(p => { const m = CHURCH_META.get(p) || {};
+      return { npub: npubEncode(p), name: CHURCH_NAMES.get(p) || '', by: m.by || '', at: m.at || 0 }; });
     // RELAY-AUDIT-2026-07-20 H1: loadChurches() rebuilds ONLY CHURCH_PUBS/CHURCH_NAMES/MEDIA_HOSTS. Every
     // other map — MEMBER_DOCS, MEMBERS, GROUP_CHURCH, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
     // GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, REQUIRE_APPROVAL, MEALS_*, ROSTER_*, FINANCE_SEQ — is only
@@ -2053,7 +2060,10 @@ function serveStatic(req, res) {
     // `envMigrated` stamps the one-time CHURCH_NPUB fold-in described in loadChurches().
     const writeChurches = (list) => {
       const tmp = CHURCH_FILE + '.tmp';
-      writeFileSync(tmp, JSON.stringify({ churches: list, envMigrated: true }, null, 2) + '\n');
+      // keep provenance on disk — a row the operator cannot place is a row they cannot safely remove
+      const withMeta = list.map(c => { const h = toHexPub(c.npub) || ''; const m = CHURCH_META.get(h) || {};
+        return { npub: c.npub, name: c.name || '', ...(c.by || m.by ? { by: c.by || m.by } : {}), ...(c.at || m.at ? { at: c.at || m.at } : {}) }; });
+      writeFileSync(tmp, JSON.stringify({ churches: withMeta, envMigrated: true }, null, 2) + '\n');
       renameSync(tmp, CHURCH_FILE);
       loadChurches();
       setImmediate(() => { try { hydrateMaps(); } catch (e) { console.error('[config] hydrateMaps failed', e); } });
@@ -2061,7 +2071,16 @@ function serveStatic(req, res) {
     if (req.method === 'GET') {
       if (!isAdmin) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }   // don't leak the church list
       res.writeHead(200, H);
-      res.end(JSON.stringify({ ok: true, port: PORT, configured: CHURCH_PUBS.size > 0, churches: curChurches() }));
+      // ?stats=1 adds what each church actually HOLDS. Opt-in because it is a per-church count query;
+      // the dashboard asks for it when rendering the list so a row can be judged before it is removed
+      // ("this one has 2,180 messages and 340 MB" vs "this one has never published anything").
+      const wantStats = /[?&]stats=1/.test(req.url || '');
+      let list = curChurches();
+      if (wantStats) list = list.map(c => { const h = toHexPub(c.npub) || '';
+        const blobs = _churchBlobList(h);
+        return { ...c, events: store.countChurchData ? store.countChurchData(h) : 0,
+                 blobs: blobs.length, bytes: blobs.reduce((a, b) => a + (b.size || 0), 0) }; });
+      res.end(JSON.stringify({ ok: true, port: PORT, configured: CHURCH_PUBS.size > 0, churches: list }));
       return;
     }
     if (req.method === 'POST') {
@@ -2120,7 +2139,8 @@ function serveStatic(req, res) {
             // without a ceiling anyone could append churches forever and bloat the write policy.
             // The admin token bypasses this (real onboarding); a new self-register past the cap is refused.
             if (!isAdmin && !existing && list.length >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end(JSON.stringify({ error: 'registration capacity reached — contact the relay operator' })); return; }
-            if (existing) { if (name) existing.name = name; } else { list.push({ npub: npubEncode(hex), name }); }
+            if (existing) { if (name) existing.name = name; }
+            else { list.push({ npub: npubEncode(hex), name, by: isAdmin ? 'operator' : 'self', at: Math.floor(Date.now() / 1000) }); }
             writeChurches(list);
             res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: isAdmin ? list : undefined }));
             return;
@@ -2140,7 +2160,11 @@ function serveStatic(req, res) {
             const events = store.countChurchData ? store.countChurchData(hex) : 0;
             const blobs = _churchBlobList(hex);
             const bytes = blobs.reduce((a, b) => a + (b.size || 0), 0);
-            if (!parsed.removeChurch.purge) {   // dry run — tell the operator the scale, change nothing
+            // Three modes, deliberately distinct: no flags = DRY RUN (report the scale, change nothing);
+            // confirm = de-provision but KEEP the data; confirm + purge = de-provision and ERASE it.
+            // Keeping 'remove' and 'erase' separate matters — an operator may remove a church to protect
+            // it, and must not have its history deleted as a side effect of that intent.
+            if (!parsed.removeChurch.confirm && !parsed.removeChurch.purge) {   // dry run
               res.writeHead(200, H);
               res.end(JSON.stringify({ ok: true, dryRun: true, npub: npubEncode(hex), name: CHURCH_NAMES.get(hex) || '', wouldDelete: { events, blobs: blobs.length, bytes } }));
               return;
@@ -2152,20 +2176,21 @@ function serveStatic(req, res) {
               res.end(JSON.stringify({ error: 'that is the only church on this relay — removing it would let anyone on the internet write here. Add another first, or turn the relay off.' }));
               return;
             }
-            const r = store.purgeChurch ? store.purgeChurch(hex) : { events: 0 };
+            const wantPurge = !!parsed.removeChurch.purge;
+            const r = wantPurge && store.purgeChurch ? store.purgeChurch(hex) : { events: 0 };
             let blobsDeleted = 0, bytesFreed = 0;
-            for (const b of blobs) {
+            for (const b of (wantPurge ? blobs : [])) {
               try { unlinkSync(join(BLOB_DIR, b.sha)); blobsDeleted++; bytesFreed += (b.size || 0); } catch {}
               try { unlinkSync(join(BLOB_DIR, b.sha + '.church')); } catch {}
             }
             // keep the media accounting honest — only subtract what actually went (see the DELETE /blob note)
-            _mediaBytesTotal = Math.max(0, _mediaBytesTotal - bytesFreed);
-            _mediaBytesByChurch.delete(hex); _blobsByChurch.delete(hex);
+            if (wantPurge) { _mediaBytesTotal = Math.max(0, _mediaBytesTotal - bytesFreed);
+              _mediaBytesByChurch.delete(hex); _blobsByChurch.delete(hex); }
             if (CHURCH_PUBS.has(hex)) writeChurches(remaining);   // also re-hydrates the derived maps (H1)
             else setImmediate(() => { try { hydrateMaps(); } catch {} });
-            console.log(`[config] purged church ${hex.slice(0, 8)}… — ${r.events} events, ${blobsDeleted} blobs, ${bytesFreed} bytes`);
+            console.log(`[config] ${wantPurge ? 'purged' : 'removed'} church ${hex.slice(0, 8)}… — ${r.events} events, ${blobsDeleted} blobs, ${bytesFreed} bytes`);
             res.writeHead(200, H);
-            res.end(JSON.stringify({ ok: true, purged: { npub: npubEncode(hex), events: r.events, blobs: blobsDeleted, bytes: bytesFreed }, churches: curChurches() }));
+            res.end(JSON.stringify({ ok: true, removed: npubEncode(hex), purged: wantPurge ? { events: r.events, blobs: blobsDeleted, bytes: bytesFreed } : null, churches: curChurches() }));
             return;
           }
           // full replace — admin token only (rewrites the whole write policy)
@@ -2185,7 +2210,9 @@ function serveStatic(req, res) {
           for (const c of churches) {
             const hex = toHexPub(String((c && c.npub) || '').trim());
             if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub: ' + String((c && c.npub) || '').slice(0, 24) })); return; }
-            clean.push({ npub: npubEncode(hex), name: String((c && c.name) || '').slice(0, 80) });
+            const prev = CHURCH_META.get(hex) || {};
+            clean.push({ npub: npubEncode(hex), name: String((c && c.name) || '').slice(0, 80),
+                         by: prev.by || 'operator', at: prev.at || Math.floor(Date.now() / 1000) });
           }
           // C4: an EMPTY list must mean "nobody may write", not "everybody may". `!CHURCH_PUBS.size` is the
           // never-configured-yet escape hatch that makes a fresh install usable, and it is reachable from the

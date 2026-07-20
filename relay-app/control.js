@@ -56,30 +56,86 @@
   const esc = (s) => String(s||'').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const authHeaders = () => adminToken ? { 'Authorization': 'Bearer ' + adminToken } : {};
 
+  // RELAY-UX-2026-07-20: the church list is a LIVE view of the server, not a form.
+  // It used to be an editable array with a Save button, and that shape caused the incident this rewrite
+  // exists for: Remove spliced a local array, Save posted the whole list, the server echoed the request
+  // back, and the UI painted "✓ Saved" over a list the server had never agreed to. Refresh silently
+  // discarded edits; the headline stat and the list below it could disagree; and a row gave the operator
+  // nothing to judge by — no idea how it got there or what it held — which is what made a bulk delete
+  // look reasonable. Now: each row acts on its own, immediately, and every action re-reads the server.
+  const fmtBytes = (n) => !n ? '' : n > 1048576 ? (n / 1048576).toFixed(n > 10485760 ? 0 : 1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  const ago = (t) => { if (!t) return ''; const d = Math.floor((Date.now() / 1000 - t) / 86400);
+    return d < 1 ? 'today' : d === 1 ? 'yesterday' : d < 31 ? d + ' days ago' : d < 365 ? Math.round(d / 30) + ' months ago' : Math.round(d / 365) + ' years ago'; };
+  function rowMeta(c) {
+    const bits = [];
+    // provenance: "you added this" vs "it registered itself" is the single most useful thing on the row
+    if (c.by === 'self') bits.push('registered itself' + (c.at ? ' ' + ago(c.at) : ''));
+    else if (c.by === 'operator') bits.push('you added this' + (c.at ? ' ' + ago(c.at) : ''));
+    if (typeof c.events === 'number') bits.push(c.events ? c.events.toLocaleString() + (c.events === 1 ? ' message' : ' messages') : 'nothing stored');
+    const b = fmtBytes(c.bytes); if (b) bits.push(b + ' of files');
+    return bits.join(' · ');
+  }
   function renderCfg() {
     const list = document.getElementById('cfgList');
     list.innerHTML = cfgChurches.length ? cfgChurches.map((c, i) =>
-      '<div class="ch">' +
+      '<div class="ch" style="align-items:flex-start">' +
         '<div class="badge">'+initials(c.name)+'</div>' +
-        '<div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:6px">' +
-          '<input data-i="'+i+'" data-f="name" value="'+esc(c.name)+'" placeholder="Church name" aria-label="Church name" />' +
-          '<input data-i="'+i+'" data-f="npub" value="'+esc(c.npub)+'" placeholder="npub1…" aria-label="Church public key (npub)" spellcheck="false" autocapitalize="none" style="font-family:ui-monospace,monospace; font-size:12px" />' +
+        '<div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:4px">' +
+          '<div style="font-weight:700; font-size:14px">'+(c.name ? esc(c.name) : '<span class="muted">Unnamed church</span>')+'</div>' +
+          '<div class="muted" style="font-family:var(--mono); font-size:11px; word-break:break-all">'+esc(c.npub)+'</div>' +
+          (rowMeta(c) ? '<div class="muted" style="font-size:11.5px">'+esc(rowMeta(c))+'</div>' : '') +
         '</div>' +
-        '<button class="btn-ghost" data-rm="'+i+'" style="align-self:flex-start">Remove</button>' +
-      '</div>').join('') : '<div class="muted" style="margin-bottom:8px">No churches yet — add one below.</div>';
-    list.querySelectorAll('input').forEach(inp => inp.oninput = () => { cfgChurches[+inp.dataset.i][inp.dataset.f] = inp.value; });
-    list.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { cfgChurches.splice(+b.dataset.rm, 1); renderCfg(); });
+        '<button class="btn-ghost" data-rm="'+i+'">Remove…</button>' +
+      '</div>').join('')
+      : '<div class="warn" style="margin-bottom:8px"><span>⚠</span><span><b>No churches yet.</b> Until you add one, this relay accepts messages from anyone on the internet. Add your church below.</span></div>';
+    list.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => removeChurch(cfgChurches[+b.dataset.rm]));
+  }
+
+  // Remove is now a real, immediate, two-stage action. Stage one asks the relay what this church actually
+  // HOLDS (a dry run that changes nothing) so the operator is never guessing; stage two offers the two
+  // genuinely different outcomes, because "remove" meant only "stop accepting their posts" and nothing on
+  // the old screen said so — their messages, care records and files stayed on the disk, unreadable and
+  // unreclaimable, and an operator who removed a church to PROTECT it was simply wrong.
+  async function removeChurch(c) {
+    if (!c) return;
+    const msg = document.getElementById('cfgMsg');
+    const who = c.name || 'this church';
+    let d;
+    try {
+      const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ removeChurch: { npub: c.npub } }) });
+      d = await r.json();
+      if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (d.error || 'could not check that church'); return; }
+    } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ could not reach the relay'; return; }
+
+    const w = d.wouldDelete || { events: 0, blobs: 0, bytes: 0 };
+    const held = w.events ? `${w.events.toLocaleString()} stored message${w.events === 1 ? '' : 's'}${w.bytes ? ' and ' + fmtBytes(w.bytes) + ' of files' : ''}` : 'nothing stored';
+    if (!window.confirm(`Stop ${who} posting to this relay?\n\nThey have ${held} here.\n\nOK = stop them posting, KEEP their data.\nCancel = change nothing.`)) return;
+
+    let purge = false;
+    if (w.events || w.blobs) {
+      purge = window.confirm(`Also ERASE ${who}'s ${held}?\n\nOK = erase it permanently. This cannot be undone and it frees the space.\nCancel = keep the data on this relay (they just can't post).`);
+    }
+    msg.style.color = 'var(--ink-3)'; msg.textContent = purge ? 'Erasing…' : 'Removing…';
+    try {
+      const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ removeChurch: { npub: c.npub, confirm: true, purge } }) });
+      const s = await r.json();
+      if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (s.error || 'could not remove that church'); await loadConfig(); return; }
+      msg.style.color = 'var(--sage-ink)';
+      msg.textContent = purge && s.purged ? `✓ ${who} removed — ${(s.purged.events || 0).toLocaleString()} messages and ${fmtBytes(s.purged.bytes) || '0 KB'} erased` : `✓ ${who} can no longer post here — their data is still stored`;
+      setTimeout(() => { msg.textContent = ''; }, 5000);
+    } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + e.message; }
+    await loadConfig();   // never trust the write's own echo — re-read the server
   }
 
   async function loadConfig() {
     const gate = document.getElementById('cfgGate'), body = document.getElementById('cfgBody'), st = document.getElementById('cfgStatus');
     try {
-      const r = await fetch('/config', { headers: authHeaders(), cache: 'no-store' });
+      const r = await fetch('/config?stats=1', { headers: authHeaders(), cache: 'no-store' });   // stats so each row shows what it holds
       if (r.status === 401) { gate.style.display = 'block'; body.style.display = 'none'; document.getElementById('cfgList').innerHTML = ''; st.textContent = '· locked'; document.getElementById('servesCard').style.display = 'none'; document.getElementById('updateCard').style.display = 'none'; return; }
       const s = await r.json();
       gate.style.display = 'none'; body.style.display = 'block';
       st.textContent = s.configured ? '' : '· not set up yet';
-      cfgChurches = (s.churches || []).map(c => ({ npub: c.npub, name: c.name }));
+      cfgChurches = (s.churches || []).map(c => ({ npub: c.npub, name: c.name, by: c.by, at: c.at, events: c.events, blobs: c.blobs, bytes: c.bytes }));
       renderCfg();
       loadServes();
       loadUpdate();
@@ -99,19 +155,7 @@
     } catch (e) { card.style.display = 'none'; }
   }
 
-  async function saveConfig() {
-    const msg = document.getElementById('cfgMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = 'Saving…';
-    const churches = cfgChurches.map(c => ({ npub: (c.npub||'').trim(), name: (c.name||'').trim() })).filter(c => c.npub);
-    try {
-      const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ churches }) });
-      const s = await r.json();
-      if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (s.error || 'save failed'); return; }
-      cfgChurches = s.churches.map(c => ({ npub: c.npub, name: c.name })); renderCfg();
-      document.getElementById('cfgStatus').textContent = '';
-      msg.style.color = 'var(--sage-ink)'; msg.textContent = '✓ Saved — members can join now';
-      setTimeout(() => { msg.textContent = ''; }, 2600);
-    } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + e.message; }
-  }
+  // (saveConfig removed — the list has no Save step now; each row acts immediately and re-reads.)
 
   // ── what this relay serves (audio / modules / web-app mirror + church URL) via /settings ──
   async function loadServes() {
@@ -348,8 +392,23 @@
     const blob = new Blob([rows.map(r => r.join(',')).join('\n')], { type: 'text/csv' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'trinityone-subscribers.csv'; a.click(); URL.revokeObjectURL(a.href);
   });
-  document.getElementById('addCh').onclick = () => { cfgChurches.push({ npub: '', name: '' }); renderCfg(); document.querySelector('#cfgList .ch:last-child input')?.focus(); };
-  document.getElementById('saveCfg').onclick = saveConfig;
+  // Adding acts immediately too — prompt, POST, re-read. The old flow pushed a blank row into a local
+  // array and relied on a Save that silently dropped any row still missing an npub.
+  document.getElementById('addCh').onclick = async () => {
+    const msg = document.getElementById('cfgMsg');
+    const npub = (window.prompt('Paste the church\u2019s public key.\n\nIt starts with npub1\u2026 and is on the Settings screen of their Steward console.') || '').trim();
+    if (!npub) return;
+    const name = (window.prompt('What is this church called?\n\nThis is just a label so you can recognise it here.') || '').trim();
+    msg.style.color = 'var(--ink-3)'; msg.textContent = 'Adding\u2026';
+    try {
+      const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ addChurch: { npub, name } }) });
+      const s2 = await r.json();
+      if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '\u2717 ' + (s2.error || 'could not add that church'); return; }
+      msg.style.color = 'var(--sage-ink)'; msg.textContent = '\u2713 ' + (name || 'Church') + ' can now post to this relay';
+      setTimeout(() => { msg.textContent = ''; }, 5000);
+    } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '\u2717 ' + e.message; }
+    await loadConfig();   // re-read: never render the write's own echo
+  };
   document.getElementById('tokGo').onclick = () => { adminToken = document.getElementById('tok').value.trim(); if (adminToken) localStorage.setItem(TOKEN_KEY, adminToken); loadConfig(); gpTick(); loadRelayName(); };
   document.getElementById('tok').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('tokGo').click(); });
   // When this panel is opened ON the relay machine (e.g. the TrinityOne Suite's own window), the relay hands
