@@ -5187,12 +5187,12 @@
   function NostrBackend(cache) {
     var KIND = 30078;
     var SYNC = {
-      "data/highlights": { d: "trinityone/highlights", priv: false },
-      "data/bookmarks": { d: "trinityone/bookmarks", priv: false },
+      "data/highlights": { d: "trinityone/highlights", priv: true },
+      "data/bookmarks": { d: "trinityone/bookmarks", priv: true },
       "data/notes": { d: "trinityone/notes", priv: true },
       "data/journal": { d: "trinityone/journal", priv: true },
       "data/prayer": { d: "trinityone/prayer", priv: true },
-      "settings": { d: "trinityone/settings", priv: false }
+      "settings": { d: "trinityone/settings", priv: true }
     };
     var D_TO_KEY = {};
     Object.keys(SYNC).forEach(function(k) {
@@ -5221,7 +5221,9 @@
       return SYNC[key].priv ? v2.encrypt(j, ck) : j;
     }
     function decode(key, content) {
-      var j = SYNC[key].priv ? v2.decrypt(content, ck) : content;
+      var s = String(content || "");
+      var plain = s.charAt(0) === "{";
+      var j = SYNC[key].priv && !plain ? v2.decrypt(s, ck) : s;
       return JSON.parse(j);
     }
     function schedulePublish(key) {
@@ -5289,6 +5291,7 @@
             if (!key) return;
             try {
               if (reconcile(key, decode(key, e.content))) touched = true;
+              if (SYNC[key].priv && String(e.content || "").charAt(0) === "{") schedulePublish(key);
             } catch (err) {
               console.warn("[mydata] reconcile failed", dTag, err);
             }

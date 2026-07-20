@@ -65,8 +65,19 @@ sed -i 's/applicationId "com.trinityone.app"/applicationId "com.trinityone.stewa
 sed -i 's#<string name="app_name">TrinityOne</string>#<string name="app_name">TrinityOne Steward</string>#' "$STRINGS"
 
 # 3. copy webDir into the native project + build
+# SECURITY-AUDIT-2026-07-20 C3: this built assembleDebug, so the STEWARD apk — the one holding the church
+# signing key — shipped android:debuggable=true and was signed with the ANDROID DEBUG CERTIFICATE
+# (CN=Android Debug) rather than the release key. debuggable=true enables `adb shell run-as` on ordinary
+# unrooted phones: ~30s of USB access to an unlocked steward device reads the app's private storage, where
+# the PIN-encrypted church key lives — reducing key theft to an offline PIN brute-force. It also let anyone
+# holding ~/.android/debug.keystore (regenerated silently if deleted) forge a steward update.
 npx cap copy android
-( cd android && ./gradlew assembleDebug -q )
-cp android/app/build/outputs/apk/debug/app-debug.apk trinityone-steward.apk
+[ -f android/app/keystore.properties ] || { echo "ERROR: android/app/keystore.properties missing — refusing to build an unsigned/debug-signed steward APK" >&2; exit 1; }
+( cd android && ./gradlew assembleRelease -q )
+cp android/app/build/outputs/apk/release/app-release.apk trinityone-steward.apk
+# Fail loudly rather than ever shipping a debuggable console again.
+if command -v aapt2 >/dev/null 2>&1 && aapt2 dump badging trinityone-steward.apk 2>/dev/null | grep -q "application-debuggable"; then
+  echo "ERROR: trinityone-steward.apk is DEBUGGABLE — refusing to ship it" >&2; rm -f trinityone-steward.apk; exit 1
+fi
 echo "→ trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))"
 # restore() runs on EXIT

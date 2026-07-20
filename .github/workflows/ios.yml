@@ -1,0 +1,245 @@
+name: iOS build
+
+# Build the iOS app on a hosted macOS runner — so you don't need your own Mac.
+# Run it from the GitHub "Actions" tab → "iOS build" → "Run workflow".
+#
+#  • Default (unsigned): proves the app compiles + archives on iOS and uploads the .xcarchive.
+#    Not installable on a device, but confirms the build is healthy.
+#  • Signed IPA (TestFlight-ready): tick "signed" AND configure the repo secrets listed in IOS-BUILD.md
+#    (Apple distribution cert + provisioning profile + team id). Then the IPA artifact is installable.
+
+on:
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: "Produce a signed IPA (requires the iOS signing secrets — see IOS-BUILD.md)"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: macos-14          # Apple-silicon runner: Xcode + CocoaPods preinstalled
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the web app into www/
+        run: bash scripts/sync-web.sh        # populates www/; the android sync is skipped (no android/ in CI)
+
+      - name: Add the iOS platform (gitignored — regenerated each run)
+        run: npx cap add ios
+
+      - name: Generate app icons & splash
+        run: npx @capacitor/assets generate --ios || echo "icon generation skipped (using defaults)"
+
+      - name: Sync web + plugins into the iOS project
+        run: npx cap sync ios
+
+      - name: Install CocoaPods
+        working-directory: ios/App
+        run: pod install
+
+      # ──────────────── UNSIGNED (default) ────────────────
+      - name: Archive (unsigned)
+        if: ${{ !inputs.signed }}
+        run: |
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App -configuration Release -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+
+      - name: Upload unsigned archive
+        if: ${{ !inputs.signed }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrinityOne-iOS-unsigned-xcarchive
+          path: ${{ runner.temp }}/App.xcarchive
+          retention-days: 14
+
+      # ──────────────── SIGNED IPA (opt-in) ────────────────
+      # Needs repo secrets (Settings → Secrets and variables → Actions):
+      #   IOS_DIST_CERT_P12_BASE64   — base64 of your Apple distribution .p12
+      #   IOS_DIST_CERT_PASSWORD     — that .p12's password
+      #   IOS_PROVISION_PROFILE_BASE64 — base64 of your .mobileprovision
+      #   IOS_TEAM_ID                — your 10-char Apple Team ID
+      #   IOS_KEYCHAIN_PASSWORD      — any throwaway string (locks the temp keychain)
+      - name: Import signing certificate & profile
+        if: ${{ inputs.signed }}
+        env:
+          CERT_P12: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          CERT_PW: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          PROFILE: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          KC_PW: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -e
+          KC="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p "$KC_PW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KC_PW" "$KC"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PW" -A -t cert -f pkcs12 -k "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -k "$KC_PW" "$KC"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$PROFILE" | base64 --decode > "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
+
+      - name: Build & export signed IPA
+        if: ${{ inputs.signed }}
+        env:
+          TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          set -e
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App -configuration Release -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" archive \
+            DEVELOPMENT_TEAM="$TEAM_ID"
+          cat > "$RUNNER_TEMP/export.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>manual</string>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+            -exportPath "$RUNNER_TEMP/export"
+
+      - name: Upload IPA
+        if: ${{ inputs.signed }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrinityOne-iOS-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          retention-days: 14
+
+  # ──────────────── SIMULATOR SMOKE TEST ────────────────
+  # Actually RUNS the app in an iOS Simulator (no signing needed) — the "does it boot on iOS WebKit"
+  # check that a pure compile can't give you. Exercises the WKWebView + CapacitorHttp path the
+  # federation relay-discovery code uses. Hard-fails on a native crash; uploads a screenshot + app log
+  # so a blank-screen / JS failure (which doesn't crash the native process) can be eyeballed too.
+  simulator-smoke:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the web app into www/
+        run: bash scripts/sync-web.sh
+
+      - name: Add the iOS platform (gitignored — regenerated each run)
+        run: npx cap add ios
+
+      - name: Sync web + plugins into the iOS project
+        run: npx cap sync ios
+
+      - name: Install CocoaPods
+        working-directory: ios/App
+        run: pod install
+
+      - name: Build for the simulator (no signing needed)
+        run: |
+          set -e
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Boot an iOS simulator
+        run: |
+          set -e
+          UDID=$(xcrun simctl list devices available -j | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);for(const rt of Object.keys(j.devices)){for(const dev of j.devices[rt]){if(dev.isAvailable&&/iPhone/.test(dev.name)){console.log(dev.udid);process.exit(0)}}}process.exit(1)})')
+          echo "Simulator UDID: $UDID"
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl bootstatus "$UDID" -b
+
+      - name: Install + launch the app
+        run: |
+          set -e
+          APP=$(find "$RUNNER_TEMP/dd/Build/Products" -name "App.app" -type d | head -1)
+          echo "App bundle: $APP"; test -n "$APP"
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" com.trinityone.app
+          sleep 25
+
+      - name: UI feature smoke via WebKit inspector (best-effort)
+        run: |
+          # Runs ci/ui-smoke-eval.js inside the live WebView to confirm the NEW features are present +
+          # the app booted clean — the same check that passes on web/Chromium. Best-effort: iOS WebView
+          # inspection tooling (ios-webkit-debug-proxy) is fragile in CI, so a tooling failure WARNs and
+          # passes (the native boot smoke + screenshot still gate). A successful attach that finds a
+          # missing feature FAILS the job.
+          set +e
+          brew install ios-webkit-debug-proxy >/dev/null 2>&1 || { echo "WARN: ios-webkit-debug-proxy install failed — skipping WebView feature smoke"; exit 0; }
+          ios_webkit_debug_proxy -s "simulator:$UDID" -c null:9221 -F >"$RUNNER_TEMP/iwdp.log" 2>&1 &
+          IWDP=$!; sleep 6
+          WS=$(curl -s --max-time 6 http://localhost:9221/json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const a=JSON.parse(d);const p=(a||[]).find(t=>t.webSocketDebuggerUrl);console.log(p?p.webSocketDebuggerUrl:"")}catch(e){console.log("")}})')
+          if [ -z "$WS" ]; then echo "WARN: no inspectable WebView (proxy attach failed) — relying on native boot smoke + screenshot"; kill $IWDP 2>/dev/null; exit 0; fi
+          node -e '
+            const WebSocket=require("ws"),fs=require("fs");const ws=new WebSocket(process.argv[1]);let id=0;
+            const expr=fs.readFileSync("ci/ui-smoke-eval.js","utf8");
+            ws.on("open",()=>{const i=++id;ws.send(JSON.stringify({id:i,method:"Runtime.evaluate",params:{expression:expr,returnByValue:true}}));ws.on("message",d=>{const m=JSON.parse(d);if(m.id===i){try{const v=JSON.parse(m.result.result.value);console.log("iOS WebView smoke:",JSON.stringify(v));process.exit(v.pass?0:2)}catch(e){console.log("WARN: could not parse smoke result");process.exit(0)}}})});
+            ws.on("error",e=>{console.log("WARN: inspector ws error:",e.message);process.exit(0)});
+            setTimeout(()=>{console.log("WARN: inspector eval timed out");process.exit(0)},15000);
+          ' "$WS"
+          RC=$?; kill $IWDP 2>/dev/null
+          if [ $RC -eq 2 ]; then echo "FAIL: iOS WebView feature smoke — a new feature is missing/unhealthy on iOS"; exit 1; fi
+          exit 0
+
+      - name: Capture logs + screenshot
+        if: always()
+        run: |
+          xcrun simctl spawn "$UDID" log show --style compact --predicate 'process == "App"' --last 120s > "$RUNNER_TEMP/app.log" 2>&1 || true
+          xcrun simctl io "$UDID" screenshot "$RUNNER_TEMP/screen.png" || true
+          echo "----- last 40 log lines -----"; tail -40 "$RUNNER_TEMP/app.log" || true
+
+      - name: Smoke assertions
+        run: |
+          STATUS=0
+          if xcrun simctl spawn "$UDID" launchctl list 2>/dev/null | grep -q "com.trinityone.app"; then
+            echo "PASS: app process alive after 25s (no boot crash)"
+          else
+            echo "FAIL: app not running (crashed or exited on launch)"; STATUS=1
+          fi
+          CRASH=$(find "$HOME/Library/Logs/DiagnosticReports" -iname "App-*.ips" 2>/dev/null | head -1)
+          if [ -n "$CRASH" ]; then echo "FAIL: crash report found: $CRASH"; cat "$CRASH" 2>/dev/null | head -30; STATUS=1; fi
+          if grep -qiE "WebView loaded|Loading app at capacitor|Capacitor|⚡" "$RUNNER_TEMP/app.log" 2>/dev/null; then
+            echo "PASS: Capacitor WebView booted"
+          else
+            echo "WARN: no explicit WebView-loaded marker in log — eyeball the screenshot artifact"
+          fi
+          if grep -qiE "unhandledrejection|Terminating due to uncaught|EXC_BAD_ACCESS|fatal error" "$RUNNER_TEMP/app.log" 2>/dev/null; then
+            echo "FAIL: fatal/unhandled error in app log"; STATUS=1
+          fi
+          exit $STATUS
+
+      - name: Upload smoke artifacts (screenshot + log)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrinityOne-iOS-simulator-smoke
+          path: |
+            ${{ runner.temp }}/screen.png
+            ${{ runner.temp }}/app.log
+          retention-days: 14
