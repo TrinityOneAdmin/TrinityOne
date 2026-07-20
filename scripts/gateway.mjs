@@ -2079,6 +2079,31 @@ function serveStatic(req, res) {
               // invite-only: the operator has locked the relay — only the admin token may add churches, so a
               // signed self-registration is refused outright (no matter how valid the proof).
               if (SETTINGS.inviteOnly) { res.writeHead(403, H); res.end(JSON.stringify({ error: 'this relay is invite-only — ask the operator to add your church' })); return; }
+              // RELAY-AUDIT-2026-07-20 H4 — BOOTSTRAP-ONLY self-registration on a PRIVATE relay.
+              // Self-registration exists so the setup flow is effortless: install the relay, open your
+              // Steward console, and it registers itself. On a private (single-church) relay that is needed
+              // exactly ONCE. Leaving it open forever is what silently turned one box into 19 tenants — every
+              // pass through "create a church" mints a fresh key and registers it, and nothing ever removes
+              // one. So once a private relay has a church, further self-registration is refused and the
+              // operator adds any additional church deliberately, with the admin token.
+              // A COMMUNITY relay (Offer to host) stays open — inviting other churches is the whole point of
+              // that switch, and turning it into a lock would advertise a relay nobody could join.
+              const community = OFFER_OPEN || SETTINGS.offerHosting;
+              const alreadyRegistered = CHURCH_PUBS.has(hex);
+              if (!community && CHURCH_PUBS.size && !alreadyRegistered) {
+                res.writeHead(403, H);
+                res.end(JSON.stringify({ error: 'this relay is already set up for its church. Ask the operator to add yours, or turn on “Offer to host other churches”.' }));
+                return;
+              }
+              // H4: a nameless registration is unidentifiable in the dashboard forever — the root call sites
+              // pass name:'' and the server only overwrites a name when non-empty, which is why 37 of this
+              // box's 41 rows show a bare npub the operator cannot safely act on. Require one for a NEW
+              // self-registration (an existing church re-announcing itself is fine, and may update its name).
+              if (!alreadyRegistered && !String(parsed.addChurch.name || '').trim()) {
+                res.writeHead(400, H);
+                res.end(JSON.stringify({ error: 'set your church’s name in the Steward console before connecting it to a relay' }));
+                return;
+              }
               const a = parsed.auth;
               const sigOk = a && typeof a === 'object' && a.kind === 27235 && verifyEvent(a);
               const fresh = sigOk && Math.abs(Math.floor(Date.now() / 1000) - (a.created_at || 0)) <= 300;
@@ -2098,6 +2123,49 @@ function serveStatic(req, res) {
             if (existing) { if (name) existing.name = name; } else { list.push({ npub: npubEncode(hex), name }); }
             writeChurches(list);
             res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: isAdmin ? list : undefined }));
+            return;
+          }
+          // removeChurch — admin only. De-provision a church AND, optionally, erase its data.
+          // RELAY-AUDIT-2026-07-20 H3: until now, removing a church deleted nothing. Its events stayed in
+          // the DB forever (structured docs are exempt from culling), became unreadable to everyone once
+          // owningChurch() could no longer resolve them, kept counting toward /status and the media cap, and
+          // could not be reclaimed from any UI — so an operator could neither free the disk nor honour a
+          // request to erase a congregation's history. `{ removeChurch: { npub } }` alone is a dry run that
+          // reports what WOULD be deleted; erasing requires an explicit `purge: true`, so the scale is always
+          // visible before the irreversible step.
+          if (parsed.removeChurch) {
+            if (!isAdmin) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+            const hex = toHexPub(String(parsed.removeChurch.npub || '').trim());
+            if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub' })); return; }
+            const events = store.countChurchData ? store.countChurchData(hex) : 0;
+            const blobs = _churchBlobList(hex);
+            const bytes = blobs.reduce((a, b) => a + (b.size || 0), 0);
+            if (!parsed.removeChurch.purge) {   // dry run — tell the operator the scale, change nothing
+              res.writeHead(200, H);
+              res.end(JSON.stringify({ ok: true, dryRun: true, npub: npubEncode(hex), name: CHURCH_NAMES.get(hex) || '', wouldDelete: { events, blobs: blobs.length, bytes } }));
+              return;
+            }
+            // C4 again: never let a purge leave the relay with no churches, which would open it to the world.
+            const remaining = curChurches().filter(c => toHexPub(c.npub) !== hex);
+            if (!remaining.length && CHURCH_PUBS.has(hex)) {
+              res.writeHead(400, H);
+              res.end(JSON.stringify({ error: 'that is the only church on this relay — removing it would let anyone on the internet write here. Add another first, or turn the relay off.' }));
+              return;
+            }
+            const r = store.purgeChurch ? store.purgeChurch(hex) : { events: 0 };
+            let blobsDeleted = 0, bytesFreed = 0;
+            for (const b of blobs) {
+              try { unlinkSync(join(BLOB_DIR, b.sha)); blobsDeleted++; bytesFreed += (b.size || 0); } catch {}
+              try { unlinkSync(join(BLOB_DIR, b.sha + '.church')); } catch {}
+            }
+            // keep the media accounting honest — only subtract what actually went (see the DELETE /blob note)
+            _mediaBytesTotal = Math.max(0, _mediaBytesTotal - bytesFreed);
+            _mediaBytesByChurch.delete(hex); _blobsByChurch.delete(hex);
+            if (CHURCH_PUBS.has(hex)) writeChurches(remaining);   // also re-hydrates the derived maps (H1)
+            else setImmediate(() => { try { hydrateMaps(); } catch {} });
+            console.log(`[config] purged church ${hex.slice(0, 8)}… — ${r.events} events, ${blobsDeleted} blobs, ${bytesFreed} bytes`);
+            res.writeHead(200, H);
+            res.end(JSON.stringify({ ok: true, purged: { npub: npubEncode(hex), events: r.events, blobs: blobsDeleted, bytes: bytesFreed }, churches: curChurches() }));
             return;
           }
           // full replace — admin token only (rewrites the whole write policy)

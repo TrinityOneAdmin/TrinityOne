@@ -10575,6 +10575,7 @@ zoo`.split("\n");
   }
   var NET = "trinityone";
   var KEY_LS = "trinityone.steward.church-key";
+  var SELFREG_KEY = "trinityone.steward.selfreg";
   var FUND_D = "trinityone/fund:";
   var GROUP_D = "trinityone/group:";
   var SAFETY_D = "trinityone/safetycheck:";
@@ -13684,16 +13685,38 @@ zoo`.split("\n");
     // self-register this church with the shared pool relays by PROVING key ownership (NIP-98 signed by the
     // church key) — no admin token, and a church can only ever register its own npub. Called automatically
     // on console load, so onboarding a new church needs zero manual relay setup.
-    async selfRegister(name) {
+    // RELAY-AUDIT-2026-07-20 H4: this fired on EVERY console mount (three call sites in steward-root.jsx plus
+    // one in stew-dashboard.jsx) and POSTed to the configured relay AND every canonical relay unconditionally.
+    // Each distinct church key is a new permanent row on each of those relays, and nothing ever removes one —
+    // which is how repeated demo/test runs of "create a church" left 19 tenants on the shared box, most of them
+    // nameless because these call sites pass name:''. Registration is a SETUP step, not a heartbeat: remember
+    // per (church key, relay) that it succeeded and don't repeat it. `force` re-runs it for the explicit
+    // "connect this church to this relay" action, where the operator really is asking.
+    async selfRegister(name, opts) {
       if (!churchSk || !churchPub) return;
       const np = npubEncode(churchPub);
+      const force = !!(opts && opts.force);
       const bases = /* @__PURE__ */ new Set([window.Steward.configBase()]);
       for (const r of CANONICAL_RELAYS) bases.add(r.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, ""));
+      let done = {};
+      try {
+        done = JSON.parse(localStorage.getItem(SELFREG_KEY) || "{}") || {};
+      } catch (e) {
+      }
       for (const base of bases) {
+        const mark = churchPub + "@" + base;
+        if (!force && done[mark]) continue;
         const url = base + "/config";
         try {
           const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
-          await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }) });
+          const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }) });
+          if (r && r.ok) {
+            done[mark] = 1;
+            try {
+              localStorage.setItem(SELFREG_KEY, JSON.stringify(done));
+            } catch (e) {
+            }
+          }
         } catch (e) {
         }
       }

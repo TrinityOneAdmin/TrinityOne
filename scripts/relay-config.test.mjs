@@ -128,3 +128,41 @@ test('C3: over the cap is REFUSED, not silently truncated', async () => {
   const j = await r.json();
   assert.match(j.error, /nothing was changed/);
 });
+
+test('H3: a removed church’s data can be previewed and then purged', async () => {
+  // seed a second church with some data, then purge it
+  const bSk = generateSecretKey(), bPub = getPublicKey(bSk);
+  const cur = (await (await api('/config')).json()).churches;
+  await api('/config', { method: 'POST', body: JSON.stringify({ churches: [...cur, { npub: npubEncode(bPub), name: 'Doomed' }] }) });
+  await sleep(300);
+  const ws = await connect();
+  for (let i = 0; i < 3; i++) {
+    await publish(ws, finalizeEvent({ kind: 30078, created_at: now() + i, tags: [['d', 'trinityone/group:g' + i]], content: '{"name":"g"}' }, bSk));
+  }
+  ws.close(); await sleep(250);
+
+  // dry run must report a count and change NOTHING
+  const dry = await (await api('/config', { method: 'POST', body: JSON.stringify({ removeChurch: { npub: npubEncode(bPub) } }) })).json();
+  assert.equal(dry.dryRun, true);
+  assert.equal(dry.wouldDelete.events >= 3, true, `expected >=3 events, got ${dry.wouldDelete.events}`);
+  const stillThere = await (await api('/config')).json();
+  assert.equal(stillThere.churches.some(c => c.name === 'Doomed'), true, 'a dry run must not remove the church');
+
+  // the real thing
+  const done = await (await api('/config', { method: 'POST', body: JSON.stringify({ removeChurch: { npub: npubEncode(bPub), purge: true } }) })).json();
+  assert.equal(done.ok, true);
+  assert.equal(done.purged.events >= 3, true, 'events were not deleted');
+  assert.equal(done.churches.some(c => c.name === 'Doomed'), false, 'the church is still configured after a purge');
+
+  const after = await (await api('/config', { method: 'POST', body: JSON.stringify({ removeChurch: { npub: npubEncode(bPub) } }) })).json();
+  assert.equal(after.wouldDelete.events, 0, 'data survived the purge');
+});
+
+test('H3: purging the only church is refused (it would open the relay)', async () => {
+  const cur = (await (await api('/config')).json()).churches;
+  assert.equal(cur.length >= 1, true);
+  if (cur.length === 1) {
+    const r = await api('/config', { method: 'POST', body: JSON.stringify({ removeChurch: { npub: cur[0].npub, purge: true } }) });
+    assert.equal(r.status, 400, 'purging the last church must be refused');
+  }
+});

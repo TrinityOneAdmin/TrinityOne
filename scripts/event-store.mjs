@@ -195,5 +195,32 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
-  return { db, put, query, eachKind, count, authorOf, del, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  // ── purge a church's data (RELAY-AUDIT-2026-07-20 H3) ───────────────────────────────────────────────
+  // Removing a church from the write policy previously deleted NOTHING: its events stayed in the DB forever
+  // (all kind-30078 docs are `structured` and exempt from culling), became unreadable to everyone including
+  // the church itself once `owningChurch()` could no longer resolve them, and still counted in /status. The
+  // operator had no way to reclaim the disk or honour a deletion request. This is that path.
+  //
+  // Three ways an event belongs to a church, all needed — attribution alone misses the church's own posts on
+  // a relay where resolveChurch never ran, and misses the member docs that ARE the roster:
+  //   1. attributed to it (the `church` column, set by resolveChurch on write)
+  //   2. authored by its key
+  //   3. a `<prefix><churchpub>`-suffixed doc (member:/minors:/stewards:/… — the d-tag names the church)
+  const PURGE_WHERE = 'church = ? OR pubkey = ? OR dtag LIKE ?';
+  const qPurgeCount = db.prepare(`SELECT COUNT(*) AS n FROM events WHERE ${PURGE_WHERE}`);
+  const qPurgeIds   = db.prepare(`SELECT id FROM events WHERE ${PURGE_WHERE}`);
+  const doPurge     = db.prepare(`DELETE FROM events WHERE ${PURGE_WHERE}`);
+  const purgeArgs   = (cp) => [cp, cp, '%:' + cp];
+  // Count first so the dashboard can show the scale BEFORE the operator commits — deleting a congregation's
+  // history should never be a surprise.
+  function countChurchData(cp) { if (!cp) return 0; try { return qPurgeCount.get(...purgeArgs(cp)).n | 0; } catch { return 0; } }
+  function purgeChurch(cp) {
+    if (!cp) return { events: 0, ids: [] };
+    try {
+      const ids = qPurgeIds.all(...purgeArgs(cp)).map(r => r.id);   // returned so the caller can drop matching blobs
+      const n = doPurge.run(...purgeArgs(cp)).changes | 0;
+      return { events: n, ids };
+    } catch (e) { return { events: 0, ids: [], error: String((e && e.message) || e) }; }
+  }
+  return { db, put, query, eachKind, count, authorOf, del, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }
