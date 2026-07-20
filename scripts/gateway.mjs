@@ -74,6 +74,10 @@ const OFFER_REGION = (process.env.RELAY_REGION || '').trim();
 const OFFER_CAP = parseInt(process.env.RELAY_CHURCH_CAP, 10) || 0;   // 0 = no declared cap
 const NONMEMBER_KIND0_CAP = 1000;   // cap stored profiles from non-members (L2: prevent unbounded growth)
 const STEWARDREQ_CAP = 50;          // cap pending steward-requests per church from strangers (audit L1: anti-flood)
+// C3: ONE cap for how many churches a relay holds, used by BOTH the dashboard's full-replace save and
+// the self-registration path. They used to be 50 and 200 — so self-registration could reach a state the
+// dashboard could not save without silently deleting 150 congregations.
+const CHURCH_REPLACE_CAP = 200;
 const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs per member — one member can't disk-exhaust the relay with novel d-tags
 // relay feature toggles — what this box serves besides the Nostr relay itself (owner request). Defaults
 // preserve current behaviour (all on); edited via the token-gated /settings endpoint + the control dashboard.
@@ -368,7 +372,21 @@ const CHURCH_FILE = join(DATA_DIR,'church.json');
 // (re)load the write policy from env + church.json — called at startup and after a browser config save
 function loadChurches() {
   CHURCH_PUBS.clear(); CHURCH_NAMES.clear(); MEDIA_HOSTS.clear();
-  (process.env.CHURCH_NPUB || '').split(',').forEach(s => addChurch(s));
+  // RELAY-AUDIT-2026-07-20 C2: CHURCH_NPUB used to be re-applied on EVERY reload, including the one that
+  // runs immediately after the operator saves the church list. So a church supplied by env could never be
+  // removed from the dashboard: the save wrote church.json without it, loadChurches() put it straight back,
+  // and (because the save response echoed the REQUEST) the UI reported success. It also silently wiped that
+  // church's display name, since the name only lived in church.json — which is one reason this box's
+  // church.json holds 41 churches, 37 of them nameless.
+  // The env var is now a SEED, migrated ONCE onto disk. Deliberately not a hard cut-over: a box configured
+  // purely by CHURCH_NPUB that also happens to have a church.json (self-registration writes one) would
+  // otherwise lose its real church on the next restart, locking out a live congregation. So on the first
+  // load after this change we fold env into church.json and stamp `envMigrated`; from then on church.json
+  // is the single source of truth and the dashboard governs.
+  let envPending = [];
+  try { const j = JSON.parse(readFileSync(CHURCH_FILE, 'utf8')); if (!j || !j.envMigrated) envPending = (process.env.CHURCH_NPUB || '').split(','); }
+  catch { envPending = (process.env.CHURCH_NPUB || '').split(','); }
+  envPending.forEach(s => addChurch(s));
   (process.env.RELAY_MEDIA_CHURCHES || '').split(',').map(s => s.trim()).filter(Boolean).forEach(s => { const h = toHexPub(s); if (h) MEDIA_HOSTS.add(h); });
   try {
     const cj = JSON.parse(readFileSync(CHURCH_FILE, 'utf8'));
@@ -933,12 +951,26 @@ function resolveChurch(e) {
 // (re)build all in-memory church/member/group/care maps from the stored kind-30078 structure docs, oldest-first.
 // Run at startup and after a restore/clone import so the imported church's membership + groups take effect at once.
 let _hydrating = false;
+// Everything note() derives from the event log. Cleared before a re-hydrate so a REMOVED church leaves no
+// residue — note() only ever adds, so without this a de-provisioned church kept its members writable and its
+// safeguarding lists still governing its ex-minors' DMs until the process restarted (RELAY-AUDIT H1).
+// Derived-only: every one of these is rebuilt from stored events by the eachKind pass below, so clearing is
+// safe. Deliberately NOT cleared: CHURCH_PUBS/CHURCH_NAMES/MEDIA_HOSTS (owned by loadChurches) and anything
+// read from disk rather than derived.
+function clearDerivedMaps() {
+  for (const m of [MEMBER_DOCS, MEMBER_CHURCH, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
+                   GROUP_LEADERS, GROUP_LEADER_BY, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
+                   GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP,
+                   FINANCE_SEQ, CARE_RECIPIENT, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
+  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER]) { try { s.clear(); } catch {} }
+}
 function hydrateMaps() {
   if (!CHURCH_PUBS.size) return;
+  clearDerivedMaps();                                  // H1: drop residue from churches that are no longer configured
   _hydrating = true;                                   // suppress per-doc rebuilds (O(n^2)); rebuild once at the end
   try { store.eachKind([30078], note); }               // uncapped ASC iteration — no 10k truncation of old docs
   finally { _hydrating = false; }
-  rebuildBlocked(); rebuildMinors(); rebuildNetworks();   // rebuildBlocked() also rebuilds MEMBERS from the full maps
+  rebuildBlocked(); rebuildMinors(); rebuildApproved(); rebuildGuardians(); rebuildNetworks();   // rebuildBlocked() also rebuilds MEMBERS from the full maps
 }
 // persist the current church allow-list to church.json (so a clone-registered church survives a relay restart).
 function persistChurches() { try { const churches = [...CHURCH_PUBS].map(h => ({ npub: npubEncode(h), name: CHURCH_NAMES.get(h) || '' })); const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE); } catch {} }
@@ -2007,7 +2039,25 @@ function serveStatic(req, res) {
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
     const isAdmin = adminOK(req);
     const curChurches = () => [...CHURCH_PUBS].map(p => ({ npub: npubEncode(p), name: CHURCH_NAMES.get(p) || '' }));
-    const writeChurches = (list) => { const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches: list }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE); loadChurches(); };
+    // RELAY-AUDIT-2026-07-20 H1: loadChurches() rebuilds ONLY CHURCH_PUBS/CHURCH_NAMES/MEDIA_HOSTS. Every
+    // other map — MEMBER_DOCS, MEMBERS, GROUP_CHURCH, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
+    // GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, REQUIRE_APPROVAL, MEALS_*, ROSTER_*, FINANCE_SEQ — is only
+    // ever filled by note() on live writes or by hydrateMaps() at boot. So a config change left them stale
+    // in BOTH directions, and neither was recoverable without a restart the dashboard doesn't offer:
+    //   • remove a church → its ex-members' writes were still ACCEPTED, and its safeguarding lists still
+    //     governed its ex-minors' DMs;
+    //   • add (or re-add) a church → its congregation was LOCKED OUT ("blocked: not a member") even though
+    //     their member: docs were sitting in SQLite, while the dashboard said "✓ Saved — members can join
+    //     now". That is the state you land in after a restore, a box migration, or undoing a mis-click.
+    // /import already got this right (see the hydrateMaps() call on the import path); config never did.
+    // `envMigrated` stamps the one-time CHURCH_NPUB fold-in described in loadChurches().
+    const writeChurches = (list) => {
+      const tmp = CHURCH_FILE + '.tmp';
+      writeFileSync(tmp, JSON.stringify({ churches: list, envMigrated: true }, null, 2) + '\n');
+      renameSync(tmp, CHURCH_FILE);
+      loadChurches();
+      setImmediate(() => { try { hydrateMaps(); } catch (e) { console.error('[config] hydrateMaps failed', e); } });
+    };
     if (req.method === 'GET') {
       if (!isAdmin) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }   // don't leak the church list
       res.writeHead(200, H);
@@ -2044,7 +2094,7 @@ function serveStatic(req, res) {
             // cap self-registration: a valid signature is cheap to mint with a fresh keypair, so
             // without a ceiling anyone could append churches forever and bloat the write policy.
             // The admin token bypasses this (real onboarding); a new self-register past the cap is refused.
-            if (!isAdmin && !existing && list.length >= 200) { res.writeHead(429, H); res.end(JSON.stringify({ error: 'registration capacity reached — contact the relay operator' })); return; }
+            if (!isAdmin && !existing && list.length >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end(JSON.stringify({ error: 'registration capacity reached — contact the relay operator' })); return; }
             if (existing) { if (name) existing.name = name; } else { list.push({ npub: npubEncode(hex), name }); }
             writeChurches(list);
             res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: isAdmin ? list : undefined }));
@@ -2054,14 +2104,39 @@ function serveStatic(req, res) {
           if (!isAdmin) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
           const churches = parsed.churches;
           if (!Array.isArray(churches)) throw new Error('expected { churches: [...] } or { addChurch: {…} }');
+          // RELAY-AUDIT-2026-07-20 C3: this used to be `churches.slice(0, 50)` — over 50 rows the surplus was
+          // silently DELETED and the operator got `ok:true` and a green tick. Self-registration is capped at
+          // 200 (below), so a relay could legitimately hold 200 churches that no dashboard save could then
+          // round-trip without de-provisioning 150 congregations. Refuse instead of truncating, and say so.
+          if (churches.length > CHURCH_REPLACE_CAP) {
+            res.writeHead(400, H);
+            res.end(JSON.stringify({ error: `this relay can hold up to ${CHURCH_REPLACE_CAP} churches — you sent ${churches.length}. Remove some first; nothing was changed.` }));
+            return;
+          }
           const clean = [];
-          for (const c of churches.slice(0, 50)) {
+          for (const c of churches) {
             const hex = toHexPub(String((c && c.npub) || '').trim());
             if (!hex) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'not a valid npub: ' + String((c && c.npub) || '').slice(0, 24) })); return; }
             clean.push({ npub: npubEncode(hex), name: String((c && c.name) || '').slice(0, 80) });
           }
+          // C4: an EMPTY list must mean "nobody may write", not "everybody may". `!CHURCH_PUBS.size` is the
+          // never-configured-yet escape hatch that makes a fresh install usable, and it is reachable from the
+          // dashboard: remove the last church, save, and the relay silently becomes an open Nostr relay for
+          // the whole internet — while the UI congratulates you. Refuse the emptying save outright.
+          if (!clean.length && CHURCH_PUBS.size) {
+            res.writeHead(400, H);
+            res.end(JSON.stringify({ error: 'removing every church would let anyone on the internet write to this relay. Keep at least one, or turn the relay off.' }));
+            return;
+          }
           writeChurches(clean);
-          res.writeHead(200, H); res.end(JSON.stringify({ ok: true, configured: CHURCH_PUBS.size > 0, churches: clean }));
+          // C2: respond with what the server ACTUALLY holds, never the list that was posted. writeChurches →
+          // loadChurches folds into a Set, so duplicates collapse and (before the fix above) env churches
+          // reappeared — the operator was shown their own request back and told it had been saved.
+          const actual = curChurches();
+          const dropped = clean.length - actual.length;
+          res.writeHead(200, H);
+          res.end(JSON.stringify({ ok: true, configured: CHURCH_PUBS.size > 0, churches: actual,
+            ...(dropped > 0 ? { note: `${actual.length} saved — ${dropped} duplicate${dropped === 1 ? '' : 's'} collapsed.` } : {}) }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });
       return;
