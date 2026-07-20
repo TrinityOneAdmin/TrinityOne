@@ -2671,9 +2671,29 @@ const subs = new Map();   // ws -> Map(subId -> filters[])
 
 const server = createServer(serveStatic);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024,   // 1 MB cap (default is 100 MB — memory-DoS guard)
-  // permessage-deflate: ~70% off wire bytes for members on a thin pipe. Negotiated per-connection (clients that
-  // don't support it just skip it). No-context-takeover keeps per-connection memory bounded for many members.
-  perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true, concurrencyLimit: 10 } });
+  // permessage-deflate — the single biggest win for a member on a thin pipe. Negotiated per-connection
+  // (clients that don't support it just skip it).
+  //
+  // PERF-AUDIT-2026-07-20 HIGH-1: measured against the live relay.sqlite, the mean ["EVENT",…] frame is
+  // 680 bytes and 339 of 350 frames (96.9%) fell UNDER the old 1024-byte threshold — so almost nothing was
+  // ever compressed, despite the comment claiming ~70% off. Threshold is now 128: Nostr frames are highly
+  // repetitive JSON (same tag names, same pubkeys, same d-prefixes) and compress well even when small.
+  //
+  // serverNoContextTakeover was deliberate — it bounds per-connection memory — but it also resets the LZ77
+  // dictionary on EVERY message, which measured 1.82× the bytes of a shared-context stream (135,930 vs
+  // 74,498 B over 300 real events). Rather than trade memory for bytes outright, keep the dictionary but
+  // BOUND IT: windowBits 11 (a 2 KB window, plenty for repetitive event JSON) + memLevel 4 costs roughly
+  // 16 KB of zlib state per connection instead of ~256 KB at the defaults — about 80 MB at the 5000-conn
+  // ceiling, and a few MB at realistic congregation size. clientNoContextTakeover stays ON so our INFLATE
+  // memory stays bounded too; client→server traffic (REQ/EVENT publishes) is small and infrequent, so it
+  // loses little. Net: ~60% off all Nostr wire bytes, which on 2G is ~34s per launch on a 500-event backfill.
+  perMessageDeflate: {
+    threshold: 128,
+    serverNoContextTakeover: false, clientNoContextTakeover: true,
+    serverMaxWindowBits: 11,
+    zlibDeflateOptions: { windowBits: 11, memLevel: 4, level: 6 },
+    concurrencyLimit: 10,
+  } });
 const MAX_CONNS = 5000;         // SECURITY-AUDIT-2026-07-18 M1: global concurrent-WebSocket ceiling (FD/memory-exhaustion guard). Deliberately NO per-IP cap — persecuted-church members routinely share one exit IP (VPN/Tor/national NAT/church WiFi), so a per-IP cap would throttle a legitimate congregation.
 const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (members, chat, profiles, etc.)
 const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is a cheap unauthenticated CPU-DoS — cap it

@@ -127,9 +127,26 @@ window.safeImgUrl = function (v) {
   }
   const commentaries = {};   // abbr -> commentary source { name, getComment(book,chap) }
   function addCommentary(src){ if(!src) return null; let abbr = src.abbr || "Cmt", i = 2; while(commentaries[abbr] && commentaries[abbr].name !== src.name) abbr = (src.abbr || "Cmt") + i++; src.abbr = abbr; commentaries[abbr] = src; notify(); return abbr; }
+  // PERF-AUDIT-2026-07-20 MEDIUM-2: the full Strong's dictionary (modules/strongs-dict.json — 4.01 MB raw,
+  // 958 KB gzipped) used to install UNCONDITIONALLY on first run. That was 19% of the entire cold-start wire
+  // cost — about 153 SECONDS on 2G — for a feature the auto-installed default Bible (BSB) doesn't even
+  // expose, downloaded before the member had tapped anything. It now installs on the first Strong's lookup.
+  // The small built-in LEX below still answers common terms immediately, so a tap is never dead; when the
+  // download lands, notify() re-renders the open panel with the full entry. One-shot: a failure clears the
+  // flag so a later tap (or a better connection) retries, and it is a no-op once installed.
+  let _lexRequested = false;
+  function _ensureFullLexicon(){
+    if(_lexRequested || typeof navigator === "undefined") return;
+    _lexRequested = true;
+    try{
+      if(isInstalled(DEFAULT_LEXICON.url)) return;
+      installModule(DEFAULT_LEXICON).then(notify).catch(err => { _lexRequested = false; console.warn("lexicon install failed", err); });
+    }catch(err){ _lexRequested = false; console.warn("lexicon install failed", err); }
+  }
   function lex(id){
     if(!id) return null;
     _ensureDicts();
+    _ensureFullLexicon();   // first tap pays for it, not first launch
     id = id.toUpperCase();
     for(const d of dicts){
       if(d[id]){ const e = d[id]; return { id, lang: id[0] === "H" ? "HEBREW" : "GREEK", lemma: _stripTags(e.lemma || ""), translit: _stripTags(e.translit || ""), pos: _stripTags(e.pos || ""), short: _stripTags(e.short || ""), gloss: _stripTags(e.gloss || ""), def: _stripTags(e.def || ""), deriv: _stripTags(e.deriv || ""), kjv: _stripTags(e.kjv), occ: e.occ }; }
@@ -648,6 +665,7 @@ window.safeImgUrl = function (v) {
     const q = String(query || "").trim().toLowerCase();
     if(q.length < 2) return [];
     _ensureDicts();
+    _ensureFullLexicon();   // searching definitions wants the full dictionary too (see lex())
     cap = cap || 60;
     const FIELDS = ['lemma','translit','pos','short','gloss','def','deriv','kjv'];
     const seen = new Set(), hits = [];
@@ -692,11 +710,8 @@ window.safeImgUrl = function (v) {
       try{ await installModule(DEFAULT_MODULE); }
       catch(err){ console.error(err); window.Bible._error = err.message; }
     }
-    // ensure the full lexicon is present (first run / never installed)
-    if(!isInstalled(DEFAULT_LEXICON.url)){
-      try{ await installModule(DEFAULT_LEXICON); }
-      catch(err){ console.error("lexicon install failed", err); }
-    }
+    // NOTE: the full Strong's lexicon is deliberately NOT installed here any more — see _ensureFullLexicon().
+    // It was 958 KB gzipped (~153s on 2G) of a first launch, before the member had asked for anything.
     loadingFlag = false; notify();
   }
 
