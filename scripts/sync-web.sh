@@ -60,19 +60,22 @@ echo "www/ populated:"; du -sh "$WWW"
 # if the native project exists, copy assets in
 if [ -d "$ROOT/android" ]; then
   npx cap sync android
-  # SECURITY-AUDIT-2026-07-20 H4 / the last open Tier-1 item. webContentsDebuggingEnabled shipped `true` in
-  # the RELEASE APK — deliberately, for pilot diagnosis, but it means any USB-connected machine (or any app
-  # that can reach the abstract socket webview_devtools_remote_<pid>) gets a full CDP session: read
-  # localStorage — the member's key and group keys — execute arbitrary JS in the app origin, exfiltrate the
-  # roster. scripts/smoke-device.sh demonstrates exactly this attack as a feature.
-  # The committed default is now false, so every ordinary build and every release is safe by construction.
-  # Opt in explicitly for a diagnostic build:  TRINITY_DEBUG=1 bash scripts/sync-web.sh
+  # webContentsDebuggingEnabled is ON during the pilot — an OWNER DECISION, deliberately held so real
+  # devices can be diagnosed over CDP (scripts/smoke-device.sh depends on it). It must be turned OFF before
+  # go-live: while it is on, any USB-connected machine — or any app that can reach the abstract socket
+  # webview_devtools_remote_<pid> — gets a full CDP session against the app origin: read localStorage (the
+  # member's key, group keys), run arbitrary JS, exfiltrate the roster.
+  #
+  # This block does NOT decide that; it makes the state impossible to forget, and gives go-live one switch:
+  #     TRINITY_DEBUG=0 bash scripts/sync-web.sh     → packaged config forced to false (the go-live build)
+  # Anything else leaves capacitor.config.json's committed value alone and says loudly what shipped.
   ASSETS_CFG="$ROOT/android/app/src/main/assets/capacitor.config.json"
-  if [ "${TRINITY_DEBUG:-}" = "1" ] && [ -f "$ASSETS_CFG" ]; then
-    node -e 'const f=process.argv[1],c=JSON.parse(require("fs").readFileSync(f,"utf8"));(c.android=c.android||{}).webContentsDebuggingEnabled=true;require("fs").writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$ASSETS_CFG"
-    echo "⚠ TRINITY_DEBUG=1 — WebView remote debugging ENABLED in this build. Do NOT ship it."
-  elif [ -f "$ASSETS_CFG" ] && grep -q '"webContentsDebuggingEnabled": *true' "$ASSETS_CFG"; then
-    echo "✖ webContentsDebuggingEnabled is true in the packaged config — refusing to leave it that way" >&2
-    exit 1
+  if [ -f "$ASSETS_CFG" ]; then
+    if [ "${TRINITY_DEBUG:-}" = "0" ]; then
+      node -e 'const f=process.argv[1],c=JSON.parse(require("fs").readFileSync(f,"utf8"));(c.android=c.android||{}).webContentsDebuggingEnabled=false;require("fs").writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$ASSETS_CFG"
+      echo "✔ TRINITY_DEBUG=0 — WebView remote debugging DISABLED in this build (go-live posture)."
+    elif grep -q '"webContentsDebuggingEnabled": *true' "$ASSETS_CFG"; then
+      echo "⚠ WebView remote debugging is ON in this build (pilot diagnosis). Ship with TRINITY_DEBUG=0 at go-live."
+    fi
   fi
 fi
