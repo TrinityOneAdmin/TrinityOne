@@ -175,9 +175,10 @@
     const gate = document.getElementById('cfgGate'), body = document.getElementById('cfgBody'), st = document.getElementById('cfgStatus');
     try {
       const r = await fetch('/config?stats=1', { headers: authHeaders(), cache: 'no-store' });   // stats so each row shows what it holds
-      if (r.status === 401) { gate.style.display = 'block'; body.style.display = 'none'; document.getElementById('cfgList').innerHTML = ''; st.textContent = '· locked'; document.getElementById('servesCard').style.display = 'none'; document.getElementById('updateCard').style.display = 'none'; return; }
+      if (r.status === 401) { gate.style.display = 'block'; body.style.display = 'none'; document.getElementById('cfgList').innerHTML = ''; st.textContent = '· locked'; document.getElementById('servesCard').style.display = 'none'; document.getElementById('updateCard').style.display = 'none'; syncSettingsLock(true); return; }
       const s = await r.json();
       gate.style.display = 'none'; body.style.display = 'block';
+      syncSettingsLock(false);
       st.textContent = s.configured ? '' : '· not set up yet';
       cfgChurches = (s.churches || []).map(c => ({ npub: c.npub, name: c.name, by: c.by, at: c.at, events: c.events, blobs: c.blobs, bytes: c.bytes }));
       renderCfg();
@@ -563,3 +564,57 @@
   }
 
   gpTick(); setInterval(gpTick, 4000);
+
+  // ── Dashboard / Settings tabs ──────────────────────────────────────────────────────────────────
+  // Toggles [hidden] on the PANELS only. Per-CARD display belongs to the auth gate (loadConfig /
+  // loadServes / loadSubs set .style.display on servesCard, updateCard, backupCard, subsCard); if the
+  // tabs wrote card display too, switching tabs would re-reveal cards a locked operator can't use.
+  const TAB_KEY = 'trinityone.relay.tab';
+  const TABS = [
+    { tab: 'tab-dash', panel: 'panel-dash', name: 'dash' },
+    { tab: 'tab-set',  panel: 'panel-set',  name: 'set'  },
+  ];
+  function selectTab(name, moveFocus) {
+    const want = TABS.some(t => t.name === name) ? name : 'dash';
+    for (const t of TABS) {
+      const tabEl = document.getElementById(t.tab), panelEl = document.getElementById(t.panel);
+      if (!tabEl || !panelEl) continue;
+      const on = t.name === want;
+      tabEl.setAttribute('aria-selected', on ? 'true' : 'false');
+      tabEl.tabIndex = on ? 0 : -1;          // roving tabindex: one stop for the whole tablist
+      panelEl.hidden = !on;
+      if (on && moveFocus) tabEl.focus();
+    }
+    try { localStorage.setItem(TAB_KEY, want); } catch (e) { /* private mode — the tab just won't persist */ }
+  }
+  // the settings cards are auth-gated, so when they're all hidden the tab must say why rather than
+  // look empty — the token gate itself lives in the churches card, on the other tab.
+  function syncSettingsLock(locked) {
+    const el = document.getElementById('setLocked');
+    if (el) el.style.display = locked ? 'block' : 'none';
+  }
+  function wireTabs() {
+    TABS.forEach((t, i) => {
+      const el = document.getElementById(t.tab); if (!el) return;
+      el.onclick = () => selectTab(t.name, false);
+      el.onkeydown = (e) => {
+        const keys = ['ArrowRight', 'ArrowLeft', 'Home', 'End'];
+        if (!keys.includes(e.key)) return;
+        e.preventDefault();
+        const n = e.key === 'Home' ? 0
+                : e.key === 'End' ? TABS.length - 1
+                : (i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length;
+        selectTab(TABS[n].name, true);
+      };
+    });
+    const unlock = document.getElementById('goUnlock');
+    if (unlock) unlock.onclick = () => {
+      selectTab('dash', false);
+      const tok = document.getElementById('tok');
+      if (tok) { tok.scrollIntoView({ behavior: 'smooth', block: 'center' }); tok.focus(); }
+    };
+    let saved = 'dash';
+    try { saved = localStorage.getItem(TAB_KEY) || 'dash'; } catch (e) { /* ignore */ }
+    selectTab(saved, false);
+  }
+  wireTabs();

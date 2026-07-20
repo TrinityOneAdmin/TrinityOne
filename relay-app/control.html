@@ -57,6 +57,18 @@
   .stat { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-sm); padding:13px; }
   .stat .n { font-size:24px; font-weight:800; letter-spacing:-.5px; font-variant-numeric:tabular-nums; }
   .stat .l { font-size:11.5px; color:var(--ink-3); font-weight:600; margin-top:2px; }
+  /* Segmented tabs, borrowing the .tag pill language so the console doesn't grow a second button idiom.
+     [hidden] is forced because .panel could otherwise inherit a display from a future layout rule and
+     the tab state would silently stop hiding anything. */
+  .tabs { display:inline-flex; gap:4px; background:var(--surface-2); border:1px solid var(--line);
+          border-radius:999px; padding:4px; margin-bottom:18px; }
+  .tab { appearance:none; border:0; background:transparent; color:var(--ink-2); font-family:inherit;
+         font-weight:700; font-size:13.5px; letter-spacing:-.1px; padding:8px 20px; border-radius:999px;
+         cursor:pointer; transition:background .18s var(--ease), color .18s var(--ease); }
+  .tab:hover { color:var(--ink); }
+  .tab[aria-selected="true"] { background:var(--surface); color:var(--ink); box-shadow:var(--shadow-sm); }
+  .tab:focus-visible { outline:2px solid var(--clay); outline-offset:2px; }
+  [hidden] { display:none !important; }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:18px; margin-bottom:16px; box-shadow:var(--shadow-sm); }
   .card h2 { margin:0 0 12px; font-size:15px; letter-spacing:-.1px; }
   .row { display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:12px; background:var(--surface-2); border:1px solid var(--line); margin-bottom:9px; }
@@ -120,6 +132,19 @@
     <button class="btn-ghost" id="openConsole">&larr; Back</button>
   </div>
 
+  <!-- Two groups: what the relay IS DOING (dashboard) vs what you CONFIGURE (settings). All eight cards
+       used to sit in one deck, so an operator checking whether members could reach them scrolled past
+       storage caps and backup to get there.
+       The tabs toggle [hidden] on the PANEL, never on the cards: control.js sets .style.display directly
+       on servesCard / updateCard / backupCard / subsCard for auth-gating and availability, so a tab that
+       wrote card display would fight the lock and re-reveal cards the operator isn't entitled to see. -->
+  <div class="tabs" role="tablist" aria-label="Relay console sections">
+    <button class="tab" id="tab-dash" role="tab" aria-selected="true" aria-controls="panel-dash" tabindex="0">Dashboard</button>
+    <button class="tab" id="tab-set" role="tab" aria-selected="false" aria-controls="panel-set" tabindex="-1">Settings</button>
+  </div>
+
+  <div class="panel" id="panel-dash" role="tabpanel" aria-labelledby="tab-dash">
+
   <div class="grid">
     <div class="stat"><div class="n" id="s-churches">—</div><div class="l">Churches</div></div>
     <div class="stat"><div class="n" id="s-members">—</div><div class="l">Members</div></div>
@@ -127,9 +152,8 @@
     <div class="stat"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
   </div>
 
-  <!-- card deck: the eight cards used to run down one 760px column, so a desktop operator scrolled past
-       three screens of whitespace to reach the churches list. Auto-fill grid, so it is 1 column on a phone
-       and packs to 2–3 on a laptop without a breakpoint per card. -->
+  <!-- card deck: auto-fill grid, so it is 1 column on a phone and packs to 2–3 on a laptop without a
+       breakpoint per card. -->
   <div class="deck">
 
   <div class="card">
@@ -143,11 +167,6 @@
   <div class="card" id="goPublic">
     <h2>Reach members from anywhere <span class="muted" id="gpStatus" style="font-weight:600"></span></h2>
     <div id="gpBody"><div class="muted">Checking…</div></div>
-  </div>
-
-  <div class="card" id="relayNameCard">
-    <h2>Your relay's name</h2>
-    <div id="relayNameBody"><div class="muted">Checking…</div></div>
   </div>
 
   <div class="card card--wide">
@@ -170,6 +189,32 @@
       <label style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line)"><span><b>Offer to host other churches</b> — list this relay for discovery.<br><span class="muted">When on, other churches can find this relay with <b>“Auto-find relays”</b> in their console and join it. Off = private; it never advertises itself. (Turn this on <b>and</b> leave Invite-only off to accept new churches automatically.)</span></span><input type="checkbox" id="t-offer" style="margin-top:3px; flex-shrink:0; width:20px; height:20px"></label>
     </div>
     <div class="muted" style="margin-top:10px">The relay only accepts writes from churches listed here — applied instantly, no restart. Add your own church's <code>npub</code> (from the Steward console), <b>and any other church you want to host</b> — a way to give churches that can't run their own relay a home on yours.</div>
+  </div>
+
+  <div class="card" id="subsCard" style="display:none">
+    <h2>Email subscribers <span class="muted" id="subsMsg" style="font-weight:600"></span></h2>
+    <div class="row"><span class="k">On the list</span><span class="v" id="subsCount">—</span></div>
+    <div class="muted" style="margin:4px 0 10px; font-size:13px">People who opted in via the website's “Stay updated” form. Export to send your update emails from your own mail tool.</div>
+    <button class="btn-clay" id="dlSubs">Download CSV</button>
+  </div>
+
+  </div><!-- /deck -->
+  </div><!-- /panel-dash -->
+
+  <div class="panel" id="panel-set" role="tabpanel" aria-labelledby="tab-set" hidden>
+  <div class="deck">
+
+  <!-- The admin-token gate lives in the Churches card on the Dashboard, but it unlocks cards HERE. Without
+       this notice, an operator opening Settings while locked sees one card and no way to explain it. -->
+  <div class="card" id="setLocked" style="display:none">
+    <h2>Settings are locked</h2>
+    <div class="muted" style="margin-bottom:12px">These settings need this relay's <b>admin token</b>. On the relay's own computer it fills in automatically; from another device, enter it once on the Dashboard.</div>
+    <button class="btn-clay" id="goUnlock">Enter the admin token</button>
+  </div>
+
+  <div class="card" id="relayNameCard">
+    <h2>Your relay's name</h2>
+    <div id="relayNameBody"><div class="muted">Checking…</div></div>
   </div>
 
   <div class="card" id="servesCard" style="display:none">
@@ -225,14 +270,8 @@
     </div>
   </div>
 
-  <div class="card" id="subsCard" style="display:none">
-    <h2>Email subscribers <span class="muted" id="subsMsg" style="font-weight:600"></span></h2>
-    <div class="row"><span class="k">On the list</span><span class="v" id="subsCount">—</span></div>
-    <div class="muted" style="margin:4px 0 10px; font-size:13px">People who opted in via the website's “Stay updated” form. Export to send your update emails from your own mail tool.</div>
-    <button class="btn-clay" id="dlSubs">Download CSV</button>
-  </div>
-
   </div><!-- /deck -->
+  </div><!-- /panel-set -->
 </div>
 
 <script src="control.js"></script>
