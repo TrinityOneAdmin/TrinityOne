@@ -33,13 +33,16 @@
   html { -webkit-text-size-adjust: 100%; }
   body { margin:0; font-family:var(--font-ui); background:var(--paper); color:var(--ink); -webkit-font-smoothing:antialiased; }
   ::selection { background:var(--gold-tint); color:var(--ink); }
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 26px 20px 60px; }
+  .wrap { max-width: 1760px; margin: 0 auto; padding: 26px 24px 60px; }
   /* summary spans the full width; detail cards pack into the deck below it */
-  .hero, .grid { max-width: 1180px; }
-  .deck { display:grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap:16px; align-items:start; }
+  .hero { max-width: 1760px; }
+  .deck { display:grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap:16px; align-items:start; }
   .deck > .card { margin-bottom:0; }
   /* the churches list carries npubs and per-row detail — give it room once there is room to give */
-  @media (min-width: 1060px) { .card--wide { grid-column: span 2; } }
+  @media (min-width: 1000px) { .card--wide { grid-column: span 2; } }
+  /* the churches list is the tallest card by far — on a wide screen let it hold its own column pair
+     and scroll internally, so 22 rows don't push every other card down a screen and a half. */
+  @media (min-width: 1000px) { .card--wide .ch-scroll { max-height: 620px; overflow-y: auto; padding-right: 4px; } }
   .brand { display:flex; align-items:center; gap:9px; margin-bottom:22px; }
   .brand b { font-weight:800; font-size:18px; letter-spacing:-.2px; } .brand .clay { color:var(--clay); }
   /* the console's .sk-pill, so the surface badge reads the same in both halves of the Suite */
@@ -141,7 +144,7 @@
       <div class="warn" style="margin-bottom:10px">⚠ Enter the relay's <b>admin token</b> to manage churches. If you're on the relay's own computer this fills in automatically. Otherwise find it in the TrinityOne Suite window, or the install output. <span style="opacity:.75">(Self-hosted on a Linux server? <code>journalctl -u trinityone-relay | grep "admin token"</code>.)</span></div>
       <div style="display:flex; gap:8px; margin-bottom:6px"><input id="tok" type="password" placeholder="admin token" autocomplete="off" /><button class="btn-clay" id="tokGo" style="white-space:nowrap">Connect</button></div>
     </div>
-    <div id="cfgList"><div class="muted">Loading…</div></div>
+    <div class="ch-scroll"><div id="cfgList"><div class="muted">Loading…</div></div></div>
     <div id="cfgBody" style="display:none">
       <div style="display:flex; align-items:center; gap:8px">
         <button class="btn-clay" id="addCh">+ Add a church</button>
