@@ -1649,6 +1649,26 @@ function _gzipBuf(body) { try { return gzipSync(body, { level: 6 }); } catch { r
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
   // relay status (for the Relay app control dashboard)
+  // Dashboard aggregates for the operator's own console. ADMIN-ONLY and default-deny: /status is public
+  // and deliberately stays coarse, but this breaks activity down BY CHURCH and by kind — a per-church
+  // publishing rhythm ("this congregation went quiet in March") is exactly the pattern an observer with a
+  // seized relay would want, so it never leaves the admin boundary. See [read gates must default-deny].
+  if (route === '/stats') {
+    if (!adminOK(req)) { res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"unauthorized"}'); return; }
+    const days = Math.max(1, Math.min(365, parseInt((req.url.match(/[?&]days=(\d+)/) || [])[1] || '30', 10) || 30));
+    let act = { days, daily: [], kinds: [], churches: [], oldest: 0 };
+    try { if (store.activity) act = store.activity(days); } catch (e) { /* a broken aggregate must not take the console down */ }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({
+      ok: true, ...act,
+      // resolve pubkeys to the names the operator configured — the console would otherwise print raw npubs.
+      // CHURCH_NAMES is the module-level map; curChurches() is scoped to the /config handler, not here.
+      churches: (act.churches || []).map(c => ({ ...c, name: CHURCH_NAMES.get(c.church) || '' })),
+      media: { bytes: _mediaBytesTotal, capBytes: effMediaCap() },
+      uptimeMs: Date.now() - STARTED_AT,
+    }));
+    return;
+  }
   if (route === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({

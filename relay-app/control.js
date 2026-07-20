@@ -185,6 +185,7 @@
       loadServes();
       loadUpdate();
       loadSubs();
+      loadStats();
     } catch (e) { /* relay down — the hero card shows it */ }
   }
   let subsCache = [];
@@ -587,11 +588,15 @@
     }
     try { localStorage.setItem(TAB_KEY, want); } catch (e) { /* private mode — the tab just won't persist */ }
   }
-  // the settings cards are auth-gated, so when they're all hidden the tab must say why rather than
-  // look empty — the token gate itself lives in the churches card, on the other tab.
+  // /stats is admin-only, so the Dashboard's activity cards are auth-gated. The token gate lives in the
+  // churches card over in Settings, so when locked we say so HERE and send the operator across, rather
+  // than leaving three cards spinning on "Loading…" with no explanation.
+  const STAT_CARDS = ['actCard', 'kindCard', 'topCard'];
   function syncSettingsLock(locked) {
-    const el = document.getElementById('setLocked');
+    const el = document.getElementById('dashLocked');
     if (el) el.style.display = locked ? 'block' : 'none';
+    for (const id of STAT_CARDS) { const c = document.getElementById(id); if (c) c.style.display = locked ? 'none' : 'block'; }
+    if (locked) for (const id of ['s-today', 's-media']) { const t = document.getElementById(id); if (t) t.textContent = '—'; }
   }
   function wireTabs() {
     TABS.forEach((t, i) => {
@@ -609,7 +614,7 @@
     });
     const unlock = document.getElementById('goUnlock');
     if (unlock) unlock.onclick = () => {
-      selectTab('dash', false);
+      selectTab('set', false);                 // the token gate lives in the churches card, on Settings
       const tok = document.getElementById('tok');
       if (tok) { tok.scrollIntoView({ behavior: 'smooth', block: 'center' }); tok.focus(); }
     };
@@ -618,3 +623,79 @@
     selectTab(saved, false);
   }
   wireTabs();
+
+  // ── Dashboard activity (/stats — admin-only) ───────────────────────────────────────────────────
+  // Nostr kind numbers mean nothing to a church operator, so name the ones this app actually writes and
+  // fall back to the raw number rather than inventing a label for something we don't recognise.
+  const KIND_NAMES = {
+    0: 'Profiles', 1: 'Posts', 3: 'Contact lists', 4: 'Direct messages', 5: 'Deletions',
+    7: 'Reactions', 1059: 'Sealed messages', 1063: 'Media', 9735: 'Giving receipts',
+    10002: 'Relay lists', 22242: 'Sign-ins', 30078: 'Church records',
+  };
+  const kindName = (k) => KIND_NAMES[k] || ('Kind ' + k);
+  const fmtStore = (b) => { b = Number(b) || 0; if (b <= 0) return '0'; const u = ['B','KB','MB','GB','TB'];
+    const i = Math.min(u.length - 1, Math.floor(Math.log(b) / Math.log(1024)));
+    const n = b / Math.pow(1024, i); return (n >= 10 || i === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + u[i]; };
+  const dayLabel = (sec) => new Date(sec * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+
+  function barRows(items, total, into) {
+    const el = document.getElementById(into); if (!el) return;
+    if (!items.length) { el.innerHTML = '<div class="muted">Nothing stored yet.</div>'; return; }
+    const max = Math.max(...items.map(i => i.n), 1);
+    el.innerHTML = items.map(i => {
+      const pct = Math.round((i.n / total) * 100);
+      return '<div class="bar-row"><div class="bar-top"><b>' + esc(i.label) + '</b><span>' +
+        i.n.toLocaleString() + (total ? ' · ' + pct + '%' : '') + '</span></div>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(2, Math.round((i.n / max) * 100)) + '%"></div></div></div>';
+    }).join('');
+  }
+
+  function renderActivity(s) {
+    const bars = document.getElementById('actBars'); if (!bars) return;
+    const daily = s.daily || [];
+    const max = Math.max(...daily.map(d => d.n), 1);
+    const total = daily.reduce((a, d) => a + d.n, 0);
+    // height is scaled to the busiest day, so the shape is relative — the peak is labelled underneath so
+    // nobody reads a tall bar on a quiet relay as a lot of traffic.
+    bars.innerHTML = daily.map(d => {
+      const h = d.n ? Math.max(4, Math.round((d.n / max) * 100)) : 0;
+      const cls = d.n === 0 ? 'zero' : (d.n === max ? 'hot' : '');
+      return '<i class="' + cls + '" style="height:' + (d.n ? h + '%' : '2px') + '" title="' +
+        esc(dayLabel(d.day)) + ': ' + d.n + (d.n === 1 ? ' event' : ' events') + '"></i>';
+    }).join('');
+    const from = document.getElementById('actFrom'), to = document.getElementById('actTo');
+    if (from && daily.length) from.textContent = dayLabel(daily[0].day);
+    if (to && daily.length) to.textContent = 'today';
+    const range = document.getElementById('actRange');
+    if (range) range.textContent = '· last ' + (s.days || 30) + ' days';
+    const note = document.getElementById('actNote');
+    if (note) note.textContent = total === 0
+      ? 'Nothing published in this window.'
+      : total.toLocaleString() + ' events · busiest day ' + max.toLocaleString() + '.';
+    const today = document.getElementById('s-today');
+    if (today && daily.length) today.textContent = daily[daily.length - 1].n.toLocaleString();
+  }
+
+  async function loadStats() {
+    try {
+      const r = await fetch('/stats?days=30', { headers: authHeaders(), cache: 'no-store' });
+      if (r.status === 401) { syncSettingsLock(true); return; }
+      const s = await r.json();
+      syncSettingsLock(false);
+      renderActivity(s);
+      const kinds = (s.kinds || []).map(k => ({ label: kindName(k.kind), n: k.n }));
+      barRows(kinds.slice(0, 7), kinds.reduce((a, k) => a + k.n, 0), 'kindBody');
+      // Match the churches list's language rather than printing a raw key at anyone — but two different
+      // churches CAN carry the same name (and on this relay three of them do). Identical rows would be
+      // indistinguishable, so a repeated name earns a key fragment to tell them apart.
+      const raw = (s.churches || []).map(c => ({ name: c.name || 'Unnamed church', church: c.church || '', n: c.n }));
+      const seen = raw.reduce((m, c) => m.set(c.name, (m.get(c.name) || 0) + 1), new Map());
+      const chs = raw.map(c => ({ label: seen.get(c.name) > 1 ? c.name + ' · ' + c.church.slice(0, 6) : c.name, n: c.n }));
+      barRows(chs.slice(0, 6), chs.reduce((a, c) => a + c.n, 0), 'topBody');
+      const media = document.getElementById('s-media');
+      if (media) media.textContent = fmtStore((s.media || {}).bytes);
+    } catch (e) { /* relay down — the hero already says so */ }
+  }
+  // the activity window moves slowly; a minute is plenty and keeps "Sent today" honest without polling
+  // the aggregates as hard as /status.
+  setInterval(loadStats, 60000);

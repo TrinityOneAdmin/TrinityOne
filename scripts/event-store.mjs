@@ -222,5 +222,27 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
       return { events: n, ids };
     } catch (e) { return { events: 0, ids: [], error: String((e && e.message) || e) }; }
   }
-  return { db, put, query, eachKind, count, authorOf, del, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  // Dashboard aggregates. Every query here rides an existing index (idx_created, idx_kind_created,
+  // idx_church_created), so this stays cheap as the pool grows.
+  const qDaily   = db.prepare(`SELECT created_at / 86400 AS d, COUNT(*) AS n FROM events WHERE created_at >= ? GROUP BY d`);
+  const qKinds   = db.prepare(`SELECT kind, COUNT(*) AS n FROM events GROUP BY kind ORDER BY n DESC`);
+  const qByChurch= db.prepare(`SELECT church, COUNT(*) AS n FROM events WHERE church <> '' GROUP BY church ORDER BY n DESC LIMIT 8`);
+  const qOldest  = db.prepare(`SELECT MIN(created_at) AS t FROM events`);
+  // `days` of DENSE buckets — a day with no events must come back as 0, not be missing. A sparse series
+  // silently rescales the chart and makes a quiet week look identical to a busy one.
+  function activity(days = 30, nowSec = Math.floor(Date.now() / 1000)) {
+    const n = Math.max(1, Math.min(365, days | 0));
+    const today = Math.floor(nowSec / 86400);
+    const since = (today - n + 1) * 86400;
+    const seen = new Map();
+    try { for (const r of qDaily.all(since)) seen.set(r.d | 0, r.n | 0); } catch {}
+    const daily = [];
+    for (let i = 0; i < n; i++) { const d = today - n + 1 + i; daily.push({ day: d * 86400, n: seen.get(d) || 0 }); }
+    let kinds = [], churches = [], oldest = 0;
+    try { kinds = qKinds.all().map(r => ({ kind: r.kind | 0, n: r.n | 0 })); } catch {}
+    try { churches = qByChurch.all().map(r => ({ church: r.church, n: r.n | 0 })); } catch {}
+    try { oldest = (qOldest.get() || {}).t | 0; } catch {}
+    return { days: n, daily, kinds, churches, oldest };
+  }
+  return { db, put, query, eachKind, count, authorOf, del, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }

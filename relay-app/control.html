@@ -53,7 +53,21 @@
   .dot.on { background:var(--sage); box-shadow:0 0 0 4px color-mix(in oklab, var(--sage) 22%, transparent); }
   .dot.off { background:var(--ink-3); }
   .hero h1 { margin:0; font-size:20px; letter-spacing:-.2px; } .hero .sub { color:var(--ink-2); font-size:13.5px; margin-top:3px; }
-  .grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; margin-bottom:16px; max-width:620px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(122px, 1fr)); gap:10px; margin-bottom:16px; max-width:940px; }
+  /* Activity chart. Plain flex bars rather than SVG: no viewBox maths, it reflows with the card, and the
+     bar count changes with ?days= without recomputing a coordinate system. */
+  .spark { display:flex; align-items:flex-end; gap:2px; height:132px; padding-top:4px; }
+  .spark i { flex:1 1 0; min-width:0; min-height:2px; border-radius:3px 3px 0 0; background:var(--clay-soft); }
+  .spark i.hot { background:var(--clay); }
+  .spark i.zero { background:var(--line); min-height:2px; }
+  .spark-x { display:flex; justify-content:space-between; font-size:11.5px; color:var(--ink-3); font-weight:600; margin-top:6px; padding-top:6px; border-top:1px solid var(--line); }
+  /* labelled proportion rows — shared by "What's stored" and "Busiest churches" */
+  .bar-row { margin-bottom:10px; }
+  .bar-row .bar-top { display:flex; justify-content:space-between; gap:10px; font-size:13px; margin-bottom:4px; }
+  .bar-row .bar-top b { font-weight:700; }
+  .bar-row .bar-top span { color:var(--ink-3); font-variant-numeric:tabular-nums; font-weight:600; flex-shrink:0; }
+  .bar-track { height:7px; border-radius:999px; background:var(--surface-2); overflow:hidden; }
+  .bar-fill { height:100%; border-radius:999px; background:var(--clay); }
   .stat { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-sm); padding:13px; }
   .stat .n { font-size:24px; font-weight:800; letter-spacing:-.5px; font-variant-numeric:tabular-nums; }
   .stat .l { font-size:11.5px; color:var(--ink-3); font-weight:600; margin-top:2px; }
@@ -150,11 +164,29 @@
     <div class="stat"><div class="n" id="s-members">—</div><div class="l">Members</div></div>
     <div class="stat"><div class="n" id="s-events">—</div><div class="l">Events stored</div></div>
     <div class="stat"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
+    <div class="stat"><div class="n" id="s-today">—</div><div class="l">Sent today</div></div>
+    <div class="stat"><div class="n" id="s-media">—</div><div class="l">Media stored</div></div>
   </div>
 
   <!-- card deck: auto-fill grid, so it is 1 column on a phone and packs to 2–3 on a laptop without a
        breakpoint per card. -->
   <div class="deck">
+
+  <!-- The activity figures come from /stats, which is admin-only (it breaks activity down BY CHURCH).
+       The token gate itself lives in the churches card, over in Settings — so when locked, say so here
+       and offer the way across rather than leaving three cards spinning on "Loading…". -->
+  <div class="card card--wide" id="dashLocked" style="display:none">
+    <h2>Activity is locked</h2>
+    <div class="muted" style="margin-bottom:12px">The figures below need this relay's <b>admin token</b>. On the relay's own computer it fills in automatically; from another device, enter it once in Settings.</div>
+    <button class="btn-clay" id="goUnlock">Enter the admin token</button>
+  </div>
+
+  <div class="card card--wide" id="actCard">
+    <h2>Activity <span class="muted" id="actRange" style="font-weight:600"></span></h2>
+    <div class="spark" id="actBars"><div class="muted">Loading…</div></div>
+    <div class="spark-x"><span id="actFrom">—</span><span id="actTo">—</span></div>
+    <div class="muted" style="margin-top:8px" id="actNote"></div>
+  </div>
 
   <div class="card">
     <h2>How members reach you</h2>
@@ -163,6 +195,30 @@
     <div class="row"><span class="k">Console</span><span class="v" id="console">—</span><button class="btn-ghost" data-copy="console">Copy</button></div>
     <div class="muted" style="margin-top:6px">Members join with the invite QR you share from the console — it carries this relay automatically.</div>
   </div>
+
+  <div class="card" id="kindCard">
+    <h2>What's stored</h2>
+    <div id="kindBody"><div class="muted">Loading…</div></div>
+  </div>
+
+  <div class="card" id="topCard">
+    <h2>Busiest churches</h2>
+    <div id="topBody"><div class="muted">Loading…</div></div>
+  </div>
+
+  <div class="card" id="healthCard">
+    <h2>Relay health</h2>
+    <div class="row"><span class="k">This relay's build</span><span class="v" id="u-current">—</span></div>
+    <div class="row"><span class="k">Relay sync</span><span class="v" id="syncMsg" style="font-weight:600">—</span></div>
+    <div class="row"><span class="k">Last checked</span><span class="v" id="syncWhen">—</span></div>
+    <div class="muted" style="margin-top:8px">Each church can trust more than one relay, and this box keeps itself level with theirs automatically. Updating and syncing on demand live in <b>Settings</b>.</div>
+  </div>
+
+  </div><!-- /deck -->
+  </div><!-- /panel-dash -->
+
+  <div class="panel" id="panel-set" role="tabpanel" aria-labelledby="tab-set" hidden>
+  <div class="deck">
 
   <div class="card" id="goPublic">
     <h2>Reach members from anywhere <span class="muted" id="gpStatus" style="font-weight:600"></span></h2>
@@ -196,20 +252,6 @@
     <div class="row"><span class="k">On the list</span><span class="v" id="subsCount">—</span></div>
     <div class="muted" style="margin:4px 0 10px; font-size:13px">People who opted in via the website's “Stay updated” form. Export to send your update emails from your own mail tool.</div>
     <button class="btn-clay" id="dlSubs">Download CSV</button>
-  </div>
-
-  </div><!-- /deck -->
-  </div><!-- /panel-dash -->
-
-  <div class="panel" id="panel-set" role="tabpanel" aria-labelledby="tab-set" hidden>
-  <div class="deck">
-
-  <!-- The admin-token gate lives in the Churches card on the Dashboard, but it unlocks cards HERE. Without
-       this notice, an operator opening Settings while locked sees one card and no way to explain it. -->
-  <div class="card" id="setLocked" style="display:none">
-    <h2>Settings are locked</h2>
-    <div class="muted" style="margin-bottom:12px">These settings need this relay's <b>admin token</b>. On the relay's own computer it fills in automatically; from another device, enter it once on the Dashboard.</div>
-    <button class="btn-clay" id="goUnlock">Enter the admin token</button>
   </div>
 
   <div class="card" id="relayNameCard">
@@ -255,7 +297,9 @@
 
   <div class="card" id="updateCard" style="display:none">
     <h2>Relay software <span class="muted" id="updateMsg" style="font-weight:600"></span></h2>
-    <div class="row"><span class="k">This relay's build</span><span class="v" id="u-current">—</span></div>
+    <!-- the build number and sync status read as HEALTH, so they live on the Dashboard; what stays here
+         is the actions. Their ids (u-current, syncMsg, syncWhen) moved with them — duplicating the ids
+         in both places would have left loadUpdate() writing to whichever element parsed first. -->
     <div id="u-body" class="muted" style="margin-top:10px">Checking for updates…</div>
     <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)">
       <div class="row"><span class="k">APK downloads</span><span class="v" id="apkMsg" style="font-weight:600">—</span></div>
@@ -263,9 +307,7 @@
       <button class="btn-clay" id="fetchApk">Fetch latest APK</button>
     </div>
     <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)">
-      <div class="row"><span class="k">Relay sync</span><span class="v" id="syncMsg" style="font-weight:600">—</span></div>
-      <div class="muted" style="margin:4px 0 9px; font-size:13px">Each church can trust more than one relay, and this box keeps itself level with theirs automatically, every few minutes. Nothing to do here — this just shows it's working.</div>
-      <div class="row" style="margin-bottom:10px"><span class="k">Last checked</span><span class="v" id="syncWhen">—</span></div>
+      <div class="muted" style="margin:0 0 9px; font-size:13px">This box keeps itself level with the other relays each church trusts, automatically, every few minutes — <b>Relay health</b> on the Dashboard shows whether that's working. Use this to check right now.</div>
       <button class="btn-ghost" id="syncNow">Check now</button>
     </div>
   </div>
