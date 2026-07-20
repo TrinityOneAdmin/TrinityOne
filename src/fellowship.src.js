@@ -1433,19 +1433,7 @@ window.Fellowship = {
         if (!d.startsWith(CARE_D)) return;
         const id = d.slice(CARE_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        // SECURITY-AUDIT-2026-07-20 H3: needs published on/after 2026-07-20 seal the identifying half
-        // (displayLabel/notes/recipient/dietary) under the church care key, wrapped to each member. Merge
-        // the opened half over the clear one. A v1 cleartext doc still reads as-is so a church mid-pilot
-        // doesn't lose its open needs; `_sealed` marks a doc we couldn't open (not yet keyed) so the UI can
-        // say "details hidden" instead of rendering a nameless, broken-looking need. The clear half
-        // (type/dates/meals) always renders, so an unkeyed member still sees help is needed and when.
-        try {
-          const c = JSON.parse(e.content);
-          let s = null, sealed = false;
-          if (c.enc) { s = _careOpen(pubk, c.enc); sealed = !s; }
-          const f = s ? { ...c, ...s } : c;
-          byId.set(id, { id, _by: e.pubkey, _sealed: sealed, displayLabel: f.displayLabel || '', type: f.type || 'meals', startDate: f.startDate || '', endDate: f.endDate || '', recipient: (f.recipient || '').toLowerCase(), notes: f.notes || '', dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: (f.dayMeals && typeof f.dayMeals === 'object') ? f.dayMeals : {}, ts: e.created_at }); emit();
-        } catch {}
+        try { const c = JSON.parse(e.content); byId.set(id, { id, _by: e.pubkey, displayLabel: c.displayLabel || '', type: c.type || 'meals', startDate: c.startDate || '', endDate: c.endDate || '', recipient: (c.recipient || '').toLowerCase(), notes: c.notes || '', dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: (c.dayMeals && typeof c.dayMeals === 'object') ? c.dayMeals : {}, ts: e.created_at }); emit(); } catch {}
       },
       onroster() { emit(); },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
