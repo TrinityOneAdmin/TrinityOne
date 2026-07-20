@@ -215,6 +215,23 @@ test('B4: a church cannot claim safeguarding authority over someone who never jo
   assert.equal(ok, true, 'a hostile church listing someone as a minor severed their DMs — denial-of-contact');
 });
 
+// ── B-2: the network scoping must not be bypassable by OMITTING the church tag ─────────────────────
+// kind-1 scopes by GROUP, not by d-tag, so the "every church-scoped rule keys off the d-tag suffix"
+// reasoning that justified allowing an untagged network event did not hold: dropping the ['church'] tag
+// walked straight into another congregation's announcement channel.
+test('B-2: an untagged post from B’s network key cannot enter church A’s broadcast channel', async () => {
+  const ws = await connect();
+  await publish(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', D.group + 'bc1']], content: JSON.stringify({ name: 'Announcements', kind: 'broadcast' }) }, aSk));
+  await sleep(150);
+  const untagged = await publish(ws, finalizeEvent({ kind: 1, created_at: now(), tags: [['t', 'bc1'], ['t', 'trinityone'], ['p', aPub]], content: 'FORGED ANNOUNCEMENT' }, netSk));
+  const tagged = await publish(ws, finalizeEvent({ kind: 1, created_at: now(), tags: [['t', 'bc1'], ['t', 'trinityone'], ['p', aPub], ['church', aPub]], content: 'FORGED ANNOUNCEMENT 2' }, netSk));
+  const owner = await publish(ws, finalizeEvent({ kind: 1, created_at: now(), tags: [['t', 'bc1'], ['t', 'trinityone'], ['p', aPub]], content: 'a real announcement' }, aSk));
+  ws.close();
+  assert.equal(untagged, false, 'B’s network key posted into church A’s broadcast channel by omitting the church tag');
+  assert.equal(tagged, false, 'B’s network key posted into church A’s broadcast channel');
+  assert.equal(owner, true, 'the owning church can no longer post to its own broadcast channel — over-corrected');
+});
+
 test('an unaffiliated outsider who authenticates reads none of it', async () => {
   const ws = await connect();
   const got = await reqCollect(ws, 's9', { kinds: [30078] }, malSk, 1200);

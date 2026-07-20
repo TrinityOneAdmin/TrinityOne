@@ -1135,8 +1135,10 @@ function accept(e) {
     if (d === MEALS_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // enable/configure the module: church or rostered steward
     if (d.startsWith(NEED_D)) {                                 // open / edit / close a care need
       const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
+      // B-2: was `isLeader ||`, which an untagged event from any church's network key satisfied for EVERY
+      // church — a forged care need in someone else's congregation. Require a resolved owning church.
       // church / steward / care-team admin; or any NON-minor member when the church allows member-opened needs (children never open needs)
-      return isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && isMember && !MINORS.has(e.pubkey));
+      return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && isMember && !MINORS.has(e.pubkey)));
     }
     if (d.startsWith(SLOT_D)) return isMember;                  // fill a slot: any member offers help (the event is keyed by their own pubkey, so they can't forge another member's)
     if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": the RECIPIENT, or a steward/care-team blocking a date on their behalf (recipient may not be on the app)
@@ -1157,7 +1159,15 @@ function accept(e) {
   }
   if (k === 1) {   // chat
     const g = gidOf(e);
-    if (g && BROADCAST.has(g)) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // broadcast channel = church/network/steward only
+    // REVIEW-2026-07-20 B-2: `isLeader` folds in an UNSCOPED network check for events carrying no ['church']
+    // tag, and kind-1 scopes by GROUP, not by d-tag — so the "every church-scoped rule keys off the d-tag
+    // suffix" reasoning did not hold here. A key any church had declared a network could omit the tag and
+    // post into ANY other church's broadcast/announcement channel, which canRead then served to that whole
+    // congregation, under an attacker-controlled display name. Scope to the group's actual owner.
+    if (g && BROADCAST.has(g)) {
+      const gcp = GROUP_CHURCH.get(g) || namedChurch(e);
+      return !!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardOf(e.pubkey, gcp));
+    }
     if (g && GROUP_VIS.get(g) === 'invite') { const mem = GROUP_MEMBERS.get(g); return isLeader || stewardOf(e.pubkey, namedChurch(e)) || !!(mem && mem.has(e.pubkey)); }  // invite-only group
     return isMember;
   }
