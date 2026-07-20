@@ -1,7 +1,7 @@
 {
   "name": "TrinityOne",
   "short_name": "TrinityOne",
-  "description": "Read · Gather · Share — an offline-first Bible with anonymous, self-custodial church fellowship.",
+  "description": "Read · Gather · Share — an offline-first Bible and your church's own private home for prayer, groups and serving. No account, no password.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
