@@ -13,14 +13,27 @@ SVC_USER="${TRINITYONE_USER:-trinityone}"
 FLAG="$DIR/relay/.update-request"
 LOG="$DIR/relay/update.log"
 log() { printf '%s  %s\n' "$(date -Is)" "$*" | tee -a "$LOG" >&2; }
+# RELAY-UX-2026-07-20 H2/H7: a persisted outcome. The dashboard could only report success if the browser
+# happened to be watching the exact moment the version changed — reload the page, close the app, or take
+# longer than its 2-minute poll and the operator was told nothing. A FAILED update reported nothing at
+# all, ever: the reason existed only in this log, reachable only by terminal, on a product whose whole
+# promise is that you do not need one. Now every exit path records why, and /update serves it back.
+STATUS="$DIR/relay/update-status.json"
+status() {   # status <state> <reason>
+  printf '{"state":"%s","reason":"%s","at":%s,"from":"%s","to":"%s"}\n' \
+    "$1" "$(printf '%s' "${2:-}" | sed 's/[\\"]/ /g' | tr -d '\n' | cut -c1-300)" "$(date +%s)" "${CUR_SHA:-}" "${NEW_SHA:-}" > "$STATUS" 2>/dev/null || true
+}
+fail() { log "$1"; status failed "$1"; exit 1; }
 
 rm -f "$FLAG"   # consume the flag first so the path-unit doesn't immediately re-trigger
 ORIGIN="$(tr -d '[:space:]' < "$DIR/relay/origin" 2>/dev/null || true)"
-[ -n "$ORIGIN" ] || { log "no update origin set — aborting"; exit 1; }
+[ -n "$ORIGIN" ] || { fail "no update origin is configured for this relay"; }
 
+CUR_SHA="$(sed -n 1p "$DIR/version.txt" 2>/dev/null | cut -c1-7)"
+status running "downloading"
 log "update requested — pulling from $ORIGIN"
 TARBALL="$(mktemp)"; SIGFILE="$(mktemp)"; trap 'rm -f "$TARBALL" "$SIGFILE"' EXIT
-curl -fsSL "$ORIGIN/relay-app/bundle.tgz" -o "$TARBALL" || { log "download failed"; exit 1; }
+curl -fsSL "$ORIGIN/relay-app/bundle.tgz" -o "$TARBALL" || { fail "could not download the update from $ORIGIN"; }
 
 # ── verify the bundle's authenticity BEFORE touching the installed code ────────────────────────
 # The bundle is signed on the release host with the Ed25519 release SECRET; we verify the detached
@@ -29,15 +42,17 @@ curl -fsSL "$ORIGIN/relay-app/bundle.tgz" -o "$TARBALL" || { log "download faile
 # swapping or rolling back — nothing has changed yet. (If origin/DNS/TLS is intact this is belt-and-braces.)
 PUBKEY="$DIR/relay-app/release-pubkey.pem"
 if [ ! -s "$PUBKEY" ]; then
+  status failed "this relay has no release key baked in, so the update cannot be verified"
   log "VERIFY ABORT: baked-in release public key missing at $PUBKEY — refusing to apply an unverifiable bundle"
   exit 1
 fi
-command -v openssl >/dev/null 2>&1 || { log "VERIFY ABORT: openssl not found — cannot verify the bundle signature"; exit 1; }
-curl -fsSL "$ORIGIN/relay-app/bundle.sig" -o "$SIGFILE" || { log "VERIFY ABORT: could not download bundle signature from $ORIGIN/relay-app/bundle.sig"; exit 1; }
-[ -s "$SIGFILE" ] || { log "VERIFY ABORT: empty signature file"; exit 1; }
+command -v openssl >/dev/null 2>&1 || { fail "openssl is missing, so the update signature cannot be checked"; }
+curl -fsSL "$ORIGIN/relay-app/bundle.sig" -o "$SIGFILE" || { fail "could not download the update signature from $ORIGIN"; }
+[ -s "$SIGFILE" ] || { fail "the update signature was empty"; }
 if openssl pkeyutl -verify -pubin -inkey "$PUBKEY" -rawin -in "$TARBALL" -sigfile "$SIGFILE" >/dev/null 2>&1; then
   log "bundle signature verified against the baked-in release key"
 else
+  status failed "the update was not signed by the real release key — refusing it (the source may be compromised)"
   log "VERIFY ABORT: bundle signature did NOT verify against the release key — refusing to apply (origin may be compromised)"
   exit 1
 fi
@@ -53,6 +68,7 @@ NEW_E="$(date -d "$NEW_STAMP" +%s 2>/dev/null || echo 0)"
 CUR_E="$(date -d "$CUR_STAMP" +%s 2>/dev/null || echo 0)"
 if [ "$NEW_E" -gt 0 ] && [ "$CUR_E" -gt 0 ]; then
   if [ "$NEW_E" -lt "$CUR_E" ]; then
+    status failed "the offered build ($NEW_STAMP) is older than the one installed ($CUR_STAMP) — refusing to go backwards"
     log "VERIFY ABORT: incoming build ($NEW_STAMP) is OLDER than installed ($CUR_STAMP) — refusing downgrade (anti-rollback)"
     exit 1
   fi
@@ -104,6 +120,7 @@ done
 
 if [ "$ok" = 1 ]; then
   log "update complete — relay healthy on :$PORT"
+  status ok ""
   rm -f "$BACKUP"
 else
   log "new build did not come up — rolling back"
@@ -111,6 +128,7 @@ else
   chown -R "$SVC_USER:$SVC_USER" "$DIR/relay"
   chown -R root:root "$DIR/scripts" "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
   systemctl restart "$SVC"
+  status rolledback "the new build did not start, so the previous one was put back"
   log "rolled back to the previous build"
   exit 1
 fi

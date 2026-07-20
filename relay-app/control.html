@@ -33,7 +33,13 @@
   html { -webkit-text-size-adjust: 100%; }
   body { margin:0; font-family:var(--font-ui); background:var(--paper); color:var(--ink); -webkit-font-smoothing:antialiased; }
   ::selection { background:var(--gold-tint); color:var(--ink); }
-  .wrap { max-width: 760px; margin: 0 auto; padding: 26px 20px 60px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 26px 20px 60px; }
+  /* summary spans the full width; detail cards pack into the deck below it */
+  .hero, .grid { max-width: 1180px; }
+  .deck { display:grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap:16px; align-items:start; }
+  .deck > .card { margin-bottom:0; }
+  /* the churches list carries npubs and per-row detail — give it room once there is room to give */
+  @media (min-width: 1060px) { .card--wide { grid-column: span 2; } }
   .brand { display:flex; align-items:center; gap:9px; margin-bottom:22px; }
   .brand b { font-weight:800; font-size:18px; letter-spacing:-.2px; } .brand .clay { color:var(--clay); }
   /* the console's .sk-pill, so the surface badge reads the same in both halves of the Suite */
@@ -44,7 +50,7 @@
   .dot.on { background:var(--sage); box-shadow:0 0 0 4px color-mix(in oklab, var(--sage) 22%, transparent); }
   .dot.off { background:var(--ink-3); }
   .hero h1 { margin:0; font-size:20px; letter-spacing:-.2px; } .hero .sub { color:var(--ink-2); font-size:13.5px; margin-top:3px; }
-  .grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-bottom:16px; }
+  .grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; margin-bottom:16px; max-width:620px; }
   .stat { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-sm); padding:13px; }
   .stat .n { font-size:24px; font-weight:800; letter-spacing:-.5px; font-variant-numeric:tabular-nums; }
   .stat .l { font-size:11.5px; color:var(--ink-3); font-weight:600; margin-top:2px; }
@@ -105,6 +111,11 @@
     <div class="stat"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
   </div>
 
+  <!-- card deck: the eight cards used to run down one 760px column, so a desktop operator scrolled past
+       three screens of whitespace to reach the churches list. Auto-fill grid, so it is 1 column on a phone
+       and packs to 2–3 on a laptop without a breakpoint per card. -->
+  <div class="deck">
+
   <div class="card">
     <h2>How members reach you</h2>
     <div id="reach"></div>
@@ -123,7 +134,7 @@
     <div id="relayNameBody"><div class="muted">Checking…</div></div>
   </div>
 
-  <div class="card">
+  <div class="card card--wide">
     <h2>Churches on this relay <span class="muted" id="cfgStatus" style="font-weight:600"></span></h2>
     <!-- token gate: shown only when configuring from another device (loopback is trusted) -->
     <div id="cfgGate" style="display:none">
@@ -192,8 +203,9 @@
     </div>
     <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line)">
       <div class="row"><span class="k">Relay sync</span><span class="v" id="syncMsg" style="font-weight:600">—</span></div>
-      <div class="muted" style="margin:4px 0 9px; font-size:13px">Pull the latest from this church's other relays now. They also sync on their own every few minutes — this is just to catch up immediately (e.g. after bringing a node back online).</div>
-      <button class="btn-clay" id="syncNow">Sync now</button>
+      <div class="muted" style="margin:4px 0 9px; font-size:13px">Each church can trust more than one relay, and this box keeps itself level with theirs automatically, every few minutes. Nothing to do here — this just shows it's working.</div>
+      <div class="row" style="margin-bottom:10px"><span class="k">Last checked</span><span class="v" id="syncWhen">—</span></div>
+      <button class="btn-ghost" id="syncNow">Check now</button>
     </div>
   </div>
 
@@ -203,6 +215,8 @@
     <div class="muted" style="margin:4px 0 10px; font-size:13px">People who opted in via the website's “Stay updated” form. Export to send your update emails from your own mail tool.</div>
     <button class="btn-clay" id="dlSubs">Download CSV</button>
   </div>
+
+  </div><!-- /deck -->
 </div>
 
 <script src="control.js"></script>

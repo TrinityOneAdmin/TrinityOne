@@ -1638,6 +1638,7 @@ function serveStatic(req, res) {
       // ordinary relay. Surfaced so "which code is being released?" is answerable without shell access —
       // a8 ran a parked branch's WIP commit for a day and nothing anywhere said so.
       ...(existsSync(RELEASE_KEY) ? { releases: { ref: process.env.RELEASE_REF || 'main', sha: (() => { try { const g = spawnSync('git', ['-C', ROOT, 'rev-parse', '--short', '--verify', '--quiet', (process.env.RELEASE_REF || 'main') + '^{commit}'], { encoding: 'utf8' }); return g.status === 0 ? g.stdout.trim() : null; } catch { return null; } })() } } : {}),
+      sync: { ..._lastSync, running: _syncing, peers: PEER_URLS.size },   // is auto-sync actually working?
       relayPub: RELAY_PUB,   // this relay's identity pubkey — a church authorises it as a trusted sync peer
       writePolicy: CHURCH_PUBS.size > 0,
       // church npubs/names are intentionally NOT exposed here (unauthenticated) — the dashboard reads
@@ -1819,7 +1820,8 @@ function serveStatic(req, res) {
   if (route === '/sync-now' && req.method === 'POST') {
     const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
-    runSync().then((n) => { res.writeHead(200, H); res.end(JSON.stringify({ ok: true, imported: n })); }).catch(() => { res.writeHead(500, H); res.end('{"error":"sync failed"}'); });
+    runSync().then((n) => { res.writeHead(200, H); res.end(JSON.stringify(n === null ? { ok: true, busy: true } : { ok: true, imported: n, churches: CHURCH_PUBS.size })); })
+      .catch(() => { res.writeHead(500, H); res.end('{"error":"sync failed"}'); });
     return;
   }
   // resync media (manifest): the sha256 + size of every blob this relay holds for a church, to a TRUSTED peer
@@ -2354,7 +2356,14 @@ function serveStatic(req, res) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS, ...CORS };
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
-    let pending = false; try { statSync(UPDATE_FLAG); pending = true; } catch {}
+    let pending = false, pendingAgeS = 0;
+    try { const st = statSync(UPDATE_FLAG); pending = true; pendingAgeS = Math.max(0, Math.floor((Date.now() - st.mtimeMs) / 1000)); } catch {}
+    // H2/H7: the OUTCOME of the last update, written by relay-update.sh on every exit path. Without this
+    // the dashboard could only report success if the browser was watching at the right instant, and a
+    // failure was invisible outside a terminal. A flag older than ~5 minutes means nothing consumed it —
+    // i.e. the root update watcher isn't installed on this box — which looked identical to "still going".
+    let last = null; try { last = JSON.parse(readFileSync(join(DATA_DIR, 'update-status.json'), 'utf8')); } catch {}
+    const stalled = pending && pendingAgeS > 300;
     if (req.method === 'GET') {
       // Check the update source SERVER-SIDE (this box → origin), not in the operator's browser. The browser
       // often can't reach the release host's ts.net funnel (Tailscale MagicDNS hijacks the name to a private
@@ -2368,7 +2377,7 @@ function serveStatic(req, res) {
             if (s && s.version) latest = { version: s.version, versionShort: s.versionShort, builtAt: s.builtAt };
           } catch {}
         }
-        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, pending, latest }));
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, pending, stalled, last, latest }));
       })();
       return;
     }
@@ -2908,7 +2917,21 @@ async function syncAllChurches() {
   return total;
 }
 let _syncing = false;
-async function runSync() { if (_syncing) return 0; _syncing = true; try { return await syncAllChurches(); } finally { _syncing = false; } }
+// Returns null when a sync is ALREADY RUNNING, so the caller can say so. It used to return 0 for both
+// 'already syncing' and 'nothing new', which made the dashboard report a DROPPED request as
+// '\u2713 already up to date' (relay-UX audit L5).
+// Last sync outcome, so the dashboard can show that syncing is WORKING rather than offering a button to
+// force it. Relays sync themselves every ~5\u20137 min; what an operator actually needs to know is whether
+// that is happening, and nothing surfaced it \u2014 a relay whose peers had been unreachable for a week
+// looked identical to a healthy one.
+let _lastSync = { at: 0, imported: 0, ok: null, error: '' };
+async function runSync() {
+  if (_syncing) return null;
+  _syncing = true;
+  try { const n = await syncAllChurches(); _lastSync = { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: true, error: '' }; return n; }
+  catch (e) { _lastSync = { at: Math.floor(Date.now() / 1000), imported: 0, ok: false, error: String((e && e.message) || e).slice(0, 200) }; throw e; }
+  finally { _syncing = false; }
+}
 function scheduleSync() { const ms = (300 + Math.floor(Math.random() * 120)) * 1000; setTimeout(() => { runSync().finally(scheduleSync); }, ms); }   // ~5–7 min, jittered
 if (process.env.RELAY_SYNC !== '0') setTimeout(() => { runSync().finally(scheduleSync); }, 20000);   // first pass ~20s after boot (let it settle)
 function scheduleSave() {}   // no-op: SQLite persists synchronously (WAL); kept so existing call sites are harmless

@@ -41,6 +41,18 @@
       document.getElementById('s-members').textContent = s.counts.members;
       document.getElementById('s-events').textContent = s.counts.events;
       document.getElementById('s-conns').textContent = s.counts.connections;
+      // sync health — the point of the card is 'is this working?', not a button
+      const sw = document.getElementById('syncWhen');
+      if (sw && s.sync) {
+        if (s.sync.running) { sw.textContent = 'checking now\u2026'; }
+        else if (!s.sync.at) { sw.textContent = s.sync.peers ? 'not yet \u2014 first check runs shortly' : 'no other relays to check'; }
+        else {
+          const mins = Math.floor((Date.now() / 1000 - s.sync.at) / 60);
+          const when = mins < 1 ? 'just now' : mins === 1 ? '1 minute ago' : mins < 60 ? mins + ' minutes ago' : Math.floor(mins / 60) + 'h ago';
+          sw.textContent = s.sync.ok === false ? when + ' \u2014 failed' : when + (s.sync.imported ? ' \u00b7 pulled ' + s.sync.imported : ' \u00b7 nothing new');
+          sw.style.color = s.sync.ok === false ? 'var(--clay-ink)' : '';
+        }
+      }
     } catch (e) {
       document.getElementById('dot').className = 'dot off';
       document.getElementById('title').textContent = 'Relay not reachable';
@@ -323,6 +335,16 @@
       card.style.display = 'block';
       document.getElementById('u-current').textContent = (cur.versionShort || '—') + (cur.builtAt ? ' · ' + cur.builtAt.slice(0, 10) : '');
       const body = document.getElementById('u-body');
+      // report the LAST OUTCOME whenever we look, not only if we happened to be watching (H2/H7)
+      const lastMsg = document.getElementById('updateMsg');
+      if (lastMsg && cur.last && !cur.pending) {
+        const mins = cur.last.at ? Math.floor((Date.now() / 1000 - cur.last.at) / 60) : null;
+        const when = mins === null ? '' : mins < 1 ? ' just now' : mins < 60 ? ' ' + mins + 'm ago' : ' ' + Math.floor(mins / 60) + 'h ago';
+        if (cur.last.state === 'ok') { lastMsg.style.color = 'var(--sage-ink)'; lastMsg.textContent = '· ✓ updated' + when; }
+        else if (cur.last.state === 'failed') { lastMsg.style.color = 'var(--clay-ink)'; lastMsg.textContent = '· ✗ last update failed' + when + ' — ' + (cur.last.reason || ''); }
+        else if (cur.last.state === 'rolledback') { lastMsg.style.color = 'var(--clay-ink)'; lastMsg.textContent = '· ⟲ rolled back' + when + ' — ' + (cur.last.reason || ''); }
+      }
+      if (cur.stalled) { body.innerHTML = '<b>The update didn\u2019t start.</b> This relay asked for one but nothing picked it up \u2014 the update helper isn\u2019t installed on this box, so updates have to be applied by re-running the installer.'; return; }
       if (cur.pending) { body.innerHTML = '⏳ An update is in progress…'; pollUpdate(); return; }
       if (!cur.origin) { body.innerHTML = 'This is the release source — nothing to pull here.'; return; }
       // The relay checks its update source server-side (cur.latest) — the browser can't be relied on to reach
@@ -358,7 +380,7 @@
         const s = await (await fetch('/status', { cache: 'no-store' })).json();
         if (s.version && relayVersion && s.version !== relayVersion) { clearInterval(iv); msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ updated'; setTimeout(loadUpdate, 800); }
       } catch (e) { /* restarting — keep polling */ }
-      if (n > 40) { clearInterval(iv); msg.textContent = '· taking a while — fully close and reopen the app, then check this card again.'; }
+      if (n > 40) { clearInterval(iv); loadUpdate(); }   // stop guessing — re-read, which now carries the real outcome
     }, 3000);
   }
 
@@ -381,7 +403,10 @@
       const r = await fetch('/sync-now', { method: 'POST', headers: authHeaders() });
       const s = await r.json();
       if (!r.ok || !s.ok) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + (s.error || 'failed'); return; }
-      m.style.color = 'var(--sage)'; m.textContent = s.imported ? '✓ pulled ' + s.imported + ' new' : '✓ already up to date';
+      if (s.busy) { m.style.color = 'var(--ink-3)'; m.textContent = 'a sync is already running \u2014 give it a moment'; return; }
+      m.style.color = 'var(--sage-ink)';
+      const across = s.churches > 1 ? ' across ' + s.churches + ' churches' : '';
+      m.textContent = s.imported ? '\u2713 pulled ' + s.imported + ' new' + across : '\u2713 nothing new' + across;
     } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
   });
   // on load, show the latest available APK version in the fetch area (so you can see which build is current)
