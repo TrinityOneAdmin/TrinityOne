@@ -35,7 +35,7 @@
     --surface-2:  #FBF5EA;
     --ink:        #221C16;
     --ink-2:      #6B6052;
-    --ink-3:      #A89E8E;
+    --ink-3:      #736958;  /* a11y: was #A89E8E = 2.60:1 on --surface / 2.29:1 on --paper — WCAG AA needs 4.5:1, and this is the INACTIVE TAB-BAR LABEL at 10.5px, plus every timestamp, caption and helper line. brand.css was corrected months ago; the member app carries its own inlined copy and never got it. Now 5.31:1 / 4.67:1. */
     --line:       rgba(34,28,22,0.10);
     --line-2:     rgba(34,28,22,0.05);
     --clay:       #C25A38;
@@ -78,7 +78,7 @@
     --surface-2: #2A2218;
     --ink:       #F3ECDC;
     --ink-2:     #B6AB96;
-    --ink-3:     #7C7261;
+    --ink-3:     #968C7B;  /* a11y (dark): was #7C7261 = 3.60:1 on --surface. Now 5.15:1 / 4.68:1 on surface-2. */
     --line:      rgba(243,236,220,0.11);
     --line-2:    rgba(243,236,220,0.06);
     --clay:      #E68A66;
@@ -137,6 +137,25 @@
     .to-splash .sp-spark { transform: scale(0); animation: spPop .5s cubic-bezier(.34,1.56,.64,1) .7s both; }
     .to-splash .sp-wm  { transform: translateY(10px); opacity: 0; animation: spRise .6s cubic-bezier(.32,.72,0,1) .98s both; }
     .to-splash .sp-tag { transform: translateY(8px); opacity: 0; animation: spRise .6s cubic-bezier(.32,.72,0,1) 1.12s both; }
+  }
+  /* ── Accessibility, ported from brand.css ──────────────────────────────────────────────────────────
+     UX-AUDIT-2026-07-20 A1/A2. The member app does NOT link brand.css — it carries its own inlined token
+     block — so neither of these ever reached the surface members actually use, while the steward console
+     (far less likely to need switch access) had both.
+
+     FOCUS RING: the member .jsx files contain 49 explicit `outline: none` declarations, so without an
+     !important rule a keyboard or switch-access user got NO focus indication on any input at all.
+
+     REDUCED MOTION: the only motion guard here was `no-preference` around the splash, so trinityFade,
+     trinityRise, trinityScale and the INFINITE trinitySpin (13+ places, including full-screen loading
+     states) all ran at full speed for someone who had explicitly asked their OS for less. */
+  :focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; border-radius: 4px; }
+  a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible,
+  select:focus-visible, [role="button"]:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--clay) !important; outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   }
   @keyframes spDraw { to { stroke-dashoffset: 0; } }
   @keyframes spSpin { from { transform: rotate(-16deg) scale(.86); opacity: .4; } to { transform: none; opacity: 1; } }

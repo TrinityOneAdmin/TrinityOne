@@ -7022,8 +7022,10 @@
       }, sk);
       try {
         await Promise.any(pool.publish(window.Fellowship.relays, evt));
+        evt._delivered = true;
       } catch (e) {
         console.warn("[fellowship] publish failed", e);
+        evt._delivered = false;
       }
       return evt;
     },
@@ -7042,8 +7044,10 @@
       const evt = finalizeEvent2({ kind: 4, created_at: Math.floor(Date.now() / 1e3), tags: [["p", peerPub]], content: ciphertext }, sk);
       try {
         await Promise.any(pool.publish(window.Fellowship.relays, evt));
+        evt._delivered = true;
       } catch (e) {
         console.warn("[fellowship] DM publish failed", e);
+        evt._delivered = false;
       }
       return evt;
     },

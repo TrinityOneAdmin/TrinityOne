@@ -171,7 +171,13 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 0 16px' }}>
         <div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>enter code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
       </div>
-      <input value={code} onChange={e => { setCode(e.target.value.trim()); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && joinable && !busy) resolve(); }} autoFocus placeholder="church name, code, or invite link" style={{
+      {/* UX-AUDIT-2026-07-20 H3: this trimmed on EVERY keystroke, so the space in "St Marys" was swallowed the
+          instant it was typed — you could never enter a church name with a space in it. Both the fix that
+          widened `joinable` to allow spaces and the `"St Marys" → "st-marys"` normalisation in resolve() were
+          dead code as a result, because the space could never reach them. This is the only cold-start path
+          that doesn't need an invite link, and most church names have a space in them. Trim at USE (joinable
+          and resolve() both already do), never as the user types. */}
+      <input value={code} onChange={e => { setCode(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && joinable && !busy) resolve(); }} autoFocus aria-label="Church name, code, or invite link" placeholder="church name, code, or invite link" style={{
         width: '100%', height: 58, border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 18px',
         fontSize: 14, fontFamily: 'monospace', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', textAlign: 'center', textOverflow: 'ellipsis' }} />
       {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8, lineHeight: 1.4 }}>{err}</div> : null}

@@ -954,25 +954,44 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight;
   }, [msgs, open]);
 
-  const send = (extra) => {
+  // UX-AUDIT-2026-07-20 E1: a send that failed used to vanish — the composer cleared, no bubble appeared,
+  // no error. On the thin, intermittent connections this product is built for that is the failure that
+  // erodes trust fastest, because nobody reports it; they just stop trusting the app with anything that
+  // matters. The transport now reports delivery (publishMessage -> evt._delivered), so we can hand the
+  // member's words back instead of losing them. `onFail` restores the composer for a plain text message;
+  // richer kinds (verse/poll) can't be re-hydrated into the composer, so they get an explicit toast.
+  const send = (extra, onFail) => {
     // NIP-10 reply markers, when this message answers another
     const rtags = replyTo ? [['e', replyTo.id, '', 'reply'], ['p', replyTo.pubkey]] : [];
     if (window.Fellowship) {                        // publish over Nostr; relay echoes it back to our sub
-      if (extra.kind === 'verse') window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse'], ...rtags]);
-      else if (extra.kind === 'prayer') window.Fellowship.publishMessage(group.id, extra.text, [['k', 'prayer'], ...rtags]);
-      else if (extra.kind === 'poll') window.Fellowship.publishMessage(group.id, JSON.stringify({ question: extra.question, options: extra.options }), [['k', 'poll'], ...rtags]);
-      else window.Fellowship.publishMessage(group.id, extra.text, rtags);
+      const p = extra.kind === 'verse' ? window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse'], ...rtags])
+        : extra.kind === 'prayer' ? window.Fellowship.publishMessage(group.id, extra.text, [['k', 'prayer'], ...rtags])
+        : extra.kind === 'poll' ? window.Fellowship.publishMessage(group.id, JSON.stringify({ question: extra.question, options: extra.options }), [['k', 'poll'], ...rtags])
+        : window.Fellowship.publishMessage(group.id, extra.text, rtags);
+      Promise.resolve(p).then(evt => {
+        if (evt && evt._delivered === false) {
+          if (onFail) onFail();
+          ctx.toast('Couldn’t send — check your connection and try again.');
+        }
+      }).catch(() => { if (onFail) onFail(); ctx.toast('Couldn’t send — check your connection and try again.'); });
       if (replyTo) setReplyTo(null);
       return;
     }
     const base = { id: 'me-' + Date.now(), me: true, handle: id.handle, color: id.color, when: 'now' };
     setMsgs(prev => [...prev, { ...base, ...extra }]);
   };
-  const sendText = () => { if (!draft.trim()) return; send(prayerOn ? { text: draft.trim(), kind: 'prayer' } : { text: draft.trim() }); setDraft(''); setPrayerOn(false); };
+  const sendText = () => {
+    const text = draft.trim(); if (!text) return;
+    const wasPrayer = prayerOn;
+    // clear optimistically so the composer feels instant, but put the words BACK if the send fails —
+    // the member never loses what they typed.
+    send(wasPrayer ? { text, kind: 'prayer' } : { text }, () => { setDraft(d => d || text); setPrayerOn(wasPrayer); });
+    setDraft(''); setPrayerOn(false);
+  };
   const sendPoll = () => {
     const q = pollQ.trim(); const opts = pollOpts.map(o => o.trim()).filter(Boolean);
     if (!q || opts.length < 2) return;
-    send({ kind: 'poll', question: q, options: opts.slice(0, 5) });
+    send({ kind: 'poll', question: q, options: opts.slice(0, 5) }, () => { setPollQ(q); setPollOpts(opts); setPollOpen(true); });
     setPollQ(''); setPollOpts(['', '']); setPollOpen(false);
   };
   const myPub = window.Fellowship && window.Fellowship.myPubkey;

@@ -901,8 +901,13 @@ window.Fellowship = {
       kind: 1, created_at: Math.floor(Date.now() / 1000),
       tags: [['t', NET], ['t', groupId], ...churchTag, ...encTag, ...extraTags], content: body,
     }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); }
-    catch (e) { console.warn('[fellowship] publish failed', e); }
+    // UX-AUDIT-2026-07-20 E1: this swallowed the failure to a console.warn and returned the event anyway, so
+    // the UI could not tell a delivered message from a lost one — the composer cleared, no bubble appeared,
+    // and a prayer request typed on a bad connection was simply gone with no error. Reading is genuinely
+    // offline-first; writing was not. `_delivered` lets the caller keep the member's words when we couldn't
+    // send them. (A persisted outbox with retry is the fuller fix; this closes the silent-loss hole.)
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); evt._delivered = true; }
+    catch (e) { console.warn('[fellowship] publish failed', e); evt._delivered = false; }
     return evt;
   },
 
@@ -913,7 +918,8 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, content); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] DM publish failed', e); }
+    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); evt._delivered = true; }
+    catch (e) { console.warn('[fellowship] DM publish failed', e); evt._delivered = false; }   // E1: same as publishMessage — the caller must be able to tell
     return evt;
   },
   // a 1:1 thread with one peer; onMsg({ id, mine, content, ts, pubkey, reactions, myReaction }).
