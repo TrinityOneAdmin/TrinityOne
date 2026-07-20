@@ -67,6 +67,18 @@ function NostrBackend(cache) {
 
   var pool = new SimplePool();
   var sk = null, pub = null, ck = null;
+  // REVIEW-2026-07-20 B2 (data loss): this backend owns its OWN SimplePool, separate from Fellowship's, and
+  // never set an auth handler — so it could not answer a NIP-42 challenge. That was harmless while these
+  // docs were world-readable, but the relay's read gate is now default-deny and the only rule that serves
+  // them is "you may read your own events", which REQUIRES auth. Without this the pull() below silently
+  // returns zero events and startSync then republishes the local view over the relay's copy — so a second
+  // device, or one that had been cleared, would overwrite the richer remote notes/journal/highlights.
+  pool.automaticallyAuth = function () {
+    return async function (authEvent) {
+      if (!sk) throw new Error('mydata: no key');
+      return finalizeEvent(authEvent, sk);
+    };
+  };
   var timers = {};
   var onChange = function () {};
 
@@ -151,7 +163,12 @@ function NostrBackend(cache) {
           }
           catch (err) { console.warn('[mydata] reconcile failed', dTag, err); }
         },
-        oneose: function () { try { sub.close(); } catch (e) {} finish(); },
+        // REVIEW-2026-07-20 B2, second half: closing on EOSE is a race against NIP-42. Under default-deny the
+        // relay withholds our docs from the unauthenticated REQ, sends EOSE, THEN challenges — and its
+        // post-AUTH replay only walks subscriptions that are still open. Closing here meant the replay
+        // landed nowhere and pull() resolved empty, with the overwrite consequence described above. Hold the
+        // subscription open briefly past EOSE so the replayed events arrive, then close.
+        oneose: function () { setTimeout(function () { try { sub.close(); } catch (e) {} finish(); }, 1500); },
       });
       setTimeout(finish, 6000); // resolve even if a relay never sends EOSE
     });

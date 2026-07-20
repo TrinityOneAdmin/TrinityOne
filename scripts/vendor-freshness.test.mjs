@@ -34,6 +34,20 @@ const BUNDLES = [
   ['build-wallet.sh',       'vendor/wallet.js'],
 ];
 
+// esbuild stamps each bundled module's path into the output as a `// <path>` comment. That path is relative
+// to the build cwd, so a checkout where node_modules is NOT a real directory inside the tree (a git
+// worktree sharing a parent's, a pnpm/hoisted layout, a symlink) emits `../../../mnt/.../node_modules/x`
+// where the primary checkout emits `node_modules/x`. Comparing raw bytes therefore reported six bundles
+// stale in any worktree — a FALSE positive that, because this same commit wires `npm test` into release.sh
+// as a hard gate and into CI, would block every release. Normalise those prefixes before comparing; they
+// are provenance comments, not semantics. (REVIEW-2026-07-20 B5.)
+// NB: the path appears BOTH as a `// comment` and as a quoted key in esbuild's CommonJS module registry
+// (`"node_modules/x/y.js"(exports, module) { … }`), so this must be a general rewrite, not a comment-only
+// one. Anchoring on the `../` prefix means output from a normal checkout is left completely untouched.
+const normalise = (buf) => Buffer.from(
+  buf.toString('utf8').replace(/(?:\.\.\/)+[^\s"'`]*?node_modules\//g, 'node_modules/')
+);
+
 test('every vendor/ bundle is rebuildable and matches its source', { timeout: 180000 }, () => {
   const originals = new Map();
   for (const [, out] of BUNDLES) {
@@ -56,7 +70,7 @@ test('every vendor/ bundle is rebuildable and matches its source', { timeout: 18
       const p = join(ROOT, out);
       const before = originals.get(p), after = existsSync(p) ? readFileSync(p) : null;
       if (!after) { broken.push(`${script}: produced no ${out}`); continue; }
-      if (!before || !before.equals(after)) stale.push(out);
+      if (!before || !normalise(before).equals(normalise(after))) stale.push(out);
     }
   } finally {
     for (const [p, buf] of originals) { try { writeFileSync(p, buf); } catch {} }   // never leave the tree dirty

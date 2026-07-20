@@ -40,7 +40,8 @@ const aSk = generateSecretKey(), aPub = getPublicKey(aSk);         // church A
 const bSk = generateSecretKey(), bPub = getPublicKey(bSk);         // church B (the other tenant)
 const aliceSk = generateSecretKey(), alicePub = getPublicKey(aliceSk);   // member of church A
 const netSk = generateSecretKey(), netPub = getPublicKey(netSk);         // a network church B declares
-const malSk = generateSecretKey(), malPub = getPublicKey(malSk);         // an outsider
+const malSk = generateSecretKey(), malPub = getPublicKey(malSk);         // an outsider (never joins anything)
+const friendSk = generateSecretKey(), friendPub = getPublicKey(friendSk); // a second member of church A
 
 let relay, dataDir;
 
@@ -169,6 +170,49 @@ test('C4: a network declared by church B has NO authority over church A', async 
   assert.equal(hasD(got, D.minors + aPub), false, 'B’s network key read church A’s safeguarding list');
   assert.equal(hasD(got, D.roster + 'g1'), false, 'B’s network key read church A’s roster');
   assert.equal(hasD(got, D.member + aPub), false, 'B’s network key enumerated church A’s members');
+});
+
+// ── B1: member-authored, church-tagged docs ───────────────────────────────────────────────────────
+// The revoked-steward roster check applies to docs carrying ['church',cp]. Members church-TAG their own
+// care participation, and a member is neither the church key nor a rostered steward — so a naive check
+// hid every meal-train sign-up and the whole "I'm here to help" register from the church that owns them.
+// Silent: the steward just saw an empty rota. This pins it.
+test('B1: a member’s care sign-up is readable by the CHURCH and its stewards, not just its author', async () => {
+  const ws = await connect();
+  await publish(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/careslot:c1:2026-08-01'], ['t', 'trinityone'], ['church', aPub]], content: JSON.stringify({ careId: 'c1', note: 'I can bring Tuesday dinner' }) }, aliceSk));
+  await publish(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/careavail:' + aPub], ['t', 'trinityone'], ['church', aPub]], content: JSON.stringify({ tags: ['meals'] }) }, aliceSk));
+  ws.close(); await sleep(150);
+
+  const wsC = await connect();
+  const asChurch = await reqCollect(wsC, 'b1a', { kinds: [30078] }, aSk, 1200);
+  wsC.close();
+  assert.equal(hasD(asChurch, 'trinityone/careslot:c1:2026-08-01'), true, 'the church cannot see who signed up for its own meal train');
+  assert.equal(hasD(asChurch, 'trinityone/careavail:' + aPub), true, 'the church cannot see its own "here to help" register');
+
+  const wsA = await connect();
+  const asAuthor = await reqCollect(wsA, 'b1b', { kinds: [30078] }, aliceSk, 1200);
+  wsA.close();
+  assert.equal(hasD(asAuthor, 'trinityone/careslot:c1:2026-08-01'), true, 'the author cannot read her own sign-up back');
+
+  const wsM = await connect();
+  const asOutsider = await reqCollect(wsM, 'b1c', { kinds: [30078] }, malSk, 1200);
+  wsM.close();
+  assert.equal(hasD(asOutsider, 'trinityone/careslot:c1:2026-08-01'), false, 'an outsider read a care sign-up');
+});
+
+// ── B4: a hostile tenant must not be able to govern someone who never joined it ────────────────────
+// Church B lists a member of church A in its OWN minors doc. B never had them as a member, so B must have
+// no say: it can neither clear an adult for them nor (via the church-authority escape) sever their DMs.
+test('B4: a church cannot claim safeguarding authority over someone who never joined it', async () => {
+  const ws = await connect();
+  await publish(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', D.minors + bPub]], content: JSON.stringify({ pubkeys: [alicePub] }) }, bSk));
+  // a fellow member of Alice's ACTUAL church DMs her — must still be delivered. Uses a dedicated identity:
+  // the outsider key must stay unaffiliated for the test below it (one relay is shared across this file).
+  await publish(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', D.member + aPub]], content: JSON.stringify({ name: 'Friend' }) }, friendSk));
+  await sleep(120);
+  const ok = await publish(ws, finalizeEvent({ kind: 4, created_at: now(), tags: [['p', alicePub]], content: 'nip44-ciphertext' }, friendSk));
+  ws.close();
+  assert.equal(ok, true, 'a hostile church listing someone as a minor severed their DMs — denial-of-contact');
 });
 
 test('an unaffiliated outsider who authenticates reads none of it', async () => {

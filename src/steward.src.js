@@ -94,6 +94,23 @@ const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (l
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key
 let _mediaKeyDocKeys = null;                   // the latest media-key doc's wrapped-per-member map (to detect members not yet keyed)
+// ── CARE KEY (SECURITY-AUDIT-2026-07-20 H3) ───────────────────────────────────────────────────────
+// A care need NAMES a vulnerable person and, by the notes field's own placeholder, carries their home
+// address, a health inference and a "who not to ring after 9pm" window. Manna already treats exactly this
+// class of doc as non-negotiable — "the disbursement ledger NAMES vulnerable people … every
+// recipient-naming doc is stored NIP-44-ENCRYPTED" — but Care shipped it all in cleartext, readable by the
+// relay operator, by every member, and by anyone on a non-enforcing relay in the pool.
+//
+// Manna's PRINCIPLE applies; its MECHANISM doesn't. Manna self-encrypts to the church key (encPublish), so
+// only stewards can read it. Care can't do that: ordinary members must read a need to volunteer for it.
+// So this uses the per-church-key-wrapped-per-member shape instead — byte-for-byte the media-key envelope
+// below, which is itself the group-key envelope. One key per church, wrapped to each member with NIP-44,
+// rotatable. Only the sensitive fields are sealed; type/dates stay clear so the slot grid, sorting and the
+// live/past filter all render WITHOUT the key (and so a member who somehow lacks it still sees that help
+// is needed, just not who). See steward-meals.src.js `publishNeed`.
+const CAREKEY_D = 'trinityone/carekey:';       // per-church care key, wrapped to each member
+let _careKeyHex = null;                        // this device's cached copy of the church care key
+let _careKeyDocKeys = null;                    // the latest care-key doc's wrapped-per-member map
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
@@ -957,6 +974,37 @@ window.Steward = {
     if (ok !== false) _mediaKeyDocKeys = keys;                    // reflect what we just published so we don't loop
     return ok;
   },
+  // ---- care key: same envelope as the media key above, for the Care module's sensitive fields ----
+  // Mints on first use (unlike the media key, which only exists once a sermon has been encrypted) because a
+  // steward writing the FIRST care need must be able to seal it immediately. Idempotent: re-wraps the
+  // EXISTING key for anyone missing, so previously-published needs stay readable — never rotates here.
+  async ensureCareKeyForMembers(memberPubs) {
+    if (!sk || !pub) return false;
+    if (!_careKeyHex) _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+    const have = _careKeyDocKeys || {};
+    if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
+    const keys = {};
+    for (const mp of want) { try { keys[mp] = nip44e(_careKeyHex, nip44ck(sk, mp)); } catch (e) {} }
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    if (ok !== false) _careKeyDocKeys = keys;
+    return ok;
+  },
+  // recover the church care key on THIS device (unwrap our own wrapped entry) — so a restored console can
+  // still read existing needs. Mirrors subscribeMediaKey.
+  subscribeCareKey() {
+    if (!pub) return () => {};
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [CAREKEY_D + pub] }], {
+      onevent(e) { try { const o = JSON.parse(e.content); _careKeyDocKeys = (o && o.keys) || null; const mine = o.keys && o.keys[pub]; if (mine && sk) _careKeyHex = nip44d(mine, nip44ck(sk, e.pubkey)); } catch (x) {} },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // seal / open the sensitive half of a care doc with the church care key. Returns null when this device
+  // has no key yet, so callers can fall back rather than publish PII in the clear by accident.
+  careSeal(obj) { try { return _careKeyHex ? nip44e(JSON.stringify(obj), _unhex(_careKeyHex)) : null; } catch (e) { return null; } },
+  careOpen(ct) { try { return _careKeyHex ? JSON.parse(nip44d(ct, _unhex(_careKeyHex))) : null; } catch (e) { return null; } },
+  hasCareKey() { return !!_careKeyHex; },
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
     if (!pub) return () => {};

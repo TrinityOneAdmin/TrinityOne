@@ -7972,7 +7972,13 @@
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, _by: e.pubkey, displayLabel: c.displayLabel || "", type: c.type || "meals", startDate: c.startDate || "", endDate: c.endDate || "", recipient: (c.recipient || "").toLowerCase(), notes: c.notes || "", dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: c.dayMeals && typeof c.dayMeals === "object" ? c.dayMeals : {}, ts: e.created_at });
+            let s = null, sealed = false;
+            if (c.enc) {
+              s = _careOpen(pubk, c.enc);
+              sealed = !s;
+            }
+            const f = s ? { ...c, ...s } : c;
+            byId.set(id, { id, _by: e.pubkey, _sealed: sealed, displayLabel: f.displayLabel || "", type: f.type || "meals", startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at });
             emit();
           } catch {
           }

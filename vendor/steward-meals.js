@@ -105,12 +105,28 @@
         dietary: (Array.isArray(n.dietary) ? n.dietary : []).map((d) => String(d).slice(0, 24)).filter(Boolean).slice(0, 12)
       };
     }
+    const SEALED_FIELDS = ["displayLabel", "notes", "recipient", "dietary"];
     function publishNeed(need) {
       if (!S() || !S().publishSigned) return Promise.resolve(null);
       const id = need.id || uid("care");
       const rec = _normNeed(need);
-      const content = JSON.stringify(rec);
-      return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", NEED_D + id], ["t", NET]], content }).then((e) => ({ id, ...rec, ts: e && e.created_at }));
+      const sealed = {};
+      for (const f of SEALED_FIELDS) sealed[f] = rec[f];
+      const ct = S().careSeal ? S().careSeal(sealed) : null;
+      let body;
+      if (ct) {
+        body = { ...rec, enc: ct };
+        for (const f of SEALED_FIELDS) delete body[f];
+      } else {
+        return Promise.reject(new Error("Care needs are encrypted for the person\u2019s privacy, and this device hasn\u2019t got the church\u2019s care key yet. Open the Members tab once to sync it, then try again."));
+      }
+      return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", NEED_D + id], ["t", NET], ["enc", "care1"]], content: JSON.stringify(body) }).then((e) => ({ id, ...rec, ts: e && e.created_at }));
+    }
+    function openNeed(rec) {
+      if (!rec || !rec.enc) return rec;
+      const opened = S() && S().careOpen ? S().careOpen(rec.enc) : null;
+      const { enc, ...clear } = rec;
+      return opened ? { ...clear, ...opened } : { ...clear, _sealed: true };
     }
     function removeNeed(id) {
       if (!S() || !S().publishSigned) return Promise.resolve(null);
@@ -146,7 +162,8 @@
               return;
             }
             try {
-              byId.set(id, { id, ..._normNeed(JSON.parse(e.content)), ts: e.created_at });
+              const o = openNeed(JSON.parse(e.content));
+              byId.set(id, { id, ..._normNeed(o), _sealed: !!o._sealed, ts: e.created_at });
               emit();
             } catch (err) {
             }

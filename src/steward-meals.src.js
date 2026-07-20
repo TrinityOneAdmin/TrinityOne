@@ -136,13 +136,46 @@
     };
   }
 
+  // SECURITY-AUDIT-2026-07-20 H3: a need used to publish `displayLabel`, `notes`, `recipient` and `dietary`
+  // as cleartext JSON. Those are, respectively: who is struggling, free text the UI explicitly asks to
+  // contain "the address … who not to ring after 9pm", the recipient's raw pubkey, and a health inference.
+  // Cleartext meant the relay operator, every member (forever, uncached-and-unrotatable), and anyone on a
+  // non-enforcing relay could read them. Manna already treats recipient-naming docs as must-encrypt; this
+  // brings Care into line.
+  //
+  // SPLIT, not blanket encryption — deliberately. `type`, the date list, meal slots and the derived
+  // start/end stay in the CLEAR so the slot grid, the sort and the live/past filter all work without the
+  // key, and so a member who hasn't been keyed yet still sees that help is needed on Tuesday (they just
+  // can't see who it's for). Only the identifying half is sealed, under the per-church care key wrapped to
+  // each member (steward.src.js `ensureCareKeyForMembers`).
+  const SEALED_FIELDS = ['displayLabel', 'notes', 'recipient', 'dietary'];
   function publishNeed(need) {
     if (!S() || !S().publishSigned) return Promise.resolve(null);
     const id = need.id || uid('care');
     const rec = _normNeed(need);
-    const content = JSON.stringify(rec);
-    return S().publishSigned({ kind: 30078, created_at: now(), tags: [['d', NEED_D + id], ['t', NET]], content })
+    const sealed = {}; for (const f of SEALED_FIELDS) sealed[f] = rec[f];
+    const ct = S().careSeal ? S().careSeal(sealed) : null;
+    let body;
+    if (ct) {
+      body = { ...rec, enc: ct };
+      for (const f of SEALED_FIELDS) delete body[f];   // never ship both halves
+    } else {
+      // No care key on this device yet (ensureCareKeyForMembers not run, or an old console). Publishing the
+      // PII in the clear silently would reintroduce exactly the finding above, so refuse and say why —
+      // stew-meals.jsx surfaces this. The steward loses a save; the church doesn't lose its privacy.
+      return Promise.reject(new Error('Care needs are encrypted for the person’s privacy, and this device hasn’t got the church’s care key yet. Open the Members tab once to sync it, then try again.'));
+    }
+    return S().publishSigned({ kind: 30078, created_at: now(), tags: [['d', NEED_D + id], ['t', NET], ['enc', 'care1']], content: JSON.stringify(body) })
       .then(e => ({ id, ...rec, ts: e && e.created_at }));
+  }
+  // Open a need read off the relay. v1 docs (pre-2026-07-20) carry the fields in the clear and are still
+  // read as-is — a church mid-pilot must not lose its open needs — so this tolerates both shapes. New
+  // writes are always sealed, so cleartext ages out as needs are edited or completed.
+  function openNeed(rec) {
+    if (!rec || !rec.enc) return rec;
+    const opened = (S() && S().careOpen) ? S().careOpen(rec.enc) : null;
+    const { enc, ...clear } = rec;
+    return opened ? { ...clear, ...opened } : { ...clear, _sealed: true };   // _sealed → UI shows "details hidden"
   }
 
   function removeNeed(id) {
@@ -174,7 +207,13 @@
           const id = d.slice(NEED_D.length);
           const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
           if (deleted) { byId.delete(id); emit(); return; }
-          try { byId.set(id, { id, ..._normNeed(JSON.parse(e.content)), ts: e.created_at }); emit(); } catch (err) {}
+          // openNeed() unseals the encrypted half (and passes v1 cleartext docs through untouched) BEFORE
+          // _normNeed, so normalisation sees the same field shape either way.
+          // openNeed() unseals the encrypted half (and passes v1 cleartext docs through untouched) BEFORE
+          // _normNeed, so normalisation sees the same field shape either way. _sealed is carried past
+          // _normNeed (which returns a fixed shape) so the UI can say "details hidden" rather than render
+          // a need with a blank name and look broken.
+          try { const o = openNeed(JSON.parse(e.content)); byId.set(id, { id, ..._normNeed(o), _sealed: !!o._sealed, ts: e.created_at }); emit(); } catch (err) {}
         },
         oneose() { emit(); },
       }

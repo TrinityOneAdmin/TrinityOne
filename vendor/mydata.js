@@ -5200,6 +5200,12 @@
     });
     var pool = new SimplePool();
     var sk = null, pub = null, ck = null;
+    pool.automaticallyAuth = function() {
+      return async function(authEvent) {
+        if (!sk) throw new Error("mydata: no key");
+        return finalizeEvent2(authEvent, sk);
+      };
+    };
     var timers = {};
     var onChange = function() {
     };
@@ -5296,12 +5302,19 @@
               console.warn("[mydata] reconcile failed", dTag, err);
             }
           },
+          // REVIEW-2026-07-20 B2, second half: closing on EOSE is a race against NIP-42. Under default-deny the
+          // relay withholds our docs from the unauthenticated REQ, sends EOSE, THEN challenges — and its
+          // post-AUTH replay only walks subscriptions that are still open. Closing here meant the replay
+          // landed nowhere and pull() resolved empty, with the overwrite consequence described above. Hold the
+          // subscription open briefly past EOSE so the replayed events arrive, then close.
           oneose: function() {
-            try {
-              sub.close();
-            } catch (e) {
-            }
-            finish();
+            setTimeout(function() {
+              try {
+                sub.close();
+              } catch (e) {
+              }
+              finish();
+            }, 1500);
           }
         });
         setTimeout(finish, 6e3);
