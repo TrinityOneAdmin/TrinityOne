@@ -30,6 +30,7 @@ const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the grou
 const GUARDNOTICE_D = 'trinityone/guardnotice:';   // church->parent notice of a steward-made guardian link, p-tagged + NIP-44-encrypted to the parent
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a church-signed self-hosted media item — references a content-addressed blob by sha256 + host(s)
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: per-church AES-GCM media key, wrapped (NIP-44) to each member
+const CAREKEY_D = 'trinityone/carekey:';     // per-church CARE key, wrapped (NIP-44) to each member — seals the identifying half of a care need
 const PINSERMON_D = 'trinityone/pinsermon:';   // the church's currently-featured sermon → Today card + notification
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 // Meal trains / Care module (optional, per church). meals-settings is church-signed; care: needs come from
@@ -76,6 +77,39 @@ function _ingestGroupKey(cp, e) {
     if (mine && sk) _gkeys[k] = _unhex(nip44d(mine, nip44ck(sk, e.pubkey)));
     else if (!mine) delete _gkeys[k];   // dropped from the group (rotation) → lose the key
   } catch {}
+}
+// ── care key (SECURITY-AUDIT-2026-07-20 H3) ───────────────────────────────────────────────────────
+// One symmetric key per church, wrapped to each member with NIP-44, church-signed. It seals the identifying
+// half of a care need (who it's for, the free-text notes, the recipient, dietary needs) so the relay
+// operator, a seized archive and anyone who leaves can't read it — while the clear half (type, dates) still
+// renders for everyone, so members can see help is needed and volunteer.
+// Author discipline mirrors _ingestGroupKey exactly: the church key or one of its CURRENT rostered stewards
+// only, a future-skew clamp, and a monotonic stale-drop so a lagging relay can't replay an older envelope
+// over a newer one. `rev` is carried and respected now so rotation can be switched on later without a
+// wire-format change; nothing rotates yet.
+const _carekeys = {};    // churchPub -> Uint8Array(32)
+const _carekeyRev = {};  // churchPub -> envelope revision seen
+const _carekeyTs = {};   // churchPub -> newest envelope created_at accepted
+function _ingestCareKey(cp, e) {
+  if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;   // untrusted author
+  const ts = e.created_at || 0;
+  if (ts > Math.floor(Date.now() / 1000) + FUTURE_SKEW) return;
+  if (ts < (_carekeyTs[cp] || 0)) return;
+  _carekeyTs[cp] = ts;
+  try {
+    const env = JSON.parse(e.content || '{}');
+    if ((env.rev || 1) < (_carekeyRev[cp] || 0)) return;   // never step backwards to an older key generation
+    _carekeyRev[cp] = env.rev || 1;
+    const mine = env.keys && pub && env.keys[pub];
+    if (mine && sk) _carekeys[cp] = _unhex(nip44d(mine, nip44ck(sk, e.pubkey)));
+    else if (!mine) delete _carekeys[cp];   // no longer keyed (left the church) → lose the key
+  } catch {}
+}
+// open the sealed half of a care need; null when we hold no key (the UI shows "details hidden")
+function _careOpen(cp, ct) {
+  const key = _carekeys[cp];
+  if (!key) return null;
+  try { return JSON.parse(nip44d(ct, key)); } catch { return null; }
 }
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
@@ -406,7 +440,7 @@ function _docsHub(cp) {
   // (so _churchVoice trusts steward-authored docs immediately) and group-key envelopes (so encrypted
   // groups decrypt) — both are in-memory only, and the since-cursor means they won't re-arrive.
   for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);   // absorb the full roster FIRST so the group-key author check can trust roster stewards regardless of buffer order
-  for (const e of hub.buf.values()) { if (_dtag(e).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); }
+  for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e); }
   return hub;
 }
 function _docsHubOpen(hub) {
@@ -433,10 +467,13 @@ function _docsHubOpen(hub) {
         // LIVE path BEFORE this roster was rejected by _ingestGroupKey (author not yet trusted) and — unlike the
         // boot path — was never retried, so the encrypted group stayed blank until the next app start. Now that
         // the roster establishes trust, re-ingest the buffered envelopes (mirrors the boot-replay loop).
-        for (const e2 of hub.buf.values()) { if (_dtag(e2).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); }
+        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); }
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return;
       }
       if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(cp, e); return; }
+      // the care key can arrive AFTER the needs it unlocks — re-emit so a card already rendered as
+      // "details hidden" opens without waiting for a reload
+      if (d === CAREKEY_D + cp) { _ingestCareKey(cp, e); for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) {} } return; }
       for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { console.error(err); } }
     },
     oneose() {
@@ -575,7 +612,7 @@ async function deriveFromIdentity() {
   if (_loadChildren().length) _needAuth = true;
   // group-key envelopes can replay from the persisted docs buffer BEFORE the signing key exists —
   // re-unwrap them now that sk/pub are known, so invite-group decryption never needs a reload.
-  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); } }
+  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); } }
   // signal that the signing key is now ready, so listeners (e.g. the app's serving subscriptions,
   // which bail when myPubkey is null) re-run with a valid pubkey instead of needing a restart.
   try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch {}
@@ -1535,7 +1572,18 @@ window.Fellowship = {
         if (!d.startsWith(CARE_D)) return;
         const id = d.slice(CARE_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
-        try { const c = JSON.parse(e.content); byId.set(id, { id, _by: e.pubkey, displayLabel: c.displayLabel || '', type: c.type || 'meals', startDate: c.startDate || '', endDate: c.endDate || '', recipient: (c.recipient || '').toLowerCase(), notes: c.notes || '', dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: (c.dayMeals && typeof c.dayMeals === 'object') ? c.dayMeals : {}, ts: e.created_at }); emit(); } catch {}
+        // H3: needs published on/after 2026-07-20 seal the identifying half under the church care key.
+        // Merge the opened half over the clear one; a v1 cleartext doc still reads as-is so a church
+        // mid-pilot doesn't lose its open needs. `_sealed` marks one we couldn't open (not yet keyed) so
+        // the UI says "details hidden" rather than rendering a nameless card. skipEnc is carried through —
+        // only the recipient can decrypt it, and it is what lets them mark a day they don't need help.
+        try {
+          const c = JSON.parse(e.content);
+          let s2 = null, sealed = false;
+          if (c.enc) { s2 = _careOpen(pubk, c.enc); sealed = !s2; }
+          const f = s2 ? { ...c, ...s2 } : c;
+          byId.set(id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || '', displayLabel: f.displayLabel || '', type: f.type || 'meals', startDate: f.startDate || '', endDate: f.endDate || '', recipient: (f.recipient || '').toLowerCase(), notes: f.notes || '', dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: (f.dayMeals && typeof f.dayMeals === 'object') ? f.dayMeals : {}, ts: e.created_at }); emit();
+        } catch {}
       },
       onroster() { emit(); },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
@@ -1620,12 +1668,20 @@ window.Fellowship = {
     try { await Promise.any(pool.publish(churchRelays(), evt)); return true; } catch (e) { console.warn('[fellowship] markSafe publish failed', e); return false; }
   },
   // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
-  async markCareSkip(careId, iso, reason) {
+  // H3: "I don't need help that day" is RECIPIENT-ONLY, and the relay enforces it — but it can no longer
+  // see who the recipient is, because that field is now sealed. So the need carries an opaque
+  // sha256(token) tag, and the token itself is encrypted to the recipient ALONE (not under the church-wide
+  // care key). Presenting the token proves you are the recipient without telling the relay who that is.
+  // `skipEnc` comes from the need (subscribeCareNeeds carries it through as _skipEnc).
+  async markCareSkip(careId, iso, reason, skipEnc) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] care skip publish failed', e); }
+    const tags = [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp]];
+    if (skipEnc) { try { const o = JSON.parse(nip44d(skipEnc, nip44ck(sk, cp))); if (o && o.tok) tags.push(['skiptok', String(o.tok)]); } catch (e) {} }
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }, sk);
+    try { await Promise.any(pool.publish(churchRelays(), evt)); evt._delivered = true; }
+    catch (e) { console.warn('[fellowship] care skip publish failed', e); evt._delivered = false; }
     return evt;
   },
   async clearCareSkip(careId, iso) {

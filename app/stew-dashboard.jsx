@@ -147,6 +147,11 @@ function KeyDistributor() {
   const membersRef = React.useRef([]); membersRef.current = members;
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
+  // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
+  React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), []);
+  // keep the envelope's author check current: a revoked steward's envelope must stop being accepted
+  const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];
+  React.useEffect(() => { if (window.Steward && window.Steward.setCareRoster) window.Steward.setCareRoster(stewardRoster); }, [stewardRoster]);
   React.useEffect(() => {
     const memberPubs = members.map(m => m.pubkey);
     for (const g of groups) {
@@ -165,7 +170,11 @@ function KeyDistributor() {
     // key is only published at sermon UPLOAD, so a member who joined since is missing from it and can't decrypt
     // existing sermons. ensureMediaKeyForMembers self-guards (only republishes if someone's actually missing).
     if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(memberPubs);
-  }, [groups, members]);
+    // H3: and the CARE key, so every member can open a need and volunteer. Mints only after the
+    // subscription has confirmed no envelope exists — never on a cold null, which is what orphaned
+    // every sealed need in the first attempt. Stewards are included so a delegated console can re-key.
+    if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster);
+  }, [groups, members, stewardRoster]);
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {

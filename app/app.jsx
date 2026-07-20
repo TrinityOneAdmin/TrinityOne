@@ -636,7 +636,16 @@ function App() {
     setBootReady(true);   // reveal the app off the cache paint — don't gate first paint on the relay round-trip (cards still refresh when the subs deliver)
     const subs = [
       F.subscribeMealsSettings(np, s => { setCareSettings(s); lsSet('trinityone.care.s.' + np, s); setBootReady(true); }),
-      F.subscribeCareNeeds(np, n => { setCareNeeds(n); lsSet('trinityone.care.n.' + np, n); }),
+      // SECURITY-AUDIT-2026-07-20 S-7: this cached the DECRYPTED needs — recipient name, free-text notes,
+      // the address the UI asks for — straight back into cleartext localStorage. That took the data off the
+      // wire and put it on the device, where a seized or shared phone reads it, and where the community-PIN
+      // lock does not wipe it. Cache only the half that is public anyway, so the slot grid still paints
+      // offline; the identifying fields come back when the care key does.
+      F.subscribeCareNeeds(np, n => {
+        setCareNeeds(n);
+        const safe = (n || []).map(x => ({ id: x.id, _by: x._by, type: x.type, dates: x.dates, meals: x.meals, dayMeals: x.dayMeals, startDate: x.startDate, endDate: x.endDate, ts: x.ts, _sealed: true }));
+        lsSet('trinityone.care.n.' + np, safe);
+      }),
       F.subscribeCareSlots(np, x => { setCareSlots(x); lsSet('trinityone.care.sl.' + np, x); }),
       F.subscribeCareSkips(np, x => { setCareSkips(x); lsSet('trinityone.care.sk.' + np, x); }),
       F.subscribeCareAvail && F.subscribeCareAvail(np, x => { setCareAvail(x); lsSet('trinityone.care.av.' + np, x); }),
@@ -1178,7 +1187,7 @@ function App() {
       clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
       // update the "what I'm bringing" note on an already-filled slot — same fillCareSlot doc, no "signed up" toast
       setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note),
-      skip: (careId, iso, reason) => window.Fellowship.markCareSkip(careId, iso, reason),
+      skip: (careId, iso, reason, skipEnc) => window.Fellowship.markCareSkip(careId, iso, reason, skipEnc),
       clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,

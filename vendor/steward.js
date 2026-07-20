@@ -10603,6 +10603,12 @@ zoo`.split("\n");
   var SERMON_D = "trinityone/sermon:";
   var PINSERMON_D = "trinityone/pinsermon:";
   var BACKUPMETA_D = "trinityone/backup-meta:";
+  var CAREKEY_D = "trinityone/carekey:";
+  var _careKeyHex = null;
+  var _careKeyDocKeys = null;
+  var _careKeyRev = 0;
+  var _careKeyChecked = false;
+  var _careRoster = /* @__PURE__ */ new Set();
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
   var _mediaKeyDocKeys = null;
@@ -11782,6 +11788,102 @@ zoo`.split("\n");
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
       if (ok !== false) _mediaKeyDocKeys = keys;
       return ok;
+    },
+    // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
+    // Watch the church's envelope. Unwraps OUR OWN entry with churchSk/churchPub — in delegated mode `pub` is
+    // the church, so using it here is what made the previous attempt impossible to satisfy.
+    subscribeCareKey() {
+      const cp = actingChurch || pub;
+      if (!cp) return () => {
+      };
+      const sub = pool.subscribeMany(relays(), [
+        { kinds: [30078], authors: [cp], "#d": [CAREKEY_D + cp] },
+        { kinds: [30078], "#church": [cp], "#d": [CAREKEY_D + cp] }
+      ], {
+        onevent(e) {
+          if (e.pubkey !== cp && !_careRoster.has(e.pubkey)) return;
+          try {
+            const o = JSON.parse(e.content || "{}");
+            if ((o.rev || 1) < _careKeyRev) return;
+            _careKeyDocKeys = o.keys || null;
+            _careKeyRev = o.rev || 1;
+            const mine = o.keys && churchPub && o.keys[churchPub];
+            if (mine && churchSk) _careKeyHex = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+          } catch (x) {
+          }
+          _careKeyChecked = true;
+        },
+        oneose() {
+          _careKeyChecked = true;
+        }
+        // no envelope came back → it is safe to mint one
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch (e) {
+        }
+      };
+    },
+    // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
+    // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
+    // for the first second of every console open. Idempotent: re-wraps the EXISTING key for anyone missing.
+    async ensureCareKeyForMembers(memberPubs, stewardPubs) {
+      const cp = actingChurch || pub;
+      if (!sk || !cp || !churchPub) return false;
+      if (!_careKeyChecked) return false;
+      if (!_careKeyHex) {
+        if (_careKeyDocKeys) return false;
+        _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+        _careKeyRev = 1;
+      }
+      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))];
+      const have = _careKeyDocKeys || {};
+      if (want.every((p2) => have[p2])) return false;
+      const keys = {};
+      for (const mp of want) {
+        try {
+          keys[mp] = encrypt3(_careKeyHex, getConversationKey(sk, mp));
+        } catch (e) {
+        }
+      }
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }));
+      if (ok !== false) _careKeyDocKeys = keys;
+      return ok;
+    },
+    // seal / open the sensitive half of a care doc. Returns null when this device has no key, so callers can
+    // refuse rather than publish PII in the clear by accident.
+    careSeal(obj) {
+      try {
+        return _careKeyHex ? encrypt3(JSON.stringify(obj), _unhex(_careKeyHex)) : null;
+      } catch (e) {
+        return null;
+      }
+    },
+    careOpen(ct) {
+      try {
+        return _careKeyHex ? JSON.parse(decrypt3(ct, _unhex(_careKeyHex))) : null;
+      } catch (e) {
+        return null;
+      }
+    },
+    careSealTo(recipientPub, obj) {
+      try {
+        return encrypt3(JSON.stringify(obj), getConversationKey(sk, recipientPub));
+      } catch (e) {
+        return null;
+      }
+    },
+    hasCareKey() {
+      return !!_careKeyHex;
+    },
+    careKeyChecked() {
+      return _careKeyChecked;
+    },
+    // the console feeds the live steward roster in, so the envelope's author check stays current when a
+    // steward is revoked (a revoked steward's envelope must stop being accepted, same as their content)
+    setCareRoster(list) {
+      _careRoster = new Set((list || []).filter(Boolean));
     },
     // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
     subscribeMediaKey() {

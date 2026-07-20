@@ -661,7 +661,17 @@ const ROSTER_BY = new Map();          // teamId(groupId) -> { by, cp } — who a
 const FINANCE_SEQ = new Map();        // churchpub -> last accepted finance-journal seq — the relay is the ordering authority; the next write must be seq+1 (single-writer, no gaps/forks/edits)
 const MEALS_ADMIN_GROUP = new Map(); // churchpub -> care-team groupId (its roster people may open/manage care needs)
 const MEALS_OPEN_MEMBER = new Set(); // churchpubs whose meals-settings allow ANY member to open their own care need (openedBy='member')
-const CARE_RECIPIENT = new Map();    // careId -> recipient pubkey (so a careskip: write can be gated to the recipient alone)
+// careId -> sha256 of the need's SKIP TOKEN. The recipient of a care need may mark a day "I don't need help",
+// and only they may do it — but once the need's `recipient` field is sealed (H3), the relay can no longer
+// see who that is, and gating on a cleartext pubkey would mean publishing "who in this congregation is
+// vulnerable" to the relay operator and into every archive.
+// So the need carries an opaque `['skiphash', sha256(token)]` tag in the clear, and the token itself is
+// encrypted TO THE RECIPIENT ALONE (not under the church-wide care key, which every member holds). To skip a
+// day the recipient presents the token; the relay hashes it and compares. It enforces recipient-only writes
+// without ever learning who the recipient is — and cannot brute-force it, because the token is random rather
+// than derived from an identity.
+const CARE_SKIPHASH = new Map();     // careId -> hex sha256 of that need's skip token
+const CARE_RECIPIENT = new Map();    // careId -> recipient pubkey — LEGACY (v1 cleartext needs) only
 // is `pub` a current steward of church `cp`? (empty/no roster => false => behaviour identical to pre-roster)
 const stewardOf = (pub, cp) => { const s = STEWARDS_BY.get(cp); return !!(cp && s && s.has(pub)); };
 // M2: a delegated leader/care-admin grant is only honoured while the steward who authored it is STILL a
@@ -967,7 +977,7 @@ function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCH, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP,
-                   FINANCE_SEQ, CARE_RECIPIENT, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
   for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER]) { try { s.clear(); } catch {} }
 }
 function hydrateMaps() {
@@ -1066,7 +1076,11 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(NEED_D)) {   // a care need (already passed accept(): church/steward/care-admin/allowed-member) — record its recipient for careskip gating
     const id = d.slice(NEED_D.length);
-    if (removed) { CARE_RECIPIENT.delete(id); return; }
+    if (removed) { CARE_RECIPIENT.delete(id); CARE_SKIPHASH.delete(id); return; }
+    // v2: an opaque skip-token hash in a clear TAG. v1 needs carried the recipient pubkey in cleartext
+    // content — still honoured so a church mid-pilot doesn't lose the ability to skip on existing needs.
+    const sh = (e.tags.find(t => t[0] === 'skiphash') || [])[1];
+    if (sh && /^[0-9a-f]{64}$/i.test(sh)) CARE_SKIPHASH.set(id, sh.toLowerCase()); else CARE_SKIPHASH.delete(id);
     try { const r = toHexPub((JSON.parse(e.content) || {}).recipient || ''); if (r) CARE_RECIPIENT.set(id, r); else CARE_RECIPIENT.delete(id); } catch {}
   }
 }
@@ -1199,7 +1213,12 @@ function accept(e) {
     if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": the RECIPIENT, or a steward/care-team blocking a date on their behalf (recipient may not be on the app)
       const careId = d.slice(SKIP_D.length).split(':')[0];
       const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
-      return !!careId && (e.pubkey === CARE_RECIPIENT.get(careId) || isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp));
+      // recipient-only, proven WITHOUT identifying them: present the token, we hash and compare. Falls back
+      // to the v1 cleartext-recipient check for needs published before the seal.
+      const tok = (e.tags.find(t => t[0] === 'skiptok') || [])[1] || '';
+      const want = CARE_SKIPHASH.get(careId);
+      const tokOk = !!(want && tok && createHash('sha256').update(String(tok)).digest('hex') === want);
+      return !!careId && (tokOk || e.pubkey === CARE_RECIPIENT.get(careId) || isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp));
     }
     if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)
     if (d.startsWith(SAFETY_D)) { const cp = d.slice(SAFETY_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }   // start/close a safety check: church, steward, or care-team admin

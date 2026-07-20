@@ -5762,6 +5762,7 @@
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
   var MEDIAKEY_D = "trinityone/mediakey:";
+  var CAREKEY_D = "trinityone/carekey:";
   var PINSERMON_D = "trinityone/pinsermon:";
   async function _sha256hex(u82) {
     const d = await crypto.subtle.digest("SHA-256", u82);
@@ -5811,6 +5812,34 @@
       if (mine && sk) _gkeys[k] = _unhex(decrypt(mine, getConversationKey(sk, e.pubkey)));
       else if (!mine) delete _gkeys[k];
     } catch {
+    }
+  }
+  var _carekeys = {};
+  var _carekeyRev = {};
+  var _carekeyTs = {};
+  function _ingestCareKey(cp, e) {
+    if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
+    const ts = e.created_at || 0;
+    if (ts > Math.floor(Date.now() / 1e3) + FUTURE_SKEW) return;
+    if (ts < (_carekeyTs[cp] || 0)) return;
+    _carekeyTs[cp] = ts;
+    try {
+      const env = JSON.parse(e.content || "{}");
+      if ((env.rev || 1) < (_carekeyRev[cp] || 0)) return;
+      _carekeyRev[cp] = env.rev || 1;
+      const mine = env.keys && pub && env.keys[pub];
+      if (mine && sk) _carekeys[cp] = _unhex(decrypt(mine, getConversationKey(sk, e.pubkey)));
+      else if (!mine) delete _carekeys[cp];
+    } catch {
+    }
+  }
+  function _careOpen(cp, ct) {
+    const key = _carekeys[cp];
+    if (!key) return null;
+    try {
+      return JSON.parse(decrypt(ct, key));
+    } catch {
+      return null;
     }
   }
   function _decEvt(cp, e) {
@@ -6199,7 +6228,9 @@
     }
     for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);
     for (const e of hub.buf.values()) {
-      if (_dtag(e).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e);
+      const d0 = _dtag(e);
+      if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e);
+      else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e);
     }
     return hub;
   }
@@ -6222,7 +6253,9 @@
         _docsHubSaveSoon(hub);
         if (_absorbRoster(cp, d, e)) {
           for (const e2 of hub.buf.values()) {
-            if (_dtag(e2).startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2);
+            const d2 = _dtag(e2);
+            if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2);
+            else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2);
           }
           for (const h of [...hub.handlers]) {
             try {
@@ -6235,6 +6268,16 @@
         }
         if (d.startsWith(GROUPKEY_D)) {
           _ingestGroupKey(cp, e);
+          return;
+        }
+        if (d === CAREKEY_D + cp) {
+          _ingestCareKey(cp, e);
+          for (const h of [...hub.handlers]) {
+            try {
+              h.onroster && h.onroster();
+            } catch (err) {
+            }
+          }
           return;
         }
         for (const h of [...hub.handlers]) {
@@ -6470,6 +6513,7 @@
       for (const e of hub.buf.values()) {
         const d = _dtag(e);
         if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e);
+        else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e);
       }
     }
     try {
@@ -8088,7 +8132,13 @@
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, _by: e.pubkey, displayLabel: c.displayLabel || "", type: c.type || "meals", startDate: c.startDate || "", endDate: c.endDate || "", recipient: (c.recipient || "").toLowerCase(), notes: c.notes || "", dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: c.dayMeals && typeof c.dayMeals === "object" ? c.dayMeals : {}, ts: e.created_at });
+            let s2 = null, sealed = false;
+            if (c.enc) {
+              s2 = _careOpen(pubk, c.enc);
+              sealed = !s2;
+            }
+            const f = s2 ? { ...c, ...s2 } : c;
+            byId.set(id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at });
             emit();
           } catch {
           }
@@ -8239,7 +8289,12 @@
       }
     },
     // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
-    async markCareSkip(careId, iso, reason) {
+    // H3: "I don't need help that day" is RECIPIENT-ONLY, and the relay enforces it — but it can no longer
+    // see who the recipient is, because that field is now sealed. So the need carries an opaque
+    // sha256(token) tag, and the token itself is encrypted to the recipient ALONE (not under the church-wide
+    // care key). Presenting the token proves you are the recipient without telling the relay who that is.
+    // `skipEnc` comes from the need (subscribeCareNeeds carries it through as _skipEnc).
+    async markCareSkip(careId, iso, reason, skipEnc) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -8248,11 +8303,21 @@
         }
       }
       if (!sk || !cp || !careId || !iso) return null;
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }, sk);
+      const tags = [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp]];
+      if (skipEnc) {
+        try {
+          const o = JSON.parse(decrypt(skipEnc, getConversationKey(sk, cp)));
+          if (o && o.tok) tags.push(["skiptok", String(o.tok)]);
+        } catch (e) {
+        }
+      }
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }, sk);
       try {
         await Promise.any(pool.publish(churchRelays(), evt));
+        evt._delivered = true;
       } catch (e) {
         console.warn("[fellowship] care skip publish failed", e);
+        evt._delivered = false;
       }
       return evt;
     },

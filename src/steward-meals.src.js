@@ -136,13 +136,58 @@
     };
   }
 
-  function publishNeed(need) {
-    if (!S() || !S().publishSigned) return Promise.resolve(null);
+  // SECURITY-AUDIT-2026-07-20 H3. A need used to publish `displayLabel`, `notes`, `recipient` and `dietary`
+  // as cleartext: who is struggling, free text the UI explicitly asks to contain "the address … who not to
+  // ring after 9pm", the recipient's pubkey, and a health inference. Readable by the relay operator, by
+  // every member forever, and by anyone holding a backup. Manna already treats recipient-naming docs as
+  // must-encrypt; this brings Care into line.
+  //
+  // SPLIT, not blanket encryption: type/dates/meals/start/end stay CLEAR so the slot grid, the sort and the
+  // live/past filter work without the key — and so a member who hasn't been keyed yet still sees that help
+  // is needed on Tuesday, just not who for.
+  const SEALED_FIELDS = ['displayLabel', 'notes', 'recipient', 'dietary'];
+  const _rand32 = () => { const b = new Uint8Array(32); crypto.getRandomValues(b); return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join(''); };
+  async function _sha256hex(str) {
+    const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  async function publishNeed(need) {
+    if (!S() || !S().publishSigned) return null;
     const id = need.id || uid('care');
     const rec = _normNeed(need);
-    const content = JSON.stringify(rec);
-    return S().publishSigned({ kind: 30078, created_at: now(), tags: [['d', NEED_D + id], ['t', NET]], content })
-      .then(e => ({ id, ...rec, ts: e && e.created_at }));
+    const sealed = {}; for (const f of SEALED_FIELDS) sealed[f] = rec[f];
+    const ct = S().careSeal ? S().careSeal(sealed) : null;
+    if (!ct) {
+      // No care key on this device. Publishing the PII in the clear would silently reintroduce the finding,
+      // so refuse and say why. careKeyChecked() distinguishes "still loading" from "genuinely absent", so the
+      // steward gets an accurate reason rather than being sent somewhere that won't help.
+      const looking = S().careKeyChecked && !S().careKeyChecked();
+      throw new Error(looking
+        ? 'Still connecting to your church — give it a moment and try again.'
+        : 'Care needs are encrypted for the person’s privacy, and this church’s care key hasn’t reached this device yet. Open Members once so it can sync, then try again.');
+    }
+    const tags = [['d', NEED_D + id], ['t', NET], ['enc', 'care1']];
+    const body = { ...rec, enc: ct };
+    for (const f of SEALED_FIELDS) delete body[f];   // never ship both halves
+    // Skip token: lets the RECIPIENT alone mark "I don't need help that day" without the relay ever learning
+    // who they are. Random (so it can't be brute-forced back to an identity) and encrypted to the recipient
+    // specifically — NOT under the church-wide care key, which every member holds.
+    if (rec.recipient && S().careSealTo) {
+      const tok = _rand32();
+      const to = S().careSealTo(rec.recipient, { tok });
+      if (to) { body.skipEnc = to; tags.push(['skiphash', await _sha256hex(tok)]); }
+    }
+    const e = await S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(body) });
+    return { id, ...rec, ts: e && e.created_at };
+  }
+  // Open a need read off the relay. v1 docs (pre-2026-07-20) carry the fields in the clear and are read
+  // as-is — a church mid-pilot must not lose its open needs. `_sealed` marks one we could not open, so the
+  // UI can say "details hidden" rather than render a nameless, broken-looking card.
+  function openNeed(rec) {
+    if (!rec || !rec.enc) return rec;
+    const opened = (S() && S().careOpen) ? S().careOpen(rec.enc) : null;
+    const { enc, ...clear } = rec;
+    return opened ? { ...clear, ...opened } : { ...clear, _sealed: true };
   }
 
   function removeNeed(id) {
@@ -240,7 +285,7 @@
     // settings
     subscribeSettings, setEnabled, cachedEnabled,
     // needs
-    publishNeed, removeNeed, subscribeNeeds,
+    publishNeed, removeNeed, subscribeNeeds, openNeed,   // openNeed exported so it is testable against the SHIPPED bundle
     // slots + skips (read slots; the steward can now WRITE skips to block a day for the recipient)
     subscribeSlots, subscribeSkips, skipDay, unskipDay,
     // care-team admin helper (client-side check)

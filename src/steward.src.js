@@ -94,6 +94,29 @@ const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->par
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a self-hosted media item referencing a content-addressed blob (sha256 + host)
 const PINSERMON_D = 'trinityone/pinsermon:';   // the church's currently-featured sermon → member Today card + notification (one per church)
 const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (last-backup time + reminder cadence) → same nudge on every steward/device
+// ── CARE KEY (SECURITY-AUDIT-2026-07-20 H3) ───────────────────────────────────────────────────────
+// A care need NAMES a vulnerable person and, by the notes field's own placeholder, carries their address, a
+// health inference and a "who not to ring after 9pm" window. Manna already treats this class of doc as
+// must-encrypt; Care shipped it in cleartext. Manna's PRINCIPLE applies, its MECHANISM doesn't — Manna
+// self-encrypts to the church key, but ordinary members must READ a need to volunteer for it. So this is
+// the per-church-key-wrapped-per-member envelope (the media/group-key shape), sealing only the identifying
+// half; type and dates stay clear so the slot grid renders without the key.
+//
+// A FIRST ATTEMPT AT THIS WAS REVERTED because the key lifecycle lost data. Both causes are fixed here:
+//  1. It minted whenever _careKeyHex was null — but the subscription that populates it is a network
+//     round-trip, so the ordinary outcome on console open was "mint a fresh key", orphaning every need
+//     already sealed. We now mint ONLY after positively observing that no envelope exists (_careKeyChecked),
+//     and never when one exists that we simply can't open.
+//  2. It unwrapped with sk/pub. In DELEGATED mode `pub` is the church and `sk` is the steward's own key, so
+//     the lookup could never succeed — every console open minted and published a competing envelope under a
+//     different author, which replKey() does not replace. Use churchSk/churchPub (this device's own key),
+//     exactly as _ingestGroupKey does above.
+const CAREKEY_D = 'trinityone/carekey:';
+let _careKeyHex = null;          // this device's copy of the church care key
+let _careKeyDocKeys = null;      // the envelope's wrapped-per-member map (to detect who is missing)
+let _careKeyRev = 0;             // envelope revision — rotation is NOT wired yet, but readers must tolerate it
+let _careKeyChecked = false;     // have we actually LOOKED for an envelope? mint gate — see (1) above
+let _careRoster = new Set();     // the church's current steward pubkeys — who may author the envelope
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key
 let _mediaKeyDocKeys = null;                   // the latest media-key doc's wrapped-per-member map (to detect members not yet keyed)
@@ -960,6 +983,65 @@ window.Steward = {
     if (ok !== false) _mediaKeyDocKeys = keys;                    // reflect what we just published so we don't loop
     return ok;
   },
+  // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
+  // Watch the church's envelope. Unwraps OUR OWN entry with churchSk/churchPub — in delegated mode `pub` is
+  // the church, so using it here is what made the previous attempt impossible to satisfy.
+  subscribeCareKey() {
+    const cp = actingChurch || pub; if (!cp) return () => {};
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], '#d': [CAREKEY_D + cp] },
+                                              { kinds: [30078], '#church': [cp], '#d': [CAREKEY_D + cp] }], {
+      onevent(e) {
+        // Author discipline: the church itself, or one of its CURRENT rostered stewards. The relay enforces
+        // exactly this on write (accept()'s CAREKEY_D rule), so on an enforcing relay the check is belt and
+        // braces; it matters on a shared or non-enforcing one, where a stray envelope could otherwise
+        // substitute the key. _careRosterSet is kept current by subscribeStewards via setCareRoster().
+        if (e.pubkey !== cp && !_careRoster.has(e.pubkey)) return;
+        try {
+          const o = JSON.parse(e.content || '{}');
+          if ((o.rev || 1) < _careKeyRev) return;            // a lagging relay must not resurrect an older envelope
+          _careKeyDocKeys = o.keys || null; _careKeyRev = o.rev || 1;
+          const mine = o.keys && churchPub && o.keys[churchPub];
+          if (mine && churchSk) _careKeyHex = nip44d(mine, nip44ck(churchSk, e.pubkey));
+        } catch (x) {}
+        _careKeyChecked = true;
+      },
+      oneose() { _careKeyChecked = true; },   // no envelope came back → it is safe to mint one
+    });
+    return () => { try { sub.close(); } catch (e) {} };
+  },
+  // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
+  // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
+  // for the first second of every console open. Idempotent: re-wraps the EXISTING key for anyone missing.
+  async ensureCareKeyForMembers(memberPubs, stewardPubs) {
+    const cp = actingChurch || pub;
+    if (!sk || !cp || !churchPub) return false;
+    if (!_careKeyChecked) return false;                       // haven't looked yet — minting now would orphan
+    if (!_careKeyHex) {
+      if (_careKeyDocKeys) return false;                      // an envelope EXISTS and we're not in it; the owner must add us
+      _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      _careKeyRev = 1;
+    }
+    // include ourselves (delegated stewards sign with their own key) and the steward roster, so a steward
+    // can open needs and re-wrap for new members without the owner present
+    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))];
+    const have = _careKeyDocKeys || {};
+    if (want.every(p2 => have[p2])) return false;             // everyone's keyed — no republish
+    const keys = {};
+    for (const mp of want) { try { keys[mp] = nip44e(_careKeyHex, nip44ck(sk, mp)); } catch (e) {} }
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }));
+    if (ok !== false) _careKeyDocKeys = keys;
+    return ok;
+  },
+  // seal / open the sensitive half of a care doc. Returns null when this device has no key, so callers can
+  // refuse rather than publish PII in the clear by accident.
+  careSeal(obj) { try { return _careKeyHex ? nip44e(JSON.stringify(obj), _unhex(_careKeyHex)) : null; } catch (e) { return null; } },
+  careOpen(ct) { try { return _careKeyHex ? JSON.parse(nip44d(ct, _unhex(_careKeyHex))) : null; } catch (e) { return null; } },
+  careSealTo(recipientPub, obj) { try { return nip44e(JSON.stringify(obj), nip44ck(sk, recipientPub)); } catch (e) { return null; } },
+  hasCareKey() { return !!_careKeyHex; },
+  careKeyChecked() { return _careKeyChecked; },
+  // the console feeds the live steward roster in, so the envelope's author check stays current when a
+  // steward is revoked (a revoked steward's envelope must stop being accepted, same as their content)
+  setCareRoster(list) { _careRoster = new Set((list || []).filter(Boolean)); },
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
     if (!pub) return () => {};

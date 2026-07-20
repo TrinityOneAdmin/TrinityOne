@@ -105,12 +105,46 @@
         dietary: (Array.isArray(n.dietary) ? n.dietary : []).map((d) => String(d).slice(0, 24)).filter(Boolean).slice(0, 12)
       };
     }
-    function publishNeed(need) {
-      if (!S() || !S().publishSigned) return Promise.resolve(null);
+    const SEALED_FIELDS = ["displayLabel", "notes", "recipient", "dietary"];
+    const _rand32 = () => {
+      const b = new Uint8Array(32);
+      crypto.getRandomValues(b);
+      return Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
+    };
+    async function _sha256hex(str) {
+      const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+      return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+    async function publishNeed(need) {
+      if (!S() || !S().publishSigned) return null;
       const id = need.id || uid("care");
       const rec = _normNeed(need);
-      const content = JSON.stringify(rec);
-      return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", NEED_D + id], ["t", NET]], content }).then((e) => ({ id, ...rec, ts: e && e.created_at }));
+      const sealed = {};
+      for (const f of SEALED_FIELDS) sealed[f] = rec[f];
+      const ct = S().careSeal ? S().careSeal(sealed) : null;
+      if (!ct) {
+        const looking = S().careKeyChecked && !S().careKeyChecked();
+        throw new Error(looking ? "Still connecting to your church \u2014 give it a moment and try again." : "Care needs are encrypted for the person\u2019s privacy, and this church\u2019s care key hasn\u2019t reached this device yet. Open Members once so it can sync, then try again.");
+      }
+      const tags = [["d", NEED_D + id], ["t", NET], ["enc", "care1"]];
+      const body = { ...rec, enc: ct };
+      for (const f of SEALED_FIELDS) delete body[f];
+      if (rec.recipient && S().careSealTo) {
+        const tok = _rand32();
+        const to = S().careSealTo(rec.recipient, { tok });
+        if (to) {
+          body.skipEnc = to;
+          tags.push(["skiphash", await _sha256hex(tok)]);
+        }
+      }
+      const e = await S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(body) });
+      return { id, ...rec, ts: e && e.created_at };
+    }
+    function openNeed(rec) {
+      if (!rec || !rec.enc) return rec;
+      const opened = S() && S().careOpen ? S().careOpen(rec.enc) : null;
+      const { enc, ...clear } = rec;
+      return opened ? { ...clear, ...opened } : { ...clear, _sealed: true };
     }
     function removeNeed(id) {
       if (!S() || !S().publishSigned) return Promise.resolve(null);
@@ -228,6 +262,8 @@
       publishNeed,
       removeNeed,
       subscribeNeeds,
+      openNeed,
+      // openNeed exported so it is testable against the SHIPPED bundle
       // slots + skips (read slots; the steward can now WRITE skips to block a day for the recipient)
       subscribeSlots,
       subscribeSkips,
