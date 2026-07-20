@@ -1093,6 +1093,10 @@ function accept(e) {
         if (c.child && (toHexPub(c.child) || c.child) !== child) return false;         // content must match the d-tag
       } catch { return false; }
     }
+    // the per-church CARE key envelope (d=carekey:<churchpub>) — church key or a current steward of it.
+    // Same shape and same authority as the media key: it wraps one symmetric key to each member, so its
+    // object keys ARE the roster and it is read-gated to effective members by CP_SUFFIXED_D.
+    if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
     // moderation: photo-suppression list — d=nophoto:<churchpub>, owner or a CURRENT steward of that church.
     // (Previously unlisted, so it fell to the generic member rule: any member could rewrite it.)
     if (d.startsWith(NOPHOTO_D)) { const cp = d.slice(NOPHOTO_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }

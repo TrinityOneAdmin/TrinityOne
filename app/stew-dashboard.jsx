@@ -142,11 +142,21 @@ function JoinNotifier() {
 // are rotated explicitly from the edit-members modal. Renders nothing.
 function KeyDistributor() {
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
-  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const allMembers = window.useStewardMembers ? window.useStewardMembers() : [];
+  // AUDIT-2026-07-20 H1: useStewardMembers() is a participation aggregate with NO blocklist filter, so this
+  // component was actively RE-ISSUING the group and media keys to blocked members on every roster change.
+  // The relay stops delivering to them, which is the whole visible effect — but they still hold live keys,
+  // so any cached ciphertext (their own cache, a mirror host, a backup, a non-enforcing relay) keeps
+  // decrypting, including sermons uploaded AFTER the block. Key distribution now excludes them.
+  const blocked = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const blockedSet = React.useMemo(() => new Set(blocked), [blocked]);
+  const members = React.useMemo(() => allMembers.filter(m => !blockedSet.has(m.pubkey)), [allMembers, blockedSet]);
   const last = React.useRef({});
   const membersRef = React.useRef([]); membersRef.current = members;
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
+  // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
+  React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), []);
   React.useEffect(() => {
     const memberPubs = members.map(m => m.pubkey);
     for (const g of groups) {
@@ -165,6 +175,10 @@ function KeyDistributor() {
     // key is only published at sermon UPLOAD, so a member who joined since is missing from it and can't decrypt
     // existing sermons. ensureMediaKeyForMembers self-guards (only republishes if someone's actually missing).
     if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(memberPubs);
+    // H3: and the CARE key, so every member can open the sealed half of a care need and volunteer. Unlike
+    // the media key this MINTS on first call — a steward writing the first care need must be able to seal
+    // it immediately. Idempotent: re-wraps the existing key only for members who are missing from it.
+    if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs);
   }, [groups, members]);
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
