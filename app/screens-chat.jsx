@@ -782,7 +782,11 @@ function Row({ me, m, children, ctx, mod }) {
           </React.Fragment>
         ) : null}
       </div>
-      {me ? <span style={{ fontSize: 11, color: 'var(--ink-3)', margin: '3px 4px 0' }}>{m.when}</span> : null}
+      {/* E1: a queued message says so, instead of looking identical to one that arrived. "Waiting to send"
+          is the honest state — it hasn't failed, and it hasn't gone; it will go when there's signal. */}
+      {me ? <span style={{ fontSize: 11, color: m._pending ? 'var(--clay-ink)' : 'var(--ink-3)', margin: '3px 4px 0', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        {m._pending ? <React.Fragment><Icon name="clock" size={11} color="currentColor" />Waiting to send</React.Fragment> : m.when}
+      </span> : null}
     </div>
   );
 }
@@ -957,10 +961,11 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   // UX-AUDIT-2026-07-20 E1: a send that failed used to vanish — the composer cleared, no bubble appeared,
   // no error. On the thin, intermittent connections this product is built for that is the failure that
   // erodes trust fastest, because nobody reports it; they just stop trusting the app with anything that
-  // matters. The transport now reports delivery (publishMessage -> evt._delivered), so we can hand the
-  // member's words back instead of losing them. `onFail` restores the composer for a plain text message;
-  // richer kinds (verse/poll) can't be re-hydrated into the composer, so they get an explicit toast.
-  const send = (extra, onFail) => {
+  // matters. publishMessage now QUEUES the signed event before attempting delivery, so a failed send is
+  // held and retried rather than lost — the member sees a "Waiting to send" bubble in the thread. We must
+  // NOT also restore the composer here: the message is already queued, and putting the text back would
+  // send it twice the moment signal returned.
+  const send = (extra) => {
     // NIP-10 reply markers, when this message answers another
     const rtags = replyTo ? [['e', replyTo.id, '', 'reply'], ['p', replyTo.pubkey]] : [];
     if (window.Fellowship) {                        // publish over Nostr; relay echoes it back to our sub
@@ -969,11 +974,8 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         : extra.kind === 'poll' ? window.Fellowship.publishMessage(group.id, JSON.stringify({ question: extra.question, options: extra.options }), [['k', 'poll'], ...rtags])
         : window.Fellowship.publishMessage(group.id, extra.text, rtags);
       Promise.resolve(p).then(evt => {
-        if (evt && evt._delivered === false) {
-          if (onFail) onFail();
-          ctx.toast('Couldn’t send — check your connection and try again.');
-        }
-      }).catch(() => { if (onFail) onFail(); ctx.toast('Couldn’t send — check your connection and try again.'); });
+        if (evt && evt._delivered === false) ctx.toast('No signal — we’ll send it as soon as you’re back online.');
+      }).catch(() => { ctx.toast('No signal — we’ll send it as soon as you’re back online.'); });
       if (replyTo) setReplyTo(null);
       return;
     }
@@ -985,13 +987,13 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     const wasPrayer = prayerOn;
     // clear optimistically so the composer feels instant, but put the words BACK if the send fails —
     // the member never loses what they typed.
-    send(wasPrayer ? { text, kind: 'prayer' } : { text }, () => { setDraft(d => d || text); setPrayerOn(wasPrayer); });
+    send(wasPrayer ? { text, kind: 'prayer' } : { text });
     setDraft(''); setPrayerOn(false);
   };
   const sendPoll = () => {
     const q = pollQ.trim(); const opts = pollOpts.map(o => o.trim()).filter(Boolean);
     if (!q || opts.length < 2) return;
-    send({ kind: 'poll', question: q, options: opts.slice(0, 5) }, () => { setPollQ(q); setPollOpts(opts); setPollOpen(true); });
+    send({ kind: 'poll', question: q, options: opts.slice(0, 5) });
     setPollQ(''); setPollOpts(['', '']); setPollOpen(false);
   };
   const myPub = window.Fellowship && window.Fellowship.myPubkey;
@@ -1015,7 +1017,23 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   // perf #6: memoize the visible set on [msgs, hidden] so it's a STABLE reference. It was rebuilt every render, and
   // the `bubbles` useMemo below lists it in its deps — so that memo recomputed on EVERY render (incl. each composer
   // keystroke), re-creating up to 200 Bubble elements. Now the thread only re-renders when messages/hidden change.
-  const visibleMsgs = React.useMemo(() => msgs.filter(m => !hideSet.has(m.id)), [msgs, hidden]);   // eslint-disable-line
+  // E1: messages still waiting to be sent, merged in at the end so they appear where the member expects —
+  // at the bottom of the thread, in the order they typed them. They carry _pending so the bubble can show
+  // it hasn't gone yet. When the relay echoes one back it arrives in `msgs` with the SAME id (the event was
+  // signed once and republished verbatim), so the filter below swaps the pending copy for the real one with
+  // no flicker and no duplicate.
+  const [queued, setQueued] = useC([]);
+  useCE(() => {
+    const F = window.Fellowship; if (!F || !F.onOutbox || !group) return;
+    const refresh = () => setQueued(F.outboxFor(group.id).map(evtToMsg).map(m => ({ ...m, _pending: true })));
+    refresh();
+    return F.onOutbox(refresh);
+  }, [group && group.id]);
+  const visibleMsgs = React.useMemo(() => {
+    const shown = msgs.filter(m => !hideSet.has(m.id));
+    const have = new Set(shown.map(m => m.id));
+    return [...shown, ...queued.filter(q => !have.has(q.id))];
+  }, [msgs, hidden, queued]);   // eslint-disable-line
   const msgById = {}; visibleMsgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents from the VISIBLE set only — a hidden/deleted parent must not leak back through a quote (audit U3)
   // perf #2: memoize the rendered bubbles so a composer keystroke (draft state) doesn't re-render the whole
   // thread. Recompute only when message / reaction / menu / pin / picker state actually changes — NOT on draft.

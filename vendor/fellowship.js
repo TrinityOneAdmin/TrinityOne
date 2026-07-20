@@ -6494,6 +6494,79 @@
     deriveFromIdentity().catch(() => {
     });
   });
+  var OUTBOX_KEY = "trinityone.outbox";
+  var OUTBOX_MAX = 200;
+  var _outbox = [];
+  var _outboxFailed = [];
+  var _outboxSubs = /* @__PURE__ */ new Set();
+  function _outboxLoad() {
+    try {
+      _outbox = JSON.parse(localStorage.getItem(OUTBOX_KEY) || "[]") || [];
+    } catch (e) {
+      _outbox = [];
+    }
+  }
+  function _outboxSave() {
+    try {
+      localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox.slice(-OUTBOX_MAX)));
+    } catch (e) {
+    }
+    for (const fn of [..._outboxSubs]) {
+      try {
+        fn(_outbox);
+      } catch (e) {
+      }
+    }
+  }
+  _outboxLoad();
+  var _flushing = false;
+  var PUBLISH_TIMEOUT_MS = 12e3;
+  function _publishBounded(relays, evt) {
+    return Promise.race([
+      Promise.any(pool.publish(relays, evt)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), PUBLISH_TIMEOUT_MS))
+    ]);
+  }
+  var _PERMANENT = /^(blocked|invalid|rate-limited|restricted|error: )/i;
+  var isPermanentRefusal = (e) => _PERMANENT.test(String(e && e.message || e || ""));
+  var MAX_TRIES = 50;
+  async function _outboxFlush() {
+    if (_flushing || !_outbox.length || !sk) return;
+    _flushing = true;
+    try {
+      for (const item of [..._outbox]) {
+        try {
+          await _publishBounded(item.relays && item.relays.length ? item.relays : window.Fellowship.relays, item.evt);
+          _outbox = _outbox.filter((o) => o.evt.id !== item.evt.id);
+          _outboxSave();
+        } catch (e) {
+          const errs = e && e.errors ? e.errors : [e];
+          const permanent = errs.length && errs.every(isPermanentRefusal);
+          item.tries = (item.tries || 0) + 1;
+          item.lastTry = Math.floor(Date.now() / 1e3);
+          item.lastError = String(errs[0] && errs[0].message || "").slice(0, 120);
+          if (permanent || item.tries >= MAX_TRIES) {
+            item.failed = true;
+            item.permanent = !!permanent;
+            _outbox = _outbox.filter((o) => o.evt.id !== item.evt.id);
+            _outboxFailed.push(item);
+            if (_outboxFailed.length > 50) _outboxFailed.shift();
+          }
+          _outboxSave();
+        }
+      }
+    } finally {
+      _flushing = false;
+    }
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", () => {
+      _outboxFlush();
+    });
+    setInterval(() => {
+      _outboxFlush();
+    }, 45e3);
+  }
   window.Fellowship = {
     relays: loadRelays(),
     CANONICAL_RELAY,
@@ -7020,14 +7093,53 @@
         tags: [["t", NET], ["t", groupId], ...churchTag, ...encTag, ...extraTags],
         content: body
       }, sk);
+      _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
+      _outboxSave();
       try {
         await Promise.any(pool.publish(window.Fellowship.relays, evt));
         evt._delivered = true;
+        _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
+        _outboxSave();
       } catch (e) {
-        console.warn("[fellowship] publish failed", e);
+        console.warn("[fellowship] publish failed \u2014 queued for retry", e);
         evt._delivered = false;
       }
       return evt;
+    },
+    // the queue, for the UI: pending messages for one group (oldest first), and a change subscription
+    outboxFor(groupId) {
+      return [
+        ..._outbox.filter((o) => o.groupId === groupId).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+        ..._outboxFailed.filter((o) => o.groupId === groupId).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "" }))
+      ];
+    },
+    outboxCount() {
+      return _outbox.length;
+    },
+    onOutbox(fn) {
+      _outboxSubs.add(fn);
+      return () => _outboxSubs.delete(fn);
+    },
+    flushOutbox() {
+      return _outboxFlush();
+    },
+    // give up on one queued message (the member chose to discard it)
+    dropQueued(id) {
+      _outbox = _outbox.filter((o) => o.evt.id !== id);
+      _outboxFailed = _outboxFailed.filter((o) => o.evt.id !== id);
+      _outboxSave();
+    },
+    // retry something we gave up on, at the member's request
+    requeue(id) {
+      const f = _outboxFailed.find((o) => o.evt.id === id);
+      if (!f) return false;
+      _outboxFailed = _outboxFailed.filter((o) => o.evt.id !== id);
+      f.tries = 0;
+      f.failed = false;
+      _outbox.push(f);
+      _outboxSave();
+      _outboxFlush();
+      return true;
     },
     // ── direct messages (1:1, encrypted) ──
     // NIP-04 encrypted kind-4: the content is private to the two parties; the relay sees only that two

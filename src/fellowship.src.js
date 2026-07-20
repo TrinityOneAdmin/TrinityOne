@@ -591,6 +591,79 @@ async function init() {
 // keep the signing key in step with identity regeneration / restore
 window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch(() => {}); });
 
+// ── OUTBOX (UX-AUDIT-2026-07-20 E1) ───────────────────────────────────────────────────────────────
+// A message that couldn't be sent used to be gone: the composer cleared, the transport logged a warning,
+// and nothing appeared. On the intermittent connections this product is built for that is the failure that
+// costs the most trust, because nobody reports it — they just stop trusting the app with anything that
+// matters.
+//
+// The event is SIGNED ONCE at compose time and the signed event is what we store. A retry republishes it
+// verbatim, so it keeps its original id and created_at: the relay's echo dedupes against the optimistic
+// bubble by id for free, and the message keeps the timestamp of when the member actually wrote it, not
+// when the signal came back. Persisted, so closing the app doesn't lose it.
+const OUTBOX_KEY = 'trinityone.outbox';
+const OUTBOX_MAX = 200;            // a bounded queue: past this the oldest is dropped rather than growing forever
+let _outbox = [];
+let _outboxFailed = [];   // gave up on these — surfaced to the member rather than discarded
+const _outboxSubs = new Set();
+function _outboxLoad() { try { _outbox = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]') || []; } catch (e) { _outbox = []; } }
+function _outboxSave() {
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox.slice(-OUTBOX_MAX))); } catch (e) {}
+  for (const fn of [..._outboxSubs]) { try { fn(_outbox); } catch (e) {} }
+}
+_outboxLoad();
+let _flushing = false;
+// One attempt at one relay set, bounded in time. Offline publishes do NOT fail fast — a socket that never
+// opens leaves Promise.any pending indefinitely — so without this the composer would sit on "sending" for
+// minutes and a flush would never finish. Verified on-device in airplane mode.
+const PUBLISH_TIMEOUT_MS = 12000;
+function _publishBounded(relays, evt) {
+  return Promise.race([
+    Promise.any(pool.publish(relays, evt)),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), PUBLISH_TIMEOUT_MS)),
+  ]);
+}
+// A relay REFUSING a message is not the same as being unable to reach one, and conflating them is a bug:
+// a message the relay will never accept (not a member of that group, blocked, malformed) would otherwise be
+// retried forever, every 45 seconds, for the life of the install. Nostr signals refusal as OK=false with a
+// reason; nostr-tools surfaces it as a rejection whose message carries that reason. Treat the known refusal
+// prefixes as permanent, everything else as "try again later".
+const _PERMANENT = /^(blocked|invalid|rate-limited|restricted|error: )/i;
+const isPermanentRefusal = (e) => _PERMANENT.test(String((e && e.message) || e || ''));
+const MAX_TRIES = 50;   // ~a day of 45s ticks; a backstop for a refusal shape we didn't anticipate
+// Try to deliver everything queued. Safe to call often — it no-ops while already running.
+async function _outboxFlush() {
+  if (_flushing || !_outbox.length || !sk) return;
+  _flushing = true;
+  try {
+    for (const item of [..._outbox]) {
+      try {
+        await _publishBounded(item.relays && item.relays.length ? item.relays : window.Fellowship.relays, item.evt);
+        _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
+        _outboxSave();
+      } catch (e) {
+        const errs = (e && e.errors) ? e.errors : [e];               // AggregateError from Promise.any
+        const permanent = errs.length && errs.every(isPermanentRefusal);
+        item.tries = (item.tries || 0) + 1;
+        item.lastTry = Math.floor(Date.now() / 1000);
+        item.lastError = String((errs[0] && errs[0].message) || '').slice(0, 120);
+        if (permanent || item.tries >= MAX_TRIES) {
+          // Give up, but do NOT silently bin the member's words — mark it so the thread can show it was
+          // refused and offer to discard or copy it out.
+          item.failed = true; item.permanent = !!permanent;
+          _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
+          _outboxFailed.push(item); if (_outboxFailed.length > 50) _outboxFailed.shift();
+        }
+        _outboxSave();
+      }
+    }
+  } finally { _flushing = false; }
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => { _outboxFlush(); });   // NB: navigator.onLine lies on native, but the EVENT still fires on a real transition
+  setInterval(() => { _outboxFlush(); }, 45000);                  // and a slow tick, because the event is not reliable on Android
+}
+
 window.Fellowship = {
   relays: loadRelays(),
   CANONICAL_RELAY,
@@ -906,10 +979,33 @@ window.Fellowship = {
     // and a prayer request typed on a bad connection was simply gone with no error. Reading is genuinely
     // offline-first; writing was not. `_delivered` lets the caller keep the member's words when we couldn't
     // send them. (A persisted outbox with retry is the fuller fix; this closes the silent-loss hole.)
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); evt._delivered = true; }
-    catch (e) { console.warn('[fellowship] publish failed', e); evt._delivered = false; }
+    // E1: queue FIRST, then attempt delivery. If the attempt fails the message stays queued and is retried
+    // on the next reconnect, online event or tick — so it eventually arrives instead of being lost. The UI
+    // renders queued items as pending bubbles (outboxFor), and the relay's echo removes them by id.
+    _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+    _outboxSave();
+    try {
+      await Promise.any(pool.publish(window.Fellowship.relays, evt));
+      evt._delivered = true;
+      _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
+    } catch (e) {
+      console.warn('[fellowship] publish failed — queued for retry', e);
+      evt._delivered = false;   // still queued; the composer no longer needs to hand the words back
+    }
     return evt;
   },
+  // the queue, for the UI: pending messages for one group (oldest first), and a change subscription
+  outboxFor(groupId) { return [
+    ..._outbox.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+    ..._outboxFailed.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
+  ]; },
+  outboxCount() { return _outbox.length; },
+  onOutbox(fn) { _outboxSubs.add(fn); return () => _outboxSubs.delete(fn); },
+  flushOutbox() { return _outboxFlush(); },
+  // give up on one queued message (the member chose to discard it)
+  dropQueued(id) { _outbox = _outbox.filter(o => o.evt.id !== id); _outboxFailed = _outboxFailed.filter(o => o.evt.id !== id); _outboxSave(); },
+  // retry something we gave up on, at the member's request
+  requeue(id) { const f = _outboxFailed.find(o => o.evt.id === id); if (!f) return false; _outboxFailed = _outboxFailed.filter(o => o.evt.id !== id); f.tries = 0; f.failed = false; _outbox.push(f); _outboxSave(); _outboxFlush(); return true; },
 
   // ── direct messages (1:1, encrypted) ──
   // NIP-04 encrypted kind-4: the content is private to the two parties; the relay sees only that two
