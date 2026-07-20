@@ -23,6 +23,7 @@ var FinanceLedger = (() => {
     ACCOUNT_TYPES: () => ACCOUNT_TYPES,
     FUND_KINDS: () => FUND_KINDS,
     STATEMENT_SECTIONS: () => STATEMENT_SECTIONS,
+    accentInk: () => accentInk,
     addAccount: () => addAccount,
     addFund: () => addFund,
     applyEntry: () => applyEntry,
@@ -429,7 +430,27 @@ var FinanceLedger = (() => {
     }
     return [...book.funds.values()].map((f) => ({ fund: f.id, name: f.name, kind: f.kind, balance: bal.get(f.id) || 0 })).sort((a, b) => a.fund === "general" ? -1 : b.fund === "general" ? 1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   }
-  function buildStatement(book, { from = "", to = "\uFFFF", title = "", note = "", sections = null, periodLabel = "", generatedAt = "" } = {}) {
+  var validHex = (c) => typeof c === "string" && /^#[0-9a-fA-F]{3,8}$/.test(c.trim()) ? c.trim() : "";
+  function accentInk(hex) {
+    const h = validHex(hex);
+    if (!h) return "#2b2723";
+    let c = h.slice(1);
+    if (c.length === 3) c = c.split("").map((x) => x + x).join("");
+    if (c.length >= 6) c = c.slice(0, 6);
+    else return "#2b2723";
+    let r = parseInt(c.slice(0, 2), 16), g = parseInt(c.slice(2, 4), 16), b = parseInt(c.slice(4, 6), 16);
+    const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    if (lum > 0.62) {
+      const k = 0.62 / lum;
+      r = Math.round(r * k);
+      g = Math.round(g * k);
+      b = Math.round(b * k);
+    }
+    const hx = (n) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0");
+    return "#" + hx(r) + hx(g) + hx(b);
+  }
+  var validLogo = (s) => /^data:image\//i.test(String(s || "").trim()) ? String(s).trim() : "";
+  function buildStatement(book, { from = "", to = "\uFFFF", title = "", note = "", sections = null, periodLabel = "", generatedAt = "", accent = "", logo = "" } = {}) {
     const enabled = sections || STATEMENT_SECTIONS.filter((s) => s.on).map((s) => s.key);
     const has = (k) => enabled.includes(k);
     const nameOf = (id) => (book.accounts.get(id) || {}).name || id;
@@ -451,7 +472,11 @@ var FinanceLedger = (() => {
       currency: book.baseCurrency,
       decimals: book.decimals,
       generatedAt,
-      sections: enabled
+      sections: enabled,
+      accent: validHex(accent),
+      // the church's brand accent (hex) — colours the statement header/rules; '' → default
+      logo: validLogo(logo)
+      // the church's dp/logo as a data: URI (letterhead); '' when none / not a data URI
     };
     if (has("summary")) model.summary = { income: ie.income, expenditure: ie.expenditure, surplus: ie.surplus };
     if (has("income")) model.income = incomeRows;
@@ -530,11 +555,12 @@ var FinanceLedger = (() => {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(model.title)} \u2014 ${esc(model.periodLabel)}</title>
 <style>
-  :root { --ink:#2b2723; --ink3:#8a8078; --line:#e7e0d5; --clay:#b4462f; --sage:#4f7a5e; }
+  :root { --ink:#2b2723; --ink3:#8a8078; --line:#e7e0d5; --accent:${accentInk(model.accent)}; }
   * { box-sizing:border-box; }
   body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:var(--ink); max-width:640px; margin:0 auto; padding:40px 28px; line-height:1.5; }
-  header { border-bottom:2px solid var(--ink); padding-bottom:14px; margin-bottom:8px; }
-  h1 { font-size:26px; margin:0 0 2px; }
+  header { border-bottom:2px solid var(--accent); padding-bottom:14px; margin-bottom:8px; }
+  header img.logo { height:48px; width:auto; max-width:180px; display:block; margin:0 0 12px; object-fit:contain; }
+  h1 { font-size:26px; margin:0 0 2px; color:var(--accent); }
   .period { color:var(--ink3); font-size:15px; font-weight:600; }
   section { margin-top:26px; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--ink3); border-bottom:1px solid var(--line); padding-bottom:6px; margin:0 0 8px; }
@@ -542,12 +568,12 @@ var FinanceLedger = (() => {
   table.t { width:100%; border-collapse:collapse; font-size:15px; }
   table.t td { padding:6px 0; border-bottom:1px solid var(--line); }
   table.t td.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
-  tr.tot td { font-weight:800; border-bottom:none; border-top:2px solid var(--ink); padding-top:9px; }
+  tr.tot td { font-weight:800; border-bottom:none; border-top:2px solid var(--accent); padding-top:9px; }
   .note { white-space:pre-wrap; }
   footer { margin-top:34px; padding-top:12px; border-top:1px solid var(--line); color:var(--ink3); font-size:12px; }
   @media print { body { padding:0; } @page { margin:18mm; } }
 </style></head><body>
-<header><h1>${esc(model.title)}</h1><div class="period">${esc(model.periodLabel)}</div></header>
+<header>${model.logo ? `<img class="logo" src="${esc(model.logo)}" alt="">` : ""}<h1>${esc(model.title)}</h1><div class="period">${esc(model.periodLabel)}</div></header>
 ${S.join("\n")}
 <footer>${model.generatedAt ? "Generated " + esc(model.generatedAt) + " \xB7 " : ""}Prepared with TrinityOne \u2014 aggregate figures only.</footer>
 </body></html>`;

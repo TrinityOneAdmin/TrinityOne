@@ -3,7 +3,7 @@
   "appName": "TrinityOne",
   "webDir": "www",
   "android": {
-    "webContentsDebuggingEnabled": true
+    "webContentsDebuggingEnabled": false
   },
   "plugins": {
     "CapacitorHttp": {

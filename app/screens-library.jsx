@@ -155,10 +155,24 @@ function BackupCard({ ctx }) {
 
   const run = async (mode) => {
     if (!secure) { ctx.toast('Open the app over https to make a backup'); return; }
-    if (pass.length < 4) { ctx.toast('Use at least 4 characters (a PIN is fine)'); return; }
+    // SECURITY-AUDIT-2026-07-20 M1: this floor was 4 while the recovery-sheet path requires 6. This file
+    // contains the member's SEED (collectMember embeds `identity`) — the card calling it "your data" does
+    // not make it less of a key file. Same floor, same reasoning, everywhere.
+    if (pass.length < 6) { ctx.toast('Use at least 6 characters — this file can restore your whole account'); return; }
     setBusy(mode);
     try {
-      const obj = window.TrinityBackup.collectMember();
+      // SECURITY-AUDIT-2026-07-20 C3 (SILENT DATA LOSS): collectMember() is async and was NOT awaited.
+      // JSON.stringify(<Promise>) is "{}" — no throw — so the app encrypted an EMPTY object, wrote it out,
+      // and reported "Saved to your device". Restoring it on a new phone succeeded silently and restored
+      // NOTHING: no seed, no notes, no journals, no highlights, no followed churches. For a self-custodial
+      // app that is the one unrecoverable failure. The sibling path in identity-extras.jsx awaited
+      // correctly — this is what a duplicated flow costs.
+      const obj = await window.TrinityBackup.collectMember();
+      // Never hand the member a file that cannot restore them. Deliberately checks the SHAPE, not
+      // `identity` — a key imported without a phrase legitimately has none (see the wizard's
+      // "imported — keep your original backup" path), and those members must still be able to back up.
+      // A Promise has neither `kind` nor `local`, so this catches the bug above and stays quiet otherwise.
+      if (!obj || obj.kind !== 'member' || !obj.local) throw new Error('couldn’t read your account data — nothing was saved');
       const text = await window.TrinityBackup.encryptObj(obj, pass);
       const name = 'trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.json';
       const res = await window.TrinityBackup.saveFile(name, text, mode);
@@ -175,6 +189,20 @@ function BackupCard({ ctx }) {
     try {
       const text = await window.TrinityBackup.readFile(f);
       const obj = await window.TrinityBackup.decryptStr(text, p);
+      // SECURITY-AUDIT-2026-07-20 H1 (was 06-24 L6, fixed in ONE of the two copies): applyMember() calls
+      // importMnemonic() and permanently REPLACES the on-device key. identity-extras.jsx guards this with a
+      // confirm and a comment noting an earlier audit marked it fixed while it was missing from the code
+      // path — and then the same gap survived here, in a card whose copy never mentions identity at all.
+      // Pick the wrong .json out of Downloads and your key is gone. Plain window.confirm is deliberate:
+      // overwriting a self-custodial key should look unambiguous and a little ugly, not slick.
+      if (obj && obj.identity) {
+        const ID = window.TrinityIdentity;
+        const cur = (ID && ((ID.current && ID.current.npub) || ID.npub)) || '';
+        const msg = 'This will REPLACE the account on this phone with the one in the backup.\n\n'
+          + (cur ? 'On this phone now: ' + cur.slice(0, 18) + '…\n' : '')
+          + '\nThe current account will be UNRECOVERABLE unless you saved its 12 words.\n\nContinue?';
+        if (!window.confirm(msg)) return;
+      }
       await window.TrinityBackup.applyMember(obj);
       ctx.toast('Backup restored');
     } catch (err) { ctx.toast(err.message || 'Couldn’t restore that file'); }

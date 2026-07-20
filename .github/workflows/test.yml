@@ -1,0 +1,30 @@
+# The release gate that did not exist.
+#
+# SECURITY-AUDIT-2026-07-20 H1: before this file, NO workflow ran `npm test` — the only two workflows were
+# ios.yml and relay-desktop.yml, both manual/tag-triggered, and neither built or tested the app. There was no
+# push or PR workflow at all. So a failing relay-privacy test (the anonymous roster/DM read gate — the
+# arrest-list-grade invariant), a broken Shamir round-trip, a broken ledger, or a vendor/ bundle that no
+# longer matches its source could all reach production with no signal whatsoever.
+name: test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'   # pinned to the version the relay + build scripts are developed against
+          cache: npm
+      - run: npm ci
+      # Includes vendor-freshness.test.mjs, which rebuilds every src/*.src.js with the real build-*.sh and
+      # asserts the committed vendor/ bundles match — the check that would have caught the stale
+      # finance-ledger.js shipping unbranded statements to churches for three days.
+      - run: npm test

@@ -2716,6 +2716,11 @@ function DashMembers() {
   const pendingReqs = guardReqs.filter(r => !((guardians[r.child] || []).includes(r.parent)));
   const parentSet = new Set(); Object.values(guardians).forEach(ps => (ps || []).forEach(p => parentSet.add(p)));
   const nameByPub = {}; members.forEach(m => { if (m.name) nameByPub[m.pubkey] = m.name; });
+  // C1: the guardian-link card must show identities a forger CANNOT control — the roster name we resolved
+  // ourselves from the signer's pubkey, plus the npub — not the names carried in the request's content.
+  const npubByPub = {}; members.forEach(m => { if (m.npub) npubByPub[m.pubkey] = m.npub; });
+  const idOf = (pk) => npubByPub[pk] ? shortNpub(npubByPub[pk]) : ((pk || '').slice(0, 16) + '…');
+  const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = (r) => {
     window.Steward.setGuardians({ ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] });
     if (!minorsSet.has(r.child)) window.Steward.setMinors([...(sg.minors || []), r.child]);   // a linked child is a minor
@@ -2861,8 +2866,20 @@ function DashMembers() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', marginBottom: 10, flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay)' }}><Icon name="pray" size={15} color="currentColor" /> Parent / child links to confirm · {pendingReqs.length}</div>
             {pendingReqs.map(r => (
+              // SECURITY-AUDIT-2026-07-20 C1: this card used to read "<parentName> set up a child account for
+              // <childName>" from content the requester supplied, with nothing verifiable on screen — so a
+              // forged request looked exactly like a real one. It now leads with the UNSPOOFABLE identities
+              // (the signer's pet-name + both npubs) and demotes the self-reported names to "claims to be",
+              // mirroring the steward-approval card. Confirming grants DM access to a child: the steward has
+              // to be able to see WHO they are actually linking.
               <div key={r.child} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.4 }}><b style={{ color: 'var(--ink)' }}>{r.parentName || nameByPub[r.parent] || 'A parent'}</b> set up a child account for <b style={{ color: 'var(--ink)' }}>{r.childName || 'their child'}</b>. Confirm to link them and mark the child as under-18.</div>
+                <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.4 }}>
+                  <div><b style={{ color: 'var(--ink)' }}>{knownName(r.parent)}</b> asks to be linked as a parent{r.claimedParentName ? <span style={{ color: 'var(--ink-3)' }}> · claims to be “{r.claimedParentName}”</span> : null}</div>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>parent {idOf(r.parent)}</div>
+                  <div style={{ marginTop: 4 }}>of <b style={{ color: 'var(--ink)' }}>{knownName(r.child)}</b>{r.claimedChildName ? <span style={{ color: 'var(--ink-3)' }}> · claims to be “{r.claimedChildName}”</span> : null}{minorsSet.has(r.child) ? null : <span style={{ color: 'var(--clay)' }}> — not currently marked as a child</span>}</div>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>child {idOf(r.child)}</div>
+                  <div style={{ marginTop: 5, fontSize: 11.5, color: 'var(--ink-3)' }}>Confirming lets this person DM the child directly and marks the child as under-18. Check both npubs are who you expect.</div>
+                </div>
                 <button onClick={() => approveGuardian(r)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="#fff" /> Confirm</button>
               </div>
             ))}

@@ -12,7 +12,10 @@ echo "JS libraries:"
 dl "https://unpkg.com/react@18.3.1/umd/react.production.min.js"         "$V/react.production.min.js"
 dl "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" "$V/react-dom.production.min.js"
 dl "https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"           "$V/babel.min.js"
-dl "https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"            "$V/fflate.js"
+# Keep this version IDENTICAL to the `fflate` pin in package.json — the member app loads this UMD build
+# while the steward console bundles the npm package, and two different copies of the same zip library in
+# one product is how a "works in the console, corrupts in the app" bug gets born.
+dl "https://cdn.jsdelivr.net/npm/fflate@0.8.3/umd/index.js"            "$V/fflate.js"
 
 echo "sql.js (wasm engine):"
 dl "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"   "$V/sqljs/sql-wasm.js"

@@ -311,6 +311,13 @@ const MINORS_D = 'trinityone/minors:';     // safeguarding: a church's list of m
 const APPROVED_D = 'trinityone/approved:'; // safeguarding: adults cleared to contact youth (mirrors the church's DBS/cleared list) — d=approved:<churchpub>
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-signed child→parents map — d=guardians:<churchpub>; a guardian may always DM their own child
 const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent notice of a steward-made guardian link — d=guardnotice:<parentpub>, p-tagged + NIP-44-encrypted to the parent (child link never in cleartext)
+// member-authored replies to church content — the member signs them and ['p']-tags the church
+const RSVP_D = 'trinityone/rsvp:';           // a member's RSVP to an event — d=rsvp:<eventId>
+const REQREPLY_D = 'trinityone/reqreply:';   // a member's accept/decline/swap on a serving request — d=reqreply:<requestId>
+const UNAVAIL_D = 'trinityone/unavail:';     // a member's unavailable dates for the rota — d=unavail:<memberpub>
+const CAREKEY_D = 'trinityone/carekey:';     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
+const GUARDREQ_D = 'trinityone/guardreq:';   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
+const NOPHOTO_D = 'trinityone/nophoto:';     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier-2 media key wrapped per-member — its object keys ARE the member roster, so gate reads to effective members (else it's a world-readable membership list)
 // (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable, falls to the default member rule)
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
@@ -593,7 +600,18 @@ const REQUIRE_APPROVAL = new Set(); // churchpubs whose joins need steward appro
 const ADMITTED_BY = new Map();      // churchpub -> Set(approved member pubkeys) (only used when that church requires approval)
 const JOIN_NOTIFIED = new Set();    // "pubkey:churchpub" we've already alerted the steward about (join or request) — dedupe push spam
 const BROADCAST = new Set();   // group ids the church marked broadcast
-const NETWORKS = new Set();    // network pubkeys this church joined — allowed to publish church-style content here
+// Networks a church joined — allowed to publish church-style content for THAT church.
+// SECURITY-AUDIT-2026-07-20 C4: this used to be a single process-global Set. A church publishing
+// `network:<pubkey>` inserted that key for EVERY church on the relay, so one tenant (or anyone who
+// self-registered a church via /config) could mint a key with leader authority over every other
+// congregation — read their roster, safeguarding lists and care needs, and inject church-style
+// content into them. Authority is now scoped to the churches that actually declared it; NETWORKS
+// is kept only as a cheap "is this pubkey a network anywhere" union for church-agnostic call sites.
+const NETWORKS_BY = new Map(); // churchpub -> Set(network pubkeys that church joined)
+const NETWORKS = new Set();    // union of the above — NEVER use to authorise access to a specific church
+function rebuildNetworks() { NETWORKS.clear(); for (const s of NETWORKS_BY.values()) for (const p of s) NETWORKS.add(p); }
+// the ONLY correct network check when a church is in scope: is `pub` a network THIS church joined?
+const networkOf = (pub, cp) => { const s = cp && NETWORKS_BY.get(cp); return !!(s && s.has(pub)); };
 const GROUP_LEADERS = new Map(); // groupId -> Set(pubkey) — members a leader empowered to post events for that group
 const GROUP_LEADER_BY = new Map(); // groupId -> { by, cp } — who authored the leader grant (M2: void it if they're later revoked)
 const STEWARDS_BY = new Map();   // churchpub -> Set(steward pubkeys) from the owner-signed stewards: roster (delegated, revocable authority)
@@ -609,11 +627,39 @@ const stewardOf = (pub, cp) => { const s = STEWARDS_BY.get(cp); return !!(cp && 
 // M2: a delegated leader/care-admin grant is only honoured while the steward who authored it is STILL a
 // steward (or the church/network key). So revoking a steward immediately drops the group-leader and
 // care-team grants they created — no re-derivation pass, the check just runs at use-time.
-const grantorOk = (src) => !!(src && (CHURCH_PUBS.has(src.by) || NETWORKS.has(src.by) || stewardOf(src.by, src.cp)));
+// REVIEW-2026-07-20 B3: `CHURCH_PUBS.has(src.by)` / `NETWORKS.has(src.by)` were unscoped, so a grant authored
+// by ANY church or ANY network key counted as a valid grantor for ANY church — which feeds careAdmin() below
+// and thus cross-tenant care-PII reads. Scoped to the church the grant is actually for.
+const grantorOk = (src) => !!(src && (src.by === src.cp || networkOf(src.by, src.cp) || stewardOf(src.by, src.cp)));
 // is `pub` on the care-team of church `cp`? (a member of the roster of cp's configured care-team group)
 const careAdmin = (pub, cp) => { const g = cp && MEALS_ADMIN_GROUP.get(cp); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub) && grantorOk(ROSTER_BY.get(g))); };
 // the church a steward-authored CONTENT event acts for: its ["church", <cp>] tag, validated to a configured church.
 const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church'); const h = t && (toHexPub(t[1]) || t[1]); return h && CHURCH_PUBS.has(h) ? h : ''; };
+// Resolve the church a kind-30078 doc BELONGS to, for the default-deny read gate (C1). Four shapes exist
+// in the corpus, in decreasing order of trustworthiness:
+//   1. `<prefix><churchpub>` — the d-tag names it outright (member:/minors:/stewards:/careavail:/safetycheck:…);
+//   2. the church key authored it (the ordinary case for church content);
+//   3. a steward authored it and named the church in ['church',<cp>] (validated to a configured church);
+//   4. a member authored a reply and p-tagged the church (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:).
+// Returns '' when ownership can't be proven — the caller MUST treat that as deny, not as public.
+const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, STEWARDS_D, STEWARDREQ_D, BLOCKED_D, MINORS_D, APPROVED_D,
+  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
+// Doc types an ORDINARY MEMBER legitimately authors while church-tagging them. Their authority comes from
+// authorship, not from delegated church authority, so the revoked-steward roster check in canRead() must
+// not be applied to them (REVIEW-2026-07-20 B1 — it silently hid every care sign-up from the church).
+const MEMBER_WRITABLE_D = [SLOT_D, SKIP_D, AVAIL_D, SAFE_D, RSVP_D, REQREPLY_D, UNAVAIL_D, GUARDREQ_D, STEWARDREQ_D, MEMBER_D];
+function owningChurch(e, d) {
+  const suf = CP_SUFFIXED_D.find(p => d.startsWith(p));
+  if (suf) { const h = toHexPub(d.slice(suf.length)) || ''; if (h && CHURCH_PUBS.has(h)) return h; }
+  if (CHURCH_PUBS.has(e.pubkey)) return e.pubkey;
+  const named = namedChurch(e); if (named) return named;
+  for (const t of (e.tags || [])) {           // member-authored reply → the church it is addressed to
+    if (t[0] !== 'p') continue;
+    const h = toHexPub(t[1]) || t[1];
+    if (h && CHURCH_PUBS.has(h)) return h;
+  }
+  return '';
+}
 // finance docs are authored EITHER by the church key itself (encPublish — self-encrypted, no ['church'] tag)
 // OR by a steward naming the church in a ['church'] tag. Resolve the owning church for the finance gates from both.
 const finCp = (e) => namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
@@ -646,6 +692,46 @@ const GUARDIANS_BY = new Map(); // churchpub -> Map(childPub -> Set(parentPubs))
 const GUARDIANS = new Map();    // childPub -> Set(parentPubs) (union across churches)
 function rebuildGuardians() { GUARDIANS.clear(); for (const m of GUARDIANS_BY.values()) for (const [c, ps] of m) { let s = GUARDIANS.get(c); if (!s) { s = new Set(); GUARDIANS.set(c, s); } for (const p of ps) s.add(p); } }
 function guardianLinked(a, b) { const ga = GUARDIANS.get(a); if (ga && ga.has(b)) return true; const gb = GUARDIANS.get(b); return !!(gb && gb.has(a)); }
+// ── per-church safeguarding (SECURITY-AUDIT-2026-07-20 C2, CRITICAL) ───────────────────────────────
+// MINORS / APPROVED / GUARDIANS are relay-wide UNIONS of every church's list, and the DM gate consulted
+// the unions. Because /config self-registration is open by default, anyone could stand up a "church" on
+// the shared relay and publish `approved:<their own key>` — becoming a cleared adult for EVERY minor of
+// EVERY church on the box. A congregation's DBS list was only as strong as the laxest tenant.
+// The gate is now evaluated per-church, over churches the CHILD ACTUALLY JOINED. That is what defeats the
+// attack: membership is self-asserted (a `member:` doc signed by the member), so a hostile church can list
+// whoever it likes in its own minors doc but cannot make that child one of its members — it is excluded
+// from the evaluation entirely, and so can neither grant clearance nor withhold it.
+const approvedIn = (pub, cp) => { const s = APPROVED_BY.get(cp); return !!(s && s.has(pub)); };
+const guardianLinkedIn = (a, b, cp) => { const m = GUARDIANS_BY.get(cp); if (!m) return false; const ga = m.get(a); if (ga && ga.has(b)) return true; const gb = m.get(b); return !!(gb && gb.has(a)); };
+// The churches whose safeguarding policy governs `pub`: ONLY churches that both list them as a minor AND
+// that they have actually joined.
+//
+// REVIEW-2026-07-20 B4: an earlier version fell back to "every church that lists them" when the joined set
+// was empty, meaning to cover a child whose account was just created. That fallback re-opened the exact
+// cross-tenant hole this function exists to close — it fires for anyone listed ONLY by a church they have
+// not joined, i.e. precisely the hostile-tenant case. A self-registered church could name any adult in its
+// own minors doc and thereby govern them: severing them from every peer DM (a targeted denial-of-contact
+// against, say, a persecuted-church member) while, via the `other === cp` clause below, remaining the only
+// party still able to message them — a grooming primitive wearing safeguarding's clothes.
+// The fallback was also unnecessary: fellowship.src.js publishes `member:<cp>` with the child's own key at
+// account creation, so a legitimately linked child HAS joined. No join, no governance.
+function minorGoverningChurches(pub) {
+  const out = [];
+  for (const [cp, s] of MINORS_BY) { if (!s.has(pub)) continue; const md = MEMBER_DOCS.get(cp); if (md && md.has(pub)) out.push(cp); }
+  return out;
+}
+// May `other` exchange DMs with `minorPub`? Clearance must come from EVERY church that governs the child —
+// so one church's lax list can never override another's. Returns true when the child is a minor nowhere.
+function safeguardAllows(minorPub, other) {
+  const cps = minorGoverningChurches(minorPub);
+  if (!cps.length) return true;
+  for (const cp of cps) {
+    if (approvedIn(other, cp) || guardianLinkedIn(minorPub, other, cp)) continue;
+    if (other === cp || stewardOf(other, cp) || networkOf(other, cp)) continue;   // the child's OWN church may always reach them
+    return false;
+  }
+  return true;
+}
 const GROUP_VIS = new Map();     // groupId -> 'open' | 'invite'
 const GROUP_MEMBERS = new Map(); // groupId -> Set(pubkey) allowed to post in an invite-only group
 const GROUP_NAMES = new Map();   // groupId -> display name (for push titles)
@@ -822,7 +908,7 @@ function resolveChurch(e) {
   if (cp) {
     const md = MEMBER_DOCS.get(cp), gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
     const effMember = !!(md && md.has(e.pubkey)) && !BLOCKED.has(e.pubkey) && (!gated || !!(admitted && admitted.has(e.pubkey)));
-    if (e.pubkey === cp || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, cp) || effMember) return cp;
+    if (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || effMember) return cp;   // B3: scoped
   }
   if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
   const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
@@ -836,7 +922,7 @@ function hydrateMaps() {
   _hydrating = true;                                   // suppress per-doc rebuilds (O(n^2)); rebuild once at the end
   try { store.eachKind([30078], note); }               // uncapped ASC iteration — no 10k truncation of old docs
   finally { _hydrating = false; }
-  rebuildBlocked(); rebuildMinors();                   // rebuildBlocked() also rebuilds MEMBERS from the full maps
+  rebuildBlocked(); rebuildMinors(); rebuildNetworks();   // rebuildBlocked() also rebuilds MEMBERS from the full maps
 }
 // persist the current church allow-list to church.json (so a clone-registered church survives a relay restart).
 function persistChurches() { try { const churches = [...CHURCH_PUBS].map(h => ({ npub: npubEncode(h), name: CHURCH_NAMES.get(h) || '' })); const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE); } catch {} }
@@ -850,14 +936,20 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (!_hydrating) rebuildMembers();   // effective membership respects the join policy + admitted list + blocklist
   }
   else if (d.startsWith(NETWORK_D) && CHURCH_PUBS.has(e.pubkey)) {   // a church joined/left a network
-    const np = d.slice(NETWORK_D.length); if (removed) NETWORKS.delete(np); else NETWORKS.add(np);
+    // C4: record WHICH church declared it. The declaring church is the author — a church may only
+    // grant network authority over itself, never over its neighbours on a shared relay.
+    const np = d.slice(NETWORK_D.length), owner = e.pubkey;
+    let s = NETWORKS_BY.get(owner); if (!s) { s = new Set(); NETWORKS_BY.set(owner, s); }
+    if (removed) s.delete(np); else s.add(np);
+    if (!_hydrating) rebuildNetworks();
   }
   else if (d === RELAYS_D && CHURCH_PUBS.has(e.pubkey)) {   // the church's trusted-relays list (resync peers + full-corpus authorisation)
     const cp = e.pubkey; const pubs = new Set(), urls = new Set();
     if (!removed) { let list = []; try { list = JSON.parse(e.content); } catch {} for (const r of (Array.isArray(list) ? list : [])) { if (r && r.pubkey) pubs.add(String(r.pubkey)); if (r && r.url) urls.add(String(r.url)); } }
     TRUSTED_RELAYS.set(cp, pubs); PEER_URLS.set(cp, urls);
   }
-  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, namedChurch(e)))) {
+  // B3: scoped — a network key may only define groups for a church that declared it, not for any church.
+  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
     if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); return; }
     GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
@@ -899,7 +991,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     STEWARDS_BY.set(e.pubkey, set);
   }
-  else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || stewardOf(e.pubkey, namedChurch(e)))) {   // a team roster — track its LINKED people so care-team admins can be resolved
+  else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
     if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_BY.delete(id); return; }
     const set = new Set(); try { (JSON.parse(e.content).people || []).forEach(p => { const h = p && toHexPub(p.pub); if (h) set.add(h); }); } catch {}
@@ -929,7 +1021,12 @@ const eventGroup = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t
 function accept(e) {
   if (!CHURCH_PUBS.size) return true;                            // unconfigured = open
   // a network a church belongs to may publish church-style content here (groups/events/plans/posts)
-  const isChurch = CHURCH_PUBS.has(e.pubkey), isNetwork = NETWORKS.has(e.pubkey), isLeader = isChurch || isNetwork, isMember = isLeader || MEMBERS.has(e.pubkey);
+  // REVIEW-2026-07-20 B3: `NETWORKS.has(e.pubkey)` granted church-level WRITE authority for EVERY church on
+  // the relay to any key ANY church had declared a network. Scoped: when the event names a church, that
+  // church must be the one that declared the network. An event naming no church can still only act for
+  // itself — every church-scoped rule below keys off the d-tag suffix, which is checked separately.
+  const _netCp = namedChurch(e);
+  const isChurch = CHURCH_PUBS.has(e.pubkey), isNetwork = _netCp ? networkOf(e.pubkey, _netCp) : NETWORKS.has(e.pubkey), isLeader = isChurch || isNetwork, isMember = isLeader || MEMBERS.has(e.pubkey);
   if (BLOCKED.has(e.pubkey) && !isLeader) return false;          // a blocked member can't write anything
   const k = e.kind;
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
@@ -977,6 +1074,33 @@ function accept(e) {
     // (its content is encrypted to the parent) so the parent receives it WITHOUT auth — it's what prompts
     // them to authenticate for the gated guardians: map. Explicit rule = exempt from the per-member doc cap.
     if (d.startsWith(GUARDNOTICE_D)) return CHURCH_PUBS.has(e.pubkey);
+    // SECURITY-AUDIT-2026-07-20 C1 (safeguarding, CRITICAL): a guardian-link REQUEST is d=guardreq:<childpub>,
+    // and the steward console renders it as "<parentName> set up a child account for <childName> — Confirm to
+    // link them". The console took the parent from a `parent` FIELD IN THE CONTENT, so ANY member could publish
+    // a request naming SOMEONE ELSE as the child and THEMSELVES (or anyone) as the parent. One routine-looking
+    // click made the attacker a guardian — and guardianLinked() is checked BEFORE the minor gate, so it bought
+    // them DM access to a child without youth clearance. Naming an ADULT as the child silently marked that adult
+    // a minor, cutting off their DMs. Belt and braces with the console fix (which now uses the signer): the
+    // relay refuses any request whose content disagrees with its signer, so an un-updated console is safe too.
+    // NOTE: deliberately a VALIDATION guard, not a grant — it falls through to the generic member rule below so
+    // the per-member doc cap still applies (d=guardreq:<any pubkey> would otherwise be an unbounded spam vector).
+    if (d.startsWith(GUARDREQ_D)) {
+      const child = toHexPub(d.slice(GUARDREQ_D.length)) || '';
+      if (!child || child === e.pubkey) return false;             // must name a child, and never yourself
+      try {
+        const c = JSON.parse(e.content || '{}');
+        if (c.parent && (toHexPub(c.parent) || c.parent) !== e.pubkey) return false;   // claimed parent ≠ signer
+        if (c.child && (toHexPub(c.child) || c.child) !== child) return false;         // content must match the d-tag
+      } catch { return false; }
+    }
+    // the per-church CARE key envelope (d=carekey:<churchpub>) — church key or a current steward of it.
+    // The care-need sealing that consumes this is deferred (see care/seal-needs-wip: the key lifecycle needs
+    // rework before it is safe to ship). The namespace is reserved and gated NOW so no member can squat the
+    // d-tag in the meantime, and CP_SUFFIXED_D already read-gates it to effective members.
+    if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    // moderation: photo-suppression list — d=nophoto:<churchpub>, owner or a CURRENT steward of that church.
+    // (Previously unlisted, so it fell to the generic member rule: any member could rewrite it.)
+    if (d.startsWith(NOPHOTO_D)) { const cp = d.slice(NOPHOTO_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
     // FINANCE journal — single-writer, relay-ordered, APPEND-ONLY. The seq lives in the (unencrypted) d-tag so
     // the relay can order it without reading the (encrypted) entry; the church is named in a ["church",<cp>] tag.
     if (d.startsWith(FIN_JOURNAL_D)) {
@@ -1012,8 +1136,10 @@ function accept(e) {
     if (d === MEALS_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // enable/configure the module: church or rostered steward
     if (d.startsWith(NEED_D)) {                                 // open / edit / close a care need
       const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
+      // B-2: was `isLeader ||`, which an untagged event from any church's network key satisfied for EVERY
+      // church — a forged care need in someone else's congregation. Require a resolved owning church.
       // church / steward / care-team admin; or any NON-minor member when the church allows member-opened needs (children never open needs)
-      return isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && isMember && !MINORS.has(e.pubkey));
+      return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && isMember && !MINORS.has(e.pubkey)));
     }
     if (d.startsWith(SLOT_D)) return isMember;                  // fill a slot: any member offers help (the event is keyed by their own pubkey, so they can't forge another member's)
     if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": the RECIPIENT, or a steward/care-team blocking a date on their behalf (recipient may not be on the app)
@@ -1034,7 +1160,15 @@ function accept(e) {
   }
   if (k === 1) {   // chat
     const g = gidOf(e);
-    if (g && BROADCAST.has(g)) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // broadcast channel = church/network/steward only
+    // REVIEW-2026-07-20 B-2: `isLeader` folds in an UNSCOPED network check for events carrying no ['church']
+    // tag, and kind-1 scopes by GROUP, not by d-tag — so the "every church-scoped rule keys off the d-tag
+    // suffix" reasoning did not hold here. A key any church had declared a network could omit the tag and
+    // post into ANY other church's broadcast/announcement channel, which canRead then served to that whole
+    // congregation, under an attacker-controlled display name. Scope to the group's actual owner.
+    if (g && BROADCAST.has(g)) {
+      const gcp = GROUP_CHURCH.get(g) || namedChurch(e);
+      return !!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardOf(e.pubkey, gcp));
+    }
     if (g && GROUP_VIS.get(g) === 'invite') { const mem = GROUP_MEMBERS.get(g); return isLeader || stewardOf(e.pubkey, namedChurch(e)) || !!(mem && mem.has(e.pubkey)); }  // invite-only group
     return isMember;
   }
@@ -1042,13 +1176,13 @@ function accept(e) {
     if (!isMember) return false;
     const target = (e.tags.find(t => t[0] === 'p') || [])[1];
     const targetHex = target ? (toHexPub(target) || target) : '';
-    // the church/steward account is the safeguarding authority: it may DM anyone, and a child may DM it.
-    if (isLeader || CHURCH_PUBS.has(targetHex) || NETWORKS.has(targetHex)) return true;
-    if (guardianLinked(e.pubkey, targetHex)) return true;   // v2: a parent may always DM their own child (and vice versa)
-    // otherwise, if either party is a minor, the OTHER party must be a cleared adult (both directions;
-    // covers minor↔minor too, since neither is on the approved list). Relay-enforced, client can't bypass.
-    if (MINORS.has(e.pubkey) && !APPROVED.has(targetHex)) return false;
-    if (targetHex && MINORS.has(targetHex) && !APPROVED.has(e.pubkey)) return false;
+    // If either party is a minor, the OTHER party must be cleared BY A CHURCH THAT GOVERNS THAT CHILD (both
+    // directions; covers minor↔minor too, since neither is on an approved list). Relay-enforced, client can't
+    // bypass. C2: the old rule consulted the relay-wide unions and let ANY configured church key (or any key
+    // any church had declared a network) DM any child on the box — safeguardAllows() now scopes both the
+    // clearance and the church-authority escape to the churches the child actually belongs to.
+    if (!safeguardAllows(e.pubkey, targetHex)) return false;
+    if (targetHex && !safeguardAllows(targetHex, e.pubkey)) return false;
     return true;
   }
   if (k === 7) return isMember;                                // reactions
@@ -1061,13 +1195,11 @@ function canRead(e, authed) {
   if (e.kind === 4) {
     const target = (e.tags.find(t => t[0] === 'p') || [])[1];
     const targetHex = target ? (toHexPub(target) || target) : '';
-    const churchParty = CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey) || CHURCH_PUBS.has(targetHex) || NETWORKS.has(targetHex);
-    // SAFEGUARDING (deny to EVERYONE, incl. the parties): never serve a stored minor↔non-approved-adult DM —
-    // unless a church/guardian is a party (they may contact minors). Checked first so delivery can't override it.
-    if (!churchParty && !guardianLinked(e.pubkey, targetHex)) {
-      if (MINORS.has(e.pubkey) && !APPROVED.has(targetHex)) return false;
-      if (targetHex && MINORS.has(targetHex) && !APPROVED.has(e.pubkey)) return false;
-    }
+    // SAFEGUARDING (deny to EVERYONE, incl. the parties): never serve a stored minor↔non-cleared-adult DM.
+    // Checked first so delivery can't override it. C2: this used the relay-wide MINORS/APPROVED unions and a
+    // `churchParty` escape that any configured church key satisfied — so a self-registered church could both
+    // clear itself for other churches' children AND DM them directly. Now evaluated per governing church.
+    if (!safeguardAllows(e.pubkey, targetHex) || (targetHex && !safeguardAllows(targetHex, e.pubkey))) return false;
     // DEANON Finding 1: a DM's ENVELOPE (sender pubkey + recipient p-tag + timing) is cleartext even though the
     // content is NIP-04-encrypted. Serving it to anyone let an anonymous observer who reaches the relay reconstruct
     // the church's PRIVATE COMMUNICATION GRAPH (who DMs whom, when) — arrest-list-grade metadata, and it unmasks
@@ -1081,53 +1213,75 @@ function canRead(e, authed) {
     if (d.startsWith(SAFE_D)) {   // a member's safety response: only the author, the check's CREATOR (p-tag), and the church + its stewards/care-admins may read it (content is NIP-44-encrypted to the creator)
       const cp = d.slice(SAFE_D.length);
       const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
-      return !!authed && (authed === e.pubkey || authed === pHex || CHURCH_PUBS.has(authed) || stewardOf(authed, cp) || careAdmin(authed, cp));
+      // C3: `CHURCH_PUBS.has(authed)` was unscoped — ANY configured church key read every OTHER church's
+      // safety responses. Scope it to the church this response belongs to.
+      return !!authed && (authed === e.pubkey || authed === pHex || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp));
     }
-    // PRIVATE church docs — readable ONLY by an authenticated EFFECTIVE MEMBER of the owning church (lazy NIP-42),
-    // NEVER by an anonymous internet client. Covers: the roster (member/admitted/stewards/blocked), the safeguarding
-    // lists (minors/approved/guardians), the media key, and the Care module (who's sick/vulnerable + notes + meal-
-    // drop schedules + availability). SECURITY-AUDIT-2026-07-13: member/admitted/stewards/blocked + all the Care docs
-    // were falling through to `return true` below — a world-readable membership ("arrest") list + care PII that
-    // silently NULLIFIED the 2026-07-06 media-key gate (the media-key's object keys ARE the roster, so gating only
-    // it while member:/admitted:/stewards: leak the same list was pointless). Now each resolves its owning church
-    // <cp> and applies ONE effective-member check (mirrors rebuildMembers: joined ∧ not-blocked ∧ (approved | not
-    // gated)). Members authenticate to read these — see fellowship.src.js `_needAuth` (flipped to always-auth).
-    // NOTE joinpolicy: is deliberately NOT gated — it's a boolean {approval} with no PII, and a not-yet-joined
-    // member needs to read it. Care <cp>: careavail carries it in the d-tag; the rest are church-authored OR
-    // ['church',cp]-tagged (accept() guarantees one), so CHURCH_PUBS.has(author)?author:namedChurch(e) resolves all.
-    {
-      let cp = '', priv = false;
-      const suf = [MEMBER_D, ADMITTED_D, STEWARDS_D, BLOCKED_D, MINORS_D, APPROVED_D, GUARDIANS_D, MEDIAKEY_D, AVAIL_D, SAFETY_D].find(p => d.startsWith(p));
-      if (suf) { cp = d.slice(suf.length); priv = true; }
-      else if (d === MEALS_SETTINGS_D || d === RELAYS_D || d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D)) { priv = true; cp = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : namedChurch(e); }   // RELAYS_D (trinityone/relays): the church's relay-topology / sync-peers doc — gate to members, not world-readable (D2 auto-publishes it)
-      // SECURITY-AUDIT-2026-07-18 H1: a private care/roster doc whose owning church can't be resolved (a careslot:/
-      // careskip:/need: with no ['church'] tag → namedChurch()='' ) MUST default-DENY, not fall through to the
-      // world-readable `return true` below. accept() does not enforce the church tag, so the read-gate can't assume
-      // it. Legit clients always church-tag these (fellowship.src.js), so this only bites untagged/forged docs.
-      if (priv && !cp) return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed));
-      if (cp) {
-        const md = MEMBER_DOCS.get(cp);
-        const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
-        const effectiveMember = !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));
-        return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || stewardOf(authed, cp) || effectiveMember);
-      }
-    }
-    // FINANCE (books): the content is encrypted client-side (encPublish self-encrypts to the church key), so
-    // the docs are ciphertext to everyone but the church. We do NOT gate reads behind NIP-42 auth — the pool
-    // (steward console + member app) doesn't auth, so a read-gate would block the church from reading its OWN
-    // books. Metadata-privacy via a proper NIP-42 auth handler is a queued follow-up (would also fix the
-    // safeguarding-list read-gate the same way). Confidentiality here rests on the encryption, not the relay.
-    // roster-verify steward-authored church content: a doc carrying ['church',<cp>] is only served while
-    // its author is on <cp>'s CURRENT signed roster — so a revoked steward's content stops being delivered.
+    // ── kind-30078 read policy: DEFAULT-DENY ──────────────────────────────────────────────────────
+    // SECURITY-AUDIT-2026-07-20 C1. This gate used to be a DENY-list of private d-prefixes ending in a
+    // world-readable `return true`, so any d-tag nobody remembered to enumerate was served to anonymous
+    // clients. That shipped three separate leaks at once:
+    //   • group:/roster:/request:/rota: — invite-only group membership (the allowlist is in the cleartext
+    //     content) and serving rosters with real names bound to pubkeys;
+    //   • the MyData docs (trinityone/highlights|bookmarks|settings) — accept() requires isMember to write
+    //     one, so their AUTHORS are by construction the congregation: an anonymous REQ enumerated it;
+    //   • trinityone/manna-* — disbursement envelopes, countable even though the content is sealed.
+    // The 2026-07-13 fix closed exactly the prefixes THAT audit named and no more, which is precisely why
+    // the same class of leak came back under different d-tags. A denylist cannot hold this line: every new
+    // feature is a new leak until someone remembers to edit it. So the polarity is inverted — nothing is
+    // served unless a rule below says it may be. A forgotten d-tag now fails CLOSED (a feature that doesn't
+    // render) instead of OPEN (an arrest list).
+    //
+    //   1. your own event is always readable by you — MyData (highlights/notes/journal/prayer/settings)
+    //      carries no church tag at all, so nothing else could authorise it;
+    //   2. an explicit PUBLIC allowlist, justified doc by doc;
+    //   3. otherwise: an authenticated effective member / steward / care-admin / the owning church itself.
+    if (authed && authed === e.pubkey) return true;
+    // PUBLIC: joinpolicy is a bare {approval:bool} with no PII, and a not-yet-joined member must read it
+    // before they can join — it is the one document that legitimately precedes membership.
+    if (d.startsWith(JOINPOLICY_D)) return true;
+    // Resolve the owning church. <prefix><churchpub> d-tags carry it directly; church-authored docs are
+    // self-identifying; steward-authored content names it in ['church']; member-authored replies
+    // (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:) p-tag it. If none of those resolve, we cannot prove
+    // who the doc belongs to, so we cannot prove who may read it → deny.
+    const cp = owningChurch(e, d);
+    if (!cp) return false;
+    // A doc carrying ['church',<cp>] is served only while its author is the church or on <cp>'s CURRENT
+    // signed roster — so a revoked steward's content stops being delivered (this check predates the rewrite
+    // and is retained: it restricts, never grants).
+    //
+    // REVIEW-2026-07-20 B1: it must NOT apply to the member-writable doc types. Members church-TAG their own
+    // care participation (careslot: "I'll bring Tuesday dinner", careskip: "I don't need help that day",
+    // careavail: "I'm here to help") and their safety response — and an ordinary member is neither the church
+    // key nor on the steward roster, so this returned false before the member/steward branch below was ever
+    // reached. Effect: a steward opened a meal train and saw ZERO sign-ups, and the "here to help" register
+    // was invisible to the church — every one of those docs readable only by its own author. The old code
+    // never hit this because those prefixes returned earlier from the private-doc block; the rewrite removed
+    // that early return. The revoked-steward concern doesn't apply to them anyway: they are members' own
+    // events, authorised by authorship, not by delegated church authority.
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];
-    if (ch) { const r = STEWARDS_BY.get(ch); return e.pubkey === ch || !!(r && r.has(e.pubkey)); }
-    return true;
+    const memberWritable = MEMBER_WRITABLE_D.some(p => d.startsWith(p));
+    if (ch && !memberWritable) { const r = STEWARDS_BY.get(ch); if (!(e.pubkey === ch || (r && r.has(e.pubkey)))) return false; }
+    if (!authed) return false;
+    // C3: `CHURCH_PUBS.has(authed)` / `NETWORKS.has(authed)` were UNSCOPED — any configured church key, and
+    // any key any church had ever declared a network, read every OTHER church's roster, safeguarding lists
+    // and care PII. On the shared community relay (where /config self-registration is open by default) that
+    // was a cross-tenant read of every congregation on the box. Both are now scoped to THIS church.
+    if (authed === cp || networkOf(authed, cp) || stewardOf(authed, cp) || careAdmin(authed, cp)) return true;
+    const md = MEMBER_DOCS.get(cp);
+    const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
+    return !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));
   }
   if (e.kind !== 1) return true;
   const g = gidOf(e);
   if (!g || GROUP_VIS.get(g) !== 'invite') return true;
   if (!authed) return false;
-  if (CHURCH_PUBS.has(authed) || NETWORKS.has(authed)) return true;
+  // REVIEW-2026-07-20 B3: this was the SAME unscoped check the C3/C4 fix removed from the 30078 branch, left
+  // behind here — so a key any church had ever declared a network still read every OTHER congregation's
+  // invite-only group messages, which is the most sensitive content in the product. Scope both to the church
+  // that actually owns this group (GROUP_CHURCH is set from the group def's ['church'] tag or its author).
+  const gcp = GROUP_CHURCH.get(g);
+  if (gcp && (authed === gcp || networkOf(authed, gcp) || stewardOf(authed, gcp))) return true;
   const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(authed));
 }
 
@@ -2574,9 +2728,29 @@ const subs = new Map();   // ws -> Map(subId -> filters[])
 
 const server = createServer(serveStatic);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024,   // 1 MB cap (default is 100 MB — memory-DoS guard)
-  // permessage-deflate: ~70% off wire bytes for members on a thin pipe. Negotiated per-connection (clients that
-  // don't support it just skip it). No-context-takeover keeps per-connection memory bounded for many members.
-  perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true, concurrencyLimit: 10 } });
+  // permessage-deflate — the single biggest win for a member on a thin pipe. Negotiated per-connection
+  // (clients that don't support it just skip it).
+  //
+  // PERF-AUDIT-2026-07-20 HIGH-1: measured against the live relay.sqlite, the mean ["EVENT",…] frame is
+  // 680 bytes and 339 of 350 frames (96.9%) fell UNDER the old 1024-byte threshold — so almost nothing was
+  // ever compressed, despite the comment claiming ~70% off. Threshold is now 128: Nostr frames are highly
+  // repetitive JSON (same tag names, same pubkeys, same d-prefixes) and compress well even when small.
+  //
+  // serverNoContextTakeover was deliberate — it bounds per-connection memory — but it also resets the LZ77
+  // dictionary on EVERY message, which measured 1.82× the bytes of a shared-context stream (135,930 vs
+  // 74,498 B over 300 real events). Rather than trade memory for bytes outright, keep the dictionary but
+  // BOUND IT: windowBits 11 (a 2 KB window, plenty for repetitive event JSON) + memLevel 4 costs roughly
+  // 16 KB of zlib state per connection instead of ~256 KB at the defaults — about 80 MB at the 5000-conn
+  // ceiling, and a few MB at realistic congregation size. clientNoContextTakeover stays ON so our INFLATE
+  // memory stays bounded too; client→server traffic (REQ/EVENT publishes) is small and infrequent, so it
+  // loses little. Net: ~60% off all Nostr wire bytes, which on 2G is ~34s per launch on a 500-event backfill.
+  perMessageDeflate: {
+    threshold: 128,
+    serverNoContextTakeover: false, clientNoContextTakeover: true,
+    serverMaxWindowBits: 11,
+    zlibDeflateOptions: { windowBits: 11, memLevel: 4, level: 6 },
+    concurrencyLimit: 10,
+  } });
 const MAX_CONNS = 5000;         // SECURITY-AUDIT-2026-07-18 M1: global concurrent-WebSocket ceiling (FD/memory-exhaustion guard). Deliberately NO per-IP cap — persecuted-church members routinely share one exit IP (VPN/Tor/national NAT/church WiFi), so a per-IP cap would throttle a legitimate congregation.
 const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (members, chat, profiles, etc.)
 const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is a cheap unauthenticated CPU-DoS — cap it
@@ -2653,7 +2827,14 @@ wss.on('connection', ws => {
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
       let _reqEvents = 0;
       const _scanBudget = { left: 300000 };   // shared across ALL filters of this REQ: caps total fallback-scan rows so a crafted many-filter/multi-letter-tag REQ can't freeze the loop (E1)
-      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && e.kind === 30078) { const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (dd.startsWith(MINORS_D) || dd.startsWith(APPROVED_D) || dd.startsWith(GUARDIANS_D) || dd.startsWith(MEDIAKEY_D) || dd.startsWith(MEMBER_D) || dd.startsWith(ADMITTED_D) || dd.startsWith(STEWARDS_D) || dd.startsWith(BLOCKED_D) || dd.startsWith(AVAIL_D) || dd.startsWith(NEED_D) || dd.startsWith(SLOT_D) || dd.startsWith(SKIP_D) || dd.startsWith(SAFETY_D) || dd.startsWith(SAFE_D) || dd === MEALS_SETTINGS_D || dd === RELAYS_D) wantsSafeguard = true; } else if (!ws._auth && e.kind === 4) wantsSafeguard = true; /* Finding 1: withheld DM envelope → challenge so the actual party can auth + read their own DMs */ continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
+      // SECURITY-AUDIT-2026-07-20 C1: this branch used to carry a SECOND hand-maintained copy of canRead's
+      // private-d-prefix list, purely to decide whether to challenge. Two lists that must agree is one list
+      // too many — they had already drifted (canRead gated GUARDNOTICE_D, this one didn't), and every fix to
+      // one silently half-applied. It is now derived from canRead itself: if we withheld a doc-or-DM from an
+      // unauthenticated connection, challenge it so the legitimate owner can AUTH and have it replayed. Kind-1
+      // is deliberately excluded — a broad query that merely happens to match an invite-only group message is
+      // still NOT challenged, so ordinary reads pay no auth round-trip (the lazy-auth perf decision stands).
+      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && (e.kind === 30078 || e.kind === 4)) wantsSafeguard = true; continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message

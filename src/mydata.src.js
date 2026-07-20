@@ -44,19 +44,41 @@ function LocalBackend(ns) {
 function NostrBackend(cache) {
   var KIND = 30078;
   // docKey -> { d: tag, priv: encrypt with NIP-44 }
+  // SECURITY-AUDIT-2026-07-20 C1 (CRITICAL): highlights/bookmarks/settings used to publish priv:false —
+  // signed, timestamped, PLAINTEXT, fanned out to every relay in the pool. accept() requires isMember to
+  // write a kind-30078, so the AUTHORS of these docs are BY CONSTRUCTION the church's members: one
+  // anonymous REQ for #d=trinityone/highlights returned a list of every member pubkey (plus which verses
+  // each highlighted, and when). That is the same arrest list the 07-13 roster gate removed, re-exposed
+  // through a d-tag nobody thought of as sensitive. settings compounded it by carrying plansFollowed —
+  // church-published plan ids, which bind a pubkey to a SPECIFIC congregation.
+  // Nothing is lost by encrypting: pull() only ever reads authors:[pub] — your own docs — and no other
+  // code in the tree subscribes to these d-tags. The relay-side default-deny gate (ea203ec) is the other
+  // half of this fix; encrypting here means a non-enforcing relay in the pool can't leak them either.
   var SYNC = {
-    'data/highlights': { d: 'trinityone/highlights', priv: false },
-    'data/bookmarks':  { d: 'trinityone/bookmarks',  priv: false },
+    'data/highlights': { d: 'trinityone/highlights', priv: true  },
+    'data/bookmarks':  { d: 'trinityone/bookmarks',  priv: true  },
     'data/notes':      { d: 'trinityone/notes',      priv: true  },
     'data/journal':    { d: 'trinityone/journal',    priv: true  },
     'data/prayer':     { d: 'trinityone/prayer',     priv: true  },
-    'settings':        { d: 'trinityone/settings',   priv: false },
+    'settings':        { d: 'trinityone/settings',   priv: true  },
   };
   var D_TO_KEY = {};
   Object.keys(SYNC).forEach(function (k) { D_TO_KEY[SYNC[k].d] = k; });
 
   var pool = new SimplePool();
   var sk = null, pub = null, ck = null;
+  // REVIEW-2026-07-20 B2 (data loss): this backend owns its OWN SimplePool, separate from Fellowship's, and
+  // never set an auth handler — so it could not answer a NIP-42 challenge. That was harmless while these
+  // docs were world-readable, but the relay's read gate is now default-deny and the only rule that serves
+  // them is "you may read your own events", which REQUIRES auth. Without this the pull() below silently
+  // returns zero events and startSync then republishes the local view over the relay's copy — so a second
+  // device, or one that had been cleared, would overwrite the richer remote notes/journal/highlights.
+  pool.automaticallyAuth = function () {
+    return async function (authEvent) {
+      if (!sk) throw new Error('mydata: no key');
+      return finalizeEvent(authEvent, sk);
+    };
+  };
   var timers = {};
   var onChange = function () {};
 
@@ -64,7 +86,17 @@ function NostrBackend(cache) {
   function tombKey(key) { return 'tomb/' + key; }
   function idset(arr) { var s = new Set(); (arr || []).forEach(function (it) { if (it && it.id != null) s.add(it.id); }); return s; }
   function encode(key, payload) { var j = JSON.stringify(payload); return SYNC[key].priv ? nip44.encrypt(j, ck) : j; }
-  function decode(key, content) { var j = SYNC[key].priv ? nip44.decrypt(content, ck) : content; return JSON.parse(j); }
+  // Read BOTH shapes, write only the encrypted one. Members already have plaintext highlights/bookmarks/
+  // settings docs sitting on relays from before they were made private; a decrypt-only reader would throw
+  // on those and silently drop the member's own data. A NIP-44 ciphertext is base64 and never starts with
+  // '{', so the payload is self-identifying. The next publish() rewrites the doc encrypted, so this
+  // tolerance ages out on its own — same read-old/write-new migration as the NIP-04→NIP-44 DM change.
+  function decode(key, content) {
+    var s = String(content || '');
+    var plain = s.charAt(0) === '{';   // legacy cleartext payload
+    var j = (SYNC[key].priv && !plain) ? nip44.decrypt(s, ck) : s;
+    return JSON.parse(j);
+  }
 
   function schedulePublish(key) {
     if (!sk || !SYNC[key]) return;
@@ -122,10 +154,21 @@ function NostrBackend(cache) {
           var dTag = (e.tags.find(function (t) { return t[0] === 'd'; }) || [])[1];
           var key = D_TO_KEY[dTag];
           if (!key) return;
-          try { if (reconcile(key, decode(key, e.content))) touched = true; }
+          try {
+            if (reconcile(key, decode(key, e.content))) touched = true;
+            // C1: a legacy CLEARTEXT copy is still sitting on the relay. reconcile() only republishes when
+            // the merged view differs, so an unchanged doc would leave the plaintext (and the membership
+            // signal it carries) there indefinitely. Force one encrypted rewrite over the top of it.
+            if (SYNC[key].priv && String(e.content || '').charAt(0) === '{') schedulePublish(key);
+          }
           catch (err) { console.warn('[mydata] reconcile failed', dTag, err); }
         },
-        oneose: function () { try { sub.close(); } catch (e) {} finish(); },
+        // REVIEW-2026-07-20 B2, second half: closing on EOSE is a race against NIP-42. Under default-deny the
+        // relay withholds our docs from the unauthenticated REQ, sends EOSE, THEN challenges — and its
+        // post-AUTH replay only walks subscriptions that are still open. Closing here meant the replay
+        // landed nowhere and pull() resolved empty, with the overwrite consequence described above. Hold the
+        // subscription open briefly past EOSE so the replayed events arrive, then close.
+        oneose: function () { setTimeout(function () { try { sub.close(); } catch (e) {} finish(); }, 1500); },
       });
       setTimeout(finish, 6000); // resolve even if a relay never sends EOSE
     });

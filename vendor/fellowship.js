@@ -7147,8 +7147,20 @@
         emit();
       };
       const sub = pool.subscribeMany(window.Fellowship.relays, [
-        { kinds: [4], authors: [pub] },
-        { kinds: [4], "#p": [pub] }
+        // PERF-AUDIT-2026-07-20 HIGH-4: these carried NO limit, so the relay shipped up to its 5000-event
+        // default cap of DM envelopes on EVERY app open, just to render an inbox preview.
+        //
+        // The limit is a deliberate TRADE, not a free win, so it is set generously. The inbox is one row per
+        // peer built by aggregating messages client-side — a filter can't express "newest per peer" — and
+        // there is NO persisted inbox cache, so any conversation whose latest message falls outside the
+        // window silently vanishes from the list, with no search to find it again. 1000 bounds the
+        // pathological case (a 5x cut) while leaving realistic congregation-sized inboxes untouched; a
+        // member would need >1000 DM events before a quiet conversation could drop off.
+        // The proper fix is a persisted inbox (peer -> {lastTs, preview}) plus a `since` cursor, which would
+        // make this near-zero on a returning launch. Not attempted here: without the cache first, a cursor
+        // turns "slow" into "messages missing", which is the worse failure for a church.
+        { kinds: [4], authors: [pub], limit: 1e3 },
+        { kinds: [4], "#p": [pub], limit: 1e3 }
       ], { onevent: handle, oneose() {
         emit();
       } });
@@ -7960,7 +7972,13 @@
           }
           try {
             const c = JSON.parse(e.content);
-            byId.set(id, { id, _by: e.pubkey, displayLabel: c.displayLabel || "", type: c.type || "meals", startDate: c.startDate || "", endDate: c.endDate || "", recipient: (c.recipient || "").toLowerCase(), notes: c.notes || "", dietary: Array.isArray(c.dietary) ? c.dietary : [], dates: Array.isArray(c.dates) ? c.dates : [], meals: Array.isArray(c.meals) ? c.meals : [], dayMeals: c.dayMeals && typeof c.dayMeals === "object" ? c.dayMeals : {}, ts: e.created_at });
+            let s = null, sealed = false;
+            if (c.enc) {
+              s = _careOpen(pubk, c.enc);
+              sealed = !s;
+            }
+            const f = s ? { ...c, ...s } : c;
+            byId.set(id, { id, _by: e.pubkey, _sealed: sealed, displayLabel: f.displayLabel || "", type: f.type || "meals", startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at });
             emit();
           } catch {
           }

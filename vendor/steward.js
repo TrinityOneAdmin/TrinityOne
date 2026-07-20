@@ -10605,6 +10605,9 @@ zoo`.split("\n");
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
   var _mediaKeyDocKeys = null;
+  var CAREKEY_D = "trinityone/carekey:";
+  var _careKeyHex = null;
+  var _careKeyDocKeys = null;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -11782,6 +11785,71 @@ zoo`.split("\n");
       if (ok !== false) _mediaKeyDocKeys = keys;
       return ok;
     },
+    // ---- care key: same envelope as the media key above, for the Care module's sensitive fields ----
+    // Mints on first use (unlike the media key, which only exists once a sermon has been encrypted) because a
+    // steward writing the FIRST care need must be able to seal it immediately. Idempotent: re-wraps the
+    // EXISTING key for anyone missing, so previously-published needs stay readable — never rotates here.
+    async ensureCareKeyForMembers(memberPubs) {
+      if (!sk || !pub) return false;
+      if (!_careKeyHex) _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+      const have = _careKeyDocKeys || {};
+      if (want.every((p) => have[p])) return false;
+      const keys = {};
+      for (const mp of want) {
+        try {
+          keys[mp] = encrypt3(_careKeyHex, getConversationKey(sk, mp));
+        } catch (e) {
+        }
+      }
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      if (ok !== false) _careKeyDocKeys = keys;
+      return ok;
+    },
+    // recover the church care key on THIS device (unwrap our own wrapped entry) — so a restored console can
+    // still read existing needs. Mirrors subscribeMediaKey.
+    subscribeCareKey() {
+      if (!pub) return () => {
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [CAREKEY_D + pub] }], {
+        onevent(e) {
+          try {
+            const o = JSON.parse(e.content);
+            _careKeyDocKeys = o && o.keys || null;
+            const mine = o.keys && o.keys[pub];
+            if (mine && sk) _careKeyHex = decrypt3(mine, getConversationKey(sk, e.pubkey));
+          } catch (x) {
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // seal / open the sensitive half of a care doc with the church care key. Returns null when this device
+    // has no key yet, so callers can fall back rather than publish PII in the clear by accident.
+    careSeal(obj) {
+      try {
+        return _careKeyHex ? encrypt3(JSON.stringify(obj), _unhex(_careKeyHex)) : null;
+      } catch (e) {
+        return null;
+      }
+    },
+    careOpen(ct) {
+      try {
+        return _careKeyHex ? JSON.parse(decrypt3(ct, _unhex(_careKeyHex))) : null;
+      } catch (e) {
+        return null;
+      }
+    },
+    hasCareKey() {
+      return !!_careKeyHex;
+    },
     // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
     subscribeMediaKey() {
       if (!pub) return () => {
@@ -12390,7 +12458,8 @@ zoo`.split("\n");
           } else {
             try {
               const c = JSON.parse(e.content);
-              byChild.set(child, { child, parent: c.parent || e.pubkey, parentName: c.parentName || "", childName: c.childName || "", ts: e.created_at });
+              if (c.child && c.child !== child) return;
+              byChild.set(child, { child, parent: e.pubkey, claimedParentName: c.parentName || "", claimedChildName: c.childName || "", ts: e.created_at });
             } catch {
             }
           }

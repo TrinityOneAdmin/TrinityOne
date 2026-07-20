@@ -32,6 +32,21 @@ if [[ -n "$dirty" ]]; then
   exit 1
 fi
 
+# 1b. THE GATE. SECURITY-AUDIT-2026-07-20 H1/H2: this script rebuilt no vendor bundle and ran no test, while
+#     BOTH packaging paths consume vendor/ verbatim (sync-web.sh copies it; build-pages.sh and
+#     build-strict-tgz.sh `git archive` it). So "did I rebuild the bundle?" was a human step with no
+#     checkpoint — and it failed: vendor/finance-ledger.js shipped 3 commits stale, sending unbranded
+#     financial statements to churches. `npm test` now includes vendor-freshness.test.mjs, which reproduces
+#     every bundle from source, so this one command catches both a stale bundle and a broken build script
+#     (build-steward.sh could not run at all for an unknown length of time).
+if [[ $DRY != 1 ]]; then
+  say "running the test suite (privacy gates, ledger, recovery, vendor freshness)"
+  if ! npm test; then
+    echo "✖ Tests failed — refusing to release. Nothing has been deployed." >&2
+    exit 1
+  fi
+fi
+
 # 2. bump the service-worker cache version so installed PWAs refresh the shell
 cur=$(grep -oP "trinity-shell-v\K[0-9]+" sw.js | head -1)
 next=$((cur + 1))
