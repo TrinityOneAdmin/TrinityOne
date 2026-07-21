@@ -1338,11 +1338,15 @@ window.Steward = {
   // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
   // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
   subscribeBlocked(onBlocked) {
-    let cur = [];
+    let cur = [], latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== BLOCKED_D + pub) return;
+        // NEWEST WINS. This is a replaceable doc and we read it from every relay, so without this the copy
+        // that ARRIVES last wins rather than the one that was WRITTEN last — a relay holding an older
+        // blocklist silently reinstates blocks the owner has already lifted.
+        if (e.created_at < latest) return; latest = e.created_at;
         try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
         onBlocked(cur);
       },
@@ -1364,12 +1368,18 @@ window.Steward = {
   // child-safe groups. Replaceable docs, church-only writes. ----
   subscribeSafeguard(onLists) {   // onLists({ minors:[…], approved:[…], nophoto:[…] })
     let minors = [], approved = [], nophoto = [];
+    // NEWEST WINS, per document. These are three separate replaceable docs riding one subscription, so they
+    // need three timestamps: a single shared one would let a fresh minors list suppress a perfectly current
+    // approved list that simply happened to arrive after it. Safeguarding lists are the worst place to let a
+    // stale copy from a lagging relay win — it would quietly reinstate a child-protection state the church
+    // has already changed.
+    let tMinors = 0, tApproved = 0, tNophoto = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (d === MINORS_D + pub) { try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === APPROVED_D + pub) { try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === NOPHOTO_D + pub) { try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
+        if (d === MINORS_D + pub) { if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
+        else if (d === APPROVED_D + pub) { if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
+        else if (d === NOPHOTO_D + pub) { if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
       },
       oneose() { onLists({ minors, approved, nophoto }); },
     });
@@ -1417,11 +1427,12 @@ window.Steward = {
     return () => { try { sub.close(); } catch {} };
   },
   subscribeGuardians(onMap) {   // the church's confirmed map → { childPub: [parentPub, …] }
-    let cur = {};
+    let cur = {}, latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== GUARDIANS_D + pub) return;
+        if (e.created_at < latest) return; latest = e.created_at;   // newest wins — a stale copy must not restore a removed guardian link
         try { cur = (JSON.parse(e.content).links) || {}; } catch { cur = {}; }
         onMap(cur);
       },
@@ -1455,11 +1466,12 @@ window.Steward = {
   // "require approval", and then a new member is held as a pending request until admitted. The relay
   // reads joinpolicy:<churchpub> + the admitted:<churchpub> allowlist and withholds posting until then. ----
   subscribeJoinPolicy(onPolicy) {   // onPolicy(true|false) — does joining need approval?
-    let approval = false;
+    let approval = false, latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== JOINPOLICY_D + pub) return;
+        if (e.created_at < latest) return; latest = e.created_at;   // newest wins — a stale copy must not silently turn approval back off
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false;
         else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } }
         onPolicy(approval);
@@ -1473,11 +1485,13 @@ window.Steward = {
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', JOINPOLICY_D + pub], ['t', NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
   },
   subscribeAdmitted(onList) {   // the approved-members allowlist → [pubkeys]
-    let cur = [];
+    let cur = [], latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== ADMITTED_D + pub) return;
+        // newest wins — a stale copy drops recently-approved members back into "waiting to join"
+        if (e.created_at < latest) return; latest = e.created_at;
         try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
         onList(cur);
       },
@@ -1495,11 +1509,13 @@ window.Steward = {
   // grants those keys day-to-day church powers (but never the roster/blocklist/relay-policy — owner-only),
   // and revocation = re-publish the roster without them. See STEWARD-ROSTER-DESIGN.md. ----
   subscribeStewards(onList) {   // the current steward roster → [hex pubkeys]
-    let cur = [];
+    let cur = [], latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== STEWARDS_D + pub) return;
+        // newest wins — this is a revocation list: a stale copy would reinstate a steward who was removed
+        if (e.created_at < latest) return; latest = e.created_at;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) cur = [];
         else { try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; } }
         onList(cur);

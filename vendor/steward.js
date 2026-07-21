@@ -12390,11 +12390,13 @@ zoo`.split("\n");
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
     subscribeBlocked(onBlocked) {
-      let cur = [];
+      let cur = [], latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== BLOCKED_D + pub) return;
+          if (e.created_at < latest) return;
+          latest = e.created_at;
           try {
             cur = JSON.parse(e.content).pubkeys || [];
           } catch {
@@ -12426,10 +12428,13 @@ zoo`.split("\n");
     // child-safe groups. Replaceable docs, church-only writes. ----
     subscribeSafeguard(onLists) {
       let minors = [], approved = [], nophoto = [];
+      let tMinors = 0, tApproved = 0, tNophoto = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d === MINORS_D + pub) {
+            if (e.created_at < tMinors) return;
+            tMinors = e.created_at;
             try {
               minors = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -12437,6 +12442,8 @@ zoo`.split("\n");
             }
             onLists({ minors, approved, nophoto });
           } else if (d === APPROVED_D + pub) {
+            if (e.created_at < tApproved) return;
+            tApproved = e.created_at;
             try {
               approved = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -12444,6 +12451,8 @@ zoo`.split("\n");
             }
             onLists({ minors, approved, nophoto });
           } else if (d === NOPHOTO_D + pub) {
+            if (e.created_at < tNophoto) return;
+            tNophoto = e.created_at;
             try {
               nophoto = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -12512,11 +12521,13 @@ zoo`.split("\n");
       };
     },
     subscribeGuardians(onMap) {
-      let cur = {};
+      let cur = {}, latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== GUARDIANS_D + pub) return;
+          if (e.created_at < latest) return;
+          latest = e.created_at;
           try {
             cur = JSON.parse(e.content).links || {};
           } catch {
@@ -12566,11 +12577,13 @@ zoo`.split("\n");
     // "require approval", and then a new member is held as a pending request until admitted. The relay
     // reads joinpolicy:<churchpub> + the admitted:<churchpub> allowlist and withholds posting until then. ----
     subscribeJoinPolicy(onPolicy) {
-      let approval = false;
+      let approval = false, latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== JOINPOLICY_D + pub) return;
+          if (e.created_at < latest) return;
+          latest = e.created_at;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
           else {
             try {
@@ -12597,11 +12610,13 @@ zoo`.split("\n");
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", JOINPOLICY_D + pub], ["t", NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
     },
     subscribeAdmitted(onList) {
-      let cur = [];
+      let cur = [], latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== ADMITTED_D + pub) return;
+          if (e.created_at < latest) return;
+          latest = e.created_at;
           try {
             cur = JSON.parse(e.content).pubkeys || [];
           } catch {
@@ -12629,11 +12644,13 @@ zoo`.split("\n");
     // grants those keys day-to-day church powers (but never the roster/blocklist/relay-policy — owner-only),
     // and revocation = re-publish the roster without them. See STEWARD-ROSTER-DESIGN.md. ----
     subscribeStewards(onList) {
-      let cur = [];
+      let cur = [], latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== STEWARDS_D + pub) return;
+          if (e.created_at < latest) return;
+          latest = e.created_at;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) cur = [];
           else {
             try {
