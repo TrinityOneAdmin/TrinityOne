@@ -675,6 +675,9 @@
     if (el) el.style.display = locked ? 'block' : 'none';
     for (const id of STAT_CARDS) { const c = document.getElementById(id); if (c) c.style.display = locked ? 'none' : 'block'; }
     if (locked) for (const id of ['s-today', 's-media']) { const t = document.getElementById(id); if (t) t.textContent = '—'; }
+    // the storage figures come from the same admin-only /stats, so they go with it rather than sitting
+    // there as a stale reading from before the token was cleared
+    if (locked) { const sr = document.getElementById('storeRow'); if (sr) sr.style.display = 'none'; }
   }
   function wireTabs() {
     TABS.forEach((t, i) => {
@@ -754,6 +757,39 @@
     if (today && daily.length) today.textContent = daily[daily.length - 1].n.toLocaleString();
   }
 
+  // How much room this box has, and how much of it is gone. A cap of 0 means unlimited — there is no
+  // proportion to draw then, so we say so in words rather than showing an empty bar that would read as
+  // "plenty of room" on a relay that actually has no ceiling at all. Thresholds are named, not just
+  // coloured, because an operator has to be able to act on this from a glance on a phone.
+  function renderStorage(m) {
+    const row = document.getElementById('storeRow'); if (!row) return;
+    const used = Number(m.bytes) || 0, cap = Number(m.capBytes) || 0;
+    const text = document.getElementById('storeText'), fill = document.getElementById('storeFill'),
+          note = document.getElementById('storeNote'), track = fill && fill.parentElement;
+    row.style.display = 'block';
+    if (cap <= 0) {
+      if (text) text.textContent = fmtStore(used) + ' used';
+      if (track) track.style.display = 'none';
+      if (note) { note.className = 'meter-note'; note.textContent = 'No limit set — this box will keep accepting media until the disk is full.'; }
+      return;
+    }
+    if (track) track.style.display = '';
+    const pct = (used / cap) * 100, left = Math.max(0, cap - used);
+    if (text) text.textContent = fmtStore(used) + ' of ' + fmtStore(cap);
+    // a hair of fill for a non-zero-but-tiny amount, so "something is stored" is visible at 0.4%
+    if (fill) {
+      fill.style.width = (used > 0 ? Math.max(2, Math.min(100, Math.round(pct))) : 0) + '%';
+      fill.className = 'bar-fill' + (pct >= 90 ? ' meter--crit' : pct >= 75 ? ' meter--warn' : '');
+    }
+    if (note) {
+      note.className = 'meter-note' + (pct >= 90 ? ' meter--crit' : pct >= 75 ? ' meter--warn' : '');
+      note.textContent = used >= cap ? 'Full — new uploads are being refused.'
+        : pct >= 90 ? 'Nearly full — only ' + fmtStore(left) + ' left. Raise the limit in Settings or remove some media.'
+        : pct >= 75 ? fmtStore(left) + ' left.'
+        : (pct < 1 ? 'Under 1% used' : Math.round(pct) + '% used') + ' · ' + fmtStore(left) + ' free.';
+    }
+  }
+
   async function loadStats() {
     try {
       const r = await fetch('/stats?days=10', { headers: authHeaders(), cache: 'no-store' });
@@ -772,6 +808,7 @@
       barRows(chs.slice(0, 6), chs.reduce((a, c) => a + c.n, 0), 'topBody');
       const media = document.getElementById('s-media');
       if (media) media.textContent = fmtStore((s.media || {}).bytes);
+      renderStorage(s.media || {});
     } catch (e) { /* relay down — the hero already says so */ }
   }
   // the activity window moves slowly; a minute is plenty and keeps "Sent today" honest without polling
