@@ -450,17 +450,35 @@
       pollUpdate();
     } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   }
+  let updatePolling = false;
   function pollUpdate() {
+    if (updatePolling) return;   // loadUpdate re-fires on a timer now; don't stack a second watcher
+    updatePolling = true;
     const msg = document.getElementById('updateMsg'); let n = 0;
+    const stop = (iv) => { clearInterval(iv); updatePolling = false; };
     const iv = setInterval(async () => {
       n++;
       try {
         const s = await (await fetch('/status', { cache: 'no-store' })).json();
-        if (s.version && relayVersion && s.version !== relayVersion) { clearInterval(iv); msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ updated'; setTimeout(loadUpdate, 800); }
+        if (s.version && relayVersion && s.version !== relayVersion) { stop(iv); msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ updated'; setTimeout(loadUpdate, 800); }
       } catch (e) { /* restarting — keep polling */ }
-      if (n > 40) { clearInterval(iv); loadUpdate(); }   // stop guessing — re-read, which now carries the real outcome
+      if (n > 40) { stop(iv); loadUpdate(); }   // stop guessing — re-read, which now carries the real outcome
     }, 3000);
   }
+
+  // The update card was only ever read once, inside loadConfig() on page load. So a relay that published a
+  // new build while this console sat open showed "Up to date" until someone thought to refresh — which is
+  // exactly the moment an operator is least likely to refresh, because the page looks fine. Re-check on a
+  // timer, and again whenever the tab is brought back to the foreground.
+  // Never mid-flight: not while an update is running (pollUpdate owns the card then), and not while the
+  // button is armed for its second confirming click — re-rendering would silently disarm it.
+  function updateBusy() {
+    if (updatePolling) return true;
+    const b = document.getElementById('doUpdate');
+    return !!(b && b.dataset.armed === '1');
+  }
+  setInterval(() => { if (!updateBusy() && !document.hidden) loadUpdate(); }, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !updateBusy()) loadUpdate(); });
 
   document.getElementById('fetchApk')?.addEventListener('click', async () => {
     const m = document.getElementById('apkMsg'); m.style.color = 'var(--ink-3)'; m.textContent = 'fetching…';
