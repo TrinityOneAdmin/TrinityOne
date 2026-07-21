@@ -2000,6 +2000,14 @@ function DashRelaysCard() {
     } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
     setFinding(false);
   };
+  // The copy lands on whichever relay is serving this console — which "this relay" did nothing to convey
+  // from a console that lists several. Name it. Read from the engine, not location.host: when the console
+  // is served from pages.dev or runs natively the destination falls back to the canonical relay, so the
+  // address in the URL bar is exactly the case where guessing would print the wrong one.
+  const cloneDest = React.useMemo(() => {
+    try { return String(window.Steward.ownRelay() || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '').replace(/\/+$/, ''); }
+    catch (e) { return ''; }
+  }, []);
   const [regOpen, setRegOpen] = React.useState(false);
   // shown only after this relay has actually refused a write — see noteRelayRejection(). Pasting a
   // relay's admin token hands over full control of that relay, so it is not something to leave sitting
@@ -2115,13 +2123,13 @@ function DashRelaysCard() {
         )}
         {/* one-time clone: copy a church's whole history from another relay onto this one (e.g. after restore) */}
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
-          <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Bring your church’s data onto this relay</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>Copy your church’s full history from another relay — handy after restoring from your recovery phrase, so it lives on your own box. Enter the relay’s name or address to copy <b>from</b>.</div>
+          <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Copy your history to {cloneDest || 'this relay'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>Copies every message, record and file your church has onto <b>{cloneDest || 'this relay'}</b>{cloneDest ? ' — the relay serving this console' : ''}. Use it when your history lives somewhere else and this relay is starting empty: after restoring from your recovery phrase, or when moving your church onto your own box. Nothing is removed from the relay you copy from, and nothing already here is overwritten. Name the relay to copy <b>from</b>.</div>
           <div style={{ display: 'flex', gap: 9 }}>
             <input value={cloneSrc} onChange={e => { setCloneSrc(e.target.value); setCloneMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') cloneFromHere(); }}
               placeholder="grace-city  ·  wss://relay.example.com" spellCheck={false} autoCapitalize="none"
               style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-            <button onClick={cloneFromHere} disabled={cloning || !cloneSrc.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (cloning || !cloneSrc.trim()) ? .5 : 1 }}>{cloning ? 'Copying…' : 'Copy here'}</button>
+            <button onClick={cloneFromHere} disabled={cloning || !cloneSrc.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (cloning || !cloneSrc.trim()) ? .5 : 1 }}>{cloning ? 'Copying…' : 'Copy across'}</button>
           </div>
           {cloneMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: cloneMsg.ok === false ? 'var(--clay)' : cloneMsg.ok ? 'var(--sage)' : 'var(--ink-3)' }}>{cloneMsg.text}</div> : null}
         </div>
