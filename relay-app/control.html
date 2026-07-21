@@ -162,13 +162,23 @@
   .span-wide { grid-column:1/-1; }
   .row2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(310px, 1fr)); gap:16px; align-items:start; }
   .row2 > .card { margin-bottom:0; }
-  /* Churches + services are a matched pair, so align their bottoms instead of letting the taller one
-     dangle. The churches list is the elastic part: it grows into spare height when the services card is
-     the taller one, and keeps its own scroll cap when it isn't — so the pair stays level whatever the
-     relay is carrying, from one church to twenty. */
-  .row2--match { align-items:stretch; }
-  .row2--match > .card { display:flex; flex-direction:column; }
-  .row2--match #cfgList { flex:1 1 auto; min-height:132px; }
+  /* Settings is one three-across grid. Fixed columns, not auto-fit: auto-fit would silently become five
+     columns on a wide monitor and squeeze every card to unreadable, and the point here is a deliberate
+     3 × 2.
+     Cards keep their natural height (align-items:start) rather than stretching to match the row. Three
+     across, the tallest card in a row is the churches list, and stretching to meet it turned "Your relay's
+     name" — four lines and a text box — into a 570px card that was mostly blank. A short card that simply
+     ends is read as finished; a tall one full of nothing is read as broken.
+     minmax(0,·) on every track, never a bare 1fr: a bare 1fr is minmax(auto,1fr), and an auto minimum
+     refuses to shrink a column below its content's min-content width. The npub rows and the tunnel URL
+     are unbreakable strings, so the tracks stayed wide and the whole page scrolled sideways — 334px of it
+     at 820px wide. The old auto-fit grid was immune only because its explicit 310px minimum overrode that
+     auto. Re-measure scrollWidth vs innerWidth if these columns are ever touched again. */
+  .deck3 { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:16px; align-items:start; }
+  .deck3 > .card { margin-bottom:0; min-width:0; }
+  /* a third of a laptop screen is too narrow for an npub row; step down well before that bites */
+  @media (max-width:1500px) { .deck3 { grid-template-columns:repeat(2, minmax(0,1fr)); } }
+  @media (max-width:1000px) { .deck3 { grid-template-columns:minmax(0,1fr); } }
   .card-head { display:flex; align-items:flex-start; gap:12px; margin-bottom:16px; }
   .hd-ic { width:34px; height:34px; border-radius:10px; background:var(--surface-2); color:var(--clay);
            display:flex; align-items:center; justify-content:center; flex-shrink:0; }
@@ -406,9 +416,11 @@
     <span class="legend-item"><span class="legend-swatch ls-danger"></span><b>Can't be undone</b>&nbsp;— asks you to confirm</span>
   </div>
 
-  <div class="group">
-    <div class="group-head"><span class="group-title">Getting connected</span><span class="group-hint">How members reach this relay</span></div>
-    <div class="row2">
+  <!-- One grid, three across, rather than three separately-headed two-up rows. Settings is six cards; at
+       this width that is exactly two clean rows, and the section headings were costing a card's worth of
+       vertical space each to label pairs that are self-evident from the card titles. Cards stretch, so
+       every row is level. Order still reads connection → churches → services → maintenance. -->
+  <div class="deck3">
       <section class="card" id="goPublic" aria-label="Reach members from anywhere">
         <div class="card-head">
           <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18"></path></svg></span>
@@ -431,17 +443,8 @@
         </div>
         <div id="relayNameBody"><div class="muted">Checking…</div></div>
       </section>
-    </div>
-  </div>
 
-  <!-- The churches allow-list and the service toggles share ONE grid. Churches used to be a full-width
-       card alone in its own group: on a wide display that wasted half the row and pushed "What this relay
-       serves" a screen further down, so the two things an operator sets up together were never on screen
-       together. Same cards, same order, one row. -->
-  <div class="group">
-    <div class="group-head"><span class="group-title">Churches and services</span><span class="group-hint">Who this relay carries, and what it offers</span></div>
-    <div class="row2 row2--match">
-    <section class="card" aria-label="Churches on this relay">
+      <section class="card" aria-label="Churches on this relay">
       <div class="card-head">
         <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"></circle><path d="M3.5 20a5.5 5.5 0 0 1 11 0"></path><path d="M16 5.2a3.4 3.4 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-2.7-4.7"></path></svg></span>
         <div class="card-titles">
@@ -510,12 +513,7 @@
           <button class="btn btn-ghost" id="dlSubs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download CSV</button>
         </div>
       </section>
-    </div>
-  </div>
 
-  <div class="group">
-    <div class="group-head"><span class="group-title">Maintenance</span><span class="group-hint">Updates and your relay's data</span></div>
-    <div class="row2">
       <section class="card" id="updateCard" style="display:none" aria-label="Relay software">
         <div class="card-head">
           <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg></span>
@@ -554,8 +552,7 @@
           <div class="hint" id="restoreMsg"></div>
         </div>
       </section>
-    </div>
-  </div>
+  </div><!-- /deck3 -->
 
   </div><!-- /setBody -->
   </div><!-- /panel-set -->
