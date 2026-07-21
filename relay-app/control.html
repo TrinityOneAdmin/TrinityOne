@@ -318,7 +318,7 @@
     <button class="btn-clay" id="goUnlock">Enter the admin token</button>
   </div>
 
-  <div class="card card--wide" id="actCard">
+  <div class="card" id="actCard">
     <h2>Activity <span class="muted" id="actRange" style="font-weight:600"></span></h2>
     <div class="spark" id="actBars"><div class="muted">Loading…</div></div>
     <div class="spark-x"><span id="actFrom">—</span><span id="actTo">—</span></div>
@@ -407,8 +407,13 @@
     </div>
   </div>
 
+  <!-- The churches allow-list and the service toggles share ONE grid. Churches used to be a full-width
+       card alone in its own group: on a wide display that wasted half the row and pushed "What this relay
+       serves" a screen further down, so the two things an operator sets up together were never on screen
+       together. Same cards, same order, one row. -->
   <div class="group">
-    <div class="group-head"><span class="group-title">Churches on this relay</span><span class="group-hint">The allow-list — who this server carries</span></div>
+    <div class="group-head"><span class="group-title">Churches and services</span><span class="group-hint">Who this relay carries, and what it offers</span></div>
+    <div class="row2">
     <section class="card" aria-label="Churches on this relay">
       <div class="card-head">
         <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"></circle><path d="M3.5 20a5.5 5.5 0 0 1 11 0"></path><path d="M16 5.2a3.4 3.4 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-2.7-4.7"></path></svg></span>
@@ -430,11 +435,7 @@
       <div class="muted" id="cfgMsg" role="status" aria-live="polite" style="margin-bottom:8px"></div>
       <div class="ch-list" id="cfgList"><div class="muted">Loading…</div></div>
     </section>
-  </div>
 
-  <div class="group">
-    <div class="group-head"><span class="group-title">What this relay does</span><span class="group-hint">Services and limits</span></div>
-    <div class="row2">
       <section class="card card-save" id="servesCard" style="display:none" aria-label="What this relay serves">
         <div class="card-head">
           <span class="hd-ic" style="color:var(--gold-ink)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"></path></svg></span>

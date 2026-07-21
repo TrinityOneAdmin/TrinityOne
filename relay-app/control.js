@@ -745,7 +745,7 @@
     if (from && daily.length) from.textContent = dayLabel(daily[0].day);
     if (to && daily.length) to.textContent = 'today';
     const range = document.getElementById('actRange');
-    if (range) range.textContent = '· last ' + (s.days || 30) + ' days';
+    if (range) range.textContent = '· last ' + (s.days || 10) + ' days';
     const note = document.getElementById('actNote');
     if (note) note.textContent = total === 0
       ? 'Nothing published in this window.'
@@ -756,7 +756,7 @@
 
   async function loadStats() {
     try {
-      const r = await fetch('/stats?days=30', { headers: authHeaders(), cache: 'no-store' });
+      const r = await fetch('/stats?days=10', { headers: authHeaders(), cache: 'no-store' });
       if (r.status === 401) { syncSettingsLock(true); return; }
       const s = await r.json();
       syncSettingsLock(false);
