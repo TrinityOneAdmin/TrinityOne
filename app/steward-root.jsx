@@ -70,6 +70,13 @@ function makeSub(getObj, method, makeInit) {
     return v;
   };
 }
+// A cache key is written ONLY when the relay actually delivers, so its presence is the "this stream has
+// loaded" signal. Exposed because an empty list is ambiguous: on a hard reload "nobody is admitted yet"
+// and "the admitted list hasn't arrived" look identical, and a screen that concludes from the wrong one
+// raises a false alarm for the second or two before the real data lands. Read it in a component that also
+// holds the matching subscription — that hook's re-render on first delivery is what makes this flip.
+window.stewardStreamLoaded = function (method, idv) { return (method + '|' + idv) in _subCache; };
+
 const S = () => window.Steward, MA = () => window.StewardManna, ME = () => window.StewardMeals;
 
 window.useStewardFunds = makeSub(S, 'subscribeFunds', () => []);

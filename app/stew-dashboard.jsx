@@ -1134,7 +1134,14 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
   const admittedSet = new Set(window.useStewardAdmitted ? window.useStewardAdmitted() : []);
   const blockedSet = new Set(window.useStewardBlocked ? window.useStewardBlocked() : []);
-  const pendingCount = joinApproval ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)).length : 0;
+  // "Pending" is the ABSENCE of a member from two other streams, so it is only meaningful once both have
+  // actually arrived. On a hard reload the members list lands first and those sets are still empty, which
+  // briefly makes every member in the church look like they are queuing at the door — an alarming banner,
+  // for a second, that was never true. Wait for the evidence before drawing the conclusion.
+  const idvNow = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const rosterLoaded = !window.stewardStreamLoaded
+    || (window.stewardStreamLoaded('subscribeAdmitted', idvNow) && window.stewardStreamLoaded('subscribeBlocked', idvNow));
+  const pendingCount = (joinApproval && rosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)).length : 0;
   const pendingBanner = pendingCount ? (
     <button onClick={() => onTab('members')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pray" size={22} color="#fff" /></div>
@@ -2797,7 +2804,13 @@ function DashMembers() {
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
   const admittedList = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
   const admittedSet = new Set(admittedList);
-  const pendingJoins = joinApproval ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)) : [];
+  // same reasoning as the dashboard banner: pending is an absence, so it can only be read once the
+  // streams that would fill it have landed. Otherwise a hard reload shows the whole church "wanting to
+  // join" for a second, each with an Approve button next to them.
+  const mIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const mRosterLoaded = !window.stewardStreamLoaded
+    || (window.stewardStreamLoaded('subscribeAdmitted', mIdv) && window.stewardStreamLoaded('subscribeBlocked', mIdv));
+  const pendingJoins = (joinApproval && mRosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)) : [];
   const pendingSet = new Set(pendingJoins.map(m => m.pubkey));
   const admitMember = (pk) => window.Steward.setAdmitted([...admittedList, pk]);
   const [copied, setCopied] = React.useState('');
