@@ -4324,7 +4324,9 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const [hasPin, setHasPin] = React.useState(() => !!(window.Steward.hasPinLock && window.Steward.hasPinLock()));
   const [pinAction, setPinAction] = React.useState(null);   // null | 'set' | 'change' | 'remove'
   // settings are grouped into sub-tabs; a deep-link (e.g. the Overview relay card) can open one directly
-  const [section, setSection] = React.useState(initialSection || 'church');
+  // 'relays' was its own tab until it merged into 'network'; anything still deep-linking to it (a saved
+  // link, an older screen's onTab call) must land on the page that now holds it, not on a blank panel.
+  const [section, setSection] = React.useState(initialSection === 'relays' ? 'network' : (initialSection || 'church'));
   React.useEffect(() => { if (initialIntent === 'pin' && !hasPin) setPinAction('set'); if (initialSection && onSectionConsumed) onSectionConsumed(); }, []);   // clear the one-shot intent + run a one-shot action (e.g. open Set-PIN)
   const [picBusy, setPicBusy] = React.useState(false);
   const [picFile, setPicFile] = React.useState(null);
@@ -4376,11 +4378,11 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        {[['church', 'Church'], ['features', 'Features'], ['network', 'Network'], ['relays', 'Relays'], ['security', 'Security']].map(([k, label]) => (
+        {[['church', 'Church'], ['features', 'Features'], ['network', 'Network & relays'], ['security', 'Security']].map(([k, label]) => (
           <button key={k} onClick={() => setSection(k)} style={{ padding: '8px 15px', borderRadius: 999, border: '1px solid ' + (section === k ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', background: section === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: section === k ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>{label}</button>
         ))}
       </div>
-      <div className={(section === 'network' || section === 'relays') ? 'net-grid' : 'sk-masonry'}>
+      <div className={section === 'network' ? 'net-grid' : 'sk-masonry'}>
       {section === 'church' ? <React.Fragment>
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
@@ -4420,8 +4422,14 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       <DashGivingPanel church={church} />
       </React.Fragment> : null}
 
-      {section === 'network' ? <DashNetworksPanel /> : null}
-      {section === 'relays' ? <DashRelaysCard /> : null}
+      {/* Network and relays are one page. Apart, the Relays card was the only child of .net-grid and so
+          landed in that grid's NARROW first track (capped at 360px) with the wide track left empty — which
+          is what squeezed its inner two-column grid down to about 150px a side and broke every line to one
+          word. Together they use the grid as designed: the narrow Network card beside the wide Relays one. */}
+      {section === 'network' ? <React.Fragment>
+      <DashNetworksPanel />
+      <DashRelaysCard />
+      </React.Fragment> : null}
 
       {section === 'security' && delegated ? (
       <Panel title="Security">

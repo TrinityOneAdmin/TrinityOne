@@ -26,9 +26,11 @@
   /* Network tab: Network card (narrow) beside the wide Relays card on desktop; stacks on a phone. */
   .net-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
   @media (min-width: 940px) { .net-grid { grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); } }
-  /* the Relays card's many sections in a tidy 2-column grid on a wide card; one column when narrow. */
-  .relay-grid { display: grid; grid-template-columns: 1fr; gap: 2px 24px; align-items: start; }
-  @media (min-width: 1120px) { .relay-grid { grid-template-columns: 1fr 1fr; } }
+  /* The Relays card's many sections, two across on a wide card and one when narrow. Sized from the CARD,
+     not the viewport: this used to split at a 1120px *viewport* media query, but the card lives inside a
+     sidebar and a grid track, so a 1130px window gave it two ~150px columns and broke every line to one
+     word. auto-fit measures the space actually available. */
+  .relay-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2px 24px; align-items: start; }
   .stew-root *::-webkit-scrollbar { width: 0; height: 0; }
 
   /* steward UI primitives (from the handoff's Steward Surfaces stylesheet) */

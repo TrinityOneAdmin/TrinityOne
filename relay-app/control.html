@@ -162,23 +162,19 @@
   .span-wide { grid-column:1/-1; }
   .row2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(310px, 1fr)); gap:16px; align-items:start; }
   .row2 > .card { margin-bottom:0; }
-  /* Settings is one three-across grid. Fixed columns, not auto-fit: auto-fit would silently become five
-     columns on a wide monitor and squeeze every card to unreadable, and the point here is a deliberate
-     3 × 2.
-     Cards keep their natural height (align-items:start) rather than stretching to match the row. Three
-     across, the tallest card in a row is the churches list, and stretching to meet it turned "Your relay's
-     name" — four lines and a text box — into a 570px card that was mostly blank. A short card that simply
-     ends is read as finished; a tall one full of nothing is read as broken.
-     minmax(0,·) on every track, never a bare 1fr: a bare 1fr is minmax(auto,1fr), and an auto minimum
-     refuses to shrink a column below its content's min-content width. The npub rows and the tunnel URL
-     are unbreakable strings, so the tracks stayed wide and the whole page scrolled sideways — 334px of it
-     at 820px wide. The old auto-fit grid was immune only because its explicit 310px minimum overrode that
-     auto. Re-measure scrollWidth vs innerWidth if these columns are ever touched again. */
-  .deck3 { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:16px; align-items:start; }
-  .deck3 > .card { margin-bottom:0; min-width:0; }
+  /* Settings is three columns of cards, laid out with CSS multi-column rather than grid.
+     Grid was the obvious choice and the wrong one. A grid row is as tall as its tallest card, so the
+     churches list — the tallest thing on the page — set the height of the whole first row and left the
+     two short cards beside it trailing ~550px of dead background before the second row could start.
+     Nothing about a settings page needs cards aligned in rows; they are independent panels. Columns let
+     each one start where the last one ended, which is what "packed" actually means, and it takes 120px
+     off the page at the same time. Order runs down each column in turn, not across.
+     Cards must not be split down the middle by a column break, hence break-inside. */
+  .deck3 { column-count:3; column-gap:16px; }
+  .deck3 > .card { break-inside:avoid; -webkit-column-break-inside:avoid; margin-bottom:16px; }
   /* a third of a laptop screen is too narrow for an npub row; step down well before that bites */
-  @media (max-width:1500px) { .deck3 { grid-template-columns:repeat(2, minmax(0,1fr)); } }
-  @media (max-width:1000px) { .deck3 { grid-template-columns:minmax(0,1fr); } }
+  @media (max-width:1500px) { .deck3 { column-count:2; } }
+  @media (max-width:1000px) { .deck3 { column-count:1; } }
   .card-head { display:flex; align-items:flex-start; gap:12px; margin-bottom:16px; }
   .hd-ic { width:34px; height:34px; border-radius:10px; background:var(--surface-2); color:var(--clay);
            display:flex; align-items:center; justify-content:center; flex-shrink:0; }
