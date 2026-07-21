@@ -82,13 +82,26 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   );
 }
 
+// A relay refusing this church's writes is the ONLY situation in which registering with a relay's
+// allow-list makes sense, so that control stays hidden until it happens. The banner is where the
+// rejection is already classified, so the flag is set here rather than duplicating the test. It is
+// persisted because the banner clears itself after 9s and the fix lives on another screen — by the time
+// the steward reaches Settings the event is long gone.
+window.REG_NEEDED_LS = 'trinityone.steward.relay-rejected';
+function noteRelayRejection() {
+  try { localStorage.setItem(window.REG_NEEDED_LS, String(Date.now())); } catch (e) {}
+  try { window.dispatchEvent(new CustomEvent('steward-relay-rejected')); } catch (e) {}
+}
+
 // surfaces a relay rejection (e.g. this console's church key isn't the one the relay enforces)
 function PublishErrorBanner() {
   const [msg, setMsg] = React.useState('');
   React.useEffect(() => {
     const f = (e) => {
       const reason = (e.detail && e.detail.reason) || '';
-      setMsg(/not a member|not permitted|blocked/i.test(reason)
+      const wrongChurch = /not a member|not permitted|blocked/i.test(reason);
+      if (wrongChurch) noteRelayRejection();
+      setMsg(wrongChurch
         ? 'Changes weren’t saved: this relay is set up for a different church. Restore this church’s key in Settings, or point the relay at this church.'
         : 'Couldn’t save to the relay — check the connection and try again.');
       clearTimeout(f._t); f._t = setTimeout(() => setMsg(''), 9000);
@@ -1988,13 +2001,28 @@ function DashRelaysCard() {
     setFinding(false);
   };
   const [regOpen, setRegOpen] = React.useState(false);
+  // shown only after this relay has actually refused a write — see noteRelayRejection(). Pasting a
+  // relay's admin token hands over full control of that relay, so it is not something to leave sitting
+  // on screen inviting a steward to go and find one.
+  const [regNeeded, setRegNeeded] = React.useState(() => { try { return !!localStorage.getItem(window.REG_NEEDED_LS); } catch (e) { return false; } });
+  React.useEffect(() => {
+    const f = () => setRegNeeded(true);
+    window.addEventListener('steward-relay-rejected', f);
+    return () => window.removeEventListener('steward-relay-rejected', f);
+  }, []);
   const [regToken, setRegToken] = React.useState('');
   const [regMsg, setRegMsg] = React.useState('');
   const [regBusy, setRegBusy] = React.useState(false);
   const register = async () => {
     if (!regToken.trim()) return;
     setRegBusy(true); setRegMsg('Registering…');
-    try { await window.Steward.registerWithRelay(regToken.trim()); setRegMsg('✓ Registered — the relay will accept this church now.'); }
+    try {
+      await window.Steward.registerWithRelay(regToken.trim());
+      setRegMsg('✓ Done — the relay will accept this church now.');
+      // the problem this control exists for is solved; stop offering it (and stop asking for the token)
+      try { localStorage.removeItem(window.REG_NEEDED_LS); } catch (e) {}
+      setRegToken('');
+    }
     catch (e) { setRegMsg('✗ ' + (e.message || 'Couldn’t reach the relay.')); }
     setRegBusy(false);
   };
@@ -2066,13 +2094,16 @@ function DashRelaysCard() {
             {byNameMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: byNameMsg.ok === false ? 'var(--clay)' : byNameMsg.ok ? 'var(--sage)' : 'var(--ink-3)' }}>{byNameMsg.text}</div> : null}
           </div>
         </div>
-        {/* register this church with the relay's write policy — fixes "Changes weren't saved: different church" */}
+        {/* Only after a relay has actually refused a write. Named for the symptom the steward has, not for
+            the mechanism — "register with the relay's allow-list" means nothing to someone whose actual
+            problem is that their posts aren't saving. */}
+        {!regNeeded ? null : (
         <div style={{ marginTop: 12 }}>
           {!regOpen ? (
-            <button onClick={() => setRegOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Register this church with the relay</button>
+            <button onClick={() => setRegOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> A relay is refusing our posts — fix it</button>
           ) : (
             <div style={{ padding: 13, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>If the relay rejects your changes (“set up for a different church”), add this church to its allow-list. Paste the relay’s <b>admin token</b> — shown in the TrinityOne Suite window, or the installer output.</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>One of your relays wouldn’t save a recent change, because it only carries churches on its own list and yours isn’t on it yet. Adding it is the relay operator’s call — if that’s you, paste the relay’s <b>admin token</b> to add this church now. It’s in the TrinityOne Suite window, or the installer output. <b>Anyone with that token controls the whole relay</b>, so don’t ask for it if the relay isn’t yours — ask its operator to add your church instead.</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input value={regToken} onChange={e => setRegToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') register(); }} type="password" placeholder="relay admin token" autoComplete="off" style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
                 <button onClick={register} disabled={regBusy || !regToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (regBusy || !regToken.trim()) ? .5 : 1 }}>Register</button>
@@ -2081,6 +2112,7 @@ function DashRelaysCard() {
             </div>
           )}
         </div>
+        )}
         {/* one-time clone: copy a church's whole history from another relay onto this one (e.g. after restore) */}
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
           <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Bring your church’s data onto this relay</div>
