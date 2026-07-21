@@ -1924,6 +1924,29 @@ function NewTeamModal({ open, onClose }) {
 }
 window.NewTeamModal = NewTeamModal;
 
+// Its own card, not a footer inside Relays. Running a relay box is a separate decision from managing the
+// relays a church already publishes to, and buried under the relay list it read like a footnote to it.
+function DashRunRelayCard() {
+  const isRelayApp = typeof location !== 'undefined' && new URLSearchParams(location.search).get('relayapp') === '1';
+  if (isRelayApp) return (
+    <Panel title="This computer is your relay">
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>It’s running as part of this app — your church uses it automatically. The control panel has the advanced relay settings (make it reachable from anywhere, software updates, storage).</div>
+      <a href="/relay-app/control.html" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none', display: 'inline-flex' }}><Icon name="globe" size={15} color="currentColor" /> Open relay control panel</a>
+    </Panel>
+  );
+  return (
+    <Panel title="Run your own relay box">
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>The TrinityOne Suite app turns any always-on computer into your church’s relay — no command line. Install it, open it, then add the address it gives you to your relays.</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {[['macOS', 'TrinityOne-Suite-macos-arm64.dmg'], ['Windows', 'TrinityOne-Suite-windows-x64-setup.exe'], ['Linux', 'TrinityOne-Suite-linux-x86_64.AppImage']].map(([label, file]) => (
+          <a key={label} href={'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/' + file} target="_blank" rel="noopener" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color="currentColor" /> {label}</a>
+        ))}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.5 }}>Download &amp; open it — it starts your relay. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay)' }}>Other builds</a> (Debian package, older Macs). Headless server? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></div>
+    </Panel>
+  );
+}
+
 function DashRelaysCard() {
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
   const host = (typeof location !== 'undefined' && location.host) || '';
@@ -1931,7 +1954,6 @@ function DashRelaysCard() {
   const checking = status.length === 0;
   const allUp = online === status.length;
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
-  const isRelayApp = typeof location !== 'undefined' && new URLSearchParams(location.search).get('relayapp') === '1';   // combined desktop app: this machine IS the relay
   const [draft, setDraft] = React.useState('');
   const [err, setErr] = React.useState('');
   const [syncBusy, setSyncBusy] = React.useState(false);
@@ -2051,24 +2073,22 @@ function DashRelaysCard() {
           </div>
         ) : null}
         {checking ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>Checking relays…</div> : null}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* One line per relay: address, role, health. It used to stack the URL over an indented meta row —
+            right for a narrow card, but this card is wide now and two relays were eating a third of it for
+            two short addresses. Everything sits inline and wraps only if the card actually gets narrow. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {status.map(r => {
             const self = host && r.url.includes(host);
             const up = r.status === 'on';
             return (
-              <div key={r.url} style={{ padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-                {/* top row: icon + the full-width URL + (optional) remove. The URL gets its own line so a long
-                    wss:// address wraps at most to two lines instead of being shattered one syllable per line. */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface)', color: up ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={18} color="currentColor" /></div>
-                  <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.4, paddingTop: 2 }}>{r.url}</div>
-                  {!self && r.url !== own ? <button onClick={() => window.Steward.removeRelay(r.url)} title="Remove relay" aria-label="Remove relay" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button> : null}
-                </div>
-                {/* meta row: role pill + live/latency, indented under the URL (34 icon + 12 gap) */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginTop: 9, marginLeft: 46 }}>
+              <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
+                <div style={{ flex: 1, minWidth: 140, fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{r.url}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
                   {self ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage)' : 'var(--clay)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Live' : 'Offline'}</span>
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
+                  {!self && r.url !== own ? <button onClick={() => window.Steward.removeRelay(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
               </div>
             );
@@ -2145,26 +2165,6 @@ function DashRelaysCard() {
           ) : null}
           {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage)' : 'var(--clay)' }}>{syncMsg.text}</div> : null}
         </div>
-        {/* In the combined desktop app THIS machine is the relay → offer the relay control panel; otherwise
-            offer the TrinityOne Suite downloads (same permanent links as the setup wizard). */}
-        {isRelayApp ? (
-          <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>This computer is your relay</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>It’s running as part of this app — your church uses it automatically. The control panel has the advanced relay settings (make it reachable from anywhere, software updates, storage).</div>
-            <a href="/relay-app/control.html" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none', display: 'inline-flex' }}><Icon name="globe" size={15} color="currentColor" /> Open relay control panel</a>
-          </div>
-        ) : (
-          <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>Run your own relay box</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>The TrinityOne Suite app turns any always-on computer into your church’s relay — no command line. Install it, open it, then add the address it gives you above.</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {[['macOS', 'TrinityOne-Suite-macos-arm64.dmg'], ['Windows', 'TrinityOne-Suite-windows-x64-setup.exe'], ['Linux', 'TrinityOne-Suite-linux-x86_64.AppImage']].map(([label, file]) => (
-                <a key={label} href={'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/' + file} target="_blank" rel="noopener" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color="currentColor" /> {label}</a>
-              ))}
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.5 }}>Download &amp; open it — it starts your relay. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay)' }}>Other builds</a> (Debian package, older Macs). Headless server? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></div>
-          </div>
-        )}
         </div>{/* end relay-actions grid */}
         <div style={{ display: 'flex', gap: 9, marginTop: 16, padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
           <Icon name="shield" size={17} color="var(--sage)" style={{ flexShrink: 0 }} /><div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church's messages, groups and members live on the relays above. Self-host one with the TrinityOne Suite for infrastructure you fully control — or run on the shared community relays. Either way, members reach it wherever you serve the app.</div>
@@ -4466,8 +4466,14 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           landed in that grid's NARROW first track (capped at 360px) with the wide track left empty — which
           is what squeezed its inner two-column grid down to about 150px a side and broke every line to one
           word. Together they use the grid as designed: the narrow Network card beside the wide Relays one. */}
+      {/* Two grid children, not three: the narrow column is a stack. As three siblings the third card
+          would land in row 2, which starts below the tall Relays card — leaving a screen of empty space
+          under Network. Stacking keeps it directly beneath. */}
       {section === 'network' ? <React.Fragment>
-      <DashNetworksPanel />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+        <DashNetworksPanel />
+        <DashRunRelayCard />
+      </div>
       <DashRelaysCard />
       </React.Fragment> : null}
 
