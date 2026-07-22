@@ -10650,6 +10650,10 @@ zoo`.split("\n");
     }
   }
   var now = () => Math.floor(Date.now() / 1e3);
+  var _CLOCK_SKEW = 600;
+  var _authFuture = (e) => e.created_at > now() + _CLOCK_SKEW;
+  var _byChurch = (e) => e.pubkey === pub;
+  var _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
   function toPubHex(npubOrHex) {
     try {
       if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase();
@@ -12395,6 +12399,7 @@ zoo`.split("\n");
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== BLOCKED_D + pub) return;
+          if (_authFuture(e) || !_byChurch(e)) return;
           if (e.created_at < latest) return;
           latest = e.created_at;
           try {
@@ -12432,7 +12437,9 @@ zoo`.split("\n");
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (_authFuture(e)) return;
           if (d === MINORS_D + pub) {
+            if (!_byChurch(e)) return;
             if (e.created_at < tMinors) return;
             tMinors = e.created_at;
             try {
@@ -12442,6 +12449,7 @@ zoo`.split("\n");
             }
             onLists({ minors, approved, nophoto });
           } else if (d === APPROVED_D + pub) {
+            if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
             tApproved = e.created_at;
             try {
@@ -12451,6 +12459,7 @@ zoo`.split("\n");
             }
             onLists({ minors, approved, nophoto });
           } else if (d === NOPHOTO_D + pub) {
+            if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
             tNophoto = e.created_at;
             try {
@@ -12526,6 +12535,7 @@ zoo`.split("\n");
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== GUARDIANS_D + pub) return;
+          if (_authFuture(e) || !_byChurch(e)) return;
           if (e.created_at < latest) return;
           latest = e.created_at;
           try {
@@ -12582,6 +12592,7 @@ zoo`.split("\n");
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== JOINPOLICY_D + pub) return;
+          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
           if (e.created_at < latest) return;
           latest = e.created_at;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
@@ -12615,6 +12626,7 @@ zoo`.split("\n");
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== ADMITTED_D + pub) return;
+          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
           if (e.created_at < latest) return;
           latest = e.created_at;
           try {
@@ -12649,6 +12661,7 @@ zoo`.split("\n");
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== STEWARDS_D + pub) return;
+          if (_authFuture(e) || !_byChurch(e)) return;
           if (e.created_at < latest) return;
           latest = e.created_at;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) cur = [];

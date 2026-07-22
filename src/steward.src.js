@@ -144,6 +144,19 @@ function stewIngestKey(e) {
   try { const env = JSON.parse(e.content || '{}'); _srev[gid] = env.rev || 1; const mine = env.keys && churchPub && env.keys[churchPub]; if (mine && churchSk) _skeys[gid] = _unhex(nip44d(mine, nip44ck(churchSk, e.pubkey))); } catch {}
 }
 const now = () => Math.floor(Date.now() / 1000);
+// Author discipline for the church's replaceable AUTHORITY docs (blocklist, admitted, stewards, guardians,
+// joinpolicy, safeguarding). Each subscribes with a second `#church` filter that matches ANY author, and
+// used to trust the d-tag alone — so a forged copy on a non-enforcing relay (a public one a church adds)
+// was accepted as truth. Mirror the relay's accept() rules EXACTLY (gateway.mjs ~1028-1054): owner-only
+// docs must be the church key; the steward-writable ones (joinpolicy/admitted/nophoto) also accept a
+// current rostered steward. The future-clamp is separate and load-bearing: with newest-wins in place, a
+// forgery dated far in the future can never be beaten on created_at, so without the clamp it would PIN
+// over the church's real doc for the life of the subscription. `pub` is the church key in view; `_careRoster`
+// is the live steward set (kept current by subscribeStewards → setCareRoster).
+const _CLOCK_SKEW = 600;   // 10 min — a real clock difference; a forgery uses a far-future stamp
+const _authFuture = (e) => e.created_at > now() + _CLOCK_SKEW;
+const _byChurch = (e) => e.pubkey === pub;
+const _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
 function toPubHex(npubOrHex) { try { if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase(); const d = nip19decode(npubOrHex); return d && d.type === 'npub' ? d.data : null; } catch { return null; } }
 
 const RELAYS_LS = 'trinityone.steward.extra-relays';   // extra public relays the church also publishes to
@@ -1343,6 +1356,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== BLOCKED_D + pub) return;
+        if (_authFuture(e) || !_byChurch(e)) return;   // owner-only; drop forgeries + future-dated pins
         // NEWEST WINS. This is a replaceable doc and we read it from every relay, so without this the copy
         // that ARRIVES last wins rather than the one that was WRITTEN last — a relay holding an older
         // blocklist silently reinstates blocks the owner has already lifted.
@@ -1377,9 +1391,11 @@ window.Steward = {
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (d === MINORS_D + pub) { if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === APPROVED_D + pub) { if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === NOPHOTO_D + pub) { if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
+        if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
+        // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
       },
       oneose() { onLists({ minors, approved, nophoto }); },
     });
@@ -1432,6 +1448,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== GUARDIANS_D + pub) return;
+        if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY safeguarding doc
         if (e.created_at < latest) return; latest = e.created_at;   // newest wins — a stale copy must not restore a removed guardian link
         try { cur = (JSON.parse(e.content).links) || {}; } catch { cur = {}; }
         onMap(cur);
@@ -1471,6 +1488,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== JOINPOLICY_D + pub) return;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward may set the join policy
         if (e.created_at < latest) return; latest = e.created_at;   // newest wins — a stale copy must not silently turn approval back off
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false;
         else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } }
@@ -1490,6 +1508,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== ADMITTED_D + pub) return;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward may admit members
         // newest wins — a stale copy drops recently-approved members back into "waiting to join"
         if (e.created_at < latest) return; latest = e.created_at;
         try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
@@ -1514,6 +1533,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== STEWARDS_D + pub) return;
+        if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY (this IS the roster; only the church key edits it)
         // newest wins — this is a revocation list: a stale copy would reinstate a steward who was removed
         if (e.created_at < latest) return; latest = e.created_at;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) cur = [];

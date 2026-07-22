@@ -69,3 +69,40 @@ test('the guard is a real comparison against a tracked timestamp, not a constant
     }
   }
 });
+
+// AUTHOR DISCIPLINE (Fable audit 2026-07-22, HIGH). The `#church` subscription filter matches ANY author,
+// so these church-signed authority docs must verify the signer — otherwise a forged copy on a non-enforcing
+// relay is accepted as truth, and (with newest-wins) a FUTURE-dated forgery pins over the real doc forever.
+// The correct signer per doc must mirror the relay's accept() exactly, so the wrong guard is as bad as none.
+const OWNER_ONLY = ['subscribeBlocked', 'subscribeStewards', 'subscribeGuardians'];       // church key only
+const STEWARD_WRITABLE = ['subscribeJoinPolicy', 'subscribeAdmitted'];                     // church OR a rostered steward
+// subscribeSafeguard carries all three: minors/approved owner-only, nophoto steward-writable.
+
+test('every authority handler drops future-dated events (no forgery can pin)', () => {
+  for (const name of Object.keys(REPLACEABLE_DOCS)) {
+    assert.match(handlerBody(name), /_authFuture\(e\)/,
+      `${name} has no future-timestamp clamp — a forgery dated far ahead can never be beaten on created_at ` +
+      `and pins over the church's real doc for the life of the subscription.`);
+  }
+});
+
+test('owner-only docs require the church key; steward-writable also accept a rostered steward', () => {
+  for (const name of OWNER_ONLY) {
+    const b = handlerBody(name);
+    assert.match(b, /_byChurch\(e\)/, `${name} is owner-only but does not check the author is the church key`);
+    assert.doesNotMatch(b, /_byChurchOrSteward\(e\)/, `${name} is owner-only but accepts steward authors — wider than the relay allows`);
+  }
+  for (const name of STEWARD_WRITABLE) {
+    assert.match(handlerBody(name), /_byChurchOrSteward\(e\)/, `${name} is steward-writable but does not accept a rostered steward — it would drop legitimate delegated writes`);
+  }
+  // safeguard: minors+approved gated by _byChurch, nophoto by _byChurchOrSteward
+  const sg = handlerBody('subscribeSafeguard');
+  assert.equal((sg.match(/_byChurch\(e\)/g) || []).length, 2, 'safeguard: minors + approved must each require the church key');
+  assert.match(sg, /_byChurchOrSteward\(e\)/, 'safeguard: nophoto is steward-writable and must accept a rostered steward');
+});
+
+test('the author helpers actually compare pubkeys — not stubs', () => {
+  assert.match(BUNDLE, /_byChurch\s*=\s*\(e\)\s*=>\s*e\.pubkey\s*===\s*pub/, '_byChurch must compare e.pubkey to the church key');
+  assert.match(BUNDLE, /_byChurchOrSteward\s*=\s*\(e\)\s*=>\s*e\.pubkey\s*===\s*pub\s*\|\|\s*_careRoster\.has\(e\.pubkey\)/, '_byChurchOrSteward must accept the church key or a rostered steward');
+  assert.match(BUNDLE, /_authFuture\s*=\s*\(e\)\s*=>\s*e\.created_at\s*>\s*now\(\)\s*\+/, '_authFuture must reject events dated beyond now + skew');
+});
