@@ -37,15 +37,18 @@ function loadMeals() {
         careSealTo: (to, obj) => nip44.encrypt(JSON.stringify(obj), nip44.utils.getConversationKey(churchSk, to)),
         careKeyChecked: () => true,
         churchPub,
+        // capture the live subscription so a test can drive the READ path (subscribeNeeds), not just openNeed.
+        subscribeMany: (filters, handlers) => { subs.push(handlers); return { close() {} }; },
       },
     },
   };
+  const subs = [];
   sandbox.window.window = sandbox.window;
   sandbox.globalThis = sandbox;
   const src = readFileSync(ROOT + 'vendor/steward-meals.js', 'utf8');
   const fn = new Function('window', 'crypto', 'console', 'TextEncoder', src + '\n;return window.StewardMeals;');
   const api = fn(sandbox.window, webcrypto, console, TextEncoder);
-  return { api, published, careKeyHex };
+  return { api, published, careKeyHex, subs };
 }
 
 test('the shipped publishNeed does not put the identifying half on the wire', async () => {
@@ -100,6 +103,48 @@ test('without the key a need is marked _sealed, not silently blank', () => {
     assert.equal(out.displayLabel, undefined);
     assert.equal(out.type, 'meals', 'the clear half must still be readable without the key');
   });
+});
+
+// REGRESSION (Fable audit 2026-07-22, HIGH). The bug that shipped: subscribeNeeds ran _normNeed on the raw
+// content and never called openNeed, so the console rendered every sealed need blank and an edit-save wrote
+// the blanks back — permanent data loss. The pre-existing tests all drove openNeed DIRECTLY and stayed green
+// through it (the exact mirror-test trap this file's header warns about). These drive the actual read path.
+test('the READ path (subscribeNeeds) decrypts a sealed need for a keyed console — not blank', async () => {
+  const { api, published, subs } = loadMeals();
+  await api.publishNeed({ id: 'c9', type: 'meals', dates: ['2026-08-01'], meals: ['dinner'], ...SENSITIVE });
+  let emitted = [];
+  api.subscribeNeeds((list) => { emitted = list; });
+  assert.equal(subs.length, 1, 'subscribeNeeds must open exactly one subscription');
+  const evt = finalizeEvent(published[0], churchSk);   // a real relay-shaped event
+  subs[0].onevent(evt);
+  const rec = emitted.find(n => n.id === 'c9');
+  assert.ok(rec, 'the need must reach the console');
+  assert.equal(rec.displayLabel, SENSITIVE.displayLabel, 'the console showed a BLANK name — openNeed is not on the read path');
+  assert.equal(rec.notes, SENSITIVE.notes);
+  assert.equal(rec.recipient, memberPub);
+  assert.ok(!rec._sealed, 'a keyed console must not mark its own needs sealed');
+});
+
+test('the READ path marks _sealed (not blank) when the console lacks the key', async () => {
+  const src = loadMeals();
+  await src.api.publishNeed({ id: 'c10', type: 'meals', dates: ['2026-08-01'], meals: ['dinner'], ...SENSITIVE });
+  const other = loadMeals();             // different device → different care key
+  let emitted = [];
+  other.api.subscribeNeeds((list) => { emitted = list; });
+  other.subs[0].onevent(finalizeEvent(src.published[0], churchSk));
+  const rec = emitted.find(n => n.id === 'c10');
+  assert.ok(rec, 'the need must still reach the console');
+  assert.equal(rec._sealed, true, 'an un-openable need must be flagged so the UI says "details hidden"');
+  assert.equal(rec.type, 'meals', 'the clear half (schedule) must still be readable');
+});
+
+test('publishNeed refuses to re-save a _sealed record, so an un-keyed edit cannot blank it', async () => {
+  const { api } = loadMeals();
+  await assert.rejects(
+    () => api.publishNeed({ id: 'c11', _sealed: true, type: 'meals', dates: ['2026-08-01'], displayLabel: '', notes: '', recipient: '' }),
+    /can.t open it|care key/i,
+    'saving a sealed record must throw, not publish blanks over the real data',
+  );
 });
 
 test('the skip token proves the recipient WITHOUT naming them to the relay', async () => {

@@ -153,6 +153,10 @@
   }
   async function publishNeed(need) {
     if (!S() || !S().publishSigned) return null;
+    // A need loaded on a device WITHOUT the care key comes back `_sealed` — its PII fields are blank because
+    // we couldn't decrypt them. Re-publishing that would seal the blanks over the real, still-encrypted data
+    // for the whole church (kind-30078 is replaceable). Refuse, rather than silently destroy it.
+    if (need._sealed) throw new Error('This need was saved by a device that holds the care key, and this device can’t open it. Open Members so the key syncs, then edit it here.');
     const id = need.id || uid('care');
     const rec = _normNeed(need);
     const sealed = {}; for (const f of SEALED_FIELDS) sealed[f] = rec[f];
@@ -219,7 +223,16 @@
           const id = d.slice(NEED_D.length);
           const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
           if (deleted) { byId.delete(id); emit(); return; }
-          try { byId.set(id, { id, ..._normNeed(JSON.parse(e.content)), ts: e.created_at }); emit(); } catch (err) {}
+          try {
+            // Decrypt the sealed half BEFORE normalising. A sealed need (H3) carries displayLabel / notes /
+            // recipient / dietary inside `enc`, not as top-level keys — so _normNeed alone reads them as
+            // empty and drops `enc`, and the console shows every sealed need blank. openNeed merges the
+            // decrypted fields back, or marks `_sealed` when this device has no care key. Carry `_sealed`
+            // through so the UI can say "details hidden" and refuse to edit-save a blank over the real data.
+            const opened = openNeed(JSON.parse(e.content));
+            byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, ts: e.created_at });
+            emit();
+          } catch (err) {}
         },
         oneose() { emit(); },
       }

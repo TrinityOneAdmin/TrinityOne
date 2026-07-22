@@ -117,6 +117,7 @@
     }
     async function publishNeed(need) {
       if (!S() || !S().publishSigned) return null;
+      if (need._sealed) throw new Error("This need was saved by a device that holds the care key, and this device can\u2019t open it. Open Members so the key syncs, then edit it here.");
       const id = need.id || uid("care");
       const rec = _normNeed(need);
       const sealed = {};
@@ -180,7 +181,8 @@
               return;
             }
             try {
-              byId.set(id, { id, ..._normNeed(JSON.parse(e.content)), ts: e.created_at });
+              const opened = openNeed(JSON.parse(e.content));
+              byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, ts: e.created_at });
               emit();
             } catch (err) {
             }
