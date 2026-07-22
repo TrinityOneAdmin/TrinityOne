@@ -6581,8 +6581,9 @@
       new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), PUBLISH_TIMEOUT_MS))
     ]);
   }
-  var _PERMANENT = /^(blocked|invalid|rate-limited|restricted|error: )/i;
+  var _PERMANENT = /^(blocked|invalid|restricted)/i;
   var isPermanentRefusal = (e) => _PERMANENT.test(String(e && e.message || e || ""));
+  var isRateLimited = (e) => /^rate-limited/i.test(String(e && e.message || e || ""));
   var _CONNECTION = /timeout|network|websocket|failed to (fetch|connect)|connection|econn|enotfound|socket|offline|unreachable/i;
   var isConnectionFailure = (e) => _CONNECTION.test(String(e && e.message || e || ""));
   var MAX_TRIES = 50;
@@ -6599,6 +6600,7 @@
           const errs = e && e.errors ? e.errors : [e];
           const permanent = errs.length && errs.every(isPermanentRefusal);
           const outage = errs.length && errs.every(isConnectionFailure);
+          const rateLimited = errs.some(isRateLimited);
           if (!outage) item.tries = (item.tries || 0) + 1;
           item.lastTry = Math.floor(Date.now() / 1e3);
           item.lastError = String(errs[0] && errs[0].message || "").slice(0, 120);
@@ -6610,7 +6612,9 @@
             if (_outboxFailed.length > 50) _outboxFailed.shift();
           }
           _outboxSave();
+          if (rateLimited) break;
         }
+        if (_outbox.length > 1) await new Promise((r) => setTimeout(r, 150));
       }
     } finally {
       _flushing = false;

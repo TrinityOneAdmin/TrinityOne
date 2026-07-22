@@ -111,11 +111,14 @@ test('a permanently refused message is not retried forever', async () => {
   // A relay REFUSING a message ("blocked: not a member of that group") is not the same as being unable to
   // reach one. Conflating them means an un-sendable message is retried every 45 seconds for the life of the
   // install — which is exactly what an on-device test in airplane mode surfaced.
-  const PERMANENT = /^(blocked|invalid|rate-limited|restricted|error: )/i;
+  const PERMANENT = /^(blocked|invalid|restricted)/i;   // mirrors _PERMANENT in fellowship.src.js
   const classify = (msg) => PERMANENT.test(msg) ? 'permanent' : 'transient';
   assert.equal(classify('blocked: not a member or not permitted for this group'), 'permanent');
   assert.equal(classify('invalid: too many filters'), 'permanent');
-  assert.equal(classify('rate-limited: too many subscriptions'), 'permanent');
+  // rate-limited is TRANSIENT per NIP-01 ("retry later") — dropping a member's message because the relay
+  // asked them to slow down (exactly what a reconnect-burst triggers) is the wrong call.
+  assert.equal(classify('rate-limited: slow down'), 'transient', 'rate-limited means retry later, not give up');
+  assert.equal(classify('error: something odd'), 'transient', 'an unstructured error should keep the message, not bin it');
   assert.equal(classify('timeout'), 'transient', 'a timeout must stay queued — that is just no signal');
   assert.equal(classify('WebSocket connection failed'), 'transient');
   assert.equal(classify('websocket error'), 'transient');
@@ -144,6 +147,12 @@ test('an outage does not count toward the give-up limit (shipped code)', () => {
   assert.match(FELLOWSHIP, /isConnectionFailure/, 'no connection-vs-refusal distinction — offline attempts still burn tries');
   assert.match(FELLOWSHIP, /every\(isConnectionFailure\)/, 'the flush must detect an all-connection-failure outage');
   assert.match(FELLOWSHIP, /if\s*\(\s*!outage\s*\)\s*item\.tries/, 'tries must increment ONLY when it is not an outage');
+});
+
+test('rate-limited is transient in the shipped predicate, and the flush backs off (shipped code)', () => {
+  assert.doesNotMatch(FELLOWSHIP, /_PERMANENT\s*=\s*\/\^\([^/]*rate-limited/, 'rate-limited must not be in _PERMANENT — it is a retry-later signal');
+  assert.match(FELLOWSHIP, /isRateLimited/, 'no rate-limit detection — the flush cannot back off when told to slow down');
+  assert.match(FELLOWSHIP, /if\s*\(\s*rateLimited\s*\)\s*break/, 'a rate-limited response must stop the burst, not keep hammering');
 });
 
 test('the gave-up bin is persisted, not memory-only (shipped code)', () => {

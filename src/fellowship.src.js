@@ -673,8 +673,14 @@ function _publishBounded(relays, evt) {
 // retried forever, every 45 seconds, for the life of the install. Nostr signals refusal as OK=false with a
 // reason; nostr-tools surfaces it as a rejection whose message carries that reason. Treat the known refusal
 // prefixes as permanent, everything else as "try again later".
-const _PERMANENT = /^(blocked|invalid|rate-limited|restricted|error: )/i;
+// PERMANENT = the relay will never accept this message, so retrying is pointless (not a member, blocked,
+// malformed). NOT rate-limited: per NIP-01 that means "retry later" — the canonical TRANSIENT refusal — and
+// it is exactly what a reconnect-flush of several queued messages trips. Dropping a member's words because
+// the relay asked them to slow down is the wrong call. `error:` is dropped too: it's an unstructured
+// catch-all, and an ambiguous error should keep the message (MAX_TRIES is the backstop), not bin it.
+const _PERMANENT = /^(blocked|invalid|restricted)/i;
 const isPermanentRefusal = (e) => _PERMANENT.test(String((e && e.message) || e || ''));
+const isRateLimited = (e) => /^rate-limited/i.test(String((e && e.message) || e || ''));
 // A connection-level failure (timeout, no relay reachable) means the message NEVER reached a relay — an
 // OUTAGE, not a refusal. It must not count toward the give-up backstop: otherwise a message queued while
 // offline is dropped after MAX_TRIES ticks (~37 min at 45s, NOT "a day" as the old comment claimed —
@@ -697,6 +703,7 @@ async function _outboxFlush() {
         const errs = (e && e.errors) ? e.errors : [e];               // AggregateError from Promise.any
         const permanent = errs.length && errs.every(isPermanentRefusal);
         const outage = errs.length && errs.every(isConnectionFailure);   // never reached a relay → don't burn a try
+        const rateLimited = errs.some(isRateLimited);
         if (!outage) item.tries = (item.tries || 0) + 1;
         item.lastTry = Math.floor(Date.now() / 1000);
         item.lastError = String((errs[0] && errs[0].message) || '').slice(0, 120);
@@ -708,7 +715,13 @@ async function _outboxFlush() {
           _outboxFailed.push(item); if (_outboxFailed.length > 50) _outboxFailed.shift();
         }
         _outboxSave();
+        // The relay said "slow down". Bursting the rest of the queue would just trip it again and burn a
+        // try on every remaining item. Stop this pass and let the 45s tick resume it, spaced out.
+        if (rateLimited) break;
       }
+      // Gentle pacing between sends so a reconnect-flush of several queued messages doesn't itself burst
+      // into the rate limit above.
+      if (_outbox.length > 1) await new Promise(r => setTimeout(r, 150));
     }
   } finally { _flushing = false; }
 }
