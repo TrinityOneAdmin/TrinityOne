@@ -28,6 +28,9 @@ relay/*.sqlite-wal
 relay/tunnel-url.txt
 relay/church.json
 relay/church.json.tmp
+relay/church.json.bak
+relay/*.bak
+relay/_dbbackup/
 relay/admin.json
 relay/vapid.json
 relay/push-subs.json
