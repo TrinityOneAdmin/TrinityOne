@@ -639,13 +639,21 @@ window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch((
 // bubble by id for free, and the message keeps the timestamp of when the member actually wrote it, not
 // when the signal came back. Persisted, so closing the app doesn't lose it.
 const OUTBOX_KEY = 'trinityone.outbox';
+const OUTBOX_FAILED_KEY = 'trinityone.outbox.failed';   // gave-up messages, persisted (see below)
 const OUTBOX_MAX = 200;            // a bounded queue: past this the oldest is dropped rather than growing forever
 let _outbox = [];
 let _outboxFailed = [];   // gave up on these — surfaced to the member rather than discarded
 const _outboxSubs = new Set();
-function _outboxLoad() { try { _outbox = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]') || []; } catch (e) { _outbox = []; } }
+function _outboxLoad() {
+  try { _outbox = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]') || []; } catch (e) { _outbox = []; }
+  try { _outboxFailed = JSON.parse(localStorage.getItem(OUTBOX_FAILED_KEY) || '[]') || []; } catch (e) { _outboxFailed = []; }
+}
 function _outboxSave() {
   try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox.slice(-OUTBOX_MAX))); } catch (e) {}
+  // The gave-up bin is persisted too. It was memory-only, so a member's refused message — the whole reason
+  // this bin exists instead of a silent discard — was itself silently lost on app close, before they could
+  // see it, copy it out, or requeue it.
+  try { localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed.slice(-50))); } catch (e) {}
   for (const fn of [..._outboxSubs]) { try { fn(_outbox); } catch (e) {} }
 }
 _outboxLoad();
@@ -667,7 +675,14 @@ function _publishBounded(relays, evt) {
 // prefixes as permanent, everything else as "try again later".
 const _PERMANENT = /^(blocked|invalid|rate-limited|restricted|error: )/i;
 const isPermanentRefusal = (e) => _PERMANENT.test(String((e && e.message) || e || ''));
-const MAX_TRIES = 50;   // ~a day of 45s ticks; a backstop for a refusal shape we didn't anticipate
+// A connection-level failure (timeout, no relay reachable) means the message NEVER reached a relay — an
+// OUTAGE, not a refusal. It must not count toward the give-up backstop: otherwise a message queued while
+// offline is dropped after MAX_TRIES ticks (~37 min at 45s, NOT "a day" as the old comment claimed —
+// off by ~40×) even though no relay ever saw it. Only a genuine relay refusal burns a try.
+const _CONNECTION = /timeout|network|websocket|failed to (fetch|connect)|connection|econn|enotfound|socket|offline|unreachable/i;
+const isConnectionFailure = (e) => _CONNECTION.test(String((e && e.message) || e || ''));
+const MAX_TRIES = 50;   // 50 genuine relay REFUSALS (outages don't count) — a backstop so an unanticipated
+                        // non-permanent refusal shape isn't retried forever, not a wall-clock limit.
 // Try to deliver everything queued. Safe to call often — it no-ops while already running.
 async function _outboxFlush() {
   if (_flushing || !_outbox.length || !sk) return;
@@ -681,7 +696,8 @@ async function _outboxFlush() {
       } catch (e) {
         const errs = (e && e.errors) ? e.errors : [e];               // AggregateError from Promise.any
         const permanent = errs.length && errs.every(isPermanentRefusal);
-        item.tries = (item.tries || 0) + 1;
+        const outage = errs.length && errs.every(isConnectionFailure);   // never reached a relay → don't burn a try
+        if (!outage) item.tries = (item.tries || 0) + 1;
         item.lastTry = Math.floor(Date.now() / 1000);
         item.lastError = String((errs[0] && errs[0].message) || '').slice(0, 120);
         if (permanent || item.tries >= MAX_TRIES) {

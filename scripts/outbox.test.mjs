@@ -130,3 +130,26 @@ test('an offline publish is bounded in time', async () => {
   await assert.rejects(() => bounded(120), /timeout/);
   assert.equal(Date.now() - t0 < 2000, true, 'the bounded publish did not give up promptly');
 });
+
+// The tests above are a MIRROR of the queue's shape. These two assert the fix from the 2026-07-22 audit is
+// in the SHIPPED bundle (vendor/fellowship.js) — a mirror can't, since it would re-implement the very logic
+// under test and pass its own sabotage. Bundle-driven, so removing the fix fails the suite. Structural: they
+// prove the guard is present, not (on their own) that the runtime branch is exactly right.
+import { readFileSync } from 'node:fs';
+const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
+
+test('an outage does not count toward the give-up limit (shipped code)', () => {
+  // Before: MAX_TRIES=50 at one 45s tick each = ~37 min, and EVERY offline attempt burned a try — so a
+  // message queued during an outage longer than ~37 min was dropped though no relay ever saw it.
+  assert.match(FELLOWSHIP, /isConnectionFailure/, 'no connection-vs-refusal distinction — offline attempts still burn tries');
+  assert.match(FELLOWSHIP, /every\(isConnectionFailure\)/, 'the flush must detect an all-connection-failure outage');
+  assert.match(FELLOWSHIP, /if\s*\(\s*!outage\s*\)\s*item\.tries/, 'tries must increment ONLY when it is not an outage');
+});
+
+test('the gave-up bin is persisted, not memory-only (shipped code)', () => {
+  // Before: _outboxSave persisted only _outbox, so a refused message — the reason this bin exists instead of
+  // a silent discard — was itself silently lost on app close before the member could see or requeue it.
+  assert.match(FELLOWSHIP, /OUTBOX_FAILED_KEY/, 'the failed bin has no storage key — it is still memory-only');
+  assert.match(FELLOWSHIP, /setItem\(\s*OUTBOX_FAILED_KEY/, '_outboxSave must write the failed bin to storage');
+  assert.match(FELLOWSHIP, /getItem\(\s*OUTBOX_FAILED_KEY/, '_outboxLoad must read the failed bin back on start');
+});

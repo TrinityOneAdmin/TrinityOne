@@ -6539,6 +6539,7 @@
     });
   });
   var OUTBOX_KEY = "trinityone.outbox";
+  var OUTBOX_FAILED_KEY = "trinityone.outbox.failed";
   var OUTBOX_MAX = 200;
   var _outbox = [];
   var _outboxFailed = [];
@@ -6549,10 +6550,19 @@
     } catch (e) {
       _outbox = [];
     }
+    try {
+      _outboxFailed = JSON.parse(localStorage.getItem(OUTBOX_FAILED_KEY) || "[]") || [];
+    } catch (e) {
+      _outboxFailed = [];
+    }
   }
   function _outboxSave() {
     try {
       localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox.slice(-OUTBOX_MAX)));
+    } catch (e) {
+    }
+    try {
+      localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed.slice(-50)));
     } catch (e) {
     }
     for (const fn of [..._outboxSubs]) {
@@ -6573,6 +6583,8 @@
   }
   var _PERMANENT = /^(blocked|invalid|rate-limited|restricted|error: )/i;
   var isPermanentRefusal = (e) => _PERMANENT.test(String(e && e.message || e || ""));
+  var _CONNECTION = /timeout|network|websocket|failed to (fetch|connect)|connection|econn|enotfound|socket|offline|unreachable/i;
+  var isConnectionFailure = (e) => _CONNECTION.test(String(e && e.message || e || ""));
   var MAX_TRIES = 50;
   async function _outboxFlush() {
     if (_flushing || !_outbox.length || !sk) return;
@@ -6586,7 +6598,8 @@
         } catch (e) {
           const errs = e && e.errors ? e.errors : [e];
           const permanent = errs.length && errs.every(isPermanentRefusal);
-          item.tries = (item.tries || 0) + 1;
+          const outage = errs.length && errs.every(isConnectionFailure);
+          if (!outage) item.tries = (item.tries || 0) + 1;
           item.lastTry = Math.floor(Date.now() / 1e3);
           item.lastError = String(errs[0] && errs[0].message || "").slice(0, 120);
           if (permanent || item.tries >= MAX_TRIES) {
