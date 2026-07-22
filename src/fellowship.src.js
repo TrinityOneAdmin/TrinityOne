@@ -1051,7 +1051,11 @@ window.Fellowship = {
     _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
     _outboxSave();
     try {
-      await Promise.any(pool.publish(window.Fellowship.relays, evt));
+      // _publishBounded, not raw Promise.any: a socket that never opens leaves Promise.any pending forever,
+      // so offline the await never settled — `_delivered` was never set false and the "No signal, we'll send
+      // it when you're back" toast never fired in exactly the offline case it's for. Bounded → the signal
+      // always arrives within 12s; the message is already queued above, so the 45s flush is the retry path.
+      await _publishBounded(window.Fellowship.relays, evt);
       evt._delivered = true;
       _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
     } catch (e) {
@@ -1080,7 +1084,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, content); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); evt._delivered = true; }
+    try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true; }   // bounded so offline sets _delivered=false within 12s, not never
     catch (e) { console.warn('[fellowship] DM publish failed', e); evt._delivered = false; }   // E1: same as publishMessage — the caller must be able to tell
     return evt;
   },
@@ -1709,7 +1713,7 @@ window.Fellowship = {
     const tags = [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp]];
     if (skipEnc) { try { const o = JSON.parse(nip44d(skipEnc, nip44ck(sk, cp))); if (o && o.tok) tags.push(['skiptok', String(o.tok)]); } catch (e) {} }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); evt._delivered = true; }
+    try { await _publishBounded(churchRelays(), evt); evt._delivered = true; }   // bounded so an offline skip settles, not hangs
     catch (e) { console.warn('[fellowship] care skip publish failed', e); evt._delivered = false; }
     return evt;
   },

@@ -145,7 +145,12 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
   const [fresh, setFresh] = useId(null); // the created identity (for the done screen)
   // SECURITY-AUDIT-2026-07-18: trust the durable per-npub "backed up" flag written when the member confirmed in
   // RecoverySheet — the in-memory identity.backedUp was never set true, so this warning fired even after backup.
-  const backedUp = !!(identity && identity.backedUp) || (() => { try { const np = identity && identity.npub; return !!(np && localStorage.getItem('trinityone.backedup.' + np) === '1'); } catch (e) { return false; } })();
+  const backedUp = !!(identity && identity.backedUp) || (() => { try {
+    const np = identity && identity.npub;
+    if (np && localStorage.getItem('trinityone.backedup.' + np) === '1') return true;
+    if (np && localStorage.getItem('trinityone.backedup') === 'true') { localStorage.setItem('trinityone.backedup.' + np, '1'); return true; }   // migrate the legacy global flag
+    return false;
+  } catch (e) { return false; } })();
 
   useIdE(() => { if (open) { setStep('warn'); setName(''); setAv({ kind: 'symbol', color: '#46708C', symbol: 'dove' }); setFresh(null); } }, [open]);
   if (!open) return null;

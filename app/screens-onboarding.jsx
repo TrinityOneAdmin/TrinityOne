@@ -69,7 +69,18 @@ function Onboarding({ onDone, ctx }) {
         await window.Fellowship.setProfile({ name: name.trim(), av });
       }
     } catch (e) {}
-    try { localStorage.setItem('trinityone.onboarded', 'true'); if (saved) localStorage.setItem('trinityone.backedup', 'true'); } catch (e) {}
+    try {
+      localStorage.setItem('trinityone.onboarded', 'true');
+      // Record the backup under BOTH keys. The nudge + identity screens read the per-npub
+      // `trinityone.backedup.<npub>`; onboarding historically wrote only the global flag, so a member who
+      // saved their words in the wizard was still nagged on Today. Write the per-npub key for the identity
+      // we just created, and keep the global one for older readers.
+      if (saved) {
+        localStorage.setItem('trinityone.backedup', 'true');
+        const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub;
+        if (np) localStorage.setItem('trinityone.backedup.' + np, '1');
+      }
+    } catch (e) {}
     onDone();
   };
 

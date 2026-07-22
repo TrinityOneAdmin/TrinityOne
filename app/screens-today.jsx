@@ -471,7 +471,14 @@ function SafetyBanner({ ctx, persistent }) {
 function RecoveryNudge({ ctx }) {
   const np = (window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub) || '';
   const SNOOZE_KEY = 'trinityone.backupnudge.snooze';
-  const backedUp = (() => { try { return !!(np && localStorage.getItem('trinityone.backedup.' + np) === '1'); } catch (e) { return false; } })();
+  // Accept the legacy GLOBAL flag too: the onboarding wizard historically recorded a saved backup under
+  // `trinityone.backedup`='true', not the per-npub key this reads — so members who backed up in the wizard
+  // were still nagged. Migrate it to the per-npub key on read so it's a one-time fallback.
+  const backedUp = (() => { try {
+    if (np && localStorage.getItem('trinityone.backedup.' + np) === '1') return true;
+    if (np && localStorage.getItem('trinityone.backedup') === 'true') { localStorage.setItem('trinityone.backedup.' + np, '1'); return true; }
+    return false;
+  } catch (e) { return false; } })();
   const [snoozed, setSnoozed] = React.useState(() => { try { return Date.now() < parseInt(localStorage.getItem(SNOOZE_KEY) || '0', 10); } catch (e) { return false; } });
   if (!np || backedUp || !ctx.openRecovery || snoozed) return null;
   const snooze = (e) => { if (e) e.stopPropagation(); try { localStorage.setItem(SNOOZE_KEY, String(Date.now() + 3 * 24 * 3600 * 1000)); } catch (e2) {} setSnoozed(true); };

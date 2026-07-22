@@ -989,7 +989,14 @@ function hydrateMaps() {
   rebuildBlocked(); rebuildMinors(); rebuildApproved(); rebuildGuardians(); rebuildNetworks();   // rebuildBlocked() also rebuilds MEMBERS from the full maps
 }
 // persist the current church allow-list to church.json (so a clone-registered church survives a relay restart).
-function persistChurches() { try { const churches = [...CHURCH_PUBS].map(h => ({ npub: npubEncode(h), name: CHURCH_NAMES.get(h) || '' })); const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE); } catch {} }
+function persistChurches() { try {
+  // Mirror writeChurches's on-disk shape: stamp envMigrated and keep by/at provenance. Without envMigrated,
+  // loadChurches() re-folds CHURCH_NPUB on the next boot — so a church the operator deliberately removed
+  // (which stamped envMigrated) is RESURRECTED the moment an /import clone rewrites church.json here, undoing
+  // the C2 removal. Dropping by/at also leaves rows the operator can't place and so can't safely remove.
+  const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), name: CHURCH_NAMES.get(h) || '', ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
+  const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches, envMigrated: true }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
+} catch {} }
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (!CHURCH_PUBS.size || e.kind !== 30078) return;
   const d = dtag(e), removed = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
@@ -1959,7 +1966,12 @@ function serveStatic(req, res) {
         // churches on an invite-only relay (each new church key = an isLeader, the precondition for cross-church
         // mischief). Apply the SAME guards here.
         if (fresh && SETTINGS.inviteOnly) { res.writeHead(403, H); res.end('{"error":"this relay is invite-only — ask the operator to add your church"}'); return; }
-        if (fresh && CHURCH_PUBS.size >= 200) { res.writeHead(429, H); res.end('{"error":"registration capacity reached — contact the relay operator"}'); return; }
+        // RELAY-AUDIT-2026-07-20 H4, applied here too: /config addChurch gained a BOOTSTRAP-ONLY lock — on a
+        // private (non-community) relay that already carries a church, a fresh key can't self-register. /import
+        // kept only the inviteOnly + cap guards, so a fresh keypair with a NIP-98 proof could seed itself on a
+        // private relay through the clone path, minting an isLeader. Mirror the /config gate exactly.
+        if (fresh && !(OFFER_OPEN || SETTINGS.offerHosting) && CHURCH_PUBS.size) { res.writeHead(403, H); res.end('{"error":"this relay is already set up for its church — ask the operator to add yours, or turn on Offer to host other churches"}'); return; }
+        if (fresh && CHURCH_PUBS.size >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end('{"error":"registration capacity reached — contact the relay operator"}'); return; }
         if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
         let imported = 0, duplicates = 0, invalid = 0;
         for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {

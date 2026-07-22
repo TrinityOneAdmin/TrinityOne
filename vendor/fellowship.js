@@ -7157,7 +7157,7 @@
       _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
       _outboxSave();
       try {
-        await Promise.any(pool.publish(window.Fellowship.relays, evt));
+        await _publishBounded(window.Fellowship.relays, evt);
         evt._delivered = true;
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
         _outboxSave();
@@ -7216,7 +7216,7 @@
       }
       const evt = finalizeEvent2({ kind: 4, created_at: Math.floor(Date.now() / 1e3), tags: [["p", peerPub]], content: ciphertext }, sk);
       try {
-        await Promise.any(pool.publish(window.Fellowship.relays, evt));
+        await _publishBounded(window.Fellowship.relays, evt);
         evt._delivered = true;
       } catch (e) {
         console.warn("[fellowship] DM publish failed", e);
@@ -8330,7 +8330,7 @@
       }
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }, sk);
       try {
-        await Promise.any(pool.publish(churchRelays(), evt));
+        await _publishBounded(churchRelays(), evt);
         evt._delivered = true;
       } catch (e) {
         console.warn("[fellowship] care skip publish failed", e);

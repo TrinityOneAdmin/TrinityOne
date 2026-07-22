@@ -164,7 +164,7 @@ function RecoverySheet({ open, onClose, ctx }) {
         <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
           <button onClick={copyPhrase} style={{ flex: 1, padding: 12, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: 'var(--shadow)' }}>
             <Icon name="copy" size={16} /> Copy</button>
-          <button onClick={() => { markSaved(); onClose(); ctx.toast('Saved — your 12 words can restore this identity'); }} style={{ flex: 1, padding: 12, borderRadius: 14, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+          <button disabled={!shown} onClick={() => { if (!shown) return; markSaved(); onClose(); ctx.toast('Saved — your 12 words can restore this identity'); }} title={shown ? '' : 'Reveal your 12 words first'} style={{ flex: 1, padding: 12, borderRadius: 14, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: shown ? 'pointer' : 'not-allowed', opacity: shown ? 1 : 0.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
             {/* SECURITY-AUDIT-2026-07-18: persist a durable, per-npub "backed up" flag (was a cosmetic toast). */}
             <Icon name="check" size={16} stroke={2.4} color="#fff" /> I’ve written them down</button>
         </div>
