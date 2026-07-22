@@ -106,3 +106,17 @@ test('the author helpers actually compare pubkeys — not stubs', () => {
   assert.match(BUNDLE, /_byChurchOrSteward\s*=\s*\(e\)\s*=>\s*e\.pubkey\s*===\s*pub\s*\|\|\s*_careRoster\.has\(e\.pubkey\)/, '_byChurchOrSteward must accept the church key or a rostered steward');
   assert.match(BUNDLE, /_authFuture\s*=\s*\(e\)\s*=>\s*e\.created_at\s*>\s*now\(\)\s*\+/, '_authFuture must reject events dated beyond now + skew');
 });
+
+// CARE-KEY MINT RACE (Fable audit 2026-07-22, #2). subscribeCareKey used to DROP an envelope whose author
+// wasn't yet in the (asynchronously-loaded) steward roster, then ensureCareKeyForMembers minted a fresh key
+// over it — two competing care keys, every sealed need orphaned. The fix buffers unverifiable envelopes,
+// blocks the mint while one is pending, and re-checks when the roster loads. Structural, over the shipped bundle.
+test('care-key mint gate buffers unverified envelopes and refuses to mint while one is pending', () => {
+  const sub = handlerBody('subscribeCareKey');
+  assert.match(sub, /_careKeyPending\.push/, 'an author-unverified envelope must be BUFFERED, not dropped');
+  assert.doesNotMatch(sub, /if \(e\.pubkey !== cp && !_careRoster\.has\(e\.pubkey\)\) return;/, 'the old silent-drop must be gone');
+  const mint = handlerBody('ensureCareKeyForMembers');
+  assert.match(mint, /_reCheckCareKeyPending\(\)/, 'the mint gate must re-check buffered envelopes before minting');
+  assert.match(mint, /if \(_careKeyPending\.length\) return false/, 'the mint gate must refuse to mint while an envelope is pending');
+  assert.match(BUNDLE, /setCareRoster\([^)]*\)\s*\{[^}]*_reCheckCareKeyPending\(\)/, 'setCareRoster must re-check the buffer when the roster changes');
+});

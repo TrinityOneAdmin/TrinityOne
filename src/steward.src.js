@@ -157,6 +157,34 @@ const _CLOCK_SKEW = 600;   // 10 min — a real clock difference; a forgery uses
 const _authFuture = (e) => e.created_at > now() + _CLOCK_SKEW;
 const _byChurch = (e) => e.pubkey === pub;
 const _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
+
+// Care-key envelope handling, factored out so both the live subscription AND the pending-buffer re-check
+// share one code path. See the mint-gate race notes at the top of this file (care-key section).
+const _careKeyAuthed = (e) => { const cp = actingChurch || pub; return e.pubkey === cp || _careRoster.has(e.pubkey); };
+function _ingestCareKeyEnv(e) {
+  try {
+    const o = JSON.parse(e.content || '{}');
+    if ((o.rev || 1) < _careKeyRev) return;                  // a lagging relay must not resurrect an older envelope
+    _careKeyDocKeys = o.keys || null; _careKeyRev = o.rev || 1;
+    const mine = o.keys && churchPub && o.keys[churchPub];
+    if (mine && churchSk) _careKeyHex = nip44d(mine, nip44ck(churchSk, e.pubkey));
+  } catch (x) {}
+  _careKeyChecked = true;
+}
+// An envelope from an author we can't YET verify (a delegated steward whose roster entry hasn't loaded — the
+// roster arrives via a separate subscription and a React round-trip) is BUFFERED, not dropped: dropping it and
+// then minting a fresh key is exactly how two competing care keys arise and orphan every sealed need. It
+// blocks minting until it is either adopted (the roster loads and confirms the author) or expires as a
+// forgery. TTL bounds a spammed forgery from blocking minting forever.
+const _CAREKEY_PENDING_TTL = 12000;
+let _careKeyPending = [];
+function _reCheckCareKeyPending() {
+  const nowMs = Date.now();
+  _careKeyPending = _careKeyPending.filter(p => nowMs - p.at < _CAREKEY_PENDING_TTL);   // expired → treat as forgery, drop
+  for (const p of _careKeyPending.slice()) {
+    if (_careKeyAuthed(p.e)) { _ingestCareKeyEnv(p.e); _careKeyPending = _careKeyPending.filter(x => x !== p); }
+  }
+}
 function toPubHex(npubOrHex) { try { if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase(); const d = nip19decode(npubOrHex); return d && d.type === 'npub' ? d.data : null; } catch { return null; } }
 
 const RELAYS_LS = 'trinityone.steward.extra-relays';   // extra public relays the church also publishes to
@@ -1005,18 +1033,11 @@ window.Steward = {
                                               { kinds: [30078], '#church': [cp], '#d': [CAREKEY_D + cp] }], {
       onevent(e) {
         // Author discipline: the church itself, or one of its CURRENT rostered stewards. The relay enforces
-        // exactly this on write (accept()'s CAREKEY_D rule), so on an enforcing relay the check is belt and
-        // braces; it matters on a shared or non-enforcing one, where a stray envelope could otherwise
-        // substitute the key. _careRosterSet is kept current by subscribeStewards via setCareRoster().
-        if (e.pubkey !== cp && !_careRoster.has(e.pubkey)) return;
-        try {
-          const o = JSON.parse(e.content || '{}');
-          if ((o.rev || 1) < _careKeyRev) return;            // a lagging relay must not resurrect an older envelope
-          _careKeyDocKeys = o.keys || null; _careKeyRev = o.rev || 1;
-          const mine = o.keys && churchPub && o.keys[churchPub];
-          if (mine && churchSk) _careKeyHex = nip44d(mine, nip44ck(churchSk, e.pubkey));
-        } catch (x) {}
-        _careKeyChecked = true;
+        // exactly this on write; the client check matters on a shared/non-enforcing relay. An author we can't
+        // verify YET (the steward roster loads asynchronously) is BUFFERED, not dropped — dropping a real
+        // steward envelope and then minting a fresh key is the mint-race that splits the care key.
+        if (!_careKeyAuthed(e)) { _careKeyPending.push({ e, at: Date.now() }); if (_careKeyPending.length > 10) _careKeyPending.shift(); return; }
+        _ingestCareKeyEnv(e);
       },
       oneose() { _careKeyChecked = true; },   // no envelope came back → it is safe to mint one
     });
@@ -1029,6 +1050,8 @@ window.Steward = {
     const cp = actingChurch || pub;
     if (!sk || !cp || !churchPub) return false;
     if (!_careKeyChecked) return false;                       // haven't looked yet — minting now would orphan
+    _reCheckCareKeyPending();                                 // adopt any envelope now verifiable; drop expired forgeries
+    if (_careKeyPending.length) return false;                 // an unverified envelope may be a REAL one whose author is still loading — never mint a second key over it
     if (!_careKeyHex) {
       if (_careKeyDocKeys) return false;                      // an envelope EXISTS and we're not in it; the owner must add us
       _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -1054,7 +1077,7 @@ window.Steward = {
   careKeyChecked() { return _careKeyChecked; },
   // the console feeds the live steward roster in, so the envelope's author check stays current when a
   // steward is revoked (a revoked steward's envelope must stop being accepted, same as their content)
-  setCareRoster(list) { _careRoster = new Set((list || []).filter(Boolean)); },
+  setCareRoster(list) { _careRoster = new Set((list || []).filter(Boolean)); _reCheckCareKeyPending(); },   // roster just changed — adopt any buffered envelope it now verifies
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
     if (!pub) return () => {};

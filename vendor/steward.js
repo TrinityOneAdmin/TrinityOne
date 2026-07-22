@@ -10654,6 +10654,34 @@ zoo`.split("\n");
   var _authFuture = (e) => e.created_at > now() + _CLOCK_SKEW;
   var _byChurch = (e) => e.pubkey === pub;
   var _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
+  var _careKeyAuthed = (e) => {
+    const cp = actingChurch || pub;
+    return e.pubkey === cp || _careRoster.has(e.pubkey);
+  };
+  function _ingestCareKeyEnv(e) {
+    try {
+      const o = JSON.parse(e.content || "{}");
+      if ((o.rev || 1) < _careKeyRev) return;
+      _careKeyDocKeys = o.keys || null;
+      _careKeyRev = o.rev || 1;
+      const mine = o.keys && churchPub && o.keys[churchPub];
+      if (mine && churchSk) _careKeyHex = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+    } catch (x) {
+    }
+    _careKeyChecked = true;
+  }
+  var _CAREKEY_PENDING_TTL = 12e3;
+  var _careKeyPending = [];
+  function _reCheckCareKeyPending() {
+    const nowMs = Date.now();
+    _careKeyPending = _careKeyPending.filter((p) => nowMs - p.at < _CAREKEY_PENDING_TTL);
+    for (const p of _careKeyPending.slice()) {
+      if (_careKeyAuthed(p.e)) {
+        _ingestCareKeyEnv(p.e);
+        _careKeyPending = _careKeyPending.filter((x) => x !== p);
+      }
+    }
+  }
   function toPubHex(npubOrHex) {
     try {
       if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase();
@@ -11805,17 +11833,12 @@ zoo`.split("\n");
         { kinds: [30078], "#church": [cp], "#d": [CAREKEY_D + cp] }
       ], {
         onevent(e) {
-          if (e.pubkey !== cp && !_careRoster.has(e.pubkey)) return;
-          try {
-            const o = JSON.parse(e.content || "{}");
-            if ((o.rev || 1) < _careKeyRev) return;
-            _careKeyDocKeys = o.keys || null;
-            _careKeyRev = o.rev || 1;
-            const mine = o.keys && churchPub && o.keys[churchPub];
-            if (mine && churchSk) _careKeyHex = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
-          } catch (x) {
+          if (!_careKeyAuthed(e)) {
+            _careKeyPending.push({ e, at: Date.now() });
+            if (_careKeyPending.length > 10) _careKeyPending.shift();
+            return;
           }
-          _careKeyChecked = true;
+          _ingestCareKeyEnv(e);
         },
         oneose() {
           _careKeyChecked = true;
@@ -11836,6 +11859,8 @@ zoo`.split("\n");
       const cp = actingChurch || pub;
       if (!sk || !cp || !churchPub) return false;
       if (!_careKeyChecked) return false;
+      _reCheckCareKeyPending();
+      if (_careKeyPending.length) return false;
       if (!_careKeyHex) {
         if (_careKeyDocKeys) return false;
         _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -11888,7 +11913,9 @@ zoo`.split("\n");
     // steward is revoked (a revoked steward's envelope must stop being accepted, same as their content)
     setCareRoster(list) {
       _careRoster = new Set((list || []).filter(Boolean));
+      _reCheckCareKeyPending();
     },
+    // roster just changed — adopt any buffered envelope it now verifies
     // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
     subscribeMediaKey() {
       if (!pub) return () => {

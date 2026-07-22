@@ -73,9 +73,16 @@ function NostrBackend(cache) {
   // them is "you may read your own events", which REQUIRES auth. Without this the pull() below silently
   // returns zero events and startSync then republishes the local view over the relay's copy — so a second
   // device, or one that had been cleared, would overwrite the richer remote notes/journal/highlights.
+  // Did the pool answer a NIP-42 challenge during the current pull()? If it did but we still received
+  // nothing, the pull is INCONCLUSIVE (a default-deny replay may still be in flight), and pushing the local
+  // view up would risk overwriting the richer remote — see pull()/startSync below.
+  var _pullAuthed = false;
+  var _onPullAuth = null;   // pull() installs a hook so a challenge landing after EOSE can extend its window
   pool.automaticallyAuth = function () {
     return async function (authEvent) {
       if (!sk) throw new Error('mydata: no key');
+      _pullAuthed = true;
+      if (_onPullAuth) { try { _onPullAuth(); } catch (e) {} }
       return finalizeEvent(authEvent, sk);
     };
   };
@@ -147,14 +154,21 @@ function NostrBackend(cache) {
 
   function pull() {
     return new Promise(function (resolve) {
-      var touched = false, done = false;
-      var finish = function () { if (done) return; done = true; if (touched) onChange(); resolve(touched); };
+      var touched = false, done = false, eosed = false, evCount = 0, closed = false, idleT = null;
+      _pullAuthed = false;
+      // Resolve a RESULT, not just `touched`: `inconclusive` = we answered a challenge but received nothing,
+      // which under default-deny can mean the replay was still in flight rather than the remote being empty.
+      var finish = function () { if (done) return; done = true; _onPullAuth = null; if (touched) onChange(); resolve({ touched: touched, inconclusive: _pullAuthed && evCount === 0 }); };
+      var closeNow = function () { if (closed) return; closed = true; clearTimeout(idleT); try { sub.close(); } catch (e) {} finish(); };
+      var scheduleClose = function (ms) { if (closed) return; clearTimeout(idleT); idleT = setTimeout(closeNow, ms); };
+      // A challenge that lands AFTER the first (unauth) EOSE means the replay is coming — hold the sub open.
+      _onPullAuth = function () { if (eosed) scheduleClose(4000); };
       var sub = pool.subscribeMany(relays(), [{ kinds: [KIND], authors: [pub], '#d': Object.keys(D_TO_KEY) }], {
         onevent: function (e) {
+          evCount++;
           var dTag = (e.tags.find(function (t) { return t[0] === 'd'; }) || [])[1];
           var key = D_TO_KEY[dTag];
-          if (!key) return;
-          try {
+          if (key) try {
             if (reconcile(key, decode(key, e.content))) touched = true;
             // C1: a legacy CLEARTEXT copy is still sitting on the relay. reconcile() only republishes when
             // the merged view differs, so an unchanged doc would leave the plaintext (and the membership
@@ -162,15 +176,17 @@ function NostrBackend(cache) {
             if (SYNC[key].priv && String(e.content || '').charAt(0) === '{') schedulePublish(key);
           }
           catch (err) { console.warn('[mydata] reconcile failed', dTag, err); }
+          if (eosed) scheduleClose(1500);   // replayed events are arriving post-EOSE — keep the window rolling
         },
-        // REVIEW-2026-07-20 B2, second half: closing on EOSE is a race against NIP-42. Under default-deny the
-        // relay withholds our docs from the unauthenticated REQ, sends EOSE, THEN challenges — and its
-        // post-AUTH replay only walks subscriptions that are still open. Closing here meant the replay
-        // landed nowhere and pull() resolved empty, with the overwrite consequence described above. Hold the
-        // subscription open briefly past EOSE so the replayed events arrive, then close.
-        oneose: function () { setTimeout(function () { try { sub.close(); } catch (e) {} finish(); }, 1500); },
+        // REVIEW-2026-07-20 B2, second half: closing on EOSE races NIP-42. Under default-deny the relay
+        // withholds our docs from the unauthenticated REQ, sends EOSE, THEN challenges — and its post-AUTH
+        // replay only walks subscriptions that are still open. A fixed 1.5s hold gambled on that replay
+        // (2+ RTTs + a signature) landing in time, which it doesn't on the 2G links this targets. Instead:
+        // hold short if events already came, generously if none have (the auth replay is still in flight),
+        // roll the window on every replayed event, and cap at 8s.
+        oneose: function () { eosed = true; scheduleClose(evCount ? 1200 : 3500); },
       });
-      setTimeout(finish, 6000); // resolve even if a relay never sends EOSE
+      setTimeout(closeNow, 8000); // hard cap — resolve even if a relay never sends EOSE or the replay never lands
     });
   }
 
@@ -203,8 +219,14 @@ function NostrBackend(cache) {
         sk = privateKeyFromSeedWords(mnemonic);
         pub = getPublicKey(sk);
         ck = nip44.utils.getConversationKey(sk, pub);
-        return pull().then(function () {
-          Object.keys(SYNC).forEach(function (k) { if (cache.getDoc(k) != null) schedulePublish(k); });
+        return pull().then(function (r) {
+          // The local→remote migration push (encrypt legacy cleartext / seed a fresh relay). Skip it when
+          // the pull was INCONCLUSIVE — we authenticated but received nothing, which under default-deny can
+          // mean the replay was still in flight, not that the remote is empty. Republishing the local view
+          // then would overwrite the richer remote notes/journal/highlights (the B2 data-loss). A genuinely
+          // empty remote (open relay, or an authed pull whose replay completed with nothing) still pushes,
+          // and any later local edit publishes normally regardless.
+          if (!(r && r.inconclusive)) { Object.keys(SYNC).forEach(function (k) { if (cache.getDoc(k) != null) schedulePublish(k); }); }
           return true;
         });
       }).catch(function (e) { console.warn('[mydata] startSync failed', e); return false; });
