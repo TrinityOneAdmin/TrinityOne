@@ -1334,7 +1334,15 @@ function canRead(e, authed) {
     // events, authorised by authorship, not by delegated church authority.
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];
     const memberWritable = MEMBER_WRITABLE_D.some(p => d.startsWith(p));
-    if (ch && !memberWritable) { const r = STEWARDS_BY.get(ch); if (!(e.pubkey === ch || (r && r.has(e.pubkey)))) return false; }
+    // A care need (NEED_D) is authored by church / steward / care-team admin / member — accept() gates the
+    // write. So, like the member-authored docs above, its read authority is NOT the author's LIVE steward
+    // status, and a need shouldn't vanish because the steward who logged it was later revoked. Without this
+    // exemption the retraction returned false for every need a CARE-ADMIN or MEMBER opened (neither is in the
+    // steward roster), hiding it from EVERYONE — the church and care team included. Sibling of B1, which
+    // exempted the sign-ups but missed the need itself. The need's PII is sealed and the authed branch below
+    // still restricts readers to effective members of cp, so serving the clear half here is the design.
+    const retractionExempt = memberWritable || d.startsWith(NEED_D);
+    if (ch && !retractionExempt) { const r = STEWARDS_BY.get(ch); if (!(e.pubkey === ch || (r && r.has(e.pubkey)))) return false; }
     if (!authed) return false;
     // C3: `CHURCH_PUBS.has(authed)` / `NETWORKS.has(authed)` were UNSCOPED — any configured church key, and
     // any key any church had ever declared a network, read every OTHER church's roster, safeguarding lists
