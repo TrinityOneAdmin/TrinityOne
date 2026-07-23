@@ -345,6 +345,7 @@ function App() {
   // church side is hidden, and the app presents as a plain Bible reader. Tracked live off the identity.
   const [commLocked, setCommLocked] = useA(() => !!(window.TrinityIdentity && window.TrinityIdentity.isLocked && window.TrinityIdentity.isLocked()));
   const [commSec, setCommSec] = useA(false);   // the Community-lock sheet (set up / unlock / turn off)
+  const [gateEscaped, setGateEscaped] = useA(false);   // "read the Bible without unlocking" — hides the front-door gate for this session (identity stays locked)
   useAE(() => {
     const refreshLock = () => setCommLocked(!!(window.TrinityIdentity && window.TrinityIdentity.isLocked && window.TrinityIdentity.isLocked()));
     const h = () => { forceId(x => x + 1); refreshLock(); };
@@ -1435,6 +1436,10 @@ function App() {
         ) : null}
 
         {showSplash ? <Splash onDone={() => setShowSplash(false)} ready={bootReady} /> : null}
+        {/* Front-door PIN gate: over the whole app on open when a PIN is set and this session isn't unlocked.
+            Not during the splash or first-run onboarding (there's no PIN yet then). */}
+        {!showSplash && !showOnboarding && commLocked && !gateEscaped
+          ? <PinUnlockGate onUnlocked={() => { setCommLocked(false); setGateEscaped(false); }} onReadBible={() => setGateEscaped(true)} /> : null}
         {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity}
           onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }}
           onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }} /> : null}
