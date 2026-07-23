@@ -147,22 +147,44 @@ test('publishNeed refuses to re-save a _sealed record, so an un-keyed edit canno
   );
 });
 
-test('the skip token proves the recipient WITHOUT naming them to the relay', async () => {
+const sha = (s) => createHash('sha256').update(s).digest('hex');
+test('#13: a delegated-steward need unseals against the AUTHOR (steward), not the church key', () => {
+  const stSk = generateSecretKey(), stPub = getPublicKey(stSk);
+  // careSealTo seals with the ACTING key — for a delegated steward that's the STEWARD's key, not the church.
+  const sealed = nip44.encrypt(JSON.stringify({ s: 'master-secret' }), nip44.utils.getConversationKey(stSk, memberPub));
+  // the recipient opens it against the need's author (the steward) — this is what the fix passes as `_by`.
+  assert.equal(JSON.parse(nip44.decrypt(sealed, nip44.utils.getConversationKey(memberSk, stPub))).s, 'master-secret',
+    'the recipient must open a steward-sealed need against the steward author');
+  // opening against the CHURCH key — the old hard-coded behaviour — FAILS, which is exactly why #13 bit:
+  // delegated-steward-need recipients could never decline help.
+  assert.throws(() => nip44.decrypt(sealed, nip44.utils.getConversationKey(memberSk, churchPub)),
+    'unsealing a steward-authored need against the church key must fail — proving the author fix is load-bearing');
+});
+test('per-day skip tokens: only the recipient recovers the secret, and each day is its own token (audit #12/#13)', async () => {
   const { api, published } = loadMeals();
-  await api.publishNeed({ id: 'c5', type: 'meals', dates: ['2026-08-01'], ...SENSITIVE });
+  await api.publishNeed({ id: 'c5', type: 'meals', dates: ['2026-08-01', '2026-08-03'], ...SENSITIVE });
   const evt = published[0];
   const body = JSON.parse(evt.content);
-  const skiphash = (evt.tags.find(t => t[0] === 'skiphash') || [])[1];
-  assert.ok(skiphash, 'the need must carry an opaque skip-token hash for the relay to check');
-  assert.equal(/^[0-9a-f]{64}$/.test(skiphash), true);
-  // the hash must not be derivable from the recipient's identity — otherwise the relay brute-forces it
-  assert.notEqual(skiphash, createHash('sha256').update(memberPub).digest('hex'));
+  // the need carries ONE per-day hash tag per date, ['skiphash', <iso>, <hash>]
+  const shTags = evt.tags.filter(t => t[0] === 'skiphash');
+  assert.equal(shTags.length, 2, 'one skiphash per day');
+  for (const t of shTags) { assert.match(t[1], /^\d{4}-\d{2}-\d{2}$/); assert.match(t[2], /^[0-9a-f]{64}$/); }
+  // the hashes must not be derivable from the recipient's identity
+  assert.ok(!shTags.some(t => t[2] === sha(memberPub)));
 
-  // only the recipient can recover the token
-  const tok = JSON.parse(nip44.decrypt(body.skipEnc, nip44.utils.getConversationKey(memberSk, churchPub))).tok;
-  assert.equal(createHash('sha256').update(tok).digest('hex'), skiphash, 'the relay could not verify a genuine skip');
+  // only the recipient recovers the MASTER SECRET (sealed to them, against the need's author = the church here)
+  const secret = JSON.parse(nip44.decrypt(body.skipEnc, nip44.utils.getConversationKey(memberSk, churchPub))).s;
+  assert.ok(secret, 'the recipient must recover the master secret');
   assert.throws(() => nip44.decrypt(body.skipEnc, nip44.utils.getConversationKey(strangerSk, churchPub)),
-    'someone who is not the recipient could read the skip token');
+    'a non-recipient could read the skip secret');
+
+  // this day's presented token = sha256(secret:day); the need stores sha256(that). #12: the token for day A
+  // hashes to day A's stored value and NOT day B's — so a captured day-A token cannot skip day B.
+  const tokFor = (day) => sha(secret + ':' + day);
+  const stored = (day) => shTags.find(t => t[1] === day)[2];
+  assert.equal(sha(tokFor('2026-08-01')), stored('2026-08-01'), 'day A token must verify against day A');
+  assert.notEqual(sha(tokFor('2026-08-01')), stored('2026-08-03'), 'day A token must NOT verify against day B');
+  assert.equal(sha(tokFor('2026-08-03')), stored('2026-08-03'), 'day B token verifies against day B');
 });
 
 test('publishNeed REFUSES rather than publishing PII in the clear when there is no key', async () => {

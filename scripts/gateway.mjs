@@ -1084,10 +1084,16 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d.startsWith(NEED_D)) {   // a care need (already passed accept(): church/steward/care-admin/allowed-member) — record its recipient for careskip gating
     const id = d.slice(NEED_D.length);
     if (removed) { CARE_RECIPIENT.delete(id); CARE_SKIPHASH.delete(id); return; }
-    // v2: an opaque skip-token hash in a clear TAG. v1 needs carried the recipient pubkey in cleartext
-    // content — still honoured so a church mid-pilot doesn't lose the ability to skip on existing needs.
-    const sh = (e.tags.find(t => t[0] === 'skiphash') || [])[1];
-    if (sh && /^[0-9a-f]{64}$/i.test(sh)) CARE_SKIPHASH.set(id, sh.toLowerCase()); else CARE_SKIPHASH.delete(id);
+    // Opaque skip-token hashes in clear TAGS. v3 = one PER DAY: ['skiphash', <iso>, <hash>]; v2 = a single
+    // whole-need ['skiphash', <hash>] (kept so a need published before the redesign still skips); v1 carried
+    // the recipient pubkey in cleartext content (CARE_RECIPIENT, below).
+    const perDay = new Map(); let legacy = '';
+    for (const t of (e.tags || [])) {
+      if (t[0] !== 'skiphash') continue;
+      if (t.length >= 3 && /^\d{4}-\d{2}-\d{2}$/.test(t[1] || '') && /^[0-9a-f]{64}$/i.test(t[2] || '')) perDay.set(t[1], t[2].toLowerCase());
+      else if (/^[0-9a-f]{64}$/i.test(t[1] || '')) legacy = t[1].toLowerCase();
+    }
+    if (perDay.size || legacy) CARE_SKIPHASH.set(id, { perDay, legacy }); else CARE_SKIPHASH.delete(id);
     try { const r = toHexPub((JSON.parse(e.content) || {}).recipient || ''); if (r) CARE_RECIPIENT.set(id, r); else CARE_RECIPIENT.delete(id); } catch {}
   }
 }
@@ -1218,13 +1224,16 @@ function accept(e) {
     }
     if (d.startsWith(SLOT_D)) return isMember;                  // fill a slot: any member offers help (the event is keyed by their own pubkey, so they can't forge another member's)
     if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": the RECIPIENT, or a steward/care-team blocking a date on their behalf (recipient may not be on the app)
-      const careId = d.slice(SKIP_D.length).split(':')[0];
+      const parts = d.slice(SKIP_D.length).split(':');
+      const careId = parts[0], date = parts[1] || '';
       const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
-      // recipient-only, proven WITHOUT identifying them: present the token, we hash and compare. Falls back
-      // to the v1 cleartext-recipient check for needs published before the seal.
+      // recipient-only, proven WITHOUT identifying them: present THIS day's token, we hash and compare it to
+      // the need's per-day hash for THIS date. A token captured for one day cannot skip another. Falls back
+      // to the v2 whole-need hash, then the v1 cleartext-recipient check, for needs published before v3.
       const tok = (e.tags.find(t => t[0] === 'skiptok') || [])[1] || '';
       const want = CARE_SKIPHASH.get(careId);
-      const tokOk = !!(want && tok && createHash('sha256').update(String(tok)).digest('hex') === want);
+      const wantHash = want && ((want.perDay && want.perDay.get(date)) || want.legacy || '');
+      const tokOk = !!(wantHash && tok && createHash('sha256').update(String(tok)).digest('hex') === wantHash);
       return !!careId && (tokOk || e.pubkey === CARE_RECIPIENT.get(careId) || isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp));
     }
     if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)

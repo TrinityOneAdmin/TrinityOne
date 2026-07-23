@@ -177,9 +177,21 @@
     // who they are. Random (so it can't be brute-forced back to an identity) and encrypted to the recipient
     // specifically — NOT under the church-wide care key, which every member holds.
     if (rec.recipient && S().careSealTo) {
-      const tok = _rand32();
-      const to = S().careSealTo(rec.recipient, { tok });
-      if (to) { body.skipEnc = to; tags.push(['skiphash', await _sha256hex(tok)]); }
+      // Per-DAY skip tokens, all derived from ONE master secret sealed to the recipient. careSealTo seals
+      // against the acting key, i.e. the NEED'S AUTHOR — so a delegated steward's need still unseals for the
+      // recipient (fellowship unseals against `_by`). Each day's token = sha256(secret + ':' + day); the need
+      // carries only sha256(token) per day. So a member who reads one day's token off a stored skip event
+      // learns nothing about the secret and cannot forge a skip for any OTHER day (was a single reusable
+      // bearer token — Fable audit 2026-07-22 #12 / #13).
+      const secret = _rand32();
+      const to = S().careSealTo(rec.recipient, { s: secret });
+      if (to) {
+        body.skipEnc = to;
+        for (const day of rec.dates) {
+          const tokDay = await _sha256hex(secret + ':' + day);
+          tags.push(['skiphash', day, await _sha256hex(tokDay)]);
+        }
+      }
     }
     const e = await S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(body) });
     return { id, ...rec, ts: e && e.created_at };

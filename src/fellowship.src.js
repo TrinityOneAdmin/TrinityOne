@@ -1706,12 +1706,21 @@ window.Fellowship = {
   // sha256(token) tag, and the token itself is encrypted to the recipient ALONE (not under the church-wide
   // care key). Presenting the token proves you are the recipient without telling the relay who that is.
   // `skipEnc` comes from the need (subscribeCareNeeds carries it through as _skipEnc).
-  async markCareSkip(careId, iso, reason, skipEnc) {
+  async markCareSkip(careId, iso, reason, skipEnc, needAuthor) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const tags = [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp]];
-    if (skipEnc) { try { const o = JSON.parse(nip44d(skipEnc, nip44ck(sk, cp))); if (o && o.tok) tags.push(['skiptok', String(o.tok)]); } catch (e) {} }
+    if (skipEnc) { try {
+      // Unseal against the need's AUTHOR (#13), not always the church key — a delegated steward's need is
+      // sealed with the steward's key, so unsealing with the church key would silently fail and the recipient
+      // could never decline. Then derive THIS day's token from the secret (#12): present only tok(iso), which
+      // unlocks this date alone. `.tok` is the v2 single-token fallback for any pre-redesign need.
+      const authorPub = needAuthor || cp;
+      const o = JSON.parse(nip44d(skipEnc, nip44ck(sk, authorPub)));
+      if (o && o.s) tags.push(['skiptok', await _sha256hex(new TextEncoder().encode(o.s + ':' + iso))]);   // UTF-8 bytes → same digest the seal computed
+      else if (o && o.tok) tags.push(['skiptok', String(o.tok)]);
+    } catch (e) {} }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }, sk);
     try { await _publishBounded(churchRelays(), evt); evt._delivered = true; }   // bounded so an offline skip settles, not hangs
     catch (e) { console.warn('[fellowship] care skip publish failed', e); evt._delivered = false; }

@@ -8311,7 +8311,7 @@
     // sha256(token) tag, and the token itself is encrypted to the recipient ALONE (not under the church-wide
     // care key). Presenting the token proves you are the recipient without telling the relay who that is.
     // `skipEnc` comes from the need (subscribeCareNeeds carries it through as _skipEnc).
-    async markCareSkip(careId, iso, reason, skipEnc) {
+    async markCareSkip(careId, iso, reason, skipEnc, needAuthor) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -8323,8 +8323,10 @@
       const tags = [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp]];
       if (skipEnc) {
         try {
-          const o = JSON.parse(decrypt(skipEnc, getConversationKey(sk, cp)));
-          if (o && o.tok) tags.push(["skiptok", String(o.tok)]);
+          const authorPub = needAuthor || cp;
+          const o = JSON.parse(decrypt(skipEnc, getConversationKey(sk, authorPub)));
+          if (o && o.s) tags.push(["skiptok", await _sha256hex(new TextEncoder().encode(o.s + ":" + iso))]);
+          else if (o && o.tok) tags.push(["skiptok", String(o.tok)]);
         } catch (e) {
         }
       }

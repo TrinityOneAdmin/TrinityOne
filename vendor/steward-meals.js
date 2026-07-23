@@ -131,11 +131,14 @@
       const body = { ...rec, enc: ct };
       for (const f of SEALED_FIELDS) delete body[f];
       if (rec.recipient && S().careSealTo) {
-        const tok = _rand32();
-        const to = S().careSealTo(rec.recipient, { tok });
+        const secret = _rand32();
+        const to = S().careSealTo(rec.recipient, { s: secret });
         if (to) {
           body.skipEnc = to;
-          tags.push(["skiphash", await _sha256hex(tok)]);
+          for (const day of rec.dates) {
+            const tokDay = await _sha256hex(secret + ":" + day);
+            tags.push(["skiphash", day, await _sha256hex(tokDay)]);
+          }
         }
       }
       const e = await S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(body) });
