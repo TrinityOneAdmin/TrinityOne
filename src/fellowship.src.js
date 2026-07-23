@@ -635,6 +635,27 @@ async function init() {
 // keep the signing key in step with identity regeneration / restore
 window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch(() => {}); });
 
+// UNLOCK RECOVERY (PIN feature): on a PIN-locked boot the signing key does not exist yet, so any relay
+// sockets opened while locked ran NIP-42 auth as NOBODY (automaticallyAuth threw 'no key') and the relay
+// served only PUBLIC docs — the member appeared stuck "waiting for approval" with no groups/care, because
+// the admitted list + the whole church corpus are member-gated. Deriving the key later doesn't help: the
+// already-open sockets never re-challenge. So when the identity unlocks, derive the key THEN force fresh,
+// authenticated reconnections. Only fires on a real keyless→keyed transition, so a no-PIN boot never churns.
+function reconnectAll() {
+  // drop every church-doc hub's live sub so it re-opens fresh (buffer + cursor stay warm in memory)
+  for (const hub of _docsHubs.values()) { const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }
+  // close the underlying relay sockets so the reopened subs run a NEW NIP-42 challenge with the key present
+  const urls = new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS]);
+  for (const m of _churchRelays.values()) for (const u of m.keys()) urls.add(u);
+  for (const u of urls) { try { pool.close([u]); } catch (e) {} }
+  // nudge the app to re-run its serving subscriptions (connTick) → fresh, authenticated sockets
+  try { window.dispatchEvent(new CustomEvent('trinity-reconnect')); } catch (e) {}
+}
+window.addEventListener('trinity-identity-lock', () => {
+  const wasKeyless = !sk;
+  deriveFromIdentity().then(() => { if (wasKeyless && sk) reconnectAll(); }).catch(() => {});
+});
+
 // ── OUTBOX (UX-AUDIT-2026-07-20 E1) ───────────────────────────────────────────────────────────────
 // A message that couldn't be sent used to be gone: the composer cleared, the transport logged a warning,
 // and nothing appeared. On the intermittent connections this product is built for that is the failure that

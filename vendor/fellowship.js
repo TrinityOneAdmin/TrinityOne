@@ -6549,6 +6549,37 @@
     deriveFromIdentity().catch(() => {
     });
   });
+  function reconnectAll() {
+    for (const hub of _docsHubs.values()) {
+      const c = hub.closer;
+      hub.closer = null;
+      if (c) {
+        try {
+          c();
+        } catch (e) {
+        }
+      }
+    }
+    const urls = /* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS]);
+    for (const m of _churchRelays.values()) for (const u of m.keys()) urls.add(u);
+    for (const u of urls) {
+      try {
+        pool.close([u]);
+      } catch (e) {
+      }
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-reconnect"));
+    } catch (e) {
+    }
+  }
+  window.addEventListener("trinity-identity-lock", () => {
+    const wasKeyless = !sk;
+    deriveFromIdentity().then(() => {
+      if (wasKeyless && sk) reconnectAll();
+    }).catch(() => {
+    });
+  });
   var OUTBOX_KEY = "trinityone.outbox";
   var OUTBOX_FAILED_KEY = "trinityone.outbox.failed";
   var OUTBOX_MAX = 200;

@@ -372,6 +372,9 @@ function App() {
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('online', onOnline);
     window.addEventListener('focus', onVis);
+    // Fellowship fires this after a PIN unlock: it has dropped the stale (anonymous) relay sockets, so we
+    // must re-run the church subscriptions to reopen them — now authenticated with the just-derived key.
+    window.addEventListener('trinity-reconnect', onOnline);
     // perf #2: the 90s tick used to bump connTick UNCONDITIONALLY, tearing down + reopening ~15 subscription
     // effects every 90s (several with no `since` → full-backlog re-download over the funnel) even on a healthy
     // socket. Now it only bumps when a relay we opened has actually DROPPED (relaysHealthy() === false) — the same
@@ -383,7 +386,7 @@ function App() {
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
       last = Date.now(); bumpConn(x => x + 1);
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); clearInterval(beat); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onOnline); clearInterval(beat); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
