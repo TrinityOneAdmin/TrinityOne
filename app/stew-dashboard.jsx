@@ -3857,7 +3857,7 @@ function DashFeaturesPanel({ church }) {
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Choose which parts of the app your members see — turn off what your church doesn’t use.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {ITEMS.map(([k, label, sub]) => (
-          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{on(k) ? 'On' : 'Off'} — {sub}</div>
@@ -3870,11 +3870,11 @@ function DashFeaturesPanel({ church }) {
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Today (home) and Giving are controlled separately. Members see changes on their next sync.</div>
 
-      <div style={{ height: 1, background: 'var(--line)', margin: '18px 0 14px' }} />
+      <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Extras</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {EXTRAS.map(([k, label, sub]) => (
-          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: onOpt(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: onOpt(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{onOpt(k) ? 'On' : 'Off'} — {sub}</div>
@@ -3889,10 +3889,10 @@ function DashFeaturesPanel({ church }) {
 
     <Panel title="Rules & privacy">
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Privacy</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: encOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: encOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Encrypt all group chat</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{encOn ? 'On — every group is sealed end-to-end; new groups too. Not even the relay can read them.' : 'Off — group chat is stored readable on the relay. (You can still seal groups one by one.)'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{encOn ? 'On — every group sealed end-to-end; the relay can’t read them.' : 'Off — chat is readable on the relay. (You can seal groups individually.)'}</div>
         </div>
         <button onClick={toggleEncryptAll} aria-label="Toggle encrypt all group chat" role="switch" aria-checked={encOn} title="Seal every group’s messages end-to-end so not even the relay can read them" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: encOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: encOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
@@ -3900,10 +3900,10 @@ function DashFeaturesPanel({ church }) {
       </div>
       {confirmEnc ? <SkConfirm icon="lock" title="Encrypt all group chat?" confirmLabel="Encrypt all" body="Every group’s messages will be sealed end-to-end from now on — even the relay can’t read them. Messages already posted stay as they are, and new groups will be sealed by default too." onConfirm={doEncryptAll} onCancel={() => setConfirmEnc(false)} /> : null}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: photosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow member photos</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{photosOn ? 'On — adult members may set a real photo as their picture. Children only if you allow it below.' : 'Off — members use a colour, initial or symbol (recommended for privacy). No uploaded photos.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{photosOn ? 'On — adults may set a real photo. Children only if allowed below.' : 'Off — colour, initial or symbol only (recommended for privacy).'}</div>
         </div>
         <button onClick={togglePhotos} aria-label="Toggle member photos" role="switch" aria-checked={photosOn} title="Let adult members use a real photo as their picture (children never can)" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: photosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: photosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
@@ -3911,7 +3911,7 @@ function DashFeaturesPanel({ church }) {
       </div>
       {photosOn ? (
         <React.Fragment>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: kidPhotosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: kidPhotosOn ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', marginTop: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>Allow children’s photos</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{kidPhotosOn ? 'On — members marked as a child may also set a photo. Use with care.' : 'Off — children use a colour, initial or symbol. Recommended for safeguarding.'}</div>
@@ -3924,21 +3924,21 @@ function DashFeaturesPanel({ church }) {
         </React.Fragment>
       ) : null}
 
-      <div style={{ height: 1, background: 'var(--line)', margin: '18px 0 14px' }} />
+      <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Joining</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: approval ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: approval ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require approval to join</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{approval ? 'On — new people who scan your code wait in “Requests to join” (in Members) until you approve them.' : 'Off — anyone with your invite code or QR joins straight away.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{approval ? 'On — new joiners wait in “Requests to join” (Members) until you approve.' : 'Off — anyone with your code or QR joins straight away.'}</div>
         </div>
         <button onClick={toggleApproval} aria-label="Toggle approval to join" role="switch" aria-checked={approval} title="Make new people wait for your approval before they can join" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: approval ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: approval ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
 
-      <div style={{ height: 1, background: 'var(--line)', margin: '18px 0 14px' }} />
+      <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Member names</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: fullName ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)', background: fullName ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Require a real first &amp; last name</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.45 }}>{fullName ? 'On — members are asked to set a full name (e.g. “Jane Smith”); those without one are nudged to add a surname.' : 'Off — members may use a single name or stay anonymous.'}</div>
@@ -3985,7 +3985,7 @@ function DashGivingPanel({ church }) {
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><b>Locked during the pilot.</b> This opens up once testing is finished.</div>
       </div>
       {/* steward owns the switch: giving only appears for members when this church turns it on */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)',
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 11, border: '1px solid var(--line)',
         background: church.giving ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', marginBottom: showConfig ? 16 : 0 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show the Giving tab to members</div>
