@@ -107,10 +107,7 @@ function DashMealsPanel({ church }) {
   );
   return (
     <Panel title="Practical care">
-      <div style={{ display: 'flex', gap: 9, padding: '9px 11px', borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, transparent)', marginBottom: 12 }}>
-        <Icon name="heart" size={16} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. You open a need; members fill the dates.</div>
-      </div>
+      <DismissibleNote id="care-intro" icon="heart" tone="sage" style={{ marginBottom: 12 }}>Meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. You open a need; members fill the dates.</DismissibleNote>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Practical care (Meal trains)</div>

@@ -922,10 +922,7 @@ function DashRooms() {
       <button onClick={() => setBkModal({})} disabled={!rooms.length} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: rooms.length ? 1 : 0.5 }}><Icon name="plus" size={14} color="#fff" /> Book a room</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
 
-      <div style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 22%, var(--line))', marginBottom: 14 }}>
-        <Icon name="marker" size={16} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>Your church's bookable spaces and who's using them when. Booking warns you of a <b>clash</b> so the hall is never double-booked.</div>
-      </div>
+      <DismissibleNote id="rooms-intro" icon="marker" tone="sage" style={{ marginBottom: 14 }}>Your church's bookable spaces and who's using them when. Booking warns you of a <b>clash</b> so the hall is never double-booked.</DismissibleNote>
 
       <div style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 8 }}>Spaces</div>
       <div style={{ display: 'flex', gap: 9, marginBottom: 10 }}>

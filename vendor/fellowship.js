@@ -6376,6 +6376,18 @@
       }
     };
   }
+  function refetchChurchDocs() {
+    for (const hub of _docsHubs.values()) {
+      if (!hub.closer) continue;
+      const c = hub.closer;
+      hub.closer = null;
+      try {
+        c();
+      } catch (e) {
+      }
+      _docsHubOpen(hub);
+    }
+  }
   var _memHubs = /* @__PURE__ */ new Map();
   function _memHubSaveNow(hub) {
     if (hub.saveT) {
@@ -6694,6 +6706,8 @@
   }
   window.Fellowship = {
     relays: loadRelays(),
+    refetchChurchDocs,
+    // force church-doc hubs to re-fetch on app resume (updates without a full restart)
     CANONICAL_RELAY,
     CANONICAL_RELAYS,
     toPub,

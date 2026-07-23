@@ -96,7 +96,7 @@
   .tab[aria-selected="true"] { background:var(--surface); color:var(--ink); box-shadow:var(--shadow-sm); }
   .tab:focus-visible { outline:2px solid var(--clay); outline-offset:2px; }
   [hidden] { display:none !important; }
-  .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:18px; margin-bottom:16px; box-shadow:var(--shadow-sm); }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:14px; margin-bottom:14px; box-shadow:var(--shadow-sm); }
   .card h2 { margin:0 0 12px; font-size:15px; letter-spacing:-.1px; }
   .row { display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:12px; background:var(--surface-2); border:1px solid var(--line); margin-bottom:9px; }
   .row .k { font-size:11px; font-weight:700; letter-spacing:.4px; color:var(--ink-3); text-transform:uppercase; width:110px; flex-shrink:0; }
@@ -170,12 +170,12 @@
   /* a third of a laptop screen is too narrow for an npub row; step down well before that bites */
   @media (max-width:1500px) { .deck3 { column-count:2; } }
   @media (max-width:1000px) { .deck3 { column-count:1; } }
-  .card-head { display:flex; align-items:flex-start; gap:12px; margin-bottom:16px; }
+  .card-head { display:flex; align-items:flex-start; gap:11px; margin-bottom:11px; }
   .hd-ic { width:34px; height:34px; border-radius:10px; background:var(--surface-2); color:var(--clay);
            display:flex; align-items:center; justify-content:center; flex-shrink:0; }
   .hd-ic svg { width:18px; height:18px; display:block; }
   .card-titles { flex:1; min-width:0; }
-  .card-title { font-weight:700; font-size:16px; letter-spacing:-.2px; }
+  .card-title { font-weight:700; font-size:15px; letter-spacing:-.2px; }
   .card-desc { font-size:13px; color:var(--ink-2); line-height:1.45; margin-top:3px; }
   .apply-tag { font-size:11px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:var(--sage-ink);
                display:inline-flex; align-items:center; gap:5px; flex-shrink:0; margin-top:3px; }
@@ -191,7 +191,7 @@
              box-shadow:inset 0 0 0 1.4px var(--line); background:var(--surface); color:var(--ink-2); flex-shrink:0; padding:0; }
   .iconbtn svg { width:14px; height:14px; display:block; }
   .iconbtn:hover:not(:disabled) { box-shadow:inset 0 0 0 1.4px var(--ink-2); transform:none; }
-  .field { margin-bottom:14px; }
+  .field { margin-bottom:11px; }
   .field-l { font-size:11.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:var(--ink-3); margin-bottom:7px; }
   .input-row { display:flex; gap:10px; align-items:stretch; }
   .input-row input { flex:1; min-width:0; }
@@ -206,7 +206,7 @@
                background:#fff; box-shadow:var(--shadow-sm); transition:left .18s var(--ease); }
   .sw:checked { background:var(--sage); }
   .sw:checked::after { left:21px; }
-  .toggle-row { display:flex; align-items:center; gap:13px; padding:13px 0; border-top:1px solid var(--line-2); }
+  .toggle-row { display:flex; align-items:center; gap:12px; padding:10px 0; border-top:1px solid var(--line-2); }
   .toggle-row:first-of-type { border-top:none; }
   .toggle-main { flex:1; min-width:0; }
   .toggle-t { font-size:14px; font-weight:700; }
@@ -470,8 +470,8 @@
         <span class="apply-tag"><span class="d"></span>Changes apply immediately</span>
       </div>
       <div class="ch-toggles">
-        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Invite-only</div><div class="toggle-s">New churches can't register themselves — you add each one. When off, a church can add itself from its Steward console.</div></div><input type="checkbox" class="sw" id="t-inviteonly" aria-label="Invite-only"></div>
-        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Offer to host other churches</div><div class="toggle-s">Let congregations without their own server find this relay with “Auto-find relays” and ask to join.</div></div><input type="checkbox" class="sw" id="t-offer" aria-label="Offer to host other churches"></div>
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Invite-only</div><div class="toggle-s">You add each church. Off = a church can add itself from its Steward console.</div></div><input type="checkbox" class="sw" id="t-inviteonly" aria-label="Invite-only"></div>
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Offer to host other churches</div><div class="toggle-s">Churches without a server can find this relay via “Auto-find relays” and ask to join.</div></div><input type="checkbox" class="sw" id="t-offer" aria-label="Offer to host other churches"></div>
       </div>
       <div class="ch-add">
         <input class="mono" id="addNpub" placeholder="Paste an npub to add a church…" autocomplete="off" spellcheck="false" aria-label="Add a church by npub" />
@@ -492,14 +492,14 @@
         </div>
         <div class="save-note" id="servesDirtyNote" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v4M12 17.5v.5"></path></svg> You have unsaved changes</div>
         <div class="ch-toggles" style="border-bottom:none; padding-bottom:0">
-          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">The web app</div><div class="toggle-s">A copy of TrinityOne served from this box, so your church can use it at your own web address.</div></div><input type="checkbox" class="sw" id="t-app" aria-label="Serve the web app"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">The web app</div><div class="toggle-s">Serve TrinityOne from this box at your own web address.</div></div><input type="checkbox" class="sw" id="t-app" aria-label="Serve the web app"></div>
           <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Bible &amp; dictionary downloads</div><div class="toggle-s">Members download study modules from this box.</div></div><input type="checkbox" class="sw" id="t-modules" aria-label="Serve Bible downloads"></div>
           <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Audio Bibles &amp; media</div><div class="toggle-s">The audio-Bible / podcast proxy. Uses the most bandwidth.</div></div><input type="checkbox" class="sw" id="t-audio" aria-label="Serve audio and media"></div>
         </div>
         <div class="field" style="margin-top:16px">
           <div class="field-l">Church web address (optional)</div>
           <input id="t-appurl" placeholder="https://yourchurch.org" spellcheck="false" autocapitalize="none" aria-label="Church web address" />
-          <div class="hint">Where members reach the app. Point that domain's DNS at this box and the app, joining codes and handles all read as yours.</div>
+          <div class="hint">Point your domain's DNS at this box — the app, joining codes and handles read as yours.</div>
         </div>
         <div class="field">
           <div class="field-l">Storage limits <span id="mediaUsed" style="text-transform:none; letter-spacing:0"></span></div>
@@ -507,7 +507,7 @@
             <input id="t-mediacap" type="number" min="0" step="1" placeholder="Total GB (0 = unlimited)" aria-label="Total media storage limit in GB" />
             <input id="t-churchcap" type="number" min="0" step="1" placeholder="Per church GB (0 = unlimited)" aria-label="Per-church storage limit in GB" />
           </div>
-          <div class="hint">For a relay hosting several churches — cap total media, and optionally per church. Uploads past a limit are refused; messages are unaffected.</div>
+          <div class="hint">Cap total media (and optionally per church). Over-limit uploads are refused; messages unaffected.</div>
         </div>
         <div class="save-footer" id="servesFooter" style="display:none">
           <span class="sf-text" id="servesCount">Changes waiting</span>
