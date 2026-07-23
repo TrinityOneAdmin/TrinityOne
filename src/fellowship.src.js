@@ -471,9 +471,16 @@ function _docsHubOpen(hub) {
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return;
       }
       if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(cp, e); return; }
-      // the care key can arrive AFTER the needs it unlocks — re-emit so a card already rendered as
-      // "details hidden" opens without waiting for a reload
-      if (d === CAREKEY_D + cp) { _ingestCareKey(cp, e); for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) {} } return; }
+      // The care key can arrive AFTER the needs it unlocks. subscribeCareNeeds decodes each need AT INGEST
+      // and its onroster() only re-filters those already-decoded entries — so a card rendered "details
+      // hidden" before the key landed stayed sealed for the session. Replay the buffered CARE_D need events
+      // through onevent so they re-parse WITH the key now present (mirrors the L7 group-key replay above).
+      if (d === CAREKEY_D + cp) {
+        _ingestCareKey(cp, e);
+        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(CARE_D)) { for (const h of [...hub.handlers]) { try { h.onevent(e2, d2); } catch (err) {} } } }
+        for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) {} }
+        return;
+      }
       for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { console.error(err); } }
     },
     oneose() {

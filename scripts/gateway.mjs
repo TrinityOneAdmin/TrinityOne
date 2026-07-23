@@ -980,6 +980,7 @@ function clearDerivedMaps() {
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
   for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER]) { try { s.clear(); } catch {} }
 }
+let _churchHydratePending = false;   // coalesce writeChurches's whole-corpus rehydrate across rapid saves
 function hydrateMaps() {
   if (!CHURCH_PUBS.size) return;
   clearDerivedMaps();                                  // H1: drop residue from churches that are no longer configured
@@ -2146,7 +2147,9 @@ function serveStatic(req, res) {
       writeFileSync(tmp, JSON.stringify({ churches: withMeta, envMigrated: true }, null, 2) + '\n');
       renameSync(tmp, CHURCH_FILE);
       loadChurches();
-      setImmediate(() => { try { hydrateMaps(); } catch (e) { console.error('[config] hydrateMaps failed', e); } });
+      // Coalesce the whole-corpus rehydrate: if several saves land in quick succession, run it ONCE after
+      // they settle rather than one full scan per save.
+      if (!_churchHydratePending) { _churchHydratePending = true; setImmediate(() => { _churchHydratePending = false; try { hydrateMaps(); } catch (e) { console.error('[config] hydrateMaps failed', e); } }); }
     };
     if (req.method === 'GET') {
       if (!isAdmin) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }   // don't leak the church list
@@ -2219,9 +2222,14 @@ function serveStatic(req, res) {
             // without a ceiling anyone could append churches forever and bloat the write policy.
             // The admin token bypasses this (real onboarding); a new self-register past the cap is refused.
             if (!isAdmin && !existing && list.length >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end(JSON.stringify({ error: 'registration capacity reached — contact the relay operator' })); return; }
-            if (existing) { if (name) existing.name = name; }
-            else { list.push({ npub: npubEncode(hex), name, by: isAdmin ? 'operator' : 'self', at: Math.floor(Date.now() / 1000) }); }
-            writeChurches(list);
+            // Only rewrite + rehydrate when something actually changed. A re-announce of an already-registered
+            // church with no new name is a no-op — and writeChurches ends with a whole-corpus rehydrate, so
+            // without this an attacker who self-registered once could loop signed re-announces of the same key
+            // and force a church.json rewrite + structure-doc rescan on each (Fable audit #1).
+            let changed = false;
+            if (existing) { if (name && existing.name !== name) { existing.name = name; changed = true; } }
+            else { list.push({ npub: npubEncode(hex), name, by: isAdmin ? 'operator' : 'self', at: Math.floor(Date.now() / 1000) }); changed = true; }
+            if (changed) writeChurches(list);
             res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: isAdmin ? list : undefined }));
             return;
           }

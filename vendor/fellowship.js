@@ -6272,6 +6272,17 @@
         }
         if (d === CAREKEY_D + cp) {
           _ingestCareKey(cp, e);
+          for (const e2 of hub.buf.values()) {
+            const d2 = _dtag(e2);
+            if (d2.startsWith(CARE_D)) {
+              for (const h of [...hub.handlers]) {
+                try {
+                  h.onevent(e2, d2);
+                } catch (err) {
+                }
+              }
+            }
+          }
           for (const h of [...hub.handlers]) {
             try {
               h.onroster && h.onroster();

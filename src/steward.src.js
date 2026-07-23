@@ -455,6 +455,8 @@ async function publish(evt) {
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
     return false;   // total failure — every relay rejected; callers that await the result can surface it
   }
+  // a write landed → the relays are accepting our posts, so any "a relay is refusing us" alarm can clear
+  try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
   return evt;
 }
 // resolve the signing key for a chosen publishing identity. asPub === church pub (or empty) -> church key;

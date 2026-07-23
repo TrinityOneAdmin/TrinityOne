@@ -11030,6 +11030,10 @@ zoo`.split("\n");
       }
       return false;
     }
+    try {
+      window.dispatchEvent(new CustomEvent("steward-publish-ok", { detail: { evt } }));
+    } catch (x) {
+    }
     return evt;
   }
   function skFor(asPub) {
