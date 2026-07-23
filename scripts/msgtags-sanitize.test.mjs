@@ -50,10 +50,16 @@ test('an unknown icon falls back to the default', () => {
   assert.equal(out[0].icon, 'sparkle');
 });
 
-test('reserved ids (prayer + built-in card kinds) are dropped', () => {
-  for (const id of ['prayer', 'verse', 'devotional', 'note', 'poll']) {
+test('reserved card-kind ids are dropped', () => {
+  for (const id of ['verse', 'devotional', 'note', 'poll']) {
     assert.equal(sanitize([{ id, label: 'x' }]).length, 0, `${id} must be rejected`);
   }
+});
+
+test('prayer is NOT reserved — it is the editable default tag', () => {
+  const out = sanitize([{ id: 'prayer', label: 'Prayer request', icon: 'pray', accent: 'gold' }]);
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0], { id: 'prayer', label: 'Prayer request', icon: 'pray', accent: 'gold' });
 });
 
 test('empty / whitespace labels are dropped', () => {

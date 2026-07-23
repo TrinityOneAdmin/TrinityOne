@@ -3709,16 +3709,18 @@ window.DashSermons = DashSermons;
 // the church add its own — Testimony, Praise, … — published as one church-signed doc. Icon/accent come from
 // fixed allowlists (no free-text CSS/icons). A tag's id is STABLE once saved, so renaming its label never
 // orphans messages already flagged with it.
-const CHATTAG_ICONS = ['sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
+const CHATTAG_ICONS = ['pray', 'sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
 const CHATTAG_ACCENTS = [['gold', 'var(--gold)'], ['sage', 'var(--sage)'], ['clay', 'var(--clay)'], ['sky', '#5360D6'], ['plum', '#C24B7A'], ['teal', '#2E8B8B']];
 const chatTagCss = (a) => (CHATTAG_ACCENTS.find(x => x[0] === a) || CHATTAG_ACCENTS[2])[1];
+const CHATTAG_PRAYER = { id: 'prayer', label: 'Prayer request', icon: 'pray', accent: 'gold' };
 function DashChatTagsPanel({ church }) {
   const [tags, setTags] = React.useState(null);   // null = still loading; else the editable list
   const [msg, setMsg] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   React.useEffect(() => {
-    if (!window.Steward.subscribeMessageTags) { setTags([]); return; }
-    return window.Steward.subscribeMessageTags(t => setTags(t));
+    if (!window.Steward.subscribeMessageTags) { setTags([{ ...CHATTAG_PRAYER }]); return; }
+    // t === null → this church has NO tags doc yet: seed the default (Prayer request), editable + removable.
+    return window.Steward.subscribeMessageTags(t => setTags(t === null ? [{ ...CHATTAG_PRAYER }] : t));
   }, []);
   const list = tags || [];
   const setRow = (i, patch) => setTags(list.map((t, j) => (j === i ? { ...t, ...patch } : t)));
@@ -3735,13 +3737,7 @@ function DashChatTagsPanel({ church }) {
   const iconBtn = (active) => ({ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, background: active ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface-2)', border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)') });
   return (
     <Panel title="Chat message tags">
-      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Members can flag a message so it stands out — a <b>Prayer request</b> is built in. Add your own, like Testimony or Praise, and members can flag those too. Up to {6} tags.</div>
-
-      {/* built-in, not editable */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 13, border: '1px solid color-mix(in oklab, var(--gold) 32%, var(--line))', background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', marginBottom: 12 }}>
-        <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: 'var(--gold)' }}><Icon name="pray" size={17} color="var(--gold)" /></div>
-        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Prayer request</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Built in — always available</div></div>
-      </div>
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Members can flag a message so it stands out. <b>Prayer request</b> is here by default — rename it, recolour it, or remove it if your church doesn’t use it. Add your own too, like Testimony or Praise. Up to {6} tags.</div>
 
       {tags === null ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Loading…</div> : (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

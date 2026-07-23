@@ -10578,10 +10578,10 @@ zoo`.split("\n");
   var SELFREG_KEY = "trinityone.steward.selfreg";
   var FUND_D = "trinityone/fund:";
   var MSGTAGS_D = "trinityone/msgtags";
-  var MSGTAG_ICONS = ["sparkle", "heart", "flame", "hand", "gift", "music"];
+  var MSGTAG_ICONS = ["pray", "sparkle", "heart", "flame", "hand", "gift", "music"];
   var MSGTAG_ACCENTS = ["gold", "sage", "clay", "sky", "plum", "teal"];
   var MSGTAG_MAX = 6;
-  var MSGTAG_RESERVED = ["prayer", "verse", "devotional", "note", "poll"];
+  var MSGTAG_RESERVED = ["verse", "devotional", "note", "poll"];
   function _msgTagSlug(s) {
     return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
   }
@@ -11657,6 +11657,8 @@ zoo`.split("\n");
       const content = JSON.stringify({ tags: clean3 });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then(() => clean3);
     },
+    // cb(tags) for the church's configured tags, or cb(null) when NO tags doc exists yet — the editor then
+    // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
     subscribeMessageTags(cb) {
       let bestTs = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
@@ -11672,6 +11674,7 @@ zoo`.split("\n");
           cb(tags);
         },
         oneose() {
+          if (!bestTs) cb(null);
         }
       });
       return () => {

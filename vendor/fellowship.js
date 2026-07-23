@@ -5770,9 +5770,9 @@
   }
   var MEALS_SETTINGS_D = "trinityone/meals-settings";
   var MSGTAGS_D = "trinityone/msgtags";
-  var MSGTAG_ICONS = ["sparkle", "heart", "flame", "hand", "gift", "music"];
+  var MSGTAG_ICONS = ["pray", "sparkle", "heart", "flame", "hand", "gift", "music"];
   var MSGTAG_ACCENTS = ["gold", "sage", "clay", "sky", "plum", "teal"];
-  var MSGTAG_RESERVED = ["prayer", "verse", "devotional", "note", "poll"];
+  var MSGTAG_RESERVED = ["verse", "devotional", "note", "poll"];
   function _msgTagSlug(s) {
     return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
   }
@@ -8127,10 +8127,12 @@
     // The church's steward-defined chat message tags (Testimony, Praise, …). cb([{ id, label, icon, accent }]).
     // Newest-wins; the relay write-gates the doc to the church/stewards, so trust what it serves. Sanitized on
     // read (allowlisted icon/accent, reserved ids dropped) so a hostile relay/forged doc can't inject anything.
+    // cb(tags) with the church's configured tags, or cb(null) when the church has NO tags doc — the caller
+    // then falls back to the built-in default (Prayer request), so a church that never touched tags still has it.
     subscribeMessageTags(churchNpub, cb) {
       const pubk = toPub(churchNpub);
       if (!pubk) {
-        cb([]);
+        cb(null);
         return () => {
         };
       }
@@ -8145,7 +8147,11 @@
           } catch {
           }
           cb(tags);
+        },
+        oneose() {
+          if (!bestTs) cb(null);
         }
+        // no doc → signal "use the default", never leave the caller hanging
       });
     },
     // Open care needs. Authored by the church, a steward, or a care-team admin — all relay-enforced, so a

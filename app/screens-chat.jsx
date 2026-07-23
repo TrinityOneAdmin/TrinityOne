@@ -626,25 +626,8 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
     );
   }
 
-  if (m.kind === 'prayer') {
-    return (
-      <Row me={me} m={m} ctx={ctx} mod={mod}>
-        <div style={{ maxWidth: 280 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', margin: '0 0 4px 2px' }}>
-            <Icon name="pray" size={12} color="var(--gold)" /> PRAYER REQUEST</div>
-          <div style={{ borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
-            border: me ? 'none' : '1.5px solid color-mix(in oklab, var(--gold) 38%, var(--line))', boxShadow: 'var(--shadow)',
-            borderBottomRightRadius: me ? 5 : 18, borderBottomLeftRadius: me ? 18 : 5 }}>
-            <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty' }}>{m.text}</p>
-          </div>
-        </div>
-        {react}
-      </Row>
-    );
-  }
-
   if (m.kind === 'flagged') {
-    const def = _MSGTAGS.find(t => t.id === m.flag);
+    const def = resolveFlag(m.flag);
     if (def) {
       const ac = flagCss(def.accent);
       return (
@@ -843,7 +826,11 @@ function searchableText(e) {
 let _MSGTAGS = [];
 const MSGTAG_CSS = { gold: 'var(--gold)', sage: 'var(--sage)', clay: 'var(--clay)', sky: '#5360D6', plum: '#C24B7A', teal: '#2E8B8B' };
 const flagCss = (accent) => MSGTAG_CSS[accent] || 'var(--clay)';
-const BUILTIN_KTAGS = ['verse', 'devotional', 'note', 'prayer', 'poll'];
+// Prayer request is the default tag — editable/removable by the church, but always resolvable so an old
+// prayer message (or a church that never configured tags) still renders as a prayer.
+const MSGTAG_PRAYER = { id: 'prayer', label: 'Prayer request', icon: 'pray', accent: 'gold' };
+const resolveFlag = (id) => _MSGTAGS.find(t => t.id === id) || (id === 'prayer' ? MSGTAG_PRAYER : null);
+const BUILTIN_KTAGS = ['verse', 'devotional', 'note', 'poll'];   // real card kinds; 'prayer' is now a flag
 function evtToMsg(e) {
   const me = e.pubkey === window.Fellowship.myPubkey;
   const kTag = (e.tags.find(t => t[0] === 'k') || [])[1];
@@ -853,9 +840,8 @@ function evtToMsg(e) {
   if (kTag === 'verse') { try { return { ...base, kind: 'verse', verse: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'devotional') { try { return { ...base, kind: 'devotional', card: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'note') { try { return { ...base, kind: 'note', card: JSON.parse(e.content) }; } catch {} }
-  if (kTag === 'prayer') return { ...base, kind: 'prayer', text: e.content };
   if (kTag === 'poll') { try { return { ...base, kind: 'poll', poll: JSON.parse(e.content) }; } catch {} }
-  if (kTag && !BUILTIN_KTAGS.includes(kTag)) return { ...base, kind: 'flagged', flag: kTag, text: e.content };   // a steward-defined tag; resolved to its label at render
+  if (kTag && !BUILTIN_KTAGS.includes(kTag)) return { ...base, kind: 'flagged', flag: kTag, text: e.content };   // prayer + any steward-defined tag; resolved to its label at render
   return { ...base, text: e.content };
 }
 
@@ -939,15 +925,15 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
   const [replyTo, setReplyTo] = useC(null);      // the message being replied to (or null)
-  const [flag, setFlag] = useC(null);            // the message tag selected for the next send: the built-in Prayer request, a steward-defined one, or null
-  const [flags, setFlags] = useC([]);            // the church's steward-defined chat tags (Testimony, Praise, …)
-  const flagList = [{ id: 'prayer', label: 'Prayer request', icon: 'pray', accent: 'gold' }, ...flags];   // built-in prayer first
+  const [flag, setFlag] = useC(null);            // the message tag selected for the next send (a flag object), or null
+  const [flags, setFlags] = useC(null);          // the church's chat tags: null = not configured (→ default), else the list (may be empty if they removed all)
+  const flagList = flags == null ? [MSGTAG_PRAYER] : flags;   // no doc → the default Prayer request; otherwise exactly what the church set
   useCE(() => {
     const np = ctx.church && ctx.church.npub;
-    if (!np || !(window.Fellowship && window.Fellowship.subscribeMessageTags)) { setFlags([]); _MSGTAGS = []; return; }
-    const cached = lsGet('trinityone.msgtags.' + np, []);
-    setFlags(cached); _MSGTAGS = cached;
-    return window.Fellowship.subscribeMessageTags(np, t => { setFlags(t); _MSGTAGS = t; lsSet('trinityone.msgtags.' + np, t); });
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeMessageTags)) { setFlags(null); _MSGTAGS = []; return; }
+    const cached = lsGet('trinityone.msgtags.' + np, null);
+    setFlags(cached); _MSGTAGS = cached || [];
+    return window.Fellowship.subscribeMessageTags(np, t => { setFlags(t); _MSGTAGS = t || []; lsSet('trinityone.msgtags.' + np, t); });
   }, [ctx.church && ctx.church.npub]);
   const [pollOpen, setPollOpen] = useC(false);   // compact poll composer open?
   const [actionsOpen, setActionsOpen] = useC(false);   // the composer "+" popover (prayer / poll / new event)

@@ -72,10 +72,13 @@ const FUND_D = 'trinityone/fund:';
 // built-in "Prayer request". id/icon/accent are validated against fixed allowlists on write AND read so a
 // forged doc can never inject CSS or an arbitrary icon. `prayer` (+ the built-in card kinds) are reserved.
 const MSGTAGS_D = 'trinityone/msgtags';
-const MSGTAG_ICONS = ['sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
+const MSGTAG_ICONS = ['pray', 'sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
 const MSGTAG_ACCENTS = ['gold', 'sage', 'clay', 'sky', 'plum', 'teal'];
 const MSGTAG_MAX = 6;
-const MSGTAG_RESERVED = ['prayer', 'verse', 'devotional', 'note', 'poll'];
+// 'prayer' is NOT reserved — it's the default tag, editable/removable like any other. Only the built-in
+// message CARD kinds are off-limits (they render as their own bubbles, not as flags).
+const MSGTAG_RESERVED = ['verse', 'devotional', 'note', 'poll'];
+const PRAYER_DEFAULT = { id: 'prayer', label: 'Prayer request', icon: 'pray', accent: 'gold' };
 function _msgTagSlug(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24); }
 function _sanitizeMsgTags(arr) {
   if (!Array.isArray(arr)) return [];
@@ -938,6 +941,8 @@ window.Steward = {
     const content = JSON.stringify({ tags: clean });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MSGTAGS_D], ['t', NET]], content })).then(() => clean);
   },
+  // cb(tags) for the church's configured tags, or cb(null) when NO tags doc exists yet — the editor then
+  // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
   subscribeMessageTags(cb) {
     let bestTs = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
@@ -948,7 +953,7 @@ window.Steward = {
         let tags = []; try { tags = _sanitizeMsgTags(JSON.parse(e.content || '{}').tags); } catch {}
         cb(tags);
       },
-      oneose() {},
+      oneose() { if (!bestTs) cb(null); },
     });
     return () => { try { sub.close(); } catch {} };
   },
