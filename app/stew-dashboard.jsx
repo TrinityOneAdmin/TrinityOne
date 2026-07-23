@@ -220,7 +220,7 @@ function WizShell({ step, title, sub, children, footer }) {
     <div style={{ position: 'absolute', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 42%, transparent)', backdropFilter: 'blur(4px)', animation: 'lumenFade .18s ease both' }}>
       <div className="no-scrollbar" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ padding: '26px 28px 0' }}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4, 5].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '-.4px' }}>{title}</div>
           {sub ? <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 0' }}>{sub}</div> : null}
           <div style={{ marginTop: 18 }}>{children}</div>
@@ -261,6 +261,20 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [vw, setVw] = React.useState(['', '', '']);
   const verified = challenge.length === 3 && challenge.every((pos, i) => vw[i].trim().toLowerCase() === (words[pos] || '').toLowerCase());
   const canContinue = !phrase || (saved && verified);
+  // step 2 — lock the church key on this device with a PIN (optional, strongly recommended)
+  const [pinA, setPinA] = React.useState('');
+  const [pinB, setPinB] = React.useState('');
+  const [pinErr, setPinErr] = React.useState('');
+  const [pinBusy, setPinBusy] = React.useState(false);
+  const savePin = async () => {
+    if (pinBusy) return;
+    if ((pinA || '').length < 6) { setPinErr('Use at least 6 characters — a longer passphrase is stronger.'); return; }
+    if (pinA !== pinB) { setPinErr('The two entries don’t match.'); return; }
+    setPinBusy(true); setPinErr('');
+    let ok = false; try { ok = await window.Steward.setPin(pinA); } catch (e) { ok = false; }
+    setPinBusy(false);
+    if (ok) next(); else setPinErr('Couldn’t set the PIN. Try again.');
+  };
   const doRegister = async () => {
     if (!relayToken.trim()) return;
     setRelayBusy(true); setRelayMsg('Connecting…');
@@ -346,9 +360,26 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   );
 
   if (step === 2) return (
-    <WizShell step={step} title="Create a few spaces" sub="Groups are chat rooms (or announcement channels) your members join. Pick a few to start — you can add or remove any time."
+    <WizShell step={step} title="Lock this device with a PIN" sub="Your 12 words live encrypted on this computer. A PIN adds a second lock: without it, anyone who picks up this laptop could open the console and post as your whole church. You’ll enter it when you open the console."
       footer={<React.Fragment>
         <button onClick={() => setStep(1)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => next()} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip for now</button>
+        <button onClick={savePin} disabled={pinBusy || !pinA || !pinB} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (pinBusy || !pinA || !pinB) ? .5 : 1 }}>{pinBusy ? 'Setting…' : 'Set a PIN'} <Icon name="chevR" size={15} color="#fff" /></button>
+      </React.Fragment>}>
+      <div style={lbl}>PIN OR PASSPHRASE</div>
+      <input type="password" autoFocus value={pinA} onChange={e => { setPinA(e.target.value); setPinErr(''); }} placeholder="At least 6 characters" inputMode="numeric" autoComplete="new-password" style={fld} />
+      <div style={{ ...lbl, marginTop: 12 }}>CONFIRM</div>
+      <input type="password" value={pinB} onChange={e => { setPinB(e.target.value); setPinErr(''); }} onKeyDown={e => { if (e.key === 'Enter') savePin(); }} placeholder="Type it again" inputMode="numeric" autoComplete="new-password" style={fld} />
+      {pinErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', marginTop: 9, fontWeight: 600 }}>{pinErr}</div> : null}
+      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>We can’t reset this for you — if you forget it, restore the church from your 12 words. You can add or change it later in <b>Settings → Security</b>.</div>
+    </WizShell>
+  );
+
+  if (step === 3) return (
+    <WizShell step={step} title="Create a few spaces" sub="Groups are chat rooms (or announcement channels) your members join. Pick a few to start — you can add or remove any time."
+      footer={<React.Fragment>
+        <button onClick={() => setStep(2)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={saveGroups} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{picks.size ? `Create ${picks.size} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="#fff" /></button>
       </React.Fragment>}>
@@ -370,10 +401,10 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     </WizShell>
   );
 
-  if (step === 3) return (
+  if (step === 4) return (
     <WizShell step={step} title="Serving rota" sub="Teams are who serves on a Sunday — welcome, kids, sound, and so on. Start one now if you like, or set this up later in the Rota tab."
       footer={<React.Fragment>
-        <button onClick={() => setStep(2)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        <button onClick={() => setStep(3)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={saveTeam} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{teamName.trim() ? 'Create team & continue' : 'I’ll do this later'} <Icon name="chevR" size={15} color="#fff" /></button>
       </React.Fragment>}>

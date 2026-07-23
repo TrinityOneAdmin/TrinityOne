@@ -10,10 +10,16 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   const [words, setWords] = useId([]);
   const [ack, setAck] = useId(false);
   const [copied, setCopied] = useId(false);
-  const [checkIdx, setCheckIdx] = useId([]);   // the two word positions we quiz
-  const [answers, setAnswers] = useId(['', '']);
+  const [checkIdx, setCheckIdx] = useId([]);   // the three word positions we quiz
+  const [answers, setAnswers] = useId(['', '', '']);
   const [checkErr, setCheckErr] = useId('');
-  useIdE(() => { if (open) { setStep(0); setName(''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '']); setCheckErr(''); } }, [open]);
+  // PIN (step 3): optional but strongly urged — encrypts the identity at rest so a lost/borrowed/taken phone
+  // is just a locked box. TrinityIdentity.setPin does the crypto; here we collect + confirm it.
+  const [pin, setPinVal] = useId('');
+  const [pin2, setPin2] = useId('');
+  const [pinErr, setPinErr] = useId('');
+  const [pinBusy, setPinBusy] = useId(false);
+  useIdE(() => { if (open) { setStep(0); setName(''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '', '']); setCheckErr(''); setPinVal(''); setPin2(''); setPinErr(''); setPinBusy(false); } }, [open]);
   // fetch the member's own 12 words when we reach the back-up step. The secure store can answer empty for a
   // moment right after boot, so retry until we get a full phrase rather than getting stuck on "Preparing…".
   useIdE(() => {
@@ -32,11 +38,23 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
     return () => { cancelled = true; };
   }, [step]);
   // pick two distinct positions to confirm when we reach the check step
-  useIdE(() => { if (step === 2 && checkIdx.length === 0 && words.length >= 6) { const n = words.length; const a = Math.floor(Math.random() * n); let b = Math.floor(Math.random() * n), g = 0; while (b === a && g++ < 30) b = Math.floor(Math.random() * n); setCheckIdx([a, b].sort((x, y) => x - y)); setAnswers(['', '']); setCheckErr(''); } }, [step, words]);
+  useIdE(() => { if (step === 2 && checkIdx.length === 0 && words.length >= 6) { const n = words.length; const idx = []; let g = 0; while (idx.length < 3 && g++ < 200) { const r = Math.floor(Math.random() * n); if (!idx.includes(r)) idx.push(r); } setCheckIdx(idx.sort((x, y) => x - y)); setAnswers(['', '', '']); setCheckErr(''); } }, [step, words]);
   if (!open) return null;
   const finish = () => onSave({ name: name.trim(), avatar: av });
-  const canConfirm = answers[0] && answers[0].trim() && answers[1] && answers[1].trim();
-  const confirmWords = () => { const ok = checkIdx.length === 2 && checkIdx.every((idx, i) => (answers[i] || '').trim().toLowerCase() === (words[idx] || '').toLowerCase()); if (ok) finish(); else setCheckErr('That’s not quite right — check your written copy and try again.'); };
+  const canConfirm = checkIdx.length === 3 && checkIdx.every((_, i) => (answers[i] || '').trim());
+  const confirmWords = () => { const ok = checkIdx.length === 3 && checkIdx.every((idx, i) => (answers[i] || '').trim().toLowerCase() === (words[idx] || '').toLowerCase()); if (ok) setStep(3); else setCheckErr('That’s not quite right — check your written copy and try again.'); };
+  const savePin = async () => {
+    if (pin.length < 6) { setPinErr('Use at least 6 digits.'); return; }
+    if (pin !== pin2) { setPinErr('The two PINs don’t match.'); return; }
+    setPinBusy(true); setPinErr('');
+    try {
+      const ID = window.TrinityIdentity;
+      const ok = ID && ID.setPin ? await ID.setPin(pin) : false;
+      if (ok) finish();
+      else setPinErr('Couldn’t set the PIN right now — you can add one later in Settings.');
+    } catch (e) { setPinErr('Couldn’t set the PIN — you can add one later in Settings.'); }
+    setPinBusy(false);
+  };
 
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 70, background: 'var(--paper)', display: 'flex', flexDirection: 'column',
@@ -91,12 +109,12 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
           <span style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>I’ve written down my 12 words and stored them somewhere safe.</span>
         </label>
       </div>
-      </React.Fragment>) : (<React.Fragment>
+      </React.Fragment>) : step === 2 ? (<React.Fragment>
       {/* STEP 2 — confirm a couple of words */}
       <div style={{ padding: '60px 22px 12px', maxWidth: 480, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="shield" size={28} /></div></div>
         <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Quick check</h1>
-        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 20px', maxWidth: 360, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Just to be sure you’ve got them — type these two words from your written copy.</p>
+        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 20px', maxWidth: 360, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Just to be sure you’ve got them — type these three words from your written copy.</p>
         {checkIdx.map((idx, i) => (
           <div key={idx} style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' }}>WORD #{idx + 1}</label>
@@ -105,6 +123,19 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
         ))}
         {checkErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', margin: '2px 2px 8px', lineHeight: 1.4 }}>{checkErr}</div> : null}
         <button onClick={() => setStep(1)} style={{ background: 'none', border: 'none', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '6px 2px', fontFamily: 'var(--font-ui)' }}>← Show my words again</button>
+      </div>
+      </React.Fragment>) : (<React.Fragment>
+      {/* STEP 3 — lock the phone with a PIN (optional, strongly urged) */}
+      <div style={{ padding: '60px 22px 12px', maxWidth: 480, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}><Icon name="shield" size={28} /></div></div>
+        <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Lock this phone with a PIN</h1>
+        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Without a PIN, <b>anyone who picks up your phone can read your messages and act as you</b>. With one, a lost, borrowed, or taken phone is just a locked box — your account can’t be opened without it. <b>We strongly recommend setting one.</b></p>
+        <input type="password" inputMode="numeric" value={pin} onChange={e => { setPinVal(e.target.value); setPinErr(''); }} autoFocus placeholder="Choose a PIN (6+ digits)"
+          style={{ width: '100%', boxSizing: 'border-box', height: 52, marginBottom: 12, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
+        <input type="password" inputMode="numeric" value={pin2} onChange={e => { setPin2(e.target.value); setPinErr(''); }} placeholder="Type it again to confirm"
+          style={{ width: '100%', boxSizing: 'border-box', height: 52, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
+        {pinErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', margin: '10px 2px 0', lineHeight: 1.4 }}>{pinErr}</div> : null}
+        <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 2px 0' }}>You’ll enter this each time you open the app. It never leaves your phone, and no one — not even us — can reset it.</div>
       </div>
       </React.Fragment>)}
       </div>
@@ -117,9 +148,12 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
           <button onClick={onSkip} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip setup for now</button>
         </React.Fragment>) : step === 1 ? (<React.Fragment>
           <button onClick={() => setStep(2)} disabled={!ack} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: ack ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
-          <button onClick={finish} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>I’ll back these up later</button>
+          <button onClick={() => setStep(3)} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>I’ll back these up later</button>
+        </React.Fragment>) : step === 2 ? (<React.Fragment>
+          <button onClick={confirmWords} disabled={!canConfirm} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: canConfirm ? 'pointer' : 'default', marginBottom: 10, background: canConfirm ? 'var(--clay)' : 'var(--surface-2)', color: canConfirm ? '#fff' : 'var(--ink-3)', boxShadow: canConfirm ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>
+          <button onClick={() => setStep(3)} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip for now</button>
         </React.Fragment>) : (<React.Fragment>
-          <button onClick={confirmWords} disabled={!canConfirm} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: canConfirm ? 'pointer' : 'default', marginBottom: 10, background: canConfirm ? 'var(--clay)' : 'var(--surface-2)', color: canConfirm ? '#fff' : 'var(--ink-3)', boxShadow: canConfirm ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Confirm &amp; finish</button>
+          <button onClick={savePin} disabled={pinBusy || pin.length < 6 || !pin2} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (pinBusy || pin.length < 6 || !pin2) ? 'default' : 'pointer', marginBottom: 10, background: (pinBusy || pin.length < 6 || !pin2) ? 'var(--surface-2)' : 'var(--clay)', color: (pinBusy || pin.length < 6 || !pin2) ? 'var(--ink-3)' : '#fff', boxShadow: (pinBusy || pin.length < 6 || !pin2) ? 'none' : 'var(--shadow)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{pinBusy ? 'Setting…' : 'Set a PIN'}</button>
           <button onClick={finish} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip for now</button>
         </React.Fragment>)}
         </div>
@@ -128,6 +162,42 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   );
 }
 window.IdentityOnboarding = IdentityOnboarding;
+
+// Front-door unlock gate: shown over the whole app on open when a PIN is set and this session isn't unlocked
+// yet. The identity is encrypted at rest (setPin dropped the plaintext), so a lost/borrowed/taken phone is
+// inert here. "Read the Bible" is an escape that needs no identity (so a forgotten PIN never bricks the phone
+// — the church, messages and identity stay locked, only the offline Bible opens).
+function PinUnlockGate({ onUnlocked, onReadBible }) {
+  const [pin, setPin] = useId('');
+  const [err, setErr] = useId('');
+  const [busy, setBusy] = useId(false);
+  const [forgot, setForgot] = useId(false);
+  const tryUnlock = async () => {
+    if (!pin || busy) return;
+    setBusy(true); setErr('');
+    const ID = window.TrinityIdentity;
+    let ok = false; try { ok = ID && ID.unlock ? await ID.unlock(pin) : false; } catch (e) { ok = false; }
+    setBusy(false);
+    if (ok) { try { window.dispatchEvent(new CustomEvent('trinity-identity-lock')); } catch (e) {} onUnlocked && onUnlocked(); }
+    else { setErr('Wrong PIN. Try again.'); setPin(''); }
+  };
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'var(--paper)', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center', padding: '24px', animation: 'trinityFade .3s ease both' }}>
+      <div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)', marginBottom: 18 }}><Icon name="lock" size={28} /></div>
+      <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, margin: '0 0 8px', textAlign: 'center' }}>Enter your PIN</h1>
+      <p style={{ fontSize: 14.5, color: 'var(--ink-2)', textAlign: 'center', margin: '0 0 22px', maxWidth: 300, lineHeight: 1.5 }}>Your account is locked on this phone. Enter your PIN to open it.</p>
+      <input type="password" inputMode="numeric" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
+        placeholder="PIN" style={{ width: 'min(320px, 100%)', boxSizing: 'border-box', height: 54, textAlign: 'center', letterSpacing: '.3em', border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', fontSize: 20, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+      {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
+      <button onClick={tryUnlock} disabled={!pin || busy} style={{ width: 'min(320px, 100%)', marginTop: 18, padding: 15, borderRadius: 14, border: 'none', cursor: (!pin || busy) ? 'default' : 'pointer', background: (!pin || busy) ? 'var(--surface-2)' : 'var(--clay)', color: (!pin || busy) ? 'var(--ink-3)' : '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{busy ? 'Unlocking…' : 'Unlock'}</button>
+      <button onClick={() => onReadBible && onReadBible()} style={{ marginTop: 16, background: 'none', border: 'none', color: 'var(--ink-2)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Read the Bible without unlocking →</button>
+      <button onClick={() => setForgot(f => !f)} style={{ marginTop: 6, background: 'none', border: 'none', color: 'var(--ink-3)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Forgot your PIN?</button>
+      {forgot ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: '10px auto 0', maxWidth: 300, lineHeight: 1.5 }}>Your PIN can’t be reset — not even by us. If you’ve forgotten it, reinstall the app and restore your account with your 12 words.</div> : null}
+    </div>
+  );
+}
+window.PinUnlockGate = PinUnlockGate;
 
 // ════════ Start a new identity (destructive — gated by a safety step) ════════
 // Reuses the warm name+avatar moment from onboarding, but FIRST makes the member
