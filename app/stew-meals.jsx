@@ -107,9 +107,9 @@ function DashMealsPanel({ church }) {
   );
   return (
     <Panel title="Practical care">
-      <div style={{ display: 'flex', gap: 10, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, transparent)', marginBottom: 14 }}>
-        <Icon name="heart" size={17} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Meals, rides, errands and visits — when someone in the church is unwell, grieving, or has a new baby. You open a need; members fill the dates. <b>Practical</b> showing-up is the kind of care a phone push can't do.</div>
+      <div style={{ display: 'flex', gap: 9, padding: '9px 11px', borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, transparent)', marginBottom: 12 }}>
+        <Icon name="heart" size={16} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Meals, rides, errands and visits when someone’s unwell, grieving, or has a new baby. You open a need; members fill the dates.</div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, border: '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -119,28 +119,28 @@ function DashMealsPanel({ church }) {
         {toggleBtn(on, () => setAll({ enabled: !on }), 'Toggle practical care')}
       </div>
       {on ? <React.Fragment>
-        <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 13, border: '1px solid var(--line)' }}>
+        <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 12, border: '1px solid var(--line)' }}>
           <div style={mealsLbl}>WHO SEES OPEN NEEDS?</div>
           <div style={{ display: 'flex', gap: 8 }}>
             {[['all', 'The whole church'], ['team', 'Only the care team']].map(([k, lbl]) => (
-              <button key={k} onClick={() => setAll({ visibility: k })} style={{ flex: 1, padding: '10px 12px', borderRadius: 10, border: '1px solid var(--line)', background: s.visibility === k ? 'var(--clay)' : 'var(--surface)', color: s.visibility === k ? '#fff' : 'var(--ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{lbl}</button>
+              <button key={k} onClick={() => setAll({ visibility: k })} style={{ flex: 1, padding: '9px 12px', borderRadius: 10, border: '1px solid var(--line)', background: s.visibility === k ? 'var(--clay)' : 'var(--surface)', color: s.visibility === k ? '#fff' : 'var(--ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{lbl}</button>
             ))}
           </div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>{s.visibility === 'team' ? 'Open needs are visible only to members of the care-team group below — kinder for congregations where guilt-pressure to help is the bigger concern.' : 'Open needs are visible to every member — best for turnout when the church has the bandwidth to carry it.'}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>{s.visibility === 'team' ? 'Only the care-team group below sees needs — gentler where guilt-pressure is the concern.' : 'Every member sees needs — best for turnout.'}</div>
           {s.visibility === 'team' && (!s.adminGroupId || teamPeople.length === 0) ? <div style={{ marginTop: 8, padding: '9px 11px', borderRadius: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45 }}>⚠ {s.adminGroupId ? 'Your care team has no members yet' : 'No care team is selected below'} — with this setting <b>no one will see open needs</b>. {s.adminGroupId ? 'Tap “Members” to add people' : 'Pick or create a care team'}, or switch to “The whole church.”</div> : null}
         </div>
-        <div style={{ marginTop: 10, padding: '12px 14px', borderRadius: 13, border: '1px solid var(--line)' }}>
+        <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 12, border: '1px solid var(--line)' }}>
           <div style={mealsLbl}>WHO CAN OPEN A NEED?</div>
           <div style={{ display: 'flex', gap: 8 }}>
             {[['steward', 'Stewards + care team'], ['member', 'Any member']].map(([k, lbl]) => (
-              <button key={k} onClick={() => setAll({ openedBy: k })} style={{ flex: 1, padding: '10px 12px', borderRadius: 10, border: '1px solid var(--line)', background: s.openedBy === k ? 'var(--clay)' : 'var(--surface)', color: s.openedBy === k ? '#fff' : 'var(--ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{lbl}</button>
+              <button key={k} onClick={() => setAll({ openedBy: k })} style={{ flex: 1, padding: '9px 12px', borderRadius: 10, border: '1px solid var(--line)', background: s.openedBy === k ? 'var(--clay)' : 'var(--surface)', color: s.openedBy === k ? '#fff' : 'var(--ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{lbl}</button>
             ))}
           </div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>{s.openedBy === 'member' ? 'Members can open a need for themselves or for someone else — useful where pride is the bigger obstacle than triage.' : 'Stewards (and the care-team group below) open needs — keeps dignity + triage in pastoral hands.'}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>{s.openedBy === 'member' ? 'Anyone can open a need — for themselves or someone else.' : 'Stewards + the care team open needs — keeps triage pastoral.'}</div>
         </div>
-        <div style={{ marginTop: 10, padding: '12px 14px', borderRadius: 13, border: '1px solid var(--line)' }}>
+        <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 12, border: '1px solid var(--line)' }}>
           <div style={mealsLbl}>CARE-TEAM GROUP</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Members of this group can also open and manage needs (not just stewards). Pick an existing group, or create a care team and choose who’s on it.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>This group can also open and manage needs. Pick an existing group, or create a care team.</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <select value={s.adminGroupId || ''} onChange={e => setAll({ adminGroupId: e.target.value })} style={{ ...mealsFld, flex: 1 }}>
               <option value="">— None (stewards only) —</option>
