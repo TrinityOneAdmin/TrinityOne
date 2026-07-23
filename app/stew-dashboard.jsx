@@ -2998,10 +2998,7 @@ function DashMembers() {
             ))}
           </div>
         ) : null}
-        <div style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 22%, var(--line))', marginBottom: 10, flexShrink: 0 }}>
-          <Icon name="shield" size={16} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b> — they’ll only see child-safe groups, and a private message between a child and an adult is blocked unless that adult is <b>cleared for youth</b> (or that adult is the child’s linked <b>parent</b>). Clear only adults on your church’s cleared-worker list. This works alongside — not instead of — your safeguarding policy.</div>
-        </div>
+        <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b> — they’ll only see child-safe groups, and a private message between a child and an adult is blocked unless that adult is <b>cleared for youth</b> (or that adult is the child’s linked <b>parent</b>). Clear only adults on your church’s cleared-worker list. This works alongside — not instead of — your safeguarding policy.</DismissibleNote>
         <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {activeM.map(m => memberRow(m, false))}
           {activeM.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>{ql ? 'No members match “' + q + '”.' : 'No active members in the last ' + INACTIVE_DAYS + ' days.'}</div> : null}
@@ -3113,10 +3110,7 @@ function DashCheckin() {
     <Panel title="Kids check-in" action={
       <button onClick={() => setPicking(true)} disabled={!minors.length} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: minors.length ? 1 : 0.5 }}><Icon name="plus" size={14} color="#fff" /> Check a child in</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 22%, var(--line))', marginBottom: 14 }}>
-        <Icon name="shield" size={16} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your church key</b> — only this console sees who’s present.</div>
-      </div>
+      <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your church key</b> — only this console sees who’s present.</DismissibleNote>
       {!minors.length ? (
         <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '40px 24px' }}><Icon name="child" size={26} color="var(--ink-3)" /><p style={{ fontSize: 13.5, margin: '10px 0 0', lineHeight: 1.5 }}>No children marked yet. In <b>Members</b>, mark each child (and confirm their guardian) first.</p></div>
       ) : (
