@@ -166,3 +166,30 @@ test('H3: purging the only church is refused (it would open the relay)', async (
     assert.equal(r.status, 400, 'purging the last church must be refused');
   }
 });
+
+// ---- H4 applied to /import + persistChurches provenance (Fable audit 2026-07-22, #10 / #11) ----
+test('#10: /import cannot self-register a fresh church on a private relay (H4 bootstrap-only)', async () => {
+  // guarantee the relay is past bootstrap (has a church) regardless of prior tests
+  await api('/config', { method: 'POST', body: JSON.stringify({ addChurch: { npub: npubEncode(aPub), name: 'A' } }) });
+  await sleep(80);
+  const fSk = generateSecretKey(), fPub = getPublicKey(fSk);
+  const host = `127.0.0.1:${PORT}`;
+  // NIP-98 proof by the FRESH key, claiming itself as the church, bound to /import
+  const proof = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', `http://${host}/import`], ['method', 'POST'], ['church', fPub]], content: '' }, fSk);
+  const auth = 'Nostr ' + Buffer.from(JSON.stringify(proof)).toString('base64');
+  const r = await fetch(`http://${host}/import`, { method: 'POST', headers: { Authorization: auth }, body: 'x\n' });
+  assert.equal(r.status, 403, 'a fresh church key must not self-register through /import on a private relay that already has a church');
+  const cfg = await (await api('/config?stats=1')).json();
+  assert.ok(!(cfg.churches || []).some(c => c.npub === npubEncode(fPub)), 'the refused fresh church must not have been registered');
+});
+
+test('#11: persistChurches stamps envMigrated so a removed env church cannot resurrect (structural)', () => {
+  // The resurrection bug is a restart-scenario, disproportionate to reproduce in-process; assert the fix at
+  // the source instead — persistChurches must write envMigrated (else loadChurches re-folds CHURCH_NPUB on
+  // the next boot, bringing back a church the operator removed) and keep by/at provenance.
+  const src = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8');
+  const m = src.match(/function persistChurches\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(m, 'persistChurches must exist');
+  assert.match(m[0], /envMigrated:\s*true/, 'persistChurches must stamp envMigrated:true');
+  assert.match(m[0], /m\.by/, 'persistChurches must preserve by/at provenance from CHURCH_META');
+});

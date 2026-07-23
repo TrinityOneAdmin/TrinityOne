@@ -6272,6 +6272,17 @@
         }
         if (d === CAREKEY_D + cp) {
           _ingestCareKey(cp, e);
+          for (const e2 of hub.buf.values()) {
+            const d2 = _dtag(e2);
+            if (d2.startsWith(CARE_D)) {
+              for (const h of [...hub.handlers]) {
+                try {
+                  h.onevent(e2, d2);
+                } catch (err) {
+                }
+              }
+            }
+          }
           for (const h of [...hub.handlers]) {
             try {
               h.onroster && h.onroster();
@@ -6539,6 +6550,7 @@
     });
   });
   var OUTBOX_KEY = "trinityone.outbox";
+  var OUTBOX_FAILED_KEY = "trinityone.outbox.failed";
   var OUTBOX_MAX = 200;
   var _outbox = [];
   var _outboxFailed = [];
@@ -6549,10 +6561,19 @@
     } catch (e) {
       _outbox = [];
     }
+    try {
+      _outboxFailed = JSON.parse(localStorage.getItem(OUTBOX_FAILED_KEY) || "[]") || [];
+    } catch (e) {
+      _outboxFailed = [];
+    }
   }
   function _outboxSave() {
     try {
       localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox.slice(-OUTBOX_MAX)));
+    } catch (e) {
+    }
+    try {
+      localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed.slice(-50)));
     } catch (e) {
     }
     for (const fn of [..._outboxSubs]) {
@@ -6571,8 +6592,11 @@
       new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), PUBLISH_TIMEOUT_MS))
     ]);
   }
-  var _PERMANENT = /^(blocked|invalid|rate-limited|restricted|error: )/i;
+  var _PERMANENT = /^(blocked|invalid|restricted)/i;
   var isPermanentRefusal = (e) => _PERMANENT.test(String(e && e.message || e || ""));
+  var isRateLimited = (e) => /^rate-limited/i.test(String(e && e.message || e || ""));
+  var _CONNECTION = /timeout|network|websocket|failed to (fetch|connect)|connection|econn|enotfound|socket|offline|unreachable/i;
+  var isConnectionFailure = (e) => _CONNECTION.test(String(e && e.message || e || ""));
   var MAX_TRIES = 50;
   async function _outboxFlush() {
     if (_flushing || !_outbox.length || !sk) return;
@@ -6586,7 +6610,9 @@
         } catch (e) {
           const errs = e && e.errors ? e.errors : [e];
           const permanent = errs.length && errs.every(isPermanentRefusal);
-          item.tries = (item.tries || 0) + 1;
+          const outage = errs.length && errs.every(isConnectionFailure);
+          const rateLimited = errs.some(isRateLimited);
+          if (!outage) item.tries = (item.tries || 0) + 1;
           item.lastTry = Math.floor(Date.now() / 1e3);
           item.lastError = String(errs[0] && errs[0].message || "").slice(0, 120);
           if (permanent || item.tries >= MAX_TRIES) {
@@ -6597,7 +6623,9 @@
             if (_outboxFailed.length > 50) _outboxFailed.shift();
           }
           _outboxSave();
+          if (rateLimited) break;
         }
+        if (_outbox.length > 1) await new Promise((r) => setTimeout(r, 150));
       }
     } finally {
       _flushing = false;
@@ -7140,7 +7168,7 @@
       _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
       _outboxSave();
       try {
-        await Promise.any(pool.publish(window.Fellowship.relays, evt));
+        await _publishBounded(window.Fellowship.relays, evt);
         evt._delivered = true;
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
         _outboxSave();
@@ -7199,7 +7227,7 @@
       }
       const evt = finalizeEvent2({ kind: 4, created_at: Math.floor(Date.now() / 1e3), tags: [["p", peerPub]], content: ciphertext }, sk);
       try {
-        await Promise.any(pool.publish(window.Fellowship.relays, evt));
+        await _publishBounded(window.Fellowship.relays, evt);
         evt._delivered = true;
       } catch (e) {
         console.warn("[fellowship] DM publish failed", e);
@@ -8294,7 +8322,7 @@
     // sha256(token) tag, and the token itself is encrypted to the recipient ALONE (not under the church-wide
     // care key). Presenting the token proves you are the recipient without telling the relay who that is.
     // `skipEnc` comes from the need (subscribeCareNeeds carries it through as _skipEnc).
-    async markCareSkip(careId, iso, reason, skipEnc) {
+    async markCareSkip(careId, iso, reason, skipEnc, needAuthor) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -8306,14 +8334,16 @@
       const tags = [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp]];
       if (skipEnc) {
         try {
-          const o = JSON.parse(decrypt(skipEnc, getConversationKey(sk, cp)));
-          if (o && o.tok) tags.push(["skiptok", String(o.tok)]);
+          const authorPub = needAuthor || cp;
+          const o = JSON.parse(decrypt(skipEnc, getConversationKey(sk, authorPub)));
+          if (o && o.s) tags.push(["skiptok", await _sha256hex(new TextEncoder().encode(o.s + ":" + iso))]);
+          else if (o && o.tok) tags.push(["skiptok", String(o.tok)]);
         } catch (e) {
         }
       }
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }, sk);
       try {
-        await Promise.any(pool.publish(churchRelays(), evt));
+        await _publishBounded(churchRelays(), evt);
         evt._delivered = true;
       } catch (e) {
         console.warn("[fellowship] care skip publish failed", e);

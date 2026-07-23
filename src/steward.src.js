@@ -144,6 +144,47 @@ function stewIngestKey(e) {
   try { const env = JSON.parse(e.content || '{}'); _srev[gid] = env.rev || 1; const mine = env.keys && churchPub && env.keys[churchPub]; if (mine && churchSk) _skeys[gid] = _unhex(nip44d(mine, nip44ck(churchSk, e.pubkey))); } catch {}
 }
 const now = () => Math.floor(Date.now() / 1000);
+// Author discipline for the church's replaceable AUTHORITY docs (blocklist, admitted, stewards, guardians,
+// joinpolicy, safeguarding). Each subscribes with a second `#church` filter that matches ANY author, and
+// used to trust the d-tag alone — so a forged copy on a non-enforcing relay (a public one a church adds)
+// was accepted as truth. Mirror the relay's accept() rules EXACTLY (gateway.mjs ~1028-1054): owner-only
+// docs must be the church key; the steward-writable ones (joinpolicy/admitted/nophoto) also accept a
+// current rostered steward. The future-clamp is separate and load-bearing: with newest-wins in place, a
+// forgery dated far in the future can never be beaten on created_at, so without the clamp it would PIN
+// over the church's real doc for the life of the subscription. `pub` is the church key in view; `_careRoster`
+// is the live steward set (kept current by subscribeStewards → setCareRoster).
+const _CLOCK_SKEW = 600;   // 10 min — a real clock difference; a forgery uses a far-future stamp
+const _authFuture = (e) => e.created_at > now() + _CLOCK_SKEW;
+const _byChurch = (e) => e.pubkey === pub;
+const _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
+
+// Care-key envelope handling, factored out so both the live subscription AND the pending-buffer re-check
+// share one code path. See the mint-gate race notes at the top of this file (care-key section).
+const _careKeyAuthed = (e) => { const cp = actingChurch || pub; return e.pubkey === cp || _careRoster.has(e.pubkey); };
+function _ingestCareKeyEnv(e) {
+  try {
+    const o = JSON.parse(e.content || '{}');
+    if ((o.rev || 1) < _careKeyRev) return;                  // a lagging relay must not resurrect an older envelope
+    _careKeyDocKeys = o.keys || null; _careKeyRev = o.rev || 1;
+    const mine = o.keys && churchPub && o.keys[churchPub];
+    if (mine && churchSk) _careKeyHex = nip44d(mine, nip44ck(churchSk, e.pubkey));
+  } catch (x) {}
+  _careKeyChecked = true;
+}
+// An envelope from an author we can't YET verify (a delegated steward whose roster entry hasn't loaded — the
+// roster arrives via a separate subscription and a React round-trip) is BUFFERED, not dropped: dropping it and
+// then minting a fresh key is exactly how two competing care keys arise and orphan every sealed need. It
+// blocks minting until it is either adopted (the roster loads and confirms the author) or expires as a
+// forgery. TTL bounds a spammed forgery from blocking minting forever.
+const _CAREKEY_PENDING_TTL = 12000;
+let _careKeyPending = [];
+function _reCheckCareKeyPending() {
+  const nowMs = Date.now();
+  _careKeyPending = _careKeyPending.filter(p => nowMs - p.at < _CAREKEY_PENDING_TTL);   // expired → treat as forgery, drop
+  for (const p of _careKeyPending.slice()) {
+    if (_careKeyAuthed(p.e)) { _ingestCareKeyEnv(p.e); _careKeyPending = _careKeyPending.filter(x => x !== p); }
+  }
+}
 function toPubHex(npubOrHex) { try { if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase(); const d = nip19decode(npubOrHex); return d && d.type === 'npub' ? d.data : null; } catch { return null; } }
 
 const RELAYS_LS = 'trinityone.steward.extra-relays';   // extra public relays the church also publishes to
@@ -414,6 +455,8 @@ async function publish(evt) {
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
     return false;   // total failure — every relay rejected; callers that await the result can surface it
   }
+  // a write landed → the relays are accepting our posts, so any "a relay is refusing us" alarm can clear
+  try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
   return evt;
 }
 // resolve the signing key for a chosen publishing identity. asPub === church pub (or empty) -> church key;
@@ -992,18 +1035,11 @@ window.Steward = {
                                               { kinds: [30078], '#church': [cp], '#d': [CAREKEY_D + cp] }], {
       onevent(e) {
         // Author discipline: the church itself, or one of its CURRENT rostered stewards. The relay enforces
-        // exactly this on write (accept()'s CAREKEY_D rule), so on an enforcing relay the check is belt and
-        // braces; it matters on a shared or non-enforcing one, where a stray envelope could otherwise
-        // substitute the key. _careRosterSet is kept current by subscribeStewards via setCareRoster().
-        if (e.pubkey !== cp && !_careRoster.has(e.pubkey)) return;
-        try {
-          const o = JSON.parse(e.content || '{}');
-          if ((o.rev || 1) < _careKeyRev) return;            // a lagging relay must not resurrect an older envelope
-          _careKeyDocKeys = o.keys || null; _careKeyRev = o.rev || 1;
-          const mine = o.keys && churchPub && o.keys[churchPub];
-          if (mine && churchSk) _careKeyHex = nip44d(mine, nip44ck(churchSk, e.pubkey));
-        } catch (x) {}
-        _careKeyChecked = true;
+        // exactly this on write; the client check matters on a shared/non-enforcing relay. An author we can't
+        // verify YET (the steward roster loads asynchronously) is BUFFERED, not dropped — dropping a real
+        // steward envelope and then minting a fresh key is the mint-race that splits the care key.
+        if (!_careKeyAuthed(e)) { _careKeyPending.push({ e, at: Date.now() }); if (_careKeyPending.length > 10) _careKeyPending.shift(); return; }
+        _ingestCareKeyEnv(e);
       },
       oneose() { _careKeyChecked = true; },   // no envelope came back → it is safe to mint one
     });
@@ -1016,6 +1052,8 @@ window.Steward = {
     const cp = actingChurch || pub;
     if (!sk || !cp || !churchPub) return false;
     if (!_careKeyChecked) return false;                       // haven't looked yet — minting now would orphan
+    _reCheckCareKeyPending();                                 // adopt any envelope now verifiable; drop expired forgeries
+    if (_careKeyPending.length) return false;                 // an unverified envelope may be a REAL one whose author is still loading — never mint a second key over it
     if (!_careKeyHex) {
       if (_careKeyDocKeys) return false;                      // an envelope EXISTS and we're not in it; the owner must add us
       _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -1041,7 +1079,7 @@ window.Steward = {
   careKeyChecked() { return _careKeyChecked; },
   // the console feeds the live steward roster in, so the envelope's author check stays current when a
   // steward is revoked (a revoked steward's envelope must stop being accepted, same as their content)
-  setCareRoster(list) { _careRoster = new Set((list || []).filter(Boolean)); },
+  setCareRoster(list) { _careRoster = new Set((list || []).filter(Boolean)); _reCheckCareKeyPending(); },   // roster just changed — adopt any buffered envelope it now verifies
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
     if (!pub) return () => {};
@@ -1343,6 +1381,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== BLOCKED_D + pub) return;
+        if (_authFuture(e) || !_byChurch(e)) return;   // owner-only; drop forgeries + future-dated pins
         // NEWEST WINS. This is a replaceable doc and we read it from every relay, so without this the copy
         // that ARRIVES last wins rather than the one that was WRITTEN last — a relay holding an older
         // blocklist silently reinstates blocks the owner has already lifted.
@@ -1377,9 +1416,11 @@ window.Steward = {
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (d === MINORS_D + pub) { if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === APPROVED_D + pub) { if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === NOPHOTO_D + pub) { if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
+        if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
+        // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
       },
       oneose() { onLists({ minors, approved, nophoto }); },
     });
@@ -1432,6 +1473,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== GUARDIANS_D + pub) return;
+        if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY safeguarding doc
         if (e.created_at < latest) return; latest = e.created_at;   // newest wins — a stale copy must not restore a removed guardian link
         try { cur = (JSON.parse(e.content).links) || {}; } catch { cur = {}; }
         onMap(cur);
@@ -1471,6 +1513,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== JOINPOLICY_D + pub) return;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward may set the join policy
         if (e.created_at < latest) return; latest = e.created_at;   // newest wins — a stale copy must not silently turn approval back off
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false;
         else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } }
@@ -1490,6 +1533,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== ADMITTED_D + pub) return;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward may admit members
         // newest wins — a stale copy drops recently-approved members back into "waiting to join"
         if (e.created_at < latest) return; latest = e.created_at;
         try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
@@ -1514,6 +1558,7 @@ window.Steward = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== STEWARDS_D + pub) return;
+        if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY (this IS the roster; only the church key edits it)
         // newest wins — this is a revocation list: a stale copy would reinstate a steward who was removed
         if (e.created_at < latest) return; latest = e.created_at;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) cur = [];

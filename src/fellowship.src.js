@@ -471,9 +471,16 @@ function _docsHubOpen(hub) {
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return;
       }
       if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(cp, e); return; }
-      // the care key can arrive AFTER the needs it unlocks — re-emit so a card already rendered as
-      // "details hidden" opens without waiting for a reload
-      if (d === CAREKEY_D + cp) { _ingestCareKey(cp, e); for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) {} } return; }
+      // The care key can arrive AFTER the needs it unlocks. subscribeCareNeeds decodes each need AT INGEST
+      // and its onroster() only re-filters those already-decoded entries — so a card rendered "details
+      // hidden" before the key landed stayed sealed for the session. Replay the buffered CARE_D need events
+      // through onevent so they re-parse WITH the key now present (mirrors the L7 group-key replay above).
+      if (d === CAREKEY_D + cp) {
+        _ingestCareKey(cp, e);
+        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(CARE_D)) { for (const h of [...hub.handlers]) { try { h.onevent(e2, d2); } catch (err) {} } } }
+        for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) {} }
+        return;
+      }
       for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { console.error(err); } }
     },
     oneose() {
@@ -639,13 +646,21 @@ window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch((
 // bubble by id for free, and the message keeps the timestamp of when the member actually wrote it, not
 // when the signal came back. Persisted, so closing the app doesn't lose it.
 const OUTBOX_KEY = 'trinityone.outbox';
+const OUTBOX_FAILED_KEY = 'trinityone.outbox.failed';   // gave-up messages, persisted (see below)
 const OUTBOX_MAX = 200;            // a bounded queue: past this the oldest is dropped rather than growing forever
 let _outbox = [];
 let _outboxFailed = [];   // gave up on these — surfaced to the member rather than discarded
 const _outboxSubs = new Set();
-function _outboxLoad() { try { _outbox = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]') || []; } catch (e) { _outbox = []; } }
+function _outboxLoad() {
+  try { _outbox = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]') || []; } catch (e) { _outbox = []; }
+  try { _outboxFailed = JSON.parse(localStorage.getItem(OUTBOX_FAILED_KEY) || '[]') || []; } catch (e) { _outboxFailed = []; }
+}
 function _outboxSave() {
   try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox.slice(-OUTBOX_MAX))); } catch (e) {}
+  // The gave-up bin is persisted too. It was memory-only, so a member's refused message — the whole reason
+  // this bin exists instead of a silent discard — was itself silently lost on app close, before they could
+  // see it, copy it out, or requeue it.
+  try { localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed.slice(-50))); } catch (e) {}
   for (const fn of [..._outboxSubs]) { try { fn(_outbox); } catch (e) {} }
 }
 _outboxLoad();
@@ -665,9 +680,22 @@ function _publishBounded(relays, evt) {
 // retried forever, every 45 seconds, for the life of the install. Nostr signals refusal as OK=false with a
 // reason; nostr-tools surfaces it as a rejection whose message carries that reason. Treat the known refusal
 // prefixes as permanent, everything else as "try again later".
-const _PERMANENT = /^(blocked|invalid|rate-limited|restricted|error: )/i;
+// PERMANENT = the relay will never accept this message, so retrying is pointless (not a member, blocked,
+// malformed). NOT rate-limited: per NIP-01 that means "retry later" — the canonical TRANSIENT refusal — and
+// it is exactly what a reconnect-flush of several queued messages trips. Dropping a member's words because
+// the relay asked them to slow down is the wrong call. `error:` is dropped too: it's an unstructured
+// catch-all, and an ambiguous error should keep the message (MAX_TRIES is the backstop), not bin it.
+const _PERMANENT = /^(blocked|invalid|restricted)/i;
 const isPermanentRefusal = (e) => _PERMANENT.test(String((e && e.message) || e || ''));
-const MAX_TRIES = 50;   // ~a day of 45s ticks; a backstop for a refusal shape we didn't anticipate
+const isRateLimited = (e) => /^rate-limited/i.test(String((e && e.message) || e || ''));
+// A connection-level failure (timeout, no relay reachable) means the message NEVER reached a relay — an
+// OUTAGE, not a refusal. It must not count toward the give-up backstop: otherwise a message queued while
+// offline is dropped after MAX_TRIES ticks (~37 min at 45s, NOT "a day" as the old comment claimed —
+// off by ~40×) even though no relay ever saw it. Only a genuine relay refusal burns a try.
+const _CONNECTION = /timeout|network|websocket|failed to (fetch|connect)|connection|econn|enotfound|socket|offline|unreachable/i;
+const isConnectionFailure = (e) => _CONNECTION.test(String((e && e.message) || e || ''));
+const MAX_TRIES = 50;   // 50 genuine relay REFUSALS (outages don't count) — a backstop so an unanticipated
+                        // non-permanent refusal shape isn't retried forever, not a wall-clock limit.
 // Try to deliver everything queued. Safe to call often — it no-ops while already running.
 async function _outboxFlush() {
   if (_flushing || !_outbox.length || !sk) return;
@@ -681,7 +709,9 @@ async function _outboxFlush() {
       } catch (e) {
         const errs = (e && e.errors) ? e.errors : [e];               // AggregateError from Promise.any
         const permanent = errs.length && errs.every(isPermanentRefusal);
-        item.tries = (item.tries || 0) + 1;
+        const outage = errs.length && errs.every(isConnectionFailure);   // never reached a relay → don't burn a try
+        const rateLimited = errs.some(isRateLimited);
+        if (!outage) item.tries = (item.tries || 0) + 1;
         item.lastTry = Math.floor(Date.now() / 1000);
         item.lastError = String((errs[0] && errs[0].message) || '').slice(0, 120);
         if (permanent || item.tries >= MAX_TRIES) {
@@ -692,7 +722,13 @@ async function _outboxFlush() {
           _outboxFailed.push(item); if (_outboxFailed.length > 50) _outboxFailed.shift();
         }
         _outboxSave();
+        // The relay said "slow down". Bursting the rest of the queue would just trip it again and burn a
+        // try on every remaining item. Stop this pass and let the 45s tick resume it, spaced out.
+        if (rateLimited) break;
       }
+      // Gentle pacing between sends so a reconnect-flush of several queued messages doesn't itself burst
+      // into the rate limit above.
+      if (_outbox.length > 1) await new Promise(r => setTimeout(r, 150));
     }
   } finally { _flushing = false; }
 }
@@ -1022,7 +1058,11 @@ window.Fellowship = {
     _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
     _outboxSave();
     try {
-      await Promise.any(pool.publish(window.Fellowship.relays, evt));
+      // _publishBounded, not raw Promise.any: a socket that never opens leaves Promise.any pending forever,
+      // so offline the await never settled — `_delivered` was never set false and the "No signal, we'll send
+      // it when you're back" toast never fired in exactly the offline case it's for. Bounded → the signal
+      // always arrives within 12s; the message is already queued above, so the 45s flush is the retry path.
+      await _publishBounded(window.Fellowship.relays, evt);
       evt._delivered = true;
       _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
     } catch (e) {
@@ -1051,7 +1091,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, content); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); evt._delivered = true; }
+    try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true; }   // bounded so offline sets _delivered=false within 12s, not never
     catch (e) { console.warn('[fellowship] DM publish failed', e); evt._delivered = false; }   // E1: same as publishMessage — the caller must be able to tell
     return evt;
   },
@@ -1673,14 +1713,23 @@ window.Fellowship = {
   // sha256(token) tag, and the token itself is encrypted to the recipient ALONE (not under the church-wide
   // care key). Presenting the token proves you are the recipient without telling the relay who that is.
   // `skipEnc` comes from the need (subscribeCareNeeds carries it through as _skipEnc).
-  async markCareSkip(careId, iso, reason, skipEnc) {
+  async markCareSkip(careId, iso, reason, skipEnc, needAuthor) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const tags = [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp]];
-    if (skipEnc) { try { const o = JSON.parse(nip44d(skipEnc, nip44ck(sk, cp))); if (o && o.tok) tags.push(['skiptok', String(o.tok)]); } catch (e) {} }
+    if (skipEnc) { try {
+      // Unseal against the need's AUTHOR (#13), not always the church key — a delegated steward's need is
+      // sealed with the steward's key, so unsealing with the church key would silently fail and the recipient
+      // could never decline. Then derive THIS day's token from the secret (#12): present only tok(iso), which
+      // unlocks this date alone. `.tok` is the v2 single-token fallback for any pre-redesign need.
+      const authorPub = needAuthor || cp;
+      const o = JSON.parse(nip44d(skipEnc, nip44ck(sk, authorPub)));
+      if (o && o.s) tags.push(['skiptok', await _sha256hex(new TextEncoder().encode(o.s + ':' + iso))]);   // UTF-8 bytes → same digest the seal computed
+      else if (o && o.tok) tags.push(['skiptok', String(o.tok)]);
+    } catch (e) {} }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); evt._delivered = true; }
+    try { await _publishBounded(churchRelays(), evt); evt._delivered = true; }   // bounded so an offline skip settles, not hangs
     catch (e) { console.warn('[fellowship] care skip publish failed', e); evt._delivered = false; }
     return evt;
   },

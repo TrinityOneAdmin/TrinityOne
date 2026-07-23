@@ -65,19 +65,39 @@ sed -i 's/applicationId "com.trinityone.app"/applicationId "com.trinityone.stewa
 sed -i 's#<string name="app_name">TrinityOne</string>#<string name="app_name">TrinityOne Steward</string>#' "$STRINGS"
 
 # 3. copy webDir into the native project + build
-# SECURITY-AUDIT-2026-07-20 C3: this built assembleDebug, so the STEWARD apk — the one holding the church
-# signing key — shipped android:debuggable=true and was signed with the ANDROID DEBUG CERTIFICATE
-# (CN=Android Debug) rather than the release key. debuggable=true enables `adb shell run-as` on ordinary
-# unrooted phones: ~30s of USB access to an unlocked steward device reads the app's private storage, where
-# the PIN-encrypted church key lives — reducing key theft to an offline PIN brute-force. It also let anyone
-# holding ~/.android/debug.keystore (regenerated silently if deleted) forge a steward update.
+#
+# ⚠ PILOT-DEFERRED: DEBUG-signed on purpose (owner's call, 2026-07-22). 8f5090e switched this to
+# assembleRelease (release cert, no android:debuggable) as a SECURITY fix — correct for go-live, but it was
+# part of the go-live hardening the owner had explicitly deferred until pilot start, and it slipped through
+# the same-batch revert that put webContentsDebuggingEnabled back ON (9c74d61). Release-signing mid-pilot-prep
+# breaks the test phone's in-place update path (a different key can't upgrade the installed app), so this is
+# reverted to the debug cert the phone already trusts. No real congregation is on anything yet, so the
+# debug-cert / debuggable blast radius is zero — which is exactly why it was deferred.
+#
+# ‼ BEFORE ANY REAL GO-LIVE: build with TRINITY_DEBUG=0 (handled just below — disables WebView debugging on
+#   the steward APK too) AND switch back to the release build below. It is the correct shipping posture:
+#     [ -f android/app/keystore.properties ] || { echo "ERROR: keystore.properties missing" >&2; exit 1; }
+#     ( cd android && ./gradlew assembleRelease -q )
+#     cp android/app/build/outputs/apk/release/app-release.apk trinityone-steward.apk
+#     aapt2 dump badging trinityone-steward.apk | grep -q application-debuggable && { echo "DEBUGGABLE — refusing"; exit 1; }
+#   The 8f5090e security rationale (debuggable=true → adb run-as reads the PIN-encrypted church key in ~30s;
+#   a silently-regenerated debug key can forge steward updates) is REAL and applies the moment anyone real is on it.
 npx cap copy android
-[ -f android/app/keystore.properties ] || { echo "ERROR: android/app/keystore.properties missing — refusing to build an unsigned/debug-signed steward APK" >&2; exit 1; }
-( cd android && ./gradlew assembleRelease -q )
-cp android/app/build/outputs/apk/release/app-release.apk trinityone-steward.apk
-# Fail loudly rather than ever shipping a debuggable console again.
-if command -v aapt2 >/dev/null 2>&1 && aapt2 dump badging trinityone-steward.apk 2>/dev/null | grep -q "application-debuggable"; then
-  echo "ERROR: trinityone-steward.apk is DEBUGGABLE — refusing to ship it" >&2; rm -f trinityone-steward.apk; exit 1
+# Honour the same TRINITY_DEBUG=0 go-live switch as sync-web.sh (member APK). `npx cap copy` just re-copied
+# capacitor.config.json with webContentsDebuggingEnabled=true (the committed pilot value), and this build
+# never applied the switch — so a go-live run that disabled WebView debugging on the MEMBER app still shipped
+# the STEWARD app (which holds the church key) debuggable. Unset = leave it ON (owner's pilot decision);
+# TRINITY_DEBUG=0 = force it off here too, so one switch covers both apps.
+ASSETS_CFG="android/app/src/main/assets/capacitor.config.json"
+if [ -f "$ASSETS_CFG" ]; then
+  if [ "${TRINITY_DEBUG:-}" = "0" ]; then
+    node -e 'const f=process.argv[1],c=JSON.parse(require("fs").readFileSync(f,"utf8"));(c.android=c.android||{}).webContentsDebuggingEnabled=false;require("fs").writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$ASSETS_CFG"
+    echo "✔ TRINITY_DEBUG=0 — WebView remote debugging DISABLED in the steward APK (go-live posture)."
+  elif grep -q '"webContentsDebuggingEnabled": *true' "$ASSETS_CFG"; then
+    echo "⚠ Steward APK WebView remote debugging is ON (pilot). Ship with TRINITY_DEBUG=0 at go-live."
+  fi
 fi
-echo "→ trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))"
+( cd android && ./gradlew assembleDebug -q )
+cp android/app/build/outputs/apk/debug/app-debug.apk trinityone-steward.apk
+echo "→ trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))  [DEBUG-signed — pilot-deferred, see note above]"
 # restore() runs on EXIT

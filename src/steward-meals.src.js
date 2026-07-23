@@ -153,6 +153,10 @@
   }
   async function publishNeed(need) {
     if (!S() || !S().publishSigned) return null;
+    // A need loaded on a device WITHOUT the care key comes back `_sealed` — its PII fields are blank because
+    // we couldn't decrypt them. Re-publishing that would seal the blanks over the real, still-encrypted data
+    // for the whole church (kind-30078 is replaceable). Refuse, rather than silently destroy it.
+    if (need._sealed) throw new Error('This need was saved by a device that holds the care key, and this device can’t open it. Open Members so the key syncs, then edit it here.');
     const id = need.id || uid('care');
     const rec = _normNeed(need);
     const sealed = {}; for (const f of SEALED_FIELDS) sealed[f] = rec[f];
@@ -173,9 +177,21 @@
     // who they are. Random (so it can't be brute-forced back to an identity) and encrypted to the recipient
     // specifically — NOT under the church-wide care key, which every member holds.
     if (rec.recipient && S().careSealTo) {
-      const tok = _rand32();
-      const to = S().careSealTo(rec.recipient, { tok });
-      if (to) { body.skipEnc = to; tags.push(['skiphash', await _sha256hex(tok)]); }
+      // Per-DAY skip tokens, all derived from ONE master secret sealed to the recipient. careSealTo seals
+      // against the acting key, i.e. the NEED'S AUTHOR — so a delegated steward's need still unseals for the
+      // recipient (fellowship unseals against `_by`). Each day's token = sha256(secret + ':' + day); the need
+      // carries only sha256(token) per day. So a member who reads one day's token off a stored skip event
+      // learns nothing about the secret and cannot forge a skip for any OTHER day (was a single reusable
+      // bearer token — Fable audit 2026-07-22 #12 / #13).
+      const secret = _rand32();
+      const to = S().careSealTo(rec.recipient, { s: secret });
+      if (to) {
+        body.skipEnc = to;
+        for (const day of rec.dates) {
+          const tokDay = await _sha256hex(secret + ':' + day);
+          tags.push(['skiphash', day, await _sha256hex(tokDay)]);
+        }
+      }
     }
     const e = await S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(body) });
     return { id, ...rec, ts: e && e.created_at };
@@ -219,7 +235,16 @@
           const id = d.slice(NEED_D.length);
           const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
           if (deleted) { byId.delete(id); emit(); return; }
-          try { byId.set(id, { id, ..._normNeed(JSON.parse(e.content)), ts: e.created_at }); emit(); } catch (err) {}
+          try {
+            // Decrypt the sealed half BEFORE normalising. A sealed need (H3) carries displayLabel / notes /
+            // recipient / dietary inside `enc`, not as top-level keys — so _normNeed alone reads them as
+            // empty and drops `enc`, and the console shows every sealed need blank. openNeed merges the
+            // decrypted fields back, or marks `_sealed` when this device has no care key. Carry `_sealed`
+            // through so the UI can say "details hidden" and refuse to edit-save a blank over the real data.
+            const opened = openNeed(JSON.parse(e.content));
+            byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, ts: e.created_at });
+            emit();
+          } catch (err) {}
         },
         oneose() { emit(); },
       }

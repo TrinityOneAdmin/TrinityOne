@@ -304,12 +304,34 @@
     } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
   };
   // restore: two-click confirm (webview confirm() is unreliable), then stream the file to /relay-restore.
-  let restoreArmed = false;
+  let restoreArmed = false, _restoreCleanup = null;
+  // The armed state promises "click anywhere else, press Esc, or wait to cancel" — so it must actually do
+  // that. Without it, an operator who armed the button, read the warning, and clicked away believing they
+  // cancelled left it live: the next single click overwrote every church's data. These are the real escape
+  // hatches, plus a 10s auto-disarm (the same self-protecting pattern the Update button uses).
+  const disarmRestore = () => {
+    restoreArmed = false;
+    const btn = document.getElementById('doRestore'), msg = document.getElementById('restoreMsg');
+    if (btn) btn.textContent = 'Restore…';
+    if (msg && /^Click again/.test(msg.textContent)) { msg.textContent = ''; }
+    if (_restoreCleanup) { _restoreCleanup(); _restoreCleanup = null; }
+  };
   document.getElementById('doRestore').onclick = async () => {
     const btn = document.getElementById('doRestore'), msg = document.getElementById('restoreMsg');
     const f = (document.getElementById('restoreFile').files || [])[0];
     if (!f) { msg.style.color = 'var(--clay-ink)'; msg.textContent = 'Choose a backup file first.'; return; }
-    if (!restoreArmed) { restoreArmed = true; btn.textContent = 'Confirm — replace everything'; msg.style.color = 'var(--clay-ink)'; msg.textContent = 'Click again to overwrite every church’s data on this relay. Click anywhere else to cancel.'; return; }
+    if (!restoreArmed) {
+      restoreArmed = true; btn.textContent = 'Confirm — replace everything';
+      msg.style.color = 'var(--clay-ink)'; msg.textContent = 'Click again to overwrite every church’s data on this relay. Click anywhere else, press Esc, or wait to cancel.';
+      const onDocClick = (ev) => { if (ev.target !== btn && !btn.contains(ev.target)) disarmRestore(); };
+      const onKey = (ev) => { if (ev.key === 'Escape') disarmRestore(); };
+      const t = setTimeout(disarmRestore, 10000);
+      setTimeout(() => document.addEventListener('click', onDocClick), 0);   // attach AFTER this click stops bubbling, or it disarms itself
+      document.addEventListener('keydown', onKey);
+      _restoreCleanup = () => { clearTimeout(t); document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onKey); };
+      return;
+    }
+    if (_restoreCleanup) { _restoreCleanup(); _restoreCleanup = null; }
     restoreArmed = false; btn.textContent = 'Restore…';
     msg.style.color = 'var(--ink-3)'; msg.textContent = '· uploading…';
     try {
@@ -494,7 +516,10 @@
     } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
   });
   document.getElementById('syncNow')?.addEventListener('click', async () => {
-    const m = document.getElementById('syncMsg'); m.style.color = 'var(--ink-3)'; m.textContent = 'syncing…';
+    // Feedback goes to #syncNowMsg, which sits under THIS button in the Settings card. It used to write to
+    // #syncMsg — the Relay-health row on the DASHBOARD tab, hidden while Settings is open — so a click (and
+    // its errors) produced no visible result on the tab the operator was looking at.
+    const m = document.getElementById('syncNowMsg'); m.style.color = 'var(--ink-3)'; m.textContent = 'syncing…';
     try {
       const r = await fetch('/sync-now', { method: 'POST', headers: authHeaders() });
       const s = await r.json();

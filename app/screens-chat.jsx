@@ -784,9 +784,19 @@ function Row({ me, m, children, ctx, mod }) {
       </div>
       {/* E1: a queued message says so, instead of looking identical to one that arrived. "Waiting to send"
           is the honest state — it hasn't failed, and it hasn't gone; it will go when there's signal. */}
-      {me ? <span style={{ fontSize: 11, color: m._pending ? 'var(--clay-ink)' : 'var(--ink-3)', margin: '3px 4px 0', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-        {m._pending ? <React.Fragment><Icon name="clock" size={11} color="currentColor" />Waiting to send</React.Fragment> : m.when}
-      </span> : null}
+      {me ? (m._failed ? (
+        // The relay refused this (blocked/invalid, or retries exhausted). Say so, and let the member act —
+        // the words aren't lost, but they aren't going without a decision.
+        <span style={{ fontSize: 11, color: 'var(--clay-ink)', margin: '3px 4px 0', display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <Icon name="bolt" size={11} color="currentColor" />Couldn’t send{m._reason ? ' — ' + m._reason : ''}
+          <button onClick={() => window.Fellowship.requeue(m.id)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 11, textDecoration: 'underline' }}>Try again</button>
+          <button onClick={() => window.Fellowship.dropQueued(m.id)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--ink-3)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 11, textDecoration: 'underline' }}>Discard</button>
+        </span>
+      ) : (
+        <span style={{ fontSize: 11, color: m._pending ? 'var(--clay-ink)' : 'var(--ink-3)', margin: '3px 4px 0', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {m._pending ? <React.Fragment><Icon name="clock" size={11} color="currentColor" />Waiting to send</React.Fragment> : m.when}
+        </span>
+      )) : null}
     </div>
   );
 }
@@ -1025,7 +1035,11 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [queued, setQueued] = useC([]);
   useCE(() => {
     const F = window.Fellowship; if (!F || !F.onOutbox || !group) return;
-    const refresh = () => setQueued(F.outboxFor(group.id).map(evtToMsg).map(m => ({ ...m, _pending: true })));
+    // Preserve the outbox's _failed/_reason flags. outboxFor returns both still-waiting items (_pending) and
+    // gave-up ones (_failed), but evtToMsg rebuilt the bubble from the event alone and the old blanket
+    // `_pending: true` stamped EVERY item as waiting — so a message the relay permanently refused showed
+    // "Waiting to send" forever, with no way to retry or discard it.
+    const refresh = () => setQueued(F.outboxFor(group.id).map(e => ({ ...evtToMsg(e), _pending: !e._failed, _failed: !!e._failed, _reason: e._reason || '' })));
     refresh();
     return F.onOutbox(refresh);
   }, [group && group.id]);

@@ -1187,7 +1187,7 @@ function App() {
       clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); return r; }); },
       // update the "what I'm bringing" note on an already-filled slot — same fillCareSlot doc, no "signed up" toast
       setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note),
-      skip: (careId, iso, reason, skipEnc) => window.Fellowship.markCareSkip(careId, iso, reason, skipEnc),
+      skip: (careId, iso, reason, skipEnc, author) => window.Fellowship.markCareSkip(careId, iso, reason, skipEnc, author),
       clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,

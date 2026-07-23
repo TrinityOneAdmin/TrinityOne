@@ -30,7 +30,9 @@
      not the viewport: this used to split at a 1120px *viewport* media query, but the card lives inside a
      sidebar and a grid track, so a 1130px window gave it two ~150px columns and broke every line to one
      word. auto-fit measures the space actually available. */
-  .relay-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2px 24px; align-items: start; }
+  /* min(300px,100%) so the track can never exceed the card: a bare minmax(300px,…) keeps a 300px floor even
+     when the card is narrower, poking inputs past the border (narrow phones, and the 940px two-column band). */
+  .relay-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 2px 24px; align-items: start; }
   .stew-root *::-webkit-scrollbar { width: 0; height: 0; }
 
   /* steward UI primitives (from the handoff's Steward Surfaces stylesheet) */

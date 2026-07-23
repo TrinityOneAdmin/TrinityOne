@@ -89,6 +89,11 @@ function RecoverySheet({ open, onClose, ctx }) {
       const obj = await window.TrinityBackup.collectMember();
       const text = await window.TrinityBackup.encryptObj(obj, pass);
       await window.TrinityBackup.saveFile('trinityone-backup-' + new Date().toISOString().slice(0, 10) + '.json', text);
+      // Mark backed-up ONLY here, on the success path. It used to be called by the button after doExport
+      // returned — but doExport resolves normally on its short-passphrase early-return AND in its catch, so
+      // the durable "backed up" flag was set even when no valid backup was written, silencing the backup
+      // nudge and leaving the member one lost device away from losing their identity with no warning.
+      markSaved();
       ctx.toast('Backup created — save it somewhere safe'); setBk(null); setPass('');
     } catch (e) { setBkErr(e.message || 'Backup failed.'); } finally { setBusy(''); }
   };
@@ -159,7 +164,7 @@ function RecoverySheet({ open, onClose, ctx }) {
         <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
           <button onClick={copyPhrase} style={{ flex: 1, padding: 12, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: 'var(--shadow)' }}>
             <Icon name="copy" size={16} /> Copy</button>
-          <button onClick={() => { markSaved(); onClose(); ctx.toast('Saved — your 12 words can restore this identity'); }} style={{ flex: 1, padding: 12, borderRadius: 14, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+          <button disabled={!shown} onClick={() => { if (!shown) return; markSaved(); onClose(); ctx.toast('Saved — your 12 words can restore this identity'); }} title={shown ? '' : 'Reveal your 12 words first'} style={{ flex: 1, padding: 12, borderRadius: 14, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: shown ? 'pointer' : 'not-allowed', opacity: shown ? 1 : 0.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
             {/* SECURITY-AUDIT-2026-07-18: persist a durable, per-npub "backed up" flag (was a cosmetic toast). */}
             <Icon name="check" size={16} stroke={2.4} color="#fff" /> I’ve written them down</button>
         </div>
@@ -188,7 +193,7 @@ function RecoverySheet({ open, onClose, ctx }) {
             {bkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{bkErr}</div> : null}
             <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
               <button onClick={() => { setBk(null); setBkErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-              <button onClick={bk === 'export' ? async () => { await doExport(); markSaved(); } : doRestore} disabled={!!busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: bk === 'restore' ? 'var(--clay)' : 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : (bk === 'export' ? 'Create backup' : 'Restore')}</button>
+              <button onClick={bk === 'export' ? doExport : doRestore} disabled={!!busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: bk === 'restore' ? 'var(--clay)' : 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : (bk === 'export' ? 'Create backup' : 'Restore')}</button>
             </div>
           </div>
         )}

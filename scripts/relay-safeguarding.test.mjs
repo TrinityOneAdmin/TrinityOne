@@ -22,6 +22,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 const PORT = 8838;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const MEMBER_D = 'trinityone/member:', MINORS_D = 'trinityone/minors:', APPROVED_D = 'trinityone/approved:';
+const MEALS_SETTINGS_D = 'trinityone/meals-settings', NEED_D = 'trinityone/care:';
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -151,4 +152,24 @@ test('...but an ANONYMOUS client still cannot read the roster', async () => {
   assert.equal(r.events.filter(e => e.kind === 30078).length, 0, 'the roster stays gated from anon even with a church registered');
   assert.equal(r.gotAuth, true, 'relay challenged (docs present, withheld)');
   ws.close();
+});
+
+// ---- READ side: a care need opened by a MEMBER (or care-admin) must not be hidden by the revoked-steward
+// retraction check (Fable audit 2026-07-22). A need carries a ['church'] tag and isn't member-writable, so
+// before the fix canRead applied the steward-roster check and returned false for any need whose author was
+// not the church or a current steward — hiding every care-admin- or member-opened need from EVERYONE.
+const mealsOpenMember = () => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MEALS_SETTINGS_D]], content: JSON.stringify({ enabled: true, openedBy: 'member' }) }, church.sk);
+const memberNeed = (who, id) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NEED_D + id], ['church', churchHex]], content: JSON.stringify({ id, type: 'meals', dates: ['2026-08-01'], enc: 'sealed-pii-stand-in' }) }, who.sk);
+
+test('a MEMBER-opened care need is readable by the church’s members, not hidden by the steward-retraction check', async () => {
+  assert.equal((await publish(pub, mealsOpenMember()))[0], true, 'meals module set to member-opened');
+  await sleep(120);
+  const needId = 'need-' + Date.now().toString(16);
+  assert.equal((await publish(pub, memberNeed(A, needId)))[0], true, 'a member opened a care need');
+  await sleep(150);
+  const ws = await connect();
+  const r = await reqCollect(ws, 'need', { kinds: [30078], '#d': [NEED_D + needId] }, X.sk);   // X: another effective member
+  ws.close();
+  assert.ok(r.events.some(e => (e.tags.find(t => t[0] === 'd') || [])[1] === NEED_D + needId),
+    'the member-opened care need was withheld from the church’s own members — the retraction check is hiding it');
 });

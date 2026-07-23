@@ -117,6 +117,7 @@
     }
     async function publishNeed(need) {
       if (!S() || !S().publishSigned) return null;
+      if (need._sealed) throw new Error("This need was saved by a device that holds the care key, and this device can\u2019t open it. Open Members so the key syncs, then edit it here.");
       const id = need.id || uid("care");
       const rec = _normNeed(need);
       const sealed = {};
@@ -130,11 +131,14 @@
       const body = { ...rec, enc: ct };
       for (const f of SEALED_FIELDS) delete body[f];
       if (rec.recipient && S().careSealTo) {
-        const tok = _rand32();
-        const to = S().careSealTo(rec.recipient, { tok });
+        const secret = _rand32();
+        const to = S().careSealTo(rec.recipient, { s: secret });
         if (to) {
           body.skipEnc = to;
-          tags.push(["skiphash", await _sha256hex(tok)]);
+          for (const day of rec.dates) {
+            const tokDay = await _sha256hex(secret + ":" + day);
+            tags.push(["skiphash", day, await _sha256hex(tokDay)]);
+          }
         }
       }
       const e = await S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(body) });
@@ -180,7 +184,8 @@
               return;
             }
             try {
-              byId.set(id, { id, ..._normNeed(JSON.parse(e.content)), ts: e.created_at });
+              const opened = openNeed(JSON.parse(e.content));
+              byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, ts: e.created_at });
               emit();
             } catch (err) {
             }

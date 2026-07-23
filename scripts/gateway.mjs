@@ -980,6 +980,7 @@ function clearDerivedMaps() {
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
   for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER]) { try { s.clear(); } catch {} }
 }
+let _churchHydratePending = false;   // coalesce writeChurches's whole-corpus rehydrate across rapid saves
 function hydrateMaps() {
   if (!CHURCH_PUBS.size) return;
   clearDerivedMaps();                                  // H1: drop residue from churches that are no longer configured
@@ -989,7 +990,14 @@ function hydrateMaps() {
   rebuildBlocked(); rebuildMinors(); rebuildApproved(); rebuildGuardians(); rebuildNetworks();   // rebuildBlocked() also rebuilds MEMBERS from the full maps
 }
 // persist the current church allow-list to church.json (so a clone-registered church survives a relay restart).
-function persistChurches() { try { const churches = [...CHURCH_PUBS].map(h => ({ npub: npubEncode(h), name: CHURCH_NAMES.get(h) || '' })); const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE); } catch {} }
+function persistChurches() { try {
+  // Mirror writeChurches's on-disk shape: stamp envMigrated and keep by/at provenance. Without envMigrated,
+  // loadChurches() re-folds CHURCH_NPUB on the next boot — so a church the operator deliberately removed
+  // (which stamped envMigrated) is RESURRECTED the moment an /import clone rewrites church.json here, undoing
+  // the C2 removal. Dropping by/at also leaves rows the operator can't place and so can't safely remove.
+  const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), name: CHURCH_NAMES.get(h) || '', ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
+  const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches, envMigrated: true }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
+} catch {} }
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (!CHURCH_PUBS.size || e.kind !== 30078) return;
   const d = dtag(e), removed = (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
@@ -1077,10 +1085,16 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d.startsWith(NEED_D)) {   // a care need (already passed accept(): church/steward/care-admin/allowed-member) — record its recipient for careskip gating
     const id = d.slice(NEED_D.length);
     if (removed) { CARE_RECIPIENT.delete(id); CARE_SKIPHASH.delete(id); return; }
-    // v2: an opaque skip-token hash in a clear TAG. v1 needs carried the recipient pubkey in cleartext
-    // content — still honoured so a church mid-pilot doesn't lose the ability to skip on existing needs.
-    const sh = (e.tags.find(t => t[0] === 'skiphash') || [])[1];
-    if (sh && /^[0-9a-f]{64}$/i.test(sh)) CARE_SKIPHASH.set(id, sh.toLowerCase()); else CARE_SKIPHASH.delete(id);
+    // Opaque skip-token hashes in clear TAGS. v3 = one PER DAY: ['skiphash', <iso>, <hash>]; v2 = a single
+    // whole-need ['skiphash', <hash>] (kept so a need published before the redesign still skips); v1 carried
+    // the recipient pubkey in cleartext content (CARE_RECIPIENT, below).
+    const perDay = new Map(); let legacy = '';
+    for (const t of (e.tags || [])) {
+      if (t[0] !== 'skiphash') continue;
+      if (t.length >= 3 && /^\d{4}-\d{2}-\d{2}$/.test(t[1] || '') && /^[0-9a-f]{64}$/i.test(t[2] || '')) perDay.set(t[1], t[2].toLowerCase());
+      else if (/^[0-9a-f]{64}$/i.test(t[1] || '')) legacy = t[1].toLowerCase();
+    }
+    if (perDay.size || legacy) CARE_SKIPHASH.set(id, { perDay, legacy }); else CARE_SKIPHASH.delete(id);
     try { const r = toHexPub((JSON.parse(e.content) || {}).recipient || ''); if (r) CARE_RECIPIENT.set(id, r); else CARE_RECIPIENT.delete(id); } catch {}
   }
 }
@@ -1211,13 +1225,16 @@ function accept(e) {
     }
     if (d.startsWith(SLOT_D)) return isMember;                  // fill a slot: any member offers help (the event is keyed by their own pubkey, so they can't forge another member's)
     if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": the RECIPIENT, or a steward/care-team blocking a date on their behalf (recipient may not be on the app)
-      const careId = d.slice(SKIP_D.length).split(':')[0];
+      const parts = d.slice(SKIP_D.length).split(':');
+      const careId = parts[0], date = parts[1] || '';
       const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
-      // recipient-only, proven WITHOUT identifying them: present the token, we hash and compare. Falls back
-      // to the v1 cleartext-recipient check for needs published before the seal.
+      // recipient-only, proven WITHOUT identifying them: present THIS day's token, we hash and compare it to
+      // the need's per-day hash for THIS date. A token captured for one day cannot skip another. Falls back
+      // to the v2 whole-need hash, then the v1 cleartext-recipient check, for needs published before v3.
       const tok = (e.tags.find(t => t[0] === 'skiptok') || [])[1] || '';
       const want = CARE_SKIPHASH.get(careId);
-      const tokOk = !!(want && tok && createHash('sha256').update(String(tok)).digest('hex') === want);
+      const wantHash = want && ((want.perDay && want.perDay.get(date)) || want.legacy || '');
+      const tokOk = !!(wantHash && tok && createHash('sha256').update(String(tok)).digest('hex') === wantHash);
       return !!careId && (tokOk || e.pubkey === CARE_RECIPIENT.get(careId) || isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp));
     }
     if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)
@@ -1334,7 +1351,15 @@ function canRead(e, authed) {
     // events, authorised by authorship, not by delegated church authority.
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];
     const memberWritable = MEMBER_WRITABLE_D.some(p => d.startsWith(p));
-    if (ch && !memberWritable) { const r = STEWARDS_BY.get(ch); if (!(e.pubkey === ch || (r && r.has(e.pubkey)))) return false; }
+    // A care need (NEED_D) is authored by church / steward / care-team admin / member — accept() gates the
+    // write. So, like the member-authored docs above, its read authority is NOT the author's LIVE steward
+    // status, and a need shouldn't vanish because the steward who logged it was later revoked. Without this
+    // exemption the retraction returned false for every need a CARE-ADMIN or MEMBER opened (neither is in the
+    // steward roster), hiding it from EVERYONE — the church and care team included. Sibling of B1, which
+    // exempted the sign-ups but missed the need itself. The need's PII is sealed and the authed branch below
+    // still restricts readers to effective members of cp, so serving the clear half here is the design.
+    const retractionExempt = memberWritable || d.startsWith(NEED_D);
+    if (ch && !retractionExempt) { const r = STEWARDS_BY.get(ch); if (!(e.pubkey === ch || (r && r.has(e.pubkey)))) return false; }
     if (!authed) return false;
     // C3: `CHURCH_PUBS.has(authed)` / `NETWORKS.has(authed)` were UNSCOPED — any configured church key, and
     // any key any church had ever declared a network, read every OTHER church's roster, safeguarding lists
@@ -1951,7 +1976,12 @@ function serveStatic(req, res) {
         // churches on an invite-only relay (each new church key = an isLeader, the precondition for cross-church
         // mischief). Apply the SAME guards here.
         if (fresh && SETTINGS.inviteOnly) { res.writeHead(403, H); res.end('{"error":"this relay is invite-only — ask the operator to add your church"}'); return; }
-        if (fresh && CHURCH_PUBS.size >= 200) { res.writeHead(429, H); res.end('{"error":"registration capacity reached — contact the relay operator"}'); return; }
+        // RELAY-AUDIT-2026-07-20 H4, applied here too: /config addChurch gained a BOOTSTRAP-ONLY lock — on a
+        // private (non-community) relay that already carries a church, a fresh key can't self-register. /import
+        // kept only the inviteOnly + cap guards, so a fresh keypair with a NIP-98 proof could seed itself on a
+        // private relay through the clone path, minting an isLeader. Mirror the /config gate exactly.
+        if (fresh && !(OFFER_OPEN || SETTINGS.offerHosting) && CHURCH_PUBS.size) { res.writeHead(403, H); res.end('{"error":"this relay is already set up for its church — ask the operator to add yours, or turn on Offer to host other churches"}'); return; }
+        if (fresh && CHURCH_PUBS.size >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end('{"error":"registration capacity reached — contact the relay operator"}'); return; }
         if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
         let imported = 0, duplicates = 0, invalid = 0;
         for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {
@@ -2117,7 +2147,9 @@ function serveStatic(req, res) {
       writeFileSync(tmp, JSON.stringify({ churches: withMeta, envMigrated: true }, null, 2) + '\n');
       renameSync(tmp, CHURCH_FILE);
       loadChurches();
-      setImmediate(() => { try { hydrateMaps(); } catch (e) { console.error('[config] hydrateMaps failed', e); } });
+      // Coalesce the whole-corpus rehydrate: if several saves land in quick succession, run it ONCE after
+      // they settle rather than one full scan per save.
+      if (!_churchHydratePending) { _churchHydratePending = true; setImmediate(() => { _churchHydratePending = false; try { hydrateMaps(); } catch (e) { console.error('[config] hydrateMaps failed', e); } }); }
     };
     if (req.method === 'GET') {
       if (!isAdmin) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }   // don't leak the church list
@@ -2190,9 +2222,14 @@ function serveStatic(req, res) {
             // without a ceiling anyone could append churches forever and bloat the write policy.
             // The admin token bypasses this (real onboarding); a new self-register past the cap is refused.
             if (!isAdmin && !existing && list.length >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end(JSON.stringify({ error: 'registration capacity reached — contact the relay operator' })); return; }
-            if (existing) { if (name) existing.name = name; }
-            else { list.push({ npub: npubEncode(hex), name, by: isAdmin ? 'operator' : 'self', at: Math.floor(Date.now() / 1000) }); }
-            writeChurches(list);
+            // Only rewrite + rehydrate when something actually changed. A re-announce of an already-registered
+            // church with no new name is a no-op — and writeChurches ends with a whole-corpus rehydrate, so
+            // without this an attacker who self-registered once could loop signed re-announces of the same key
+            // and force a church.json rewrite + structure-doc rescan on each (Fable audit #1).
+            let changed = false;
+            if (existing) { if (name && existing.name !== name) { existing.name = name; changed = true; } }
+            else { list.push({ npub: npubEncode(hex), name, by: isAdmin ? 'operator' : 'self', at: Math.floor(Date.now() / 1000) }); changed = true; }
+            if (changed) writeChurches(list);
             res.writeHead(200, H); res.end(JSON.stringify({ ok: true, added: npubEncode(hex), configured: true, churches: isAdmin ? list : undefined }));
             return;
           }

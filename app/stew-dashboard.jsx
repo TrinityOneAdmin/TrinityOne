@@ -88,9 +88,24 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
 // persisted because the banner clears itself after 9s and the fix lives on another screen — by the time
 // the steward reaches Settings the event is long gone.
 window.REG_NEEDED_LS = 'trinityone.steward.relay-rejected';
+const REG_NEEDED_TTL = 7 * 24 * 60 * 60 * 1000;   // a rejection older than a week is stale — the relay was likely fixed another way
 function noteRelayRejection() {
   try { localStorage.setItem(window.REG_NEEDED_LS, String(Date.now())); } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-relay-rejected')); } catch (e) {}
+}
+function clearRelayRejection() {
+  try { localStorage.removeItem(window.REG_NEEDED_LS); } catch (e) {}
+  try { window.dispatchEvent(new CustomEvent('steward-relay-cleared')); } catch (e) {}
+}
+// The flag says "a relay refused our posts". It's stale once posts are landing again — the steward may well
+// have fixed it another way (restored the key, the operator added the church) without touching the in-console
+// token, and the alarm shouldn't linger forever. True only if a rejection is recorded AND still fresh.
+function relayRejectionActive() {
+  try { const t = parseInt(localStorage.getItem(window.REG_NEEDED_LS) || '', 10);
+    if (!t) return false;
+    if (Date.now() - t > REG_NEEDED_TTL) { clearRelayRejection(); return false; }
+    return true;
+  } catch (e) { return false; }
 }
 
 // surfaces a relay rejection (e.g. this console's church key isn't the one the relay enforces)
@@ -2041,11 +2056,17 @@ function DashRelaysCard() {
   // shown only after this relay has actually refused a write — see noteRelayRejection(). Pasting a
   // relay's admin token hands over full control of that relay, so it is not something to leave sitting
   // on screen inviting a steward to go and find one.
-  const [regNeeded, setRegNeeded] = React.useState(() => { try { return !!localStorage.getItem(window.REG_NEEDED_LS); } catch (e) { return false; } });
+  const [regNeeded, setRegNeeded] = React.useState(relayRejectionActive);
   React.useEffect(() => {
-    const f = () => setRegNeeded(true);
-    window.addEventListener('steward-relay-rejected', f);
-    return () => window.removeEventListener('steward-relay-rejected', f);
+    const onRejected = () => setRegNeeded(true);
+    // A write landing (steward-publish-ok) means the relay is accepting our posts again — so whatever the
+    // steward did to fix it (in-console token, restored key, operator added the church), clear the alarm.
+    const onOk = () => { clearRelayRejection(); setRegNeeded(false); };
+    const onCleared = () => setRegNeeded(false);
+    window.addEventListener('steward-relay-rejected', onRejected);
+    window.addEventListener('steward-publish-ok', onOk);
+    window.addEventListener('steward-relay-cleared', onCleared);
+    return () => { window.removeEventListener('steward-relay-rejected', onRejected); window.removeEventListener('steward-publish-ok', onOk); window.removeEventListener('steward-relay-cleared', onCleared); };
   }, []);
   const [regToken, setRegToken] = React.useState('');
   const [regMsg, setRegMsg] = React.useState('');
@@ -2056,8 +2077,7 @@ function DashRelaysCard() {
     try {
       await window.Steward.registerWithRelay(regToken.trim());
       setRegMsg('✓ Done — the relay will accept this church now.');
-      // the problem this control exists for is solved; stop offering it (and stop asking for the token)
-      try { localStorage.removeItem(window.REG_NEEDED_LS); } catch (e) {}
+      clearRelayRejection();   // the problem this control exists for is solved — clear the alarm + sync listeners
       setRegToken('');
     }
     catch (e) { setRegMsg('✗ ' + (e.message || 'Couldn’t reach the relay.')); }

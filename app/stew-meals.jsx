@@ -16,6 +16,9 @@ const MEALS_TYPES = [
 ];
 const MEALS_TYPE_LABEL = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[1]]));
 const MEALS_TYPE_ICON  = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[2]]));
+// A need is `_sealed` when this device lacks the church care key, so its name/notes couldn't be decrypted.
+// Say that plainly instead of showing the no-name fallback, which would read as a real nameless need.
+const needTitle = (need) => need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church');
 const MEALS_DIET = ['Vegetarian', 'Vegan', 'Carnivore', 'Pescatarian', 'Keto', 'Gluten-free', 'Dairy-free', 'Nut-free'];
 
 const mealsFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
@@ -341,7 +344,7 @@ function MealsNeedCard({ need, slots, skips, onOpen }) {
         <Icon name={MEALS_TYPE_ICON[need.type] || 'heart'} size={20} color="var(--sage)" />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
+        <div style={{ fontWeight: 700, fontSize: 15, color: need._sealed ? 'var(--ink-3)' : 'var(--ink)', fontStyle: need._sealed ? 'italic' : 'normal' }}>{needTitle(need)}</div>
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
       </div>
       <div style={{ textAlign: 'right' }}>
@@ -376,12 +379,17 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
             <Icon name={MEALS_TYPE_ICON[need.type] || 'heart'} size={24} color="var(--sage)" />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21 }}>{need.displayLabel || 'A member in our church'}</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21, color: need._sealed ? 'var(--ink-3)' : 'var(--ink)', fontStyle: need._sealed ? 'italic' : 'normal' }}>{needTitle(need)}</div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
           </div>
-          <button onClick={onEdit} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
+          {/* No care key on this device → can't edit without blanking the sealed name/notes. Point at the fix. */}
+          {need._sealed
+            ? <span style={{ fontSize: 12, color: 'var(--ink-3)', maxWidth: 150, textAlign: 'right', lineHeight: 1.4 }}>Open Members to sync the care key, then edit</span>
+            : <button onClick={onEdit} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>}
         </div>
-        {need.notes ? <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{need.notes}</div> : null}
+        {need._sealed
+          ? <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>The name, notes and recipient of this need are encrypted for the member’s privacy, and this device doesn’t hold the church’s care key yet. The schedule below still works. Open <b>Members</b> once so the key can sync.</div>
+          : (need.notes ? <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{need.notes}</div> : null)}
       </div>
 
       <div style={{ marginTop: 14, ...mealsLbl }}>SCHEDULE</div>

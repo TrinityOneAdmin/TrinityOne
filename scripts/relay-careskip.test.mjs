@@ -137,3 +137,25 @@ test('the church itself can still block a date on a member’s behalf', async ()
   const [ok] = await publish(ws, skip(church, 'c-steward', '2026-08-01', null));
   assert.equal(ok, true, 'the church lost the ability to skip for someone not on the app');
 });
+
+// v3 PER-DAY tokens (Fable audit 2026-07-22 #12). A need seals ONE master secret to the recipient and carries
+// a per-day hash ['skiphash', <iso>, sha256(sha256(secret:day))]. The recipient presents sha256(secret:day)
+// for that day only — so a token captured off one day's stored skip cannot skip any other day.
+const v3Need = (id, secret, days) => finalizeEvent({
+  kind: 30078, created_at: now(),
+  tags: [['d', NEED_D + id], ['p', cp], ...days.map(day => ['skiphash', day, sha(sha(secret + ':' + day))])],
+  content: JSON.stringify({ id, type: 'meals', dates: days, church: cp, sealed: 'nip44-stand-in' }),
+}, church.sk);
+const dayTok = (secret, day) => sha(secret + ':' + day);
+
+test('v3: a per-day token skips ITS day but is REFUSED for another day (no reusable bearer token)', async () => {
+  const secret = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  const days = ['2026-09-01', '2026-09-02'];
+  assert.equal((await publish(ws, v3Need('c-perday', secret, days)))[0], true, 'the church could not publish the v3 need');
+  await sleep(60);
+  assert.equal((await publish(ws, skip(recipient, 'c-perday', days[0], dayTok(secret, days[0]))))[0], true, "day-1's own token must skip day 1");
+  // the crux: the SAME day-1 token must NOT skip day 2 (what a captured/replayed token could do before)
+  const [reused, why] = await publish(ws, skip(recipient, 'c-perday', days[1], dayTok(secret, days[0])));
+  assert.equal(reused, false, `a day-1 token was accepted for day 2 — the per-day binding failed: ${why}`);
+  assert.equal((await publish(ws, skip(recipient, 'c-perday', days[1], dayTok(secret, days[1]))))[0], true, "day-2's own token must skip day 2");
+});
