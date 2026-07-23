@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>TrinityOne — Features in depth</title>
-<meta name="description" content="Everything TrinityOne does — the Bible reader, community, serving, calendar, care, safeguarding and self-hosting — running on a box your church owns." />
+<meta name="description" content="Everything TrinityOne does — the Bible reader, community, serving, calendar, care, safety check, safeguarding and self-hosting — running on a box your church owns." />
 
 <link rel="stylesheet" href="vendor/fonts/fonts.css" />
 <link rel="stylesheet" href="brand.css" />
@@ -129,6 +129,7 @@
     <a href="#serving">Serving</a>
     <a href="#calendar">Calendar</a>
     <a href="#care">Care</a>
+    <a href="#safety">Safety check</a>
     <a href="#library">Library</a>
     <a href="#safeguarding">Safeguarding</a>
     <a href="#selfhost">Self-hosting</a>
@@ -307,14 +308,36 @@
     </div>
   </section>
 
+  <!-- SAFETY CHECK -->
+  <section class="feat alt" id="safety">
+    <div class="ftext">
+      <span class="to-pill" style="background:var(--clay-soft);color:var(--clay-ink)">Safety check</span>
+      <h3>When something happens, know everyone's safe</h3>
+      <p class="lead">In a crisis &mdash; a quake, unrest, a storm &mdash; a steward sends one check. Members tap once to mark themselves safe, and the church sees at a glance who's accounted for and who still needs a call.</p>
+      <ul>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>One tap to say &ldquo;I'm safe&rdquo; &mdash; no typing, works over a thin connection</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Replies are encrypted to your church &mdash; the roll-call stays private</span></li>
+      </ul>
+    </div>
+    <div class="fvis" style="background:linear-gradient(155deg,var(--clay),#8f3f24)">
+      <div class="fpanel">
+        <div class="ph"><div class="ic" style="background:var(--clay-soft);color:var(--clay-ink)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4.5 6v5.2c0 4.6 3.2 7.9 7.5 9.3 4.3-1.4 7.5-4.7 7.5-9.3V6L12 3Z"/><path d="m8.8 12 2.2 2.2L15.4 9.8"/></svg></div><div><div class="t">Safety check</div><div class="s">Storm warning &middot; sent 10 min ago</div></div></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">Maria Gonzalez</div><div class="sub">Marked safe &middot; 2 min ago</div></div><span class="pill" style="background:var(--sage)">Safe</span></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">John Park</div><div class="sub">Marked safe &middot; 5 min ago</div></div><span class="pill" style="background:var(--sage)">Safe</span></div>
+        <div class="frow" style="background:var(--clay-soft);border-color:color-mix(in oklab,var(--clay) 30%,var(--line))"><div style="flex:1"><div class="lbl">Grace Okafor</div><div class="sub">Not heard from &mdash; give her a call</div></div><span class="pill" style="background:var(--clay)">Waiting</span></div>
+      </div>
+    </div>
+  </section>
+
   <!-- LIBRARY -->
-  <section class="feat alt" id="library">
+  <section class="feat" id="library">
     <div class="ftext">
       <span class="to-pill">Library</span>
       <h3>Plans, search, and your church's shelf</h3>
-      <p class="lead">Read with a plan, search across the Bibles you've installed, and find the devotionals, studies and audio your church publishes &mdash; all in one place.</p>
+      <p class="lead">Read with a plan, search across the Bibles you've installed, and find the devotionals, studies, and sermons &mdash; video and audio &mdash; your church publishes, all in one place.</p>
       <ul>
         <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Reading plans and fast search</span></li>
+        <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Your church uploads its own sermon video and audio for members to stream</span></li>
         <li><span class="tick"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg></span><span>Resources your church gathers and publishes</span></li>
       </ul>
     </div>
@@ -323,13 +346,14 @@
         <div class="ph"><div class="ic" style="background:var(--clay-soft);color:var(--clay-ink)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5.6C10.4 4.5 8.2 4 5.8 4 4.8 4 4 4.8 4 5.8v11.4c0 1 .8 1.6 1.8 1.6 2.4 0 4.6.5 6.2 1.6 1.6-1.1 3.8-1.6 6.2-1.6 1 0 1.8-.6 1.8-1.6V5.8C20 4.8 19.2 4 18.2 4c-2.4 0-4.6.5-6.2 1.6Z"/><path d="M12 5.6v13.4"/></svg></div><div><div class="t">This week's plan</div><div class="s">Gospel of John &middot; Day 4 of 21</div></div></div>
         <div class="frow"><div style="flex:1"><div class="lbl">John 4 &middot; The well</div><div class="sub">~6 min read</div></div><span class="pill">Continue</span></div>
         <div class="frow"><div style="flex:1"><div class="lbl">Search &ldquo;living water&rdquo;</div><div class="sub">37 results across 3 translations</div></div></div>
-        <div class="frow"><div style="flex:1"><div class="lbl">Sunday's sermon</div><div class="sub">Audio + notes &middot; Grace Chapel</div></div><span class="pill" style="background:var(--clay)">Play</span></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">Sunday's sermon</div><div class="sub">Video &middot; uploaded by Grace Chapel</div></div><span class="pill" style="background:var(--clay)">Watch</span></div>
+        <div class="frow"><div style="flex:1"><div class="lbl">Midweek teaching</div><div class="sub">Audio + notes &middot; Grace Chapel</div></div><span class="pill" style="background:var(--clay)">Play</span></div>
       </div>
     </div>
   </section>
 
   <!-- SAFEGUARDING -->
-  <section class="feat" id="safeguarding">
+  <section class="feat alt" id="safeguarding">
     <div class="ftext">
       <span class="to-pill" style="background:var(--sage-soft);color:#345c41">Safeguarding</span>
       <h3>Protection anchored in your leaders</h3>
@@ -351,7 +375,7 @@
   </section>
 
   <!-- SELF-HOSTING -->
-  <section class="feat alt" id="selfhost">
+  <section class="feat" id="selfhost">
     <div class="ftext">
       <span class="to-pill">Self-hosting</span>
       <h3>Run the whole thing on a box you own</h3>
@@ -372,7 +396,7 @@
   </section>
 
   <!-- KEYS & PRIVACY -->
-  <section class="feat" id="privacy">
+  <section class="feat alt" id="privacy">
     <div class="ftext">
       <span class="to-pill">Your keys</span>
       <h3>No account, no password &mdash; just you</h3>
