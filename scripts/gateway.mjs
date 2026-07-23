@@ -406,6 +406,25 @@ const ADMIN_FILE = join(DATA_DIR,'admin.json');
 let ADMIN_TOKEN = '';
 try { ADMIN_TOKEN = JSON.parse(readFileSync(ADMIN_FILE, 'utf8')).token || ''; } catch {}
 if (!ADMIN_TOKEN) { ADMIN_TOKEN = randomBytes(24).toString('base64url'); try { writeFileSync(ADMIN_FILE, JSON.stringify({ token: ADMIN_TOKEN }), { mode: 0o600 }); } catch {} }
+// One-time backup-download tickets. A plain <a download> navigation can't send an Authorization header, so
+// the backup URL used to carry ?token=<ADMIN_TOKEN> — putting the relay's secret into browser history, logs
+// and referrers (and tripping Brave's "insecure download" heuristic). A ticket is single-use + 60s-lived, so
+// the download URL is inert the moment it's used or expires.
+const BACKUP_TICKETS = new Map();   // ticket -> expiry ms
+function mintBackupTicket() {
+  const now = Date.now();
+  for (const [k, exp] of BACKUP_TICKETS) if (exp < now) BACKUP_TICKETS.delete(k);   // sweep expired
+  const t = randomBytes(24).toString('base64url');
+  BACKUP_TICKETS.set(t, now + 60000);
+  return t;
+}
+function consumeBackupTicket(t) {
+  if (!t) return false;
+  const exp = BACKUP_TICKETS.get(t);
+  if (exp === undefined) return false;
+  BACKUP_TICKETS.delete(t);   // one-time, even if expired
+  return exp >= Date.now();
+}
 // Relay identity (for resync): this relay's own Nostr keypair. It proves WHICH relay is asking when it pulls a
 // peer for a church's full corpus — a church authorises specific relay pubkeys as its trusted infrastructure
 // (see TRUSTED_RELAYS), the same church key that gatekeeps writes. Generated once, stored 0600 (gitignored).
@@ -2395,8 +2414,17 @@ function serveStatic(req, res) {
   // Full relay backup: stream the ENTIRE data dir (every church's events + media, plus this relay's identity
   // key + settings) as one gzipped tar. Admin-gated (token in header or ?token=). Uses the platform `tar`
   // (bundled on Win10+/macOS/Linux). A WAL checkpoint first so relay.sqlite is self-consistent in the archive.
-  if (route === '/relay-backup' && req.method === 'GET') {
+  // Mint a one-time ticket for the backup download (auth via header, so the admin secret never rides in a URL).
+  if (route === '/relay-backup-ticket' && req.method === 'POST') {
     if (!adminOK(req)) { res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"unauthorized"}'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    res.end(JSON.stringify({ ticket: mintBackupTicket() }));
+    return;
+  }
+  if (route === '/relay-backup' && req.method === 'GET') {
+    // Accept a one-time ?ticket= (the console's normal path) OR the admin token (header/?token=, for API use).
+    const ticket = (() => { try { return new URL(req.url, 'http://x').searchParams.get('ticket') || ''; } catch { return ''; } })();
+    if (!consumeBackupTicket(ticket) && !adminOK(req)) { res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"unauthorized"}'); return; }
     try { store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch {}
     const stamp = new Date().toISOString().slice(0, 10);
     const fname = 'trinityone-relay-backup-' + stamp + '.tgz';

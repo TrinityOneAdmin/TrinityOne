@@ -239,7 +239,17 @@
       // backup/restore card (unlocked with the admin token, same as this settings fetch). The download streams a
       // big file, so it's a plain <a download> with the token in the query rather than a fetch-into-memory blob.
       const bc = document.getElementById('backupCard'); if (bc) bc.style.display = 'block';
-      const dlb = document.getElementById('dlBackup'); if (dlb) dlb.href = '/relay-backup?token=' + encodeURIComponent(adminToken);
+      // Download via a one-time ticket so the admin secret never sits in a URL (history/logs/referrers).
+      const dlb = document.getElementById('dlBackup');
+      if (dlb) dlb.onclick = async (e) => {
+        e.preventDefault();
+        try {
+          const r = await fetch('/relay-backup-ticket', { method: 'POST', headers: authHeaders() });
+          if (!r.ok) return;
+          const j = await r.json();
+          const a = document.createElement('a'); a.href = '/relay-backup?ticket=' + encodeURIComponent(j.ticket); a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+        } catch (err) {}
+      };
       const used = j.mediaUsed || 0;
       document.getElementById('mediaUsed').textContent = used ? '· ' + (Math.round(used / 1e9 * 100) / 100) + ' GB used' : '';
       servesBaseline = servesSnapshot();   // what's on the server right now — the thing "unsaved" is measured against
