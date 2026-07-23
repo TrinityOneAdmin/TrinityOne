@@ -4592,9 +4592,11 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
 
       <DashChatTagsPanel church={church} />
 
-      <DashMealsPanel church={church} />
-
+      {/* Giving is a short card — place it right after the short Chat-tags card so the masonry column flow
+          packs it there, instead of stranding it at the bottom of the tall Practical-care column. */}
       <DashGivingPanel church={church} />
+
+      <DashMealsPanel church={church} />
       </React.Fragment> : null}
 
       {/* Network and relays are one page. Apart, the Relays card was the only child of .net-grid and so
