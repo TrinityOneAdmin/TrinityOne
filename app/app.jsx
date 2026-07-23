@@ -367,14 +367,28 @@ function App() {
   const [connTick, bumpConn] = useA(0);
   useAE(() => {
     let last = Date.now();
-    const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - last > 2500) { last = Date.now(); bumpConn(x => x + 1); } };
-    const onOnline = () => bumpConn(x => x + 1);
+    // force the church-doc hubs to re-fetch too (bumpConn alone can't reopen a hub the chat/care screens hold open)
+    const refetch = () => { try { const F = window.Fellowship; if (F && F.refetchChurchDocs) F.refetchChurchDocs(); } catch (e) {} };
+    const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - last > 2500) { last = Date.now(); bumpConn(x => x + 1); refetch(); } };
+    const onOnline = () => { bumpConn(x => x + 1); refetch(); };
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('online', onOnline);
     window.addEventListener('focus', onVis);
     // Fellowship fires this after a PIN unlock: it has dropped the stale (anonymous) relay sockets, so we
     // must re-run the church subscriptions to reopen them — now authenticated with the just-derived key.
     window.addEventListener('trinity-reconnect', onOnline);
+    // Native resume: web visibilitychange/focus are unreliable in the Android WebView, so RETURNING to a
+    // backgrounded app often didn't re-subscribe — a steward's change (chat tags, groups, care) then never
+    // appeared until a force-close+reopen. The App plugin's appStateChange is the reliable native foreground
+    // signal; on resume we re-run the church subscriptions (a cheap since-cursor re-fetch) so updates land.
+    let appRemove = null;
+    try {
+      const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+      if (AppP && AppP.addListener) {
+        Promise.resolve(AppP.addListener('appStateChange', (s) => { if (s && s.isActive && Date.now() - last > 2500) { last = Date.now(); bumpConn(x => x + 1); refetch(); } }))
+          .then(h => { appRemove = (h && h.remove) ? () => h.remove() : null; }).catch(() => {});
+      }
+    } catch (e) {}
     // perf #2: the 90s tick used to bump connTick UNCONDITIONALLY, tearing down + reopening ~15 subscription
     // effects every 90s (several with no `since` → full-backlog re-download over the funnel) even on a healthy
     // socket. Now it only bumps when a relay we opened has actually DROPPED (relaysHealthy() === false) — the same
@@ -386,7 +400,7 @@ function App() {
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
       last = Date.now(); bumpConn(x => x + 1);
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onOnline); clearInterval(beat); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onOnline); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));

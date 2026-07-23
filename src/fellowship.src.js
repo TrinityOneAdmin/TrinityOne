@@ -540,6 +540,18 @@ function _onChurchDocs(cp, h) {
     if (--hub.refs <= 0) { hub.refs = 0; const close = hub.closer; hub.closer = null; if (close) close(); _docsHubSaveNow(hub); }
   };
 }
+// Force every OPEN church-doc hub to re-run its since-cursor fetch, independent of ref-counting. The
+// connTick reopen only fires when EVERY feature using a hub tears down at once — which isn't true while the
+// chat/care screens hold persistent subs — so a steward's change (chat tags, groups, care) could sit unseen
+// until a full app restart. Called on app RESUME (not on a timer): it closes each hub's live sub and reopens
+// it with a fresh _hubSince() fetch (incremental, 3-day slop), delivering any updates to the existing handlers.
+function refetchChurchDocs() {
+  for (const hub of _docsHubs.values()) {
+    if (!hub.closer) continue;                 // only hubs currently open
+    const c = hub.closer; hub.closer = null; try { c(); } catch (e) {}
+    _docsHubOpen(hub);
+  }
+}
 
 // ── members hub: kind-1 chatter + member:<church> joins — ONE sub feeds both the People directory
 // and the member count (they used to fetch the whole chat corpus twice, in parallel). msgs counts can
@@ -785,6 +797,7 @@ if (typeof window !== 'undefined') {
 
 window.Fellowship = {
   relays: loadRelays(),
+  refetchChurchDocs,   // force church-doc hubs to re-fetch on app resume (updates without a full restart)
   CANONICAL_RELAY,
   CANONICAL_RELAYS,
   toPub,   // validate/normalise an npub-or-hex → 64-hex (or null on a bad bech32 checksum); used by the UI to reject a mistyped church code
