@@ -572,7 +572,7 @@
     } catch (e) { if (gm) { gm.style.color = 'var(--clay-ink)'; gm.textContent = '\u2717 Couldn\u2019t reach the relay.'; } return; }
     adminToken = t; localStorage.setItem(TOKEN_KEY, adminToken);
     if (gm) gm.textContent = '';
-    loadConfig(); gpTick(); loadRelayName();
+    loadConfig(); gpTick(); loadRelayName(); maybeFirstRun();
   };
   document.getElementById('tok').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('tokGo').click(); });
   // When this panel is opened ON the relay machine (e.g. the TrinityOne Suite's own window), the relay hands
@@ -584,6 +584,7 @@
     }
     loadConfig();
     loadRelayName();
+    maybeFirstRun();
   })();
 
   // ── "Go public" wizard: bring the node onto Tailscale + turn on Funnel (public HTTPS/WSS) ──
@@ -857,3 +858,127 @@
   // the activity window moves slowly; a minute is plenty and keeps "Sent today" honest without polling
   // the aggregates as hard as /status.
   setInterval(loadStats, 60000);
+
+  // ── First-run setup wizard ──────────────────────────────────────────────────
+  // A fresh relay otherwise drops the operator straight onto the dashboard with the
+  // setup scattered across Settings cards. This walks a brand-new relay through the
+  // two things it actually needs — a name and its first church — BEFORE the console,
+  // then points at the tunnel as the next step. Shown once (a localStorage flag), and
+  // only when the relay genuinely looks new (no name claimed AND no church added), so
+  // an established relay is never nagged.
+  const RSW_SEEN = 'to_relay_setup_seen';
+  let rswOpen = false, rswStep = 0, rswHandle = '', rswAdded = false;
+  const RSW_IC = {
+    wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 16 0"/><path d="M2 20h20"/><circle cx="12" cy="8" r="1.4" fill="currentColor" stroke="none"/></svg>',
+    tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v5.6a2 2 0 0 0 .6 1.4l7 7a2 2 0 0 0 2.8 0l5.6-5.6a2 2 0 0 0 0-2.8l-7-7A2 2 0 0 0 12.6 5H7a4 4 0 0 0-4 4Z"/><circle cx="8" cy="10" r="1.3" fill="currentColor" stroke="none"/></svg>',
+    church: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M9 5h6"/><path d="M12 8 5 12v9h14v-9L12 8Z"/><path d="M10 21v-4a2 2 0 0 1 4 0v4"/></svg>',
+    globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg>',
+  };
+
+  async function maybeFirstRun() {
+    if (rswOpen || !adminToken || localStorage.getItem(RSW_SEEN)) return;
+    let nm = null, cf = null;
+    try {
+      [nm, cf] = await Promise.all([
+        fetch('/relay-names/mine', { headers: authHeaders(), cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/config?stats=1', { headers: authHeaders(), cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
+      ]);
+    } catch (e) { return; }
+    if (!nm || !cf) return;                                   // couldn't read (401 / relay down) — don't guess
+    const fresh = !nm.handle && (cf.churches || []).length === 0;
+    if (fresh) openRelaySetup();
+    else localStorage.setItem(RSW_SEEN, '1');                 // an established relay must never be nagged
+  }
+  window.maybeFirstRun = maybeFirstRun;
+
+  function openRelaySetup() { rswOpen = true; rswStep = 0; rswHandle = ''; rswAdded = false; document.getElementById('relaySetup').classList.add('show'); renderRSW(); }
+  function closeRSW() { localStorage.setItem(RSW_SEEN, '1'); rswOpen = false; document.getElementById('relaySetup').classList.remove('show'); }
+  function rswDots() { let s = ''; for (let i = 0; i < 4; i++) s += '<span class="' + (i <= rswStep ? 'on' : '') + '"></span>'; return '<div class="rsw-dots">' + s + '</div>'; }
+
+  function renderRSW() {
+    const card = document.getElementById('rswCard');
+    if (rswStep === 0) {
+      card.innerHTML = rswDots()
+        + '<div class="rsw-ic">' + RSW_IC.wave + '</div>'
+        + '<h2 class="rsw-h">Welcome — let’s set up your relay</h2>'
+        + '<p class="rsw-sub">A relay is the private server that stores your church’s messages, records and media — running right here, on this machine. Two quick things and you’re ready: give it a name, and add your church. About a minute.</p>'
+        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswSkip">Skip setup</button><div style="flex:1"></div><button class="btn btn-clay" id="rswGo">Get started</button></div>';
+      document.getElementById('rswGo').onclick = () => { rswStep = 1; renderRSW(); };
+      document.getElementById('rswSkip').onclick = closeRSW;
+      return;
+    }
+    if (rswStep === 1) {
+      card.innerHTML = rswDots()
+        + '<div class="rsw-ic">' + RSW_IC.tag + '</div>'
+        + '<h2 class="rsw-h">Name your relay</h2>'
+        + '<p class="rsw-sub">Pick a short, memorable name. Stewards type it in their console to connect their church — and it keeps pointing here even when the tunnel address changes on restart.</p>'
+        + '<div class="rsw-lbl">Relay name</div>'
+        + '<input class="rsw-in" id="rswName" placeholder="e.g. grace-city" autocomplete="off" spellcheck="false" />'
+        + '<div class="rsw-msg" id="rswNameMsg"></div>'
+        + '<div class="rsw-note">Letters, numbers and hyphens. Others can type this to connect once public access is on — that’s the last step, on the dashboard.</div>'
+        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswSkip">Skip for now</button><button class="btn btn-clay" id="rswClaim">Claim &amp; continue</button></div>';
+      const inp = document.getElementById('rswName');
+      if (rswHandle) inp.value = rswHandle;
+      inp.focus();
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('rswClaim').click(); });
+      document.getElementById('rswBack').onclick = () => { rswStep = 0; renderRSW(); };
+      document.getElementById('rswSkip').onclick = () => { rswStep = 2; renderRSW(); };
+      document.getElementById('rswClaim').onclick = async () => {
+        const handle = (inp.value || '').trim().toLowerCase();
+        const msg = document.getElementById('rswNameMsg');
+        if (!handle) { msg.style.color = 'var(--clay-ink)'; msg.textContent = 'Type a name first, or skip.'; inp.focus(); return; }
+        msg.style.color = 'var(--ink-3)'; msg.textContent = 'Claiming…';
+        try {
+          const r = await fetch('/relay-names/mine', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ handle }) });
+          const j = await r.json();
+          if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (j.error || 'that name didn’t work — try another'); return; }
+          rswHandle = j.handle || handle; rswStep = 2; renderRSW();
+        } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (e.message || 'couldn’t reach the relay'); }
+      };
+      return;
+    }
+    if (rswStep === 2) {
+      card.innerHTML = rswDots()
+        + '<div class="rsw-ic">' + RSW_IC.church + '</div>'
+        + '<h2 class="rsw-h">Add your church</h2>'
+        + '<p class="rsw-sub">Paste your church’s ID (its npub) so it’s allowed to publish to and read from this relay. You’ll find it in the steward console. You can add more churches later.</p>'
+        + '<div class="rsw-lbl">Church npub</div>'
+        + '<input class="rsw-in" id="rswNpub" placeholder="npub1…" autocomplete="off" spellcheck="false" />'
+        + '<div class="rsw-msg" id="rswNpubMsg"></div>'
+        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswSkip">Skip for now</button><button class="btn btn-clay" id="rswAdd">Add &amp; continue</button></div>';
+      const inp = document.getElementById('rswNpub');
+      inp.focus();
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('rswAdd').click(); });
+      document.getElementById('rswBack').onclick = () => { rswStep = 1; renderRSW(); };
+      document.getElementById('rswSkip').onclick = () => { rswStep = 3; renderRSW(); };
+      document.getElementById('rswAdd').onclick = async () => {
+        const npub = (inp.value || '').trim();
+        const msg = document.getElementById('rswNpubMsg');
+        if (!npub) { msg.style.color = 'var(--clay-ink)'; msg.textContent = 'Paste the church’s npub first, or skip.'; inp.focus(); return; }
+        msg.style.color = 'var(--ink-3)'; msg.textContent = 'Adding…';
+        try {
+          const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ addChurch: { npub, name: '' } }) });
+          const j = await r.json();
+          if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (j.error || 'that didn’t look like a valid npub'); return; }
+          rswAdded = true; if (typeof loadConfig === 'function') loadConfig(); rswStep = 3; renderRSW();
+        } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (e.message || 'couldn’t reach the relay'); }
+      };
+      return;
+    }
+    // step 3 — done + the one worthwhile next step (the tunnel lives on Settings)
+    card.innerHTML = rswDots()
+      + '<div class="rsw-ic">' + RSW_IC.check + '</div>'
+      + '<h2 class="rsw-h">Your relay is ready</h2>'
+      + '<p class="rsw-sub">' + (rswHandle ? 'Named <b>' + esc(rswHandle) + '</b>. ' : '') + (rswAdded ? 'Your church can use it now. ' : '') + 'One more thing worth doing, so members outside your building can connect:</p>'
+      + '<div class="rsw-next">'
+      +   '<button class="rsw-step" id="rswTunnel"><span class="si">' + RSW_IC.globe + '</span><span style="flex:1"><span class="st">Reach members from anywhere</span><span class="sd">Turn on a secure tunnel — free, no router setup.</span></span></button>'
+      + '</div>'
+      + '<div class="rsw-foot"><div style="flex:1"></div><button class="btn btn-clay" id="rswDone">Go to dashboard</button></div>';
+    document.getElementById('rswDone').onclick = closeRSW;
+    document.getElementById('rswTunnel').onclick = () => {
+      closeRSW();
+      const t = document.getElementById('tab-set'); if (t) t.click();
+      setTimeout(() => { const gp = document.getElementById('goPublic'); if (gp) gp.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 140);
+    };
+  }
