@@ -3705,6 +3705,80 @@ function DashSermons() {
 }
 window.DashSermons = DashSermons;
 
+// Steward-defined chat message tags. Members can flag a message as a "Prayer request" (built-in); this lets
+// the church add its own — Testimony, Praise, … — published as one church-signed doc. Icon/accent come from
+// fixed allowlists (no free-text CSS/icons). A tag's id is STABLE once saved, so renaming its label never
+// orphans messages already flagged with it.
+const CHATTAG_ICONS = ['sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
+const CHATTAG_ACCENTS = [['gold', 'var(--gold)'], ['sage', 'var(--sage)'], ['clay', 'var(--clay)'], ['sky', '#5360D6'], ['plum', '#C24B7A'], ['teal', '#2E8B8B']];
+const chatTagCss = (a) => (CHATTAG_ACCENTS.find(x => x[0] === a) || CHATTAG_ACCENTS[2])[1];
+function DashChatTagsPanel({ church }) {
+  const [tags, setTags] = React.useState(null);   // null = still loading; else the editable list
+  const [msg, setMsg] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    if (!window.Steward.subscribeMessageTags) { setTags([]); return; }
+    return window.Steward.subscribeMessageTags(t => setTags(t));
+  }, []);
+  const list = tags || [];
+  const setRow = (i, patch) => setTags(list.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  const add = () => setTags([...list, { id: '', label: '', icon: 'sparkle', accent: 'clay' }]);
+  const remove = (i) => setTags(list.filter((_, j) => j !== i));
+  const save = async () => {
+    setBusy(true); setMsg('');
+    try { const saved = await window.Steward.publishMessageTags(list); setTags(saved || []); setMsg('✓ Saved — members see these on their next sync.'); }
+    catch (e) { setMsg('Couldn’t save — try again.'); }
+    setBusy(false);
+    setTimeout(() => setMsg(''), 4000);
+  };
+  const swatch = { width: 24, height: 24, borderRadius: 999, cursor: 'pointer', flexShrink: 0 };
+  const iconBtn = (active) => ({ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, background: active ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface-2)', border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)') });
+  return (
+    <Panel title="Chat message tags">
+      <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Members can flag a message so it stands out — a <b>Prayer request</b> is built in. Add your own, like Testimony or Praise, and members can flag those too. Up to {6} tags.</div>
+
+      {/* built-in, not editable */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 13, border: '1px solid color-mix(in oklab, var(--gold) 32%, var(--line))', background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', marginBottom: 12 }}>
+        <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: 'var(--gold)' }}><Icon name="pray" size={17} color="var(--gold)" /></div>
+        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Prayer request</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Built in — always available</div></div>
+      </div>
+
+      {tags === null ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Loading…</div> : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {list.map((t, i) => { const ac = chatTagCss(t.accent); return (
+          <div key={i} style={{ borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: ac }}><Icon name={t.icon} size={17} color={ac} /></div>
+              <input value={t.label} onChange={e => setRow(i, { label: e.target.value.slice(0, 24) })} placeholder="Tag name, e.g. Testimony" maxLength={24} style={{ flex: 1, minWidth: 0, height: 40, padding: '0 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+              <button onClick={() => remove(i)} aria-label="Remove tag" title="Remove tag" style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)' }}><Icon name="trash" size={16} color="currentColor" /></button>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+              {CHATTAG_ICONS.map(ic => (
+                <button key={ic} onClick={() => setRow(i, { icon: ic })} aria-label={'Icon ' + ic} style={iconBtn(t.icon === ic)}><Icon name={ic} size={16} color={t.icon === ic ? ac : 'var(--ink-3)'} /></button>
+              ))}
+              <div style={{ width: 1, height: 22, background: 'var(--line)', margin: '0 3px' }} />
+              {CHATTAG_ACCENTS.map(([id, css]) => (
+                <button key={id} onClick={() => setRow(i, { accent: id })} aria-label={'Colour ' + id} title={id} style={{ ...swatch, background: css, border: t.accent === id ? '2px solid var(--ink)' : '2px solid transparent', boxShadow: t.accent === id ? '0 0 0 2px var(--surface) inset' : 'none' }} />
+              ))}
+            </div>
+          </div>
+        ); })}
+        {list.length < 6 ? (
+          <button onClick={add} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '11px 13px', borderRadius: 12, border: '1px dashed var(--line)', background: 'none', cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}><Icon name="plus" size={16} color="var(--clay)" /> Add a tag</button>
+        ) : <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>You’ve reached the limit of 6 tags.</div>}
+      </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16 }}>
+        <button onClick={save} disabled={busy || tags === null} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 13.5, opacity: (busy || tags === null) ? .5 : 1 }}>{busy ? 'Saving…' : 'Save tags'}</button>
+        {msg ? <div style={{ fontSize: 12.5, fontWeight: 600, color: msg[0] === '✓' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{msg}</div> : null}
+      </div>
+    </Panel>
+  );
+}
+
+window.DashChatTagsPanel = DashChatTagsPanel;
+
 // Congregation features — the steward chooses which parts of the app members see. Published on the
 // kind-0 profile as `features:{read,community,library}`; the member app hides the disabled tabs.
 // Unset = on (so existing churches are unaffected). Today (home) + Giving are controlled separately.
@@ -4489,6 +4563,8 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
 
       {section === 'features' ? <React.Fragment>
       <DashFeaturesPanel church={church} />
+
+      <DashChatTagsPanel church={church} />
 
       <DashMealsPanel church={church} />
 
