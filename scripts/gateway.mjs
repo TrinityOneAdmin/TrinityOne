@@ -1413,6 +1413,10 @@ const MIME = {
   '.gz': 'application/gzip', '.zip': 'application/zip', '.txt': 'text/plain; charset=utf-8', '.pdf': 'application/pdf',
   '.ico': 'image/x-icon', '.map': 'application/json',
   '.apk': 'application/vnd.android.package-archive', '.webmanifest': 'application/manifest+json',
+  // self-hosted tutorial/help + sermon media — without these a .mp4 served as octet-stream won't play inline
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.ogv': 'video/ogg', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.oga': 'audio/ogg', '.ogg': 'audio/ogg', '.wav': 'audio/wav',
+  '.vtt': 'text/vtt; charset=utf-8',   // WebVTT captions/subtitles for <track>
 };
 // ---- video feed proxy: fetch a church's YouTube/Rumble channel feed server-side (browsers can't,
 // the RSS has no CORS). Returns { channel:{name,url,platform}, videos:[{id,ytId,title,published,thumb}] }.
@@ -2893,8 +2897,23 @@ function serveStatic(req, res) {
     const gz = _gzipFile(file, st.mtimeMs);
     if (gz) { headers['Content-Encoding'] = 'gzip'; headers['Content-Length'] = gz.length; headers['Vary'] = 'Accept-Encoding'; res.writeHead(200, headers); res.end(gz); return; }
   }
+  // HTTP Range — required for <video>/<audio> seeking (Safari refuses to play a video at all without it).
+  // Only on the identity path (range + gzip don't mix, and media isn't gzipped anyway).
+  headers['Accept-Ranges'] = 'bytes';
+  const rm = req.headers['range'] && /^bytes=(\d*)-(\d*)$/.exec(String(req.headers['range']).trim());
+  if (rm) {
+    let start, end;
+    if (rm[1] === '' && rm[2] !== '') { const n = parseInt(rm[2], 10); start = Math.max(0, st.size - n); end = st.size - 1; }   // suffix `bytes=-N` (mp4 moov probe)
+    else { start = rm[1] ? parseInt(rm[1], 10) : 0; end = rm[2] ? parseInt(rm[2], 10) : st.size - 1; }
+    if (start > end || end >= st.size || start < 0) { res.writeHead(416, { ...headers, 'Content-Range': `bytes */${st.size}`, 'Content-Length': 0 }); res.end(); return; }
+    res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
+    if (req.method === 'HEAD') { res.end(); return; }
+    createReadStream(file, { start, end }).on('error', () => { try { res.destroy(); } catch {} }).pipe(res);
+    return;
+  }
   res.writeHead(200, headers);
-  createReadStream(file).pipe(res);
+  if (req.method === 'HEAD') { res.end(); return; }
+  createReadStream(file).on('error', () => { try { res.destroy(); } catch {} }).pipe(res);
 }
 
 // ---- relay (NIP-01) — events live in SQLite (node:sqlite); REQ reads are indexed queries ----
