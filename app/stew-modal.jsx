@@ -50,3 +50,22 @@ function useStewDialog(onClose, active) {
   return panelRef;
 }
 window.useStewDialog = useStewDialog;
+
+// A dismissible help/intro banner — the tinted "here's what this section does" callouts. The × writes a
+// per-note localStorage flag ('trinityone.note.<id>') so a steward who's read it never sees it again.
+// tone: 'sage' (default) | 'gold' | 'clay'. Pass `style` for the caller's spacing (e.g. marginBottom).
+function DismissibleNote({ id, icon, tone, children, style }) {
+  const key = 'trinityone.note.' + id;
+  const [gone, setGone] = React.useState(() => { try { return localStorage.getItem(key) === '1'; } catch (e) { return false; } });
+  if (gone) return null;
+  const cv = tone === 'gold' ? 'var(--gold)' : tone === 'clay' ? 'var(--clay)' : 'var(--sage)';
+  const ic = tone === 'gold' ? '#8a6717' : tone === 'clay' ? 'var(--clay-ink)' : 'var(--sage)';
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, ' + cv + ' 8%, var(--surface))', border: '1px solid color-mix(in oklab, ' + cv + ' 24%, var(--line))', ...(style || {}) }}>
+      {icon ? <Icon name={icon} size={16} color={ic} style={{ flexShrink: 0, marginTop: 1 }} /> : null}
+      <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>{children}</div>
+      <button onClick={() => { try { localStorage.setItem(key, '1'); } catch (e) {} setGone(true); }} aria-label="Dismiss this note" title="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, margin: '-2px -3px 0 0' }}><Icon name="x" size={15} color="currentColor" /></button>
+    </div>
+  );
+}
+window.DismissibleNote = DismissibleNote;
