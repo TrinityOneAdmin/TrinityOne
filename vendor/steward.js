@@ -10577,6 +10577,29 @@ zoo`.split("\n");
   var KEY_LS = "trinityone.steward.church-key";
   var SELFREG_KEY = "trinityone.steward.selfreg";
   var FUND_D = "trinityone/fund:";
+  var MSGTAGS_D = "trinityone/msgtags";
+  var MSGTAG_ICONS = ["pray", "sparkle", "heart", "flame", "hand", "gift", "music"];
+  var MSGTAG_ACCENTS = ["gold", "sage", "clay", "sky", "plum", "teal"];
+  var MSGTAG_MAX = 6;
+  var MSGTAG_RESERVED = ["verse", "devotional", "note", "poll"];
+  function _msgTagSlug(s) {
+    return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
+  }
+  function _sanitizeMsgTags(arr) {
+    if (!Array.isArray(arr)) return [];
+    const out = [], seen = /* @__PURE__ */ new Set();
+    for (const t of arr) {
+      if (!t || typeof t !== "object") continue;
+      const label = String(t.label || "").trim().replace(/\s+/g, " ").slice(0, 24);
+      if (!label) continue;
+      const id = _msgTagSlug(t.id || label);
+      if (!id || MSGTAG_RESERVED.includes(id) || seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, label, icon: MSGTAG_ICONS.includes(t.icon) ? t.icon : "sparkle", accent: MSGTAG_ACCENTS.includes(t.accent) ? t.accent : "clay" });
+      if (out.length >= MSGTAG_MAX) break;
+    }
+    return out;
+  }
   var GROUP_D = "trinityone/group:";
   var SAFETY_D = "trinityone/safetycheck:";
   var SAFE_D = "trinityone/safe:";
@@ -11626,6 +11649,40 @@ zoo`.split("\n");
     removeFund(id) {
       if (!sk) return Promise.resolve(null);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", FUND_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+    },
+    // ── steward-defined chat message tags (one church-signed doc; newest-wins) ──
+    publishMessageTags(tags) {
+      if (!sk) return Promise.resolve(null);
+      const clean3 = _sanitizeMsgTags(tags);
+      const content = JSON.stringify({ tags: clean3 });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then(() => clean3);
+    },
+    // cb(tags) for the church's configured tags, or cb(null) when NO tags doc exists yet — the editor then
+    // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
+    subscribeMessageTags(cb) {
+      let bestTs = 0;
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d !== MSGTAGS_D || (e.created_at || 0) <= bestTs) return;
+          bestTs = e.created_at || 0;
+          let tags = [];
+          try {
+            tags = _sanitizeMsgTags(JSON.parse(e.content || "{}").tags);
+          } catch {
+          }
+          cb(tags);
+        },
+        oneose() {
+          if (!bestTs) cb(null);
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
     },
     // ---- Phase 5 Tier 2: self-hosted media (sermons). Upload a file to the church's own blob store, then
     // publish a signed sermon doc referencing it by sha256 — no YouTube, members-only. `encrypt` (a bytes->bytes

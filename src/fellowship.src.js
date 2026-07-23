@@ -36,6 +36,31 @@ async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', 
 // Meal trains / Care module (optional, per church). meals-settings is church-signed; care: needs come from
 // church/steward/care-team admins; careslot: are member offers to help; careskip: is RECIPIENT-only.
 const MEALS_SETTINGS_D = 'trinityone/meals-settings';
+// steward-defined chat message tags (Testimony, Praise, …) — one church-signed doc alongside the built-in
+// "Prayer request". Validated against fixed allowlists on read so a forged doc can't inject CSS/icons.
+const MSGTAGS_D = 'trinityone/msgtags';
+const MSGTAG_ICONS = ['pray', 'sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
+const MSGTAG_ACCENTS = ['gold', 'sage', 'clay', 'sky', 'plum', 'teal'];
+// 'prayer' is NOT reserved — it's the default tag, editable/removable like any other. Only the built-in
+// message CARD kinds are off-limits (they render as their own bubbles, not as flags).
+const MSGTAG_RESERVED = ['verse', 'devotional', 'note', 'poll'];
+const PRAYER_DEFAULT = { id: 'prayer', label: 'Prayer request', icon: 'pray', accent: 'gold' };
+function _msgTagSlug(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24); }
+function _sanitizeMsgTags(arr) {
+  if (!Array.isArray(arr)) return [];
+  const out = [], seen = new Set();
+  for (const t of arr) {
+    if (!t || typeof t !== 'object') continue;
+    const label = String(t.label || '').trim().replace(/\s+/g, ' ').slice(0, 24);
+    if (!label) continue;
+    const id = _msgTagSlug(t.id || label);
+    if (!id || MSGTAG_RESERVED.includes(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, label, icon: MSGTAG_ICONS.includes(t.icon) ? t.icon : 'sparkle', accent: MSGTAG_ACCENTS.includes(t.accent) ? t.accent : 'clay' });
+    if (out.length >= 6) break;
+  }
+  return out;
+}
 const CARE_D = 'trinityone/care:';        // a care need — d=care:<id>
 const ROSTER_PFX = 'trinityone/roster:';  // a team roster (people); the meals-admin one names the care-team admins (M2)
 const CARESLOT_D = 'trinityone/careslot:';// a member's offer for one (need,date) — d=careslot:<careId>:<iso>
@@ -1605,6 +1630,25 @@ window.Fellowship = {
         try { const c = JSON.parse(e.content || '{}'); best = { ts: e.created_at || 0, doc: { enabled: !!c.enabled, visibility: c.visibility === 'team' ? 'team' : 'all', openedBy: c.openedBy === 'member' ? 'member' : 'steward', adminGroupId: String(c.adminGroupId || '') } }; cb({ ...best.doc }); } catch {}
       },
       oneose() { if (best.ts) cb({ ...best.doc }); },   // sticky: only emit on EOSE if we actually received settings — don't flip the card off on a reconnect's empty
+    });
+  },
+  // The church's steward-defined chat message tags (Testimony, Praise, …). cb([{ id, label, icon, accent }]).
+  // Newest-wins; the relay write-gates the doc to the church/stewards, so trust what it serves. Sanitized on
+  // read (allowlisted icon/accent, reserved ids dropped) so a hostile relay/forged doc can't inject anything.
+  // cb(tags) with the church's configured tags, or cb(null) when the church has NO tags doc — the caller
+  // then falls back to the built-in default (Prayer request), so a church that never touched tags still has it.
+  subscribeMessageTags(churchNpub, cb) {
+    const pubk = toPub(churchNpub);
+    if (!pubk) { cb(null); return () => {}; }
+    let bestTs = 0;
+    return _onChurchDocs(pubk, {
+      onevent(e, d) {
+        if (d !== MSGTAGS_D || (e.created_at || 0) <= bestTs) return;
+        bestTs = e.created_at || 0;
+        let tags = []; try { tags = _sanitizeMsgTags(JSON.parse(e.content || '{}').tags); } catch {}
+        cb(tags);
+      },
+      oneose() { if (!bestTs) cb(null); },   // no doc → signal "use the default", never leave the caller hanging
     });
   },
   // Open care needs. Authored by the church, a steward, or a care-team admin — all relay-enforced, so a

@@ -626,21 +626,26 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
     );
   }
 
-  if (m.kind === 'prayer') {
-    return (
-      <Row me={me} m={m} ctx={ctx} mod={mod}>
-        <div style={{ maxWidth: 280 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', margin: '0 0 4px 2px' }}>
-            <Icon name="pray" size={12} color="var(--gold)" /> PRAYER REQUEST</div>
-          <div style={{ borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
-            border: me ? 'none' : '1.5px solid color-mix(in oklab, var(--gold) 38%, var(--line))', boxShadow: 'var(--shadow)',
-            borderBottomRightRadius: me ? 5 : 18, borderBottomLeftRadius: me ? 18 : 5 }}>
-            <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty' }}>{m.text}</p>
+  if (m.kind === 'flagged') {
+    const def = resolveFlag(m.flag);
+    if (def) {
+      const ac = flagCss(def.accent);
+      return (
+        <Row me={me} m={m} ctx={ctx} mod={mod}>
+          <div style={{ maxWidth: 280 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: ac, margin: '0 0 4px 2px' }}>
+              <Icon name={def.icon} size={12} color={ac} /> {def.label.toUpperCase()}</div>
+            <div style={{ borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
+              border: me ? 'none' : '1.5px solid color-mix(in oklab, ' + ac + ' 38%, var(--line))', boxShadow: 'var(--shadow)',
+              borderBottomRightRadius: me ? 5 : 18, borderBottomLeftRadius: me ? 18 : 5 }}>
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty' }}>{m.text}</p>
+            </div>
           </div>
-        </div>
-        {react}
-      </Row>
-    );
+          {react}
+        </Row>
+      );
+    }
+    // unknown/removed tag → fall through to a plain message so old messages never break
   }
 
   if (m.kind === 'devotional') {
@@ -816,6 +821,16 @@ function searchableText(e) {
   }
   return e.content;
 }
+// Steward-defined chat tags (Testimony, Praise, …), cached here so the pure render helpers below resolve a
+// custom flag id → its label/icon/accent. ChatRoom keeps this in sync from Fellowship.subscribeMessageTags.
+let _MSGTAGS = [];
+const MSGTAG_CSS = { gold: 'var(--gold)', sage: 'var(--sage)', clay: 'var(--clay)', sky: '#5360D6', plum: '#C24B7A', teal: '#2E8B8B' };
+const flagCss = (accent) => MSGTAG_CSS[accent] || 'var(--clay)';
+// Prayer request is the default tag — editable/removable by the church, but always resolvable so an old
+// prayer message (or a church that never configured tags) still renders as a prayer.
+const MSGTAG_PRAYER = { id: 'prayer', label: 'Prayer request', icon: 'pray', accent: 'gold' };
+const resolveFlag = (id) => _MSGTAGS.find(t => t.id === id) || (id === 'prayer' ? MSGTAG_PRAYER : null);
+const BUILTIN_KTAGS = ['verse', 'devotional', 'note', 'poll'];   // real card kinds; 'prayer' is now a flag
 function evtToMsg(e) {
   const me = e.pubkey === window.Fellowship.myPubkey;
   const kTag = (e.tags.find(t => t[0] === 'k') || [])[1];
@@ -825,8 +840,8 @@ function evtToMsg(e) {
   if (kTag === 'verse') { try { return { ...base, kind: 'verse', verse: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'devotional') { try { return { ...base, kind: 'devotional', card: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'note') { try { return { ...base, kind: 'note', card: JSON.parse(e.content) }; } catch {} }
-  if (kTag === 'prayer') return { ...base, kind: 'prayer', text: e.content };
   if (kTag === 'poll') { try { return { ...base, kind: 'poll', poll: JSON.parse(e.content) }; } catch {} }
+  if (kTag && !BUILTIN_KTAGS.includes(kTag)) return { ...base, kind: 'flagged', flag: kTag, text: e.content };   // prayer + any steward-defined tag; resolved to its label at render
   return { ...base, text: e.content };
 }
 
@@ -910,7 +925,16 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
   const [replyTo, setReplyTo] = useC(null);      // the message being replied to (or null)
-  const [prayerOn, setPrayerOn] = useC(false);   // flag this message as a prayer request (always available)
+  const [flag, setFlag] = useC(null);            // the message tag selected for the next send (a flag object), or null
+  const [flags, setFlags] = useC(null);          // the church's chat tags: null = not configured (→ default), else the list (may be empty if they removed all)
+  const flagList = flags == null ? [MSGTAG_PRAYER] : flags;   // no doc → the default Prayer request; otherwise exactly what the church set
+  useCE(() => {
+    const np = ctx.church && ctx.church.npub;
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeMessageTags)) { setFlags(null); _MSGTAGS = []; return; }
+    const cached = lsGet('trinityone.msgtags.' + np, null);
+    setFlags(cached); _MSGTAGS = cached || [];
+    return window.Fellowship.subscribeMessageTags(np, t => { setFlags(t); _MSGTAGS = t || []; lsSet('trinityone.msgtags.' + np, t); });
+  }, [ctx.church && ctx.church.npub]);
   const [pollOpen, setPollOpen] = useC(false);   // compact poll composer open?
   const [actionsOpen, setActionsOpen] = useC(false);   // the composer "+" popover (prayer / poll / new event)
   const [pollQ, setPollQ] = useC('');
@@ -927,7 +951,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const id = useIdentity();
   const scRef = useCR();
   useCE(() => {
-    setDraft('');
+    setDraft(''); setFlag(null);
     if (!group) return;
     if (window.Fellowship) {                       // live: subscribe to the group over Nostr
       setMsgs([]); setReactions({}); setPickerFor(null);
@@ -980,7 +1004,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     const rtags = replyTo ? [['e', replyTo.id, '', 'reply'], ['p', replyTo.pubkey]] : [];
     if (window.Fellowship) {                        // publish over Nostr; relay echoes it back to our sub
       const p = extra.kind === 'verse' ? window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse'], ...rtags])
-        : extra.kind === 'prayer' ? window.Fellowship.publishMessage(group.id, extra.text, [['k', 'prayer'], ...rtags])
+        : extra.flag ? window.Fellowship.publishMessage(group.id, extra.text, [['k', extra.flag], ...rtags])
         : extra.kind === 'poll' ? window.Fellowship.publishMessage(group.id, JSON.stringify({ question: extra.question, options: extra.options }), [['k', 'poll'], ...rtags])
         : window.Fellowship.publishMessage(group.id, extra.text, rtags);
       Promise.resolve(p).then(evt => {
@@ -994,11 +1018,11 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   };
   const sendText = () => {
     const text = draft.trim(); if (!text) return;
-    const wasPrayer = prayerOn;
+    const f = flag;
     // clear optimistically so the composer feels instant, but put the words BACK if the send fails —
     // the member never loses what they typed.
-    send(wasPrayer ? { text, kind: 'prayer' } : { text });
-    setDraft(''); setPrayerOn(false);
+    send(f ? { text, flag: f.id } : { text });
+    setDraft(''); setFlag(null);
   };
   const sendPoll = () => {
     const q = pollQ.trim(); const opts = pollOpts.map(o => o.trim()).filter(Boolean);
@@ -1060,7 +1084,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
     onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
     onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} />),
-    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate]);   // eslint-disable-line
+    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, flags]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
@@ -1143,14 +1167,14 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             <Icon name="send" size={16} color="var(--ink-3)" /> Announcements only — your church posts here.
           </div>
         ) : (<React.Fragment>
-        {prayerOn ? (
+        {flag ? (() => { const ac = flagCss(flag.accent); return (
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'color-mix(in oklab, var(--gold) 15%, var(--surface))', color: 'var(--gold)', border: '1px solid color-mix(in oklab, var(--gold) 35%, transparent)', padding: '5px 8px 5px 11px', borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
-              <Icon name="pray" size={13} color="var(--gold)" /> Prayer request
-              <button onClick={() => setPrayerOn(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--gold)', display: 'flex', padding: 0 }}><Icon name="x" size={14} /></button>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'color-mix(in oklab, ' + ac + ' 15%, var(--surface))', color: ac, border: '1px solid color-mix(in oklab, ' + ac + ' 35%, transparent)', padding: '5px 8px 5px 11px', borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+              <Icon name={flag.icon} size={13} color={ac} /> {flag.label}
+              <button onClick={() => setFlag(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: ac, display: 'flex', padding: 0 }}><Icon name="x" size={14} /></button>
             </span>
           </div>
-        ) : null}
+        ); })() : null}
         {pollOpen ? (
           <div style={{ marginBottom: 8, padding: 11, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 8 }}><Icon name="sliders" size={13} color="var(--clay)" /> NEW POLL<button onClick={() => setPollOpen(false)} style={{ marginLeft: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0 }}><Icon name="x" size={15} /></button></div>
@@ -1178,12 +1202,14 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <div style={{ position: 'relative', flexShrink: 0 }}>
             {actionsOpen ? <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} /> : null}
             <button onClick={() => setActionsOpen(v => !v)} title="Add" aria-label="More options" style={{ width: 44, height: 44, borderRadius: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              border: (actionsOpen || prayerOn || pollOpen) ? '1px solid var(--clay)' : '1px solid var(--line)',
-              background: (actionsOpen || prayerOn || pollOpen) ? 'color-mix(in oklab, var(--clay) 14%, var(--surface))' : 'var(--surface-2)', color: 'var(--clay)' }}>
+              border: (actionsOpen || flag || pollOpen) ? '1px solid var(--clay)' : '1px solid var(--line)',
+              background: (actionsOpen || flag || pollOpen) ? 'color-mix(in oklab, var(--clay) 14%, var(--surface))' : 'var(--surface-2)', color: 'var(--clay)' }}>
               <Icon name="plus" size={22} color="var(--clay)" style={{ transition: 'transform .18s ease', transform: actionsOpen ? 'rotate(45deg)' : 'none' }} /></button>
             {actionsOpen ? (
               <div style={{ position: 'absolute', bottom: 52, left: 0, zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 6, minWidth: 190, display: 'flex', flexDirection: 'column', gap: 2, animation: 'trinityFade .16s ease both' }}>
-                <button onClick={() => { setPrayerOn(v => !v); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: prayerOn ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pray" size={18} color="var(--gold)" fill={prayerOn} /> Prayer request{prayerOn ? ' · on' : ''}</button>
+                {flagList.map(f => { const on = !!(flag && flag.id === f.id); const ac = flagCss(f.accent); return (
+                  <button key={f.id} onClick={() => { setFlag(on ? null : f); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: on ? 'color-mix(in oklab, ' + ac + ' 14%, var(--surface))' : 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name={f.icon} size={18} color={ac} fill={on} /> {f.label}{on ? ' · on' : ''}</button>
+                ); })}
                 <button onClick={() => { setPollOpen(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="sliders" size={18} color="var(--clay)" /> Poll</button>
                 {isLeader ? <button onClick={() => { setComposeEvt(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="calPlus" size={18} color="var(--clay)" /> New event</button> : null}
               </div>
@@ -1191,7 +1217,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           </div>
           <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={1}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); } }}
-            placeholder={prayerOn ? 'Share a prayer request…' : 'Message…'} style={{
+            placeholder={flag ? 'Share a ' + flag.label.toLowerCase() + '…' : 'Message…'} style={{
               flex: 1, resize: 'none', minHeight: 44, maxHeight: 96, padding: '12px 15px', borderRadius: 16,
               border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14.5,
               fontFamily: 'var(--font-ui)', color: 'var(--ink)', lineHeight: 1.35 }} />
