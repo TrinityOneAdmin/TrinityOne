@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const PORT = 8843;
+const PORT = 8846;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const url = p => `http://127.0.0.1:${PORT}${p}`;
 let relay, dataDir, token;
