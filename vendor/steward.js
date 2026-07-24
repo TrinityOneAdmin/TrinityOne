@@ -10678,6 +10678,15 @@ zoo`.split("\n");
   var _authFuture = (e) => e.created_at > now() + _CLOCK_SKEW;
   var _byChurch = (e) => e.pubkey === pub;
   var _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
+  function _requireTrustedView(what) {
+    if (_relayAuthed) return;
+    const err2 = new Error("Can\u2019t save the " + what + " yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t see the current list. Wait a moment and try again.");
+    try {
+      window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what, message: err2.message } }));
+    } catch (e) {
+    }
+    throw err2;
+  }
   async function _churchHasCareNeeds() {
     const cp = actingChurch || pub;
     if (!cp) return false;
@@ -11942,6 +11951,7 @@ zoo`.split("\n");
     // so the host (and any cloud backup) only ever holds ciphertext; only members hold the key to decrypt.
     async mediaEncryptor(memberPubs) {
       if (!sk) throw new Error("no key");
+      if (!_mediaKeyHex && !_relayAuthed) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
       if (!_mediaKeyHex) _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const keys = {};
       const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
@@ -12099,6 +12109,11 @@ zoo`.split("\n");
     },
     hasCareKey() {
       return !!_careKeyHex;
+    },
+    // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
+    // from "the relay didn't serve it to us" before doing anything destructive. See _requireTrustedView.
+    relayAuthed() {
+      return _relayAuthed;
     },
     careKeyChecked() {
       return _careKeyChecked;
@@ -12595,6 +12610,7 @@ zoo`.split("\n");
       if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);
       const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])];
       let key = _skeys[groupId];
+      if (!opts.rotate && !key && !_relayAuthed) return Promise.resolve(null);
       if (opts.rotate || !key) {
         key = crypto.getRandomValues(new Uint8Array(32));
         _srev[groupId] = (_srev[groupId] || 0) + 1;
@@ -12642,6 +12658,7 @@ zoo`.split("\n");
       };
     },
     setBlocked(pubkeys) {
+      _requireTrustedView("blocked list");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       const content = JSON.stringify({ pubkeys: list });
@@ -12703,16 +12720,19 @@ zoo`.split("\n");
       };
     },
     setNoPhoto(pubkeys) {
+      _requireTrustedView("photo settings");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
     },
     setMinors(pubkeys) {
+      _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
     },
     setApproved(pubkeys) {
+      _requireTrustedView("cleared-adults list");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
@@ -12778,6 +12798,7 @@ zoo`.split("\n");
       };
     },
     setGuardians(links) {
+      _requireTrustedView("parent links");
       if (!sk) return Promise.resolve(null);
       const clean3 = {};
       for (const [c, ps] of Object.entries(links || {})) {
@@ -12869,6 +12890,7 @@ zoo`.split("\n");
       };
     },
     setAdmitted(pubkeys) {
+      _requireTrustedView("approved-members list");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", ADMITTED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
@@ -12907,6 +12929,7 @@ zoo`.split("\n");
       };
     },
     setStewards(pubkeys) {
+      _requireTrustedView("steward roster");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
