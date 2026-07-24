@@ -145,7 +145,7 @@ jobs:
           # same checkout the payload was stamped from) so /suite-update compares like-for-like. Every matrix
           # job writes the same sha; softprops clobbers by filename on the Release, so one wins harmlessly.
           SHA="$(git rev-parse HEAD)"
-          printf '{"sha":"%s","version":"0.7.1","tag":"%s"}\n' "$SHA" "${GITHUB_REF_NAME}" > dist-installers/suite-latest.json
+          printf '{"sha":"%s","version":"%s","tag":"%s"}\n' "$SHA" "${GITHUB_REF_NAME#relay-v}" "${GITHUB_REF_NAME}" > dist-installers/suite-latest.json
           ls -la dist-installers || true
 
       - name: Upload installers (artifact)
