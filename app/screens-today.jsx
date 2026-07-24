@@ -151,14 +151,109 @@ const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No r
 function MyRequestRow({ r, onCancel }) {
   const [busy, setBusy] = React.useState(false);
   const label = CARE_TYPE_LABEL[r.type] || 'Help';
+  const st = r.status || 'open';
+  const sub = st === 'approved' ? 'Your care team set it up — see Open needs below.'
+    : st === 'declined' ? 'Your care team has this in hand.'
+    : st === 'handled' ? 'Your care team is on it.'
+    : 'Sent privately — your care team will be in touch.';
+  const tint = st === 'open' ? 'var(--sage)' : st === 'declined' ? 'var(--ink-3)' : 'var(--sage)';
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)', marginBottom: 9 }}>
-      <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name={CARE_TYPE_ICON[r.type] || 'heart'} size={19} /></div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 16, background: 'color-mix(in oklab, ' + tint + ' 8%, var(--surface))', border: '1px solid color-mix(in oklab, ' + tint + ' 24%, transparent)', marginBottom: 9 }}>
+      <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, ' + tint + ' 16%, var(--surface))', color: tint }}><Icon name={st === 'open' ? (CARE_TYPE_ICON[r.type] || 'heart') : 'check'} size={19} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>You asked for help{r.type ? ' · ' + label : ''}{!r.forSelf && r.forName ? ' · for ' + r.forName : ''}</div>
-        <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>Sent privately — your care team will be in touch.</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{sub}</div>
       </div>
-      <button onClick={async () => { setBusy(true); try { await onCancel(); } catch (e) {} setBusy(false); }} disabled={busy} title="Withdraw this request" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700 }}>{busy ? '…' : 'Withdraw'}</button>
+      {st === 'open' ? <button onClick={async () => { setBusy(true); try { await onCancel(); } catch (e) {} setBusy(false); }} disabled={busy} title="Withdraw this request" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700 }}>{busy ? '…' : 'Withdraw'}</button> : null}
+    </div>
+  );
+}
+
+// ── Care-team Requests (care-admins only): incoming ask-for-help requests to triage → Approve into a need,
+// Message the person, or Decline. Visible only to a member on the care-team roster.
+function CareRequestCard({ r, ctx, onApprove, onDecline, canMessage, onMessage }) {
+  const [busy, setBusy] = React.useState('');
+  const who = r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone');
+  const when = ({ once: 'Just once', ongoing: 'For a while', unsure: 'Not sure yet' })[r.when] || '';
+  const urg = ({ soon: 'This week', month: 'Soon', norush: 'No rush' })[r.urgency] || '';
+  return (
+    <div style={{ padding: 15, borderRadius: 18, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--clay) 34%, var(--line))', boxShadow: 'var(--shadow)', marginBottom: 11 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={CARE_TYPE_ICON[r.type] || 'heart'} size={19} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>{CARE_TYPE_LABEL[r.type] || 'Help'} · for {who}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[when, urg].filter(Boolean).join(' · ') || 'Asked for help'}</div>
+        </div>
+      </div>
+      {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device isn’t on the care team’s key list.</div>
+        : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap', padding: '2px 0 4px' }}>{r.note}</div> : null}
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+        <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="#fff" stroke={2.6} /> Set up help</button>
+        {canMessage ? <button onClick={onMessage} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
+        <button onClick={async () => { setBusy('d'); try { await onDecline(); } catch (e) {} setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Dismiss'}</button>
+      </div>
+    </div>
+  );
+}
+
+function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [start, setStart] = React.useState(today);
+  const [end, setEnd] = React.useState(today);
+  const [notes, setNotes] = React.useState(req.note || '');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const submit = async () => {
+    setBusy(true); setErr('');
+    const dates = [];
+    try { let d = new Date(start + 'T00:00:00'); const e = new Date((end < start ? start : end) + 'T00:00:00'); for (let i = 0; i < 90 && d <= e; i++) { dates.push(d.toISOString().slice(0, 10)); d = new Date(d.getTime() + 86400000); } } catch (e2) {}
+    let ok = null;
+    try { ok = await window.Fellowship.approveCareRequest(req, { dates, notes }); } catch (e2) { setErr((e2 && e2.message) || 'Couldn’t set up the need.'); setBusy(false); return; }
+    setBusy(false);
+    if (ok) onDone(); else setErr('Couldn’t set up the need — try again.');
+  };
+  const fld = { width: '100%', boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' };
+  const lbl = { fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 8px' };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Set up help" style={{ width: '100%', maxWidth: 460, background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '22px 20px calc(24px + env(safe-area-inset-bottom))' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Set up help</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 0' }}>Opens a need for <b style={{ color: 'var(--ink)' }}>{CARE_TYPE_LABEL[req.type] || 'help'}</b> the church can sign up for. Pick the dates — you can refine it later in the console.</p>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}><div style={lbl}>From</div><input type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
+          <div style={{ flex: 1 }}><div style={lbl}>To</div><input type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
+        </div>
+        <div style={lbl}>Notes for the team (optional)</div>
+        <textarea value={notes} onChange={e => setNotes(e.target.value)} style={{ ...fld, minHeight: 70, resize: 'vertical', lineHeight: 1.45 }} />
+        {err ? <div style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 12 }}>{err}</div> : null}
+        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Setting up…' : 'Open the need'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CareRequests({ ctx }) {
+  const care = ctx.care || {};
+  const myPub = (care.myPub || '').toLowerCase();
+  const s = care.settings || {};
+  const isCareAdmin = (() => { const roster = (ctx.churchRosters || []).find(r => r.team === s.adminGroupId); return !!(roster && (roster.people || []).some(p => (p.pub || '').toLowerCase() === myPub)); })();
+  const [reqs, setReqs] = React.useState([]);
+  const [approving, setApproving] = React.useState(null);
+  React.useEffect(() => {
+    if (!isCareAdmin || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
+    let unsub = null;
+    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {}
+    return () => { try { unsub && unsub(); } catch (e) {} };
+  }, [isCareAdmin, ctx.church && ctx.church.npub]);
+  if (!isCareAdmin || !reqs.length) return null;
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-deep, #b4462f)', margin: '2px 0 10px', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="heart" size={15} color="var(--clay)" /> REQUESTS FOR HELP · {reqs.length}</div>
+      {reqs.map(r => <CareRequestCard key={r.id} r={r} ctx={ctx} onApprove={() => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(r.from)))} onMessage={() => ctx.openDM && ctx.openDM(r.from)} />)}
+      {approving ? <ApproveNeedSheet req={approving} ctx={ctx} onClose={() => setApproving(null)} onDone={() => { setApproving(null); ctx.toast && ctx.toast('Opened as a need'); }} /> : null}
     </div>
   );
 }
@@ -261,7 +356,10 @@ function CareAvailability({ ctx }) {
   const myPub = (care.myPub || '').toLowerCase();
   const avail = care.avail || [];
   const mine = avail.find(a => (a.pubkey || '').toLowerCase() === myPub) || null;
-  const others = avail.filter(a => (a.pubkey || '').toLowerCase() !== myPub);
+  // A child must never be advertised as an available helper (they can't be DM'd anyway, and it's a safeguarding
+  // line) — filter minors out of the list even if a stale availability doc survived a later "mark as child".
+  const _minors = new Set(((ctx.safeguard && ctx.safeguard.minors) || []).map(x => String(x || '').toLowerCase()));
+  const others = avail.filter(a => (a.pubkey || '').toLowerCase() !== myPub && !_minors.has((a.pubkey || '').toLowerCase()));
   const isMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);
   const churchPub = (window.Fellowship && window.Fellowship.churchPub) || '';
   const [editing, setEditing] = React.useState(false);
@@ -364,7 +462,7 @@ function CareCard({ ctx, embedded }) {
     </div>
   );
   // embedded = the Serving "Care" tab: availability module first (offer help + who's ready), then the needs.
-  if (embedded) return (<React.Fragment><AskForHelp ctx={ctx} /><CareAvailability ctx={ctx} />{needsBlock}</React.Fragment>);
+  if (embedded) return (<React.Fragment><CareRequests ctx={ctx} /><AskForHelp ctx={ctx} /><CareAvailability ctx={ctx} />{needsBlock}</React.Fragment>);
   if (!live.length) return null;   // Today-card variant (currently unused): nothing to show with no needs
   return (
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>

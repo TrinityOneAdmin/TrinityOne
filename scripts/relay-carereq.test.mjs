@@ -21,7 +21,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 
 const PORT = 8856;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
-const MEMBER_D = 'trinityone/member:', CAREREQ_D = 'trinityone/carereq:', CARETEAM_D = 'trinityone/careteam:';
+const MEMBER_D = 'trinityone/member:', CAREREQ_D = 'trinityone/carereq:', CARETEAM_D = 'trinityone/careteam:', CARESTATUS_D = 'trinityone/carereqstatus:';
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -37,6 +37,8 @@ const memberDoc = who => finalizeEvent({ kind: 30078, created_at: now(), tags: [
 // a care request names its church in ['church',cp]; content stands in for the ciphertext sealed to the care team
 const carereq = (who, id, ct, tagChurch = true) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', CAREREQ_D + id], ['t', 'trinityone'], ...(tagChurch ? [['church', cp]] : [])], content: ct }, who.sk);
 const careteam = (by) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', CARETEAM_D + cp]], content: JSON.stringify({ pubs: [church.pub] }) }, by.sk);
+// the care team's resolution of req1, p-tagged to requester M so the asker can read it
+const status = (by, id, st) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', CARESTATUS_D + id], ['t', 'trinityone'], ['t', 'carereqstatus'], ['church', cp], ['p', M.pub]], content: JSON.stringify({ status: st, needId: '', by: by.pub, at: now() }) }, by.sk);
 
 function reqCollect(ws, subId, filter, authSk, window = 700) {
   return new Promise((resolve) => {
@@ -91,4 +93,16 @@ test('another member CANNOT read the request, and anon reads nothing (care-team 
   const ws2 = await connect(); const anon = await reqCollect(ws2, 'x1', { kinds: [30078], '#d': [CAREREQ_D + 'req1'] }); ws2.close();
   assert.equal(ofD(anon, CAREREQ_D + 'req1').length, 0, 'anon reads no requests');
   assert.equal(anon.gotAuth, true, 'relay challenged (request present, withheld)');
+});
+
+test('only the care team may resolve a request (carereqstatus) — a plain member cannot', async () => {
+  assert.equal((await publish(pub, status(church, 'req1', 'approved')))[0], true, 'the church can resolve a request');
+  assert.equal((await publish(pub, status(N, 'req1', 'declined')))[0], false, 'a plain member cannot write a resolution');
+});
+
+test('the requester reads their resolution (p-tagged); another member cannot', async () => {
+  const ws = await connect(); const asM = await reqCollect(ws, 's1', { kinds: [30078], '#d': [CARESTATUS_D + 'req1'] }, M.sk); ws.close();
+  assert.equal(ofD(asM, CARESTATUS_D + 'req1').length, 1, 'the asker sees their request was resolved');
+  const ws2 = await connect(); const asN = await reqCollect(ws2, 's2', { kinds: [30078], '#d': [CARESTATUS_D + 'req1'] }, N.sk); ws2.close();
+  assert.equal(ofD(asN, CARESTATUS_D + 'req1').length, 0, 'an unrelated member cannot read the resolution');
 });

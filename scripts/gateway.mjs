@@ -354,6 +354,7 @@ const SKIP_D = 'trinityone/careskip:';    // recipient marks a day they don't ne
 const AVAIL_D = 'trinityone/careavail:';  // a member's "I'm here to help" availability — d=careavail:<churchpub> (member-signed, one per member per church; non-minors only)
 const CAREREQ_D = 'trinityone/carereq:';  // a member's private "ask for help" request — d=carereq:<id>, ['church',cp]; member-signed, content sealed to the care team. Read-gated to care-team ONLY (like SAFE_D), never the whole church. The care team approves it into a NEED_D or opens a chat.
 const CARETEAM_D = 'trinityone/careteam:'; // church/steward-signed roster of care-team recipient pubkeys — d=careteam:<churchpub>, content {pubs:[hex,…]}. Public-ish (pubkeys only, no secrets) so a member can seal a carereq: to exactly the care team.
+const CAREREQSTATUS_D = 'trinityone/carereqstatus:'; // the care team's resolution of a request — d=carereqstatus:<id>, ['church',cp], ['p',requester]. Care-admin/steward/church-authored; read by the care team AND the p-tagged requester (so they see "approved"/"handled"). Clears the queue + tells the asker.
 // SAFETY CHECK ("mark as safe" — emergency roll-call after a raid/disaster). A check is one active doc per
 // church (church/steward/care-team authored); each member replies with their OWN response doc, whose content
 // is NIP-44-encrypted to the check's CREATOR (p-tagged) so even a seized relay can't read who's safe / in danger.
@@ -1264,6 +1265,9 @@ function accept(e) {
     if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)
     if (d.startsWith(SAFETY_D)) { const cp = d.slice(SAFETY_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }   // start/close a safety check: church, steward, or care-team admin
     if (d.startsWith(SAFE_D)) { const cp = d.slice(SAFE_D.length); return CHURCH_PUBS.has(cp) && isMember; }   // mark yourself safe / needing help: any member (minors included — safety matters most)
+    // the care team's RESOLUTION of a request (approved / declined / handled) — d=carereqstatus:<id>. Only the
+    // church / a steward / a care-team admin may resolve a request; never the requester (they withdraw instead).
+    if (d.startsWith(CAREREQSTATUS_D)) { const cp = namedChurch(e); return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }
     // a private "ask for help" request (d=carereq:<id>, content sealed to the care team). Any member — MINORS
     // INCLUDED, since a child in trouble must be able to reach the care team, and it's sealed + care-team-only —
     // may open one. Must name a configured church; then falls through to the member rule so the per-member doc
@@ -1339,6 +1343,11 @@ function canRead(e, authed) {
     if (d.startsWith(CAREREQ_D)) {   // a member's private ask-for-help — CARE-TEAM ONLY (mirror SAFE_D), never served to the whole church
       const cp = owningChurch(e, d);
       return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp));
+    }
+    if (d.startsWith(CAREREQSTATUS_D)) {   // a request's resolution — the care team AND the p-tagged requester (so the asker sees "approved"/"handled")
+      const cp = owningChurch(e, d);
+      const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
+      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp) || (!!pHex && authed === pHex));
     }
     // ── kind-30078 read policy: DEFAULT-DENY ──────────────────────────────────────────────────────
     // SECURITY-AUDIT-2026-07-20 C1. This gate used to be a DENY-list of private d-prefixes ending in a

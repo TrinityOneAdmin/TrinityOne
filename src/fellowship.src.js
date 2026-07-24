@@ -66,6 +66,7 @@ const ROSTER_PFX = 'trinityone/roster:';  // a team roster (people); the meals-a
 const CARESLOT_D = 'trinityone/careslot:';// a member's offer for one (need,date) — d=careslot:<careId>:<iso>
 const CAREREQ_D = 'trinityone/carereq:';  // a member's private "ask for help" request, sealed to the care team — d=carereq:<id>
 const CARETEAM_D = 'trinityone/careteam:';// church-published roster of care-team recipient pubkeys — d=careteam:<churchpub>
+const CAREREQSTATUS_D = 'trinityone/carereqstatus:';// the care team's resolution of a request (approved/declined/handled) — d=carereqstatus:<id>
 const CARESKIP_D = 'trinityone/careskip:';// recipient marks a day they don't need help — d=careskip:<careId>:<iso>
 const CAREAVAIL_D = 'trinityone/careavail:';// a member's "I'm here to help" availability — d=careavail:<churchpub> (one per member per church)
 const SAFETY_D = 'trinityone/safetycheck:';// the church's active safety check ("are you safe?") — d=safetycheck:<churchpub>
@@ -137,6 +138,13 @@ function _careOpen(cp, ct) {
   const key = _carekeys[cp];
   if (!key) return null;
   try { return JSON.parse(nip44d(ct, key)); } catch { return null; }
+}
+// seal a care need's identifying half with the church care key (care-admins approving a request into a need);
+// null when this device holds no care key, so the caller can refuse rather than publish PII in the clear.
+function _careSeal(cp, obj) {
+  const key = _carekeys[cp];
+  if (!key) return null;
+  try { return nip44e(JSON.stringify(obj), key); } catch { return null; }
 }
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
@@ -1791,13 +1799,24 @@ window.Fellowship = {
   },
   // Subscribe to care requests. A member receives their OWN (the relay serves the author); the care team gets
   // all. cb(list) with [{ id, from, at, sealed, ...body }] newest-first; entries we can decrypt carry the body.
+  // The care team gets ALL requests (they can decrypt — they're on the roster); a member gets only their own.
+  // We merge the care team's resolution (carereqstatus:) so a resolved request drops out of the open queue and
+  // the asker sees "approved"/"handled". cb(list) newest-first; each carries { status:'open'|'approved'|
+  // 'declined'|'handled', needId, sealed, ...body }.
   subscribeCareRequests(cb) {
     const cp = window.Fellowship.churchPub; if (!cp) return () => {};
-    const byId = new Map();
-    const emit = () => { try { cb([...byId.values()].sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
-    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#t': ['carereq'], '#church': [cp] }], {
+    const byId = new Map();        // id -> request
+    const statusById = new Map();  // id -> { status, needId, _ts }
+    const emit = () => { try { cb([...byId.values()].map(r => { const s = statusById.get(r.id) || {}; return { ...r, status: s.status || 'open', needId: s.needId || '' }; }).sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
+    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#t': ['carereq', 'carereqstatus'], '#church': [cp] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d.startsWith(CAREREQSTATUS_D)) {
+          const id = d.slice(CAREREQSTATUS_D.length);
+          const prev = statusById.get(id); if (prev && prev._ts >= e.created_at) return;
+          try { const s = JSON.parse(e.content || '{}'); statusById.set(id, { status: String(s.status || 'handled'), needId: String(s.needId || ''), _ts: e.created_at }); emit(); } catch (e2) {}
+          return;
+        }
         if (!d.startsWith(CAREREQ_D)) return;
         const id = d.slice(CAREREQ_D.length);
         if (e.tags.some(t => t[0] === 'deleted')) { byId.delete(id); emit(); return; }
@@ -1818,6 +1837,41 @@ window.Fellowship = {
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp], ['deleted', '1']], content: '' }, sk);
     try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) {}
     return evt;
+  },
+  // ── care-team actions (careAdmin/steward): resolve a request, or approve it INTO a care need ──
+  async setCareRequestStatus(reqId, requesterPub, opts) {
+    const cp = window.Fellowship.churchPub;
+    if (!sk) { try { await window.Fellowship.ready; } catch {} }
+    if (!sk || !cp || !reqId) return null;
+    const o = opts || {};
+    const tags = [['d', CAREREQSTATUS_D + reqId], ['t', NET], ['t', 'carereqstatus'], ['church', cp]];
+    if (requesterPub) tags.push(['p', requesterPub]);   // so the asker can read their resolution
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ status: String(o.status || 'handled'), needId: String(o.needId || ''), by: pub, at: Math.floor(Date.now() / 1000) }) }, sk);
+    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) {}
+    return evt;
+  },
+  async declineCareRequest(req) {
+    if (!req || !req.id) return null;
+    return window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'declined' });
+  },
+  // Approve a request INTO a care need. fields: { dates:[iso…], notes }. The identifying half (who it's for +
+  // notes) is sealed with the church care key — requires this device to hold it (a care-admin does).
+  async approveCareRequest(req, fields) {
+    const cp = window.Fellowship.churchPub;
+    if (!sk) { try { await window.Fellowship.ready; } catch {} }
+    if (!sk || !cp || !req) return null;
+    if (!_carekeys[cp]) throw new Error('This church’s care key hasn’t reached this device yet — open the church once so it syncs, then approve.');
+    const f = fields || {};
+    const dates = [...new Set((Array.isArray(f.dates) ? f.dates : []).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)))].sort();
+    const who = req.forSelf ? (((profiles[req.from] || {}).name) || 'A member') : (req.forName || 'A member');
+    const enc = _careSeal(cp, { displayLabel: who, recipient: req.forSelf ? req.from : '', notes: String(f.notes != null ? f.notes : (req.note || '')).trim(), dietary: [] });
+    if (!enc) throw new Error('Couldn’t seal the need — care key missing.');
+    const id = 'care' + _hex(crypto.getRandomValues(new Uint8Array(6)));
+    const body = { id, type: req.type || 'other', dates, startDate: dates[0] || '', endDate: dates[dates.length - 1] || '', meals: (req.type === 'meals' ? ['dinner'] : []), dayMeals: {}, enc };
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + id], ['t', NET], ['church', cp], ['enc', 'care1']], content: JSON.stringify(body) }, sk);
+    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
+    await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
+    return { id };
   },
   async fillCareSlot(careId, iso, note) {
     const cp = window.Fellowship.churchPub;
