@@ -977,9 +977,86 @@ function InvitePosterModal({ church, url, svg, onClose }) {
   );
 }
 
+// ── "Go public" gate for any invite surface ─────────────────────────────────────────────────────────────
+// In the desktop Suite this box IS the relay, reachable only on the local wifi until the operator turns on the
+// free Cloudflare tunnel. A QR shared before then embeds a loopback address that fails on anyone else's phone.
+// This hook drives the HOST component's own re-render, so joinUrl() recomputes with the public relay the moment
+// go-public succeeds (a wrapper component couldn't — its children are built before the state changes). Off the
+// Suite (web console, phone APK, community relays) selfHosted is false and the whole thing is a no-op.
+function useGoPublicGate() {
+  const isRelayApp = typeof location !== 'undefined' && new URLSearchParams(location.search).get('relayapp') === '1';
+  const selfHosted = isRelayApp && window.Steward && window.Steward.isSelfHosted && window.Steward.isSelfHosted();
+  const [pub, setPub] = React.useState(selfHosted ? null : { skip: true });   // null=checking · false=not public · {wss,name}=public
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [override, setOverride] = React.useState(false);
+  const alive = React.useRef(true);
+  React.useEffect(() => () => { alive.current = false; }, []);
+  React.useEffect(() => {
+    if (!selfHosted) return;
+    const check = async () => {
+      try { const st = await window.Steward.tunnelState(); if (!alive.current) return;
+        if (st && st.running && st.wss) { const nm = await window.Steward.ownRelayName().catch(() => ''); if (alive.current) setPub({ wss: st.wss, name: nm }); }
+        else if (alive.current) setPub(false);
+      } catch (e) { if (alive.current) setPub(false); }
+    };
+    check();
+    // keep sibling invite surfaces coherent — go-public (or a cleared stale url) dispatches 'steward-relays'.
+    // tunnelState() only re-writes the cache on a real change, so this settles without looping.
+    window.addEventListener('steward-relays', check);
+    return () => { window.removeEventListener('steward-relays', check); };
+  }, [selfHosted]);
+  const goPublic = async () => {
+    setBusy(true); setErr('');
+    try { const r = await window.Steward.goPublic(); const nm = await window.Steward.ownRelayName().catch(() => ''); if (alive.current) setPub({ wss: r.wss, name: nm || r.name }); }
+    catch (e) { if (alive.current) setErr((e && e.message) || 'The tunnel couldn’t open.'); }
+    if (alive.current) setBusy(false);
+  };
+  // gate is "open" (show the invite) when: not self-hosted, already public, or the operator chose to skip
+  const blocking = selfHosted && (pub === null || (pub === false && !override));
+  return { selfHosted, pub, busy, err, override, setOverride, goPublic, blocking };
+}
+
+// The go-public prompt shown IN PLACE of an invite until the relay is reachable (or the operator skips).
+function GoPublicPanel({ gate }) {
+  const { pub, busy, err, goPublic, setOverride } = gate;
+  if (pub === null) return <div style={{ fontSize: 14, color: 'var(--ink-3)', display: 'inline-flex', alignItems: 'center', gap: 9, padding: '6px 0' }}><span style={{ width: 15, height: 15, border: '2px solid var(--line)', borderTopColor: 'var(--clay)', borderRadius: '50%', display: 'inline-block', animation: 'trinitySpin .7s linear infinite' }} /> Checking whether your relay is reachable…</div>;
+  return (
+    <div>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--clay)', fontWeight: 700, fontSize: 15 }}><Icon name="globe" size={18} color="var(--clay)" /> Make your church reachable</div>
+      <p style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.6, margin: '8px 0 0', maxWidth: 560 }}>Right now your relay only answers on this building’s wifi, so an invite would fail on anyone else’s phone. Turn on a secure tunnel — <b style={{ color: 'var(--ink)' }}>free, no account</b>, no router or port setup — and your church becomes reachable worldwide.</p>
+      <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 13, flexWrap: 'wrap' }}>
+        <button className="sk-btn sk-btn--clay" onClick={goPublic} disabled={busy} style={busy ? { opacity: .6, cursor: 'wait' } : undefined}>
+          {busy ? <><span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,.5)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', marginRight: 4, animation: 'trinitySpin .7s linear infinite' }} /> Opening a secure tunnel… (up to 30s)</> : <><Icon name="globe" size={17} color="#fff" /> Turn on public access</>}
+        </button>
+        {!busy && <button className="sk-btn sk-btn--ghost" onClick={() => setOverride(true)} style={{ fontSize: 13.5 }}>I’ll do this later</button>}
+      </div>
+      {err ? <div style={{ marginTop: 14, padding: '11px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', fontSize: 13, color: 'var(--ink)', lineHeight: 1.5 }}>{err}</div> : null}
+    </div>
+  );
+}
+
+// The status note shown ABOVE an invite once it's live (or a caution if the operator skipped go-public).
+function GoPublicNote({ gate }) {
+  const { selfHosted, pub, override } = gate;
+  if (!selfHosted) return null;
+  if (pub && pub.wss) return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 12px', borderRadius: 11, marginBottom: 14, background: 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+      <Icon name="globe" size={15} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} /><span>Reachable from anywhere{pub.name ? <> as <b style={{ color: 'var(--ink)' }}>{pub.name}</b></> : ''} — this invite works on any network.</span>
+    </div>
+  );
+  if (override) return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 12px', borderRadius: 11, marginBottom: 14, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+      <Icon name="bell" size={15} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} /><span>Not public yet — this code won’t reach anyone else until you turn on public access (relay control panel → <b style={{ color: 'var(--ink)' }}>Reach members</b>).</span>
+    </div>
+  );
+  return null;
+}
+
 function JoinCard({ qrSize = 92, center = false }) {
   const church = window.useStewardChurch();   // re-renders once the npub is ready
   const np = church.npub || '';
+  const gate = useGoPublicGate();
   const direct = np ? window.Steward.joinUrl() : '';
   // share the smart /join landing (offers the app, or instant-web) — this is what you paste into WhatsApp/email
   const url = direct ? direct.replace('/?follow=', '/join?follow=') + (church.name ? '&c=' + encodeURIComponent(church.name) : '') : '';
@@ -1006,7 +1083,11 @@ function JoinCard({ qrSize = 92, center = false }) {
     img.onerror = () => URL.revokeObjectURL(u);
     img.src = u;
   };
+  // reachability gate: in the self-hosted Suite, show "make your church reachable" until the tunnel is on
+  if (gate.blocking) return <GoPublicPanel gate={gate} />;
   return (
+    <React.Fragment>
+      <GoPublicNote gate={gate} />
     <div style={{ display: 'flex', flexDirection: center ? 'column' : 'row', gap: 16, alignItems: 'center', textAlign: center ? 'center' : 'left' }}>
       <div style={{ width: qrSize + 18, height: qrSize + 18, borderRadius: 14, background: '#fff', boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 9, boxSizing: 'border-box' }}>
         {svg ? <div role="img" aria-label="Invite QR code" style={{ width: qrSize, height: qrSize, display: 'flex' }} dangerouslySetInnerHTML={{ __html: svg }} /> : <SkQR size={qrSize} />}
@@ -1027,6 +1108,7 @@ function JoinCard({ qrSize = 92, center = false }) {
       </div>
       {poster ? <InvitePosterModal church={church} url={url} svg={svg} onClose={() => setPoster(false)} /> : null}
     </div>
+    </React.Fragment>
   );
 }
 
@@ -2749,6 +2831,7 @@ window.GuardianLinkModal = GuardianLinkModal;
 function BulkInviteModal({ onClose }) {
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
   const [names, setNames] = React.useState('');
+  const gate = useGoPublicGate();   // printing slips before the relay is public would hand out dead QR codes
   const list = names.split('\n').map(n => n.trim()).filter(Boolean).slice(0, 500);
   const onFile = (e) => {
     const f = e.target.files && e.target.files[0]; if (!f) return;
@@ -2786,8 +2869,14 @@ function BulkInviteModal({ onClose }) {
       + `</style></head><body><div class="bar"><span>${list.length} join slip${list.length === 1 ? '' : 's'} for ${esc(church.name || 'your church')}. Print, cut along the dashes, and hand them out.</span><button onclick="window.print()">Print / Save as PDF</button></div><div class="grid">${slips}</div></body></html>`;
     if (window.skPrintable) window.skPrintable(html);
   };
+  if (gate.blocking) return (
+    <CkModal title="Bring your church on" onClose={onClose}>
+      <GoPublicPanel gate={gate} />
+    </CkModal>
+  );
   return (
     <CkModal title="Bring your church on" onClose={onClose}>
+      <GoPublicNote gate={gate} />
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Paste your members’ names (one per line) — or import the CSV your old church software exports. We make a printable <b>join slip</b> for each person: a QR they scan, already showing their name. Scanning opens TrinityOne <b>right in their browser</b> — no app to download, no account, no password — and joins them to your church, named.</div>
       <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center' }}>
         <label className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="globe" size={14} color="currentColor" /> Import CSV<input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} /></label>

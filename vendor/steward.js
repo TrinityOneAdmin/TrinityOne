@@ -10866,6 +10866,62 @@ zoo`.split("\n");
     const slug = String(name || "").toLowerCase().replace(/[^a-z0-9._-]+/g, "").slice(0, 30);
     return slug ? slug + "@" + s : "";
   }
+  var SELF_PUB_LS = "trinityone.steward.self-public-relay";
+  function ownIsLoopback() {
+    return /^wss?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(:|\/)/i.test(ownRelay());
+  }
+  function selfPublicRelay() {
+    try {
+      return normRelay(lsGet(SELF_PUB_LS) || "");
+    } catch {
+      return "";
+    }
+  }
+  function setSelfPublicRelay(wss) {
+    try {
+      const v = normRelay(wss || "");
+      if (v !== normRelay(lsGet(SELF_PUB_LS) || "")) {
+        lsSet(SELF_PUB_LS, v);
+        window.dispatchEvent(new CustomEvent("steward-relays"));
+      }
+    } catch (e) {
+    }
+  }
+  var _localToken = null;
+  async function localAdminToken() {
+    if (_localToken) return _localToken;
+    if (!ownIsLoopback()) return "";
+    try {
+      const r = await fetch("/local-token", { cache: "no-store" });
+      if (!r.ok) return "";
+      const j = await r.json();
+      _localToken = j && j.token || "";
+      return _localToken;
+    } catch (e) {
+      return "";
+    }
+  }
+  function _authHdr(tok) {
+    return tok ? { "Authorization": "Bearer " + tok } : {};
+  }
+  async function refreshSelfPublicRelay() {
+    if (!ownIsLoopback()) return;
+    try {
+      const tok = await localAdminToken();
+      if (!tok) return;
+      const r = await fetch("/tunnel/state", { cache: "no-store", headers: _authHdr(tok), signal: AbortSignal.timeout(5e3) });
+      if (!r.ok) return;
+      const j = await r.json();
+      setSelfPublicRelay(j && j.running && j.wss ? j.wss : "");
+    } catch (e) {
+    }
+  }
+  try {
+    setTimeout(refreshSelfPublicRelay, 1500);
+    setInterval(refreshSelfPublicRelay, 6e4);
+    window.addEventListener("focus", refreshSelfPublicRelay);
+  } catch (e) {
+  }
   function relays() {
     const own = ownRelay();
     const out = [own];
@@ -13878,6 +13934,53 @@ zoo`.split("\n");
     extraRelays() {
       return extraRelays();
     },
+    // ---- self-hosted "go public" (desktop Suite): make the church reachable from anywhere BEFORE inviting.
+    // The console is same-origin with its own relay on loopback; these hit it directly, authing with the token
+    // the Suite discloses to a genuine same-machine request (/local-token). All no-ops off the Suite. ----
+    isSelfHosted() {
+      return ownIsLoopback();
+    },
+    async tunnelState() {
+      if (!ownIsLoopback()) return { supported: false, running: false };
+      const tok = await localAdminToken();
+      if (!tok) return { supported: false, running: false };
+      try {
+        const r = await fetch("/tunnel/state", { cache: "no-store", headers: _authHdr(tok) });
+        if (!r.ok) return { supported: true, running: false };
+        const j = await r.json();
+        setSelfPublicRelay(j && j.running && j.wss ? j.wss : "");
+        return { supported: true, running: !!(j && j.running), url: j && j.url || "", wss: j && j.wss || "" };
+      } catch (e) {
+        return { supported: true, running: false };
+      }
+    },
+    async goPublic() {
+      if (!ownIsLoopback()) throw new Error("This device isn\u2019t running its own relay.");
+      const tok = await localAdminToken();
+      if (!tok) throw new Error("Couldn\u2019t reach this computer\u2019s relay.");
+      const r = await fetch("/tunnel/up", { method: "POST", headers: _authHdr(tok) });
+      let j = null;
+      try {
+        j = await r.json();
+      } catch (e) {
+      }
+      if (!r.ok || !j || !j.wss) throw new Error(j && j.error || "The tunnel couldn\u2019t open \u2014 a VPN, firewall or antivirus may be blocking it. Allow it through (or turn your VPN off) and try again.");
+      setSelfPublicRelay(j.wss);
+      return { url: j.url || "", wss: j.wss, name: j.name || "" };
+    },
+    async ownRelayName() {
+      if (!ownIsLoopback()) return "";
+      const tok = await localAdminToken();
+      if (!tok) return "";
+      try {
+        const r = await fetch("/relay-names/mine", { cache: "no-store", headers: _authHdr(tok) });
+        if (!r.ok) return "";
+        const j = await r.json();
+        return j && j.handle || "";
+      } catch (e) {
+        return "";
+      }
+    },
     // register THIS church with the relay's write policy so it stops rejecting our publishes. Needs the
     // relay's admin token (the steward running the relay has it — relay/admin.json / installer output).
     // Idempotent; works cross-origin (the relay's /config sends CORS + is token-gated).
@@ -14124,7 +14227,7 @@ zoo`.split("\n");
       const PUBLIC_BASE = "https://app.trinityone.church";
       const isPublic = /^https:\/\//i.test(o) && !/^https:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(o);
       const base = isPublic ? o : PUBLIC_BASE;
-      const relay = ownRelay();
+      const relay = ownIsLoopback() && selfPublicRelay() ? selfPublicRelay() : ownRelay();
       return base + "/?follow=" + np + "&relay=" + encodeURIComponent(relay);
     },
     // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")

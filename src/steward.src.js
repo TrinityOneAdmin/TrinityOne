@@ -314,6 +314,32 @@ function cleanNip05(raw, name) {
   const slug = String(name || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
   return slug ? slug + '@' + s : '';
 }
+// ── Self-hosted "go public" (desktop Suite) ──────────────────────────────────────────────────────────
+// In the Suite this console is served BY its own relay on loopback (ws://127.0.0.1…), which is useless in a
+// member's invite. When the operator turns on the free Cloudflare tunnel the relay exposes a public wss (and
+// auto-claims its directory name); we cache that here so joinUrl() shares the REACHABLE address, not loopback.
+// The tunnel/name endpoints are admin-gated even on loopback (cloudflared proxies from 127.0.0.1, so the relay
+// can't tell local from public by socket alone); the Suite discloses the token to a genuine same-machine request
+// via /local-token — mirror the control panel and use it. All of this is inert off the loopback-served Suite.
+const SELF_PUB_LS = 'trinityone.steward.self-public-relay';
+function ownIsLoopback() { return /^wss?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(:|\/)/i.test(ownRelay()); }
+function selfPublicRelay() { try { return normRelay(lsGet(SELF_PUB_LS) || ''); } catch { return ''; } }
+// pass '' to CLEAR — the Cloudflare quick-tunnel url rotates every restart, so a cached url is dead once the
+// tunnel is reported down; keeping it would let joinUrl() embed a URL that resolves nowhere. Dispatch on change.
+function setSelfPublicRelay(wss) { try { const v = normRelay(wss || ''); if (v !== normRelay(lsGet(SELF_PUB_LS) || '')) { lsSet(SELF_PUB_LS, v); window.dispatchEvent(new CustomEvent('steward-relays')); } } catch (e) {} }
+let _localToken = null;
+async function localAdminToken() {
+  if (_localToken) return _localToken;
+  if (!ownIsLoopback()) return '';
+  try { const r = await fetch('/local-token', { cache: 'no-store' }); if (!r.ok) return ''; const j = await r.json(); _localToken = (j && j.token) || ''; return _localToken; } catch (e) { return ''; }
+}
+function _authHdr(tok) { return tok ? { 'Authorization': 'Bearer ' + tok } : {}; }
+async function refreshSelfPublicRelay() {
+  if (!ownIsLoopback()) return;
+  try { const tok = await localAdminToken(); if (!tok) return; const r = await fetch('/tunnel/state', { cache: 'no-store', headers: _authHdr(tok), signal: AbortSignal.timeout(5000) }); if (!r.ok) return; const j = await r.json(); setSelfPublicRelay(j && j.running && j.wss ? j.wss : ''); } catch (e) {}
+}
+try { setTimeout(refreshSelfPublicRelay, 1500); setInterval(refreshSelfPublicRelay, 60000); window.addEventListener('focus', refreshSelfPublicRelay); } catch (e) {}
+
 function relays() {
   const own = ownRelay();
   const out = [own];
@@ -2251,6 +2277,35 @@ window.Steward = {
   relayList() { return relays(); },
   ownRelay() { return ownRelay(); },
   extraRelays() { return extraRelays(); },
+  // ---- self-hosted "go public" (desktop Suite): make the church reachable from anywhere BEFORE inviting.
+  // The console is same-origin with its own relay on loopback; these hit it directly, authing with the token
+  // the Suite discloses to a genuine same-machine request (/local-token). All no-ops off the Suite. ----
+  isSelfHosted() { return ownIsLoopback(); },
+  async tunnelState() {
+    if (!ownIsLoopback()) return { supported: false, running: false };
+    const tok = await localAdminToken(); if (!tok) return { supported: false, running: false };
+    try {
+      const r = await fetch('/tunnel/state', { cache: 'no-store', headers: _authHdr(tok) });
+      if (!r.ok) return { supported: true, running: false };
+      const j = await r.json();
+      setSelfPublicRelay(j && j.running && j.wss ? j.wss : '');   // cache the live url, or clear a dead one
+      return { supported: true, running: !!(j && j.running), url: (j && j.url) || '', wss: (j && j.wss) || '' };
+    } catch (e) { return { supported: true, running: false }; }
+  },
+  async goPublic() {
+    if (!ownIsLoopback()) throw new Error('This device isn’t running its own relay.');
+    const tok = await localAdminToken(); if (!tok) throw new Error('Couldn’t reach this computer’s relay.');
+    const r = await fetch('/tunnel/up', { method: 'POST', headers: _authHdr(tok) });
+    let j = null; try { j = await r.json(); } catch (e) {}
+    if (!r.ok || !j || !j.wss) throw new Error((j && j.error) || 'The tunnel couldn’t open — a VPN, firewall or antivirus may be blocking it. Allow it through (or turn your VPN off) and try again.');
+    setSelfPublicRelay(j.wss);
+    return { url: j.url || '', wss: j.wss, name: j.name || '' };
+  },
+  async ownRelayName() {
+    if (!ownIsLoopback()) return '';
+    const tok = await localAdminToken(); if (!tok) return '';
+    try { const r = await fetch('/relay-names/mine', { cache: 'no-store', headers: _authHdr(tok) }); if (!r.ok) return ''; const j = await r.json(); return (j && j.handle) || ''; } catch (e) { return ''; }
+  },
   // register THIS church with the relay's write policy so it stops rejecting our publishes. Needs the
   // relay's admin token (the steward running the relay has it — relay/admin.json / installer output).
   // Idempotent; works cross-origin (the relay's /config sends CORS + is token-gated).
@@ -2415,7 +2470,10 @@ window.Steward = {
     // carry the church's REAL relay so a member who follows from anywhere connects to the right place.
     // ownRelay() is the church's relay (a TrinityOne community node on a static host, or the box's own
     // relay when self-hosted) — NOT the page origin, which on a CDN host (pages.dev) has no relay.
-    const relay = ownRelay();
+    // Self-hosted on loopback (the desktop Suite): ownRelay() is ws://127.0.0.1 — meaningless to a member.
+    // Share the public tunnel url the relay exposes once "go public" is on (empty until then; the setup wizard
+    // gates the invite on turning it on, so by the time a QR is handed out this carries a reachable address).
+    const relay = (ownIsLoopback() && selfPublicRelay()) ? selfPublicRelay() : ownRelay();
     return base + '/?follow=' + np + '&relay=' + encodeURIComponent(relay);
   },
   // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
