@@ -299,16 +299,21 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
     </div>
   );
 }
-function StewApproveSheet({ req, onClose, onDone }) {
-  const today = new Date().toISOString().slice(0, 10);
+function StewApproveSheet({ req, who, onClose, onDone }) {
+  // Calendar days must never round-trip through UTC — local-midnight parse + toISOString renders the PREVIOUS
+  // day east of Greenwich (BST), which published needs dated yesterday (already expired → invisible).
+  const _pad = (n) => String(n).padStart(2, '0');
+  const localToday = () => { const x = new Date(); return x.getFullYear() + '-' + _pad(x.getMonth() + 1) + '-' + _pad(x.getDate()); };
+  const dayRange = (a, b) => { const out = []; try { const [y1, m1, d1] = a.split('-').map(Number); const [y2, m2, d2] = b.split('-').map(Number); let t = Date.UTC(y1, m1 - 1, d1); const end = Date.UTC(y2, m2 - 1, d2); for (let i = 0; i < 90 && t <= end; i++) { out.push(new Date(t).toISOString().slice(0, 10)); t += 86400000; } } catch (x) {} return out; };
+  const today = localToday();
   const [start, setStart] = React.useState(today);
   const [end, setEnd] = React.useState(today);
   const [notes, setNotes] = React.useState(req.note || '');
   const [busy, setBusy] = React.useState(false);
   const submit = async () => {
     setBusy(true);
-    const dates = []; try { let d = new Date(start + 'T00:00:00'); const e = new Date((end < start ? start : end) + 'T00:00:00'); for (let i = 0; i < 90 && d <= e; i++) { dates.push(d.toISOString().slice(0, 10)); d = new Date(d.getTime() + 86400000); } } catch (x) {}
-    let ok = null; try { ok = await window.StewardMeals.approveCareRequest(req, { dates, notes }); } catch (x) {}
+    const dates = dayRange(start, end < start ? start : end);
+    let ok = null; try { ok = await window.StewardMeals.approveCareRequest(req, { dates, notes, who }); } catch (x) {}
     setBusy(false); if (ok) onDone();
   };
   const fld = { width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14 };
@@ -333,6 +338,8 @@ function StewApproveSheet({ req, onClose, onDone }) {
 }
 function StewCareRequests() {
   const church = window.useStewardChurch ? window.useStewardChurch() : {};   // re-subscribe once the church key is ready (subscribe no-ops while churchPub is null)
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const nameOf = (pk) => { const m = (members || []).find(x => (x.pubkey || '').toLowerCase() === String(pk || '').toLowerCase()); return (m && m.name) || ''; };
   const [reqs, setReqs] = React.useState([]);
   const [approving, setApproving] = React.useState(null);
   const [chatting, setChatting] = React.useState(null);
@@ -345,7 +352,7 @@ function StewCareRequests() {
         <div key={r.id} style={{ padding: 14, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--clay) 32%, var(--line))', marginBottom: 9 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={MEALS_TYPE_ICON[r.type] || 'heart'} size={18} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{MEALS_TYPE_LABEL[r.type] || 'Help'}{r.forSelf === false && r.forName ? ' · for ' + r.forName : ''}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Asked for help</div></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{MEALS_TYPE_LABEL[r.type] || 'Help'}{r.forSelf === false && r.forName ? ' · for ' + r.forName : (nameOf(r.from) ? ' · for ' + nameOf(r.from) : '')}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Asked for help</div></div>
           </div>
           {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
@@ -355,7 +362,7 @@ function StewCareRequests() {
           </div>
         </div>
       ))}
-      {approving ? <StewApproveSheet req={approving} onClose={() => setApproving(null)} onDone={() => setApproving(null)} /> : null}
+      {approving ? <StewApproveSheet req={approving} who={approving.forSelf ? (nameOf(approving.from) || 'A member') : (approving.forName || 'A member')} onClose={() => setApproving(null)} onDone={() => setApproving(null)} /> : null}
       {chatting ? <StewCareChat reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
     </div>
   );
@@ -369,7 +376,10 @@ function DashMeals() {
   const [openId, setOpenId]   = React.useState(null);
   const today = new Date().toISOString().slice(0, 10);
   const live    = (needs || []).filter(n => !n.endDate || n.endDate >= today);
-  const pastNeeds = (needs || []).filter(n => n.endDate && n.endDate < today);
+  // "Recently closed" is capped at 5 below, and subscribeNeeds sorts OLDEST-first — so slicing straight off that
+  // order showed the five oldest and hid the ones that just closed (a need that closed today fell off the list
+  // entirely). Sort most-recently-ended first so the cap keeps the RECENT ones, as the heading promises.
+  const pastNeeds = (needs || []).filter(n => n.endDate && n.endDate < today).sort((a, b) => (b.endDate || '').localeCompare(a.endDate || '') || (b.ts || 0) - (a.ts || 0));
   const detail = openId ? (needs || []).find(n => n.id === openId) : null;
   return (
     <div className="stew-tab">

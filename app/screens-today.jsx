@@ -28,11 +28,15 @@ const CARE_TYPE_LABEL = { meals: 'Meals', rides: 'Rides', moving: 'Moving', erra
 const CARE_TYPE_ICON = { meals: 'gift', rides: 'calCheck', moving: 'users', errands: 'check', diy: 'hand', visits: 'heart', childcare: 'child', other: 'sparkle' };
 function careDateRange(start, end) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '')) return [];
-  const s = new Date(start + 'T00:00:00');
-  const e = /^\d{4}-\d{2}-\d{2}$/.test(end || '') ? new Date(end + 'T00:00:00') : s;
+  // Parse AND format in UTC ('…T00:00:00Z' + setUTCDate). Parsing as LOCAL midnight and formatting with
+  // toISOString rendered the PREVIOUS calendar day everywhere east of Greenwich (BST included) — which shifted
+  // a need's whole day list, so a member's "I'll help Tuesday" was recorded against Monday. (Mirrors the
+  // steward console's dayList, which already parsed with 'Z'.)
+  const s = new Date(start + 'T00:00:00Z');
+  const e = /^\d{4}-\d{2}-\d{2}$/.test(end || '') ? new Date(end + 'T00:00:00Z') : s;
   if (isNaN(s) || isNaN(e) || e < s) return [];
   const out = [];
-  for (const d = new Date(s); d <= e && out.length < 90; d.setDate(d.getDate() + 1)) out.push(d.toISOString().slice(0, 10));
+  for (const d = new Date(s); d <= e && out.length < 90; d.setUTCDate(d.getUTCDate() + 1)) out.push(d.toISOString().slice(0, 10));
   return out;
 }
 function careFmtDate(iso) { try { return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); } catch { return iso; } }
@@ -200,7 +204,14 @@ function CareRequestCard({ r, ctx, onApprove, onDecline, canMessage, onMessage }
 }
 
 function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
-  const today = new Date().toISOString().slice(0, 10);
+  // Dates are CALENDAR days, so never round-trip them through UTC: `new Date('YYYY-MM-DDT00:00:00')` parses as
+  // LOCAL midnight and `.toISOString()` then renders the UTC day — which is the PREVIOUS day everywhere east of
+  // Greenwich (BST included). That shipped needs dated yesterday, i.e. already expired and invisible. Build the
+  // day list from the date parts in UTC (Date.UTC + toISOString agree), and default from the LOCAL calendar day.
+  const _pad = (n) => String(n).padStart(2, '0');
+  const localToday = () => { const x = new Date(); return x.getFullYear() + '-' + _pad(x.getMonth() + 1) + '-' + _pad(x.getDate()); };
+  const dayRange = (a, b) => { const out = []; try { const [y1, m1, d1] = a.split('-').map(Number); const [y2, m2, d2] = b.split('-').map(Number); let t = Date.UTC(y1, m1 - 1, d1); const end = Date.UTC(y2, m2 - 1, d2); for (let i = 0; i < 90 && t <= end; i++) { out.push(new Date(t).toISOString().slice(0, 10)); t += 86400000; } } catch (e) {} return out; };
+  const today = localToday();
   const [start, setStart] = React.useState(today);
   const [end, setEnd] = React.useState(today);
   const [notes, setNotes] = React.useState(req.note || '');
@@ -208,8 +219,7 @@ function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
   const [err, setErr] = React.useState('');
   const submit = async () => {
     setBusy(true); setErr('');
-    const dates = [];
-    try { let d = new Date(start + 'T00:00:00'); const e = new Date((end < start ? start : end) + 'T00:00:00'); for (let i = 0; i < 90 && d <= e; i++) { dates.push(d.toISOString().slice(0, 10)); d = new Date(d.getTime() + 86400000); } } catch (e2) {}
+    const dates = dayRange(start, end < start ? start : end);
     let ok = null;
     try { ok = await window.Fellowship.approveCareRequest(req, { dates, notes }); } catch (e2) { setErr((e2 && e2.message) || 'Couldn’t set up the need.'); setBusy(false); return; }
     setBusy(false);
