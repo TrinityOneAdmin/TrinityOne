@@ -1277,7 +1277,15 @@ function accept(e) {
     // a message in a request's shared care-team↔asker thread. Member-writable (so the asker can reply); must
     // name its church, then falls to the member rule + per-member cap. The content is sealed to the care team +
     // asker, so a non-audience write is unreadable garbage the recipients' client filters out on decryption.
-    if (d.startsWith(CARECHAT_D) && !namedChurch(e)) return false;
+    if (d.startsWith(CARECHAT_D)) {
+      if (!namedChurch(e)) return false;
+      // SAFEGUARDING (relay-enforced): writing INTO a minor asker's thread requires being the asker, or an
+      // adult CLEARED to contact that child. A care-team roster seat is NOT youth clearance, so without this a
+      // non-cleared care-admin could use the sealed thread to route around the kind-4 minor↔adult gate (the
+      // very thing the kind-1059/1060 block guards). Then falls through to the member rule + per-member cap.
+      const _p = (e.tags.find(t => t[0] === 'p') || [])[1]; const _asker = _p ? (toHexPub(_p) || _p) : '';
+      if (_asker && MINORS.has(_asker) && e.pubkey !== _asker && !safeguardAllows(_asker, e.pubkey)) return false;
+    }
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
@@ -1357,7 +1365,11 @@ function canRead(e, authed) {
     if (d.startsWith(CARECHAT_D)) {   // a request thread message — the care team + the p-tagged asker + the author
       const cp = owningChurch(e, d);
       const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
-      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp) || (!!pHex && authed === pHex));
+      if (!authed || !cp) return false;
+      // SAFEGUARDING: if the asker is a minor, only the child + adults CLEARED to contact them (or the child's
+      // own church/steward/guardian) may read the thread — a care-team roster seat alone is not clearance.
+      if (pHex && MINORS.has(pHex) && authed !== pHex && !safeguardAllows(pHex, authed)) return false;
+      return (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp) || (!!pHex && authed === pHex));
     }
     // ── kind-30078 read policy: DEFAULT-DENY ──────────────────────────────────────────────────────
     // SECURITY-AUDIT-2026-07-20 C1. This gate used to be a DENY-list of private d-prefixes ending in a

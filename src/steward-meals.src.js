@@ -326,7 +326,7 @@
   // the members app as a care-admin, or are added to the care team.)
   function subscribeCareRequests(cb) {
     if (!S() || !S().subscribeMany || !S().churchPub) { cb([]); return () => {}; }
-    const cp = S().churchPub; const byId = new Map(), statusById = new Map();
+    const cp = S().churchPub; const byId = new Map(), statusById = new Map(), tomb = new Map();
     const emit = () => { try { cb([...byId.values()].map(r => { const s = statusById.get(r.id) || {}; return { ...r, status: s.status || 'open', needId: s.needId || '' }; }).sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
     const sub = S().subscribeMany([{ kinds: [30078], '#t': ['carereq', 'carereqstatus'], '#church': [cp] }], {
       onevent(e) {
@@ -334,7 +334,8 @@
         if (d.startsWith(CARESTATUS_D)) { const id = d.slice(CARESTATUS_D.length); const p = statusById.get(id); if (p && p._ts >= e.created_at) return; try { const s = JSON.parse(e.content || '{}'); statusById.set(id, { status: String(s.status || 'handled'), needId: String(s.needId || ''), _ts: e.created_at }); emit(); } catch (x) {} return; }
         if (!d.startsWith(CAREREQ_D)) return;
         const id = d.slice(CAREREQ_D.length);
-        if (e.tags.some(t => t[0] === 'deleted')) { byId.delete(id); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted')) { tomb.set(id, Math.max(tomb.get(id) || 0, e.created_at)); byId.delete(id); emit(); return; }
+        if ((tomb.get(id) || 0) >= e.created_at) return;   // withdrawn — don't resurrect a lagging copy
         const p = byId.get(id); if (p && p._ts >= e.created_at) return;
         let body = null; try { body = S().openSealedFromPeer(JSON.parse(e.content), e.pubkey); } catch (x) {}
         byId.set(id, { id, from: e.pubkey, at: (body && body.at) || e.created_at, _ts: e.created_at, sealed: !body, ...(body || {}) });

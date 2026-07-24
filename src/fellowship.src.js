@@ -716,8 +716,11 @@ async function deriveFromIdentity() {
   // PUBLIC docs — so the member sees an empty church (no groups/care/roster) until a background+resume.
   // Reopening a sub on that socket won't re-challenge; only a NEW socket does. So if we just gained the key
   // and hubs are already open, force authenticated reconnections. Covers fresh-join, boot race, AND unlock.
-  if (wasKeyless && sk) { for (const hub of _docsHubs.values()) { if (hub.closer) { try { reconnectAll(); } catch (e) {} break; } } }
+  // Debounced: unlock fires BOTH 'trinity-identity' and 'trinity-identity-lock', and on native (async key read)
+  // the two can each capture wasKeyless=true before either sets sk — guard so we reconnect at most once per window.
+  if (wasKeyless && sk && !_reconnectGuard) { for (const hub of _docsHubs.values()) { if (hub.closer) { _reconnectGuard = true; setTimeout(() => { _reconnectGuard = false; }, 1500); try { reconnectAll(); } catch (e) {} break; } } }
 }
+let _reconnectGuard = false;
 async function init() {
   if (window.TrinityIdentity && window.TrinityIdentity.ready) await window.TrinityIdentity.ready;
   await deriveFromIdentity();
@@ -1832,6 +1835,7 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub; if (!cp) return () => {};
     const byId = new Map();        // id -> request
     const statusById = new Map();  // id -> { status, needId, _ts }
+    const tomb = new Map();        // id -> withdrawal ts — so a lagging relay re-serving the older carereq can't resurrect it
     const emit = () => { try { cb([...byId.values()].map(r => { const s = statusById.get(r.id) || {}; return { ...r, status: s.status || 'open', needId: s.needId || '' }; }).sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
     const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#t': ['carereq', 'carereqstatus'], '#church': [cp] }], {
       onevent(e) {
@@ -1844,7 +1848,8 @@ window.Fellowship = {
         }
         if (!d.startsWith(CAREREQ_D)) return;
         const id = d.slice(CAREREQ_D.length);
-        if (e.tags.some(t => t[0] === 'deleted')) { byId.delete(id); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted')) { tomb.set(id, Math.max(tomb.get(id) || 0, e.created_at)); byId.delete(id); emit(); return; }
+        if ((tomb.get(id) || 0) >= e.created_at) return;   // withdrawn — never resurrect a copy at/older than the withdrawal
         const prev = byId.get(id); if (prev && prev._ts >= e.created_at) return;
         let body = null;
         try { const o = JSON.parse(e.content); const mine = o.keys && o.keys[pub]; if (mine) { const kh = nip44d(mine, nip44ck(sk, e.pubkey)); body = JSON.parse(nip44d(o.enc, _unhex(kh))); } } catch (e2) {}

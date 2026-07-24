@@ -275,7 +275,7 @@
         };
       }
       const cp = S().churchPub;
-      const byId = /* @__PURE__ */ new Map(), statusById = /* @__PURE__ */ new Map();
+      const byId = /* @__PURE__ */ new Map(), statusById = /* @__PURE__ */ new Map(), tomb = /* @__PURE__ */ new Map();
       const emit = () => {
         try {
           cb([...byId.values()].map((r) => {
@@ -303,10 +303,12 @@
           if (!d.startsWith(CAREREQ_D)) return;
           const id = d.slice(CAREREQ_D.length);
           if (e.tags.some((t) => t[0] === "deleted")) {
+            tomb.set(id, Math.max(tomb.get(id) || 0, e.created_at));
             byId.delete(id);
             emit();
             return;
           }
+          if ((tomb.get(id) || 0) >= e.created_at) return;
           const p = byId.get(id);
           if (p && p._ts >= e.created_at) return;
           let body = null;

@@ -281,7 +281,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   const endRef = React.useRef(null);
   React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareChat(reqId, setMsgs); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [reqId]);
   React.useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ block: 'end' }); } catch (e) {} }, [msgs.length]);
-  const send = async () => { const t = text.trim(); if (!t) return; setText(''); try { await window.StewardMeals.sendCareChat(reqId, requesterPub, t); } catch (e) {} };
+  const send = async () => { const t = text.trim(); if (!t) return; setText(''); let ok = null; try { ok = await window.StewardMeals.sendCareChat(reqId, requesterPub, t); } catch (e) {} if (!ok) setText(t); };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
@@ -292,7 +292,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
           <div ref={endRef} />
         </div>
         <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--line)' }}>
-          <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
+          <input value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
           <button onClick={send} className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="#fff" /></button>
         </div>
       </div>
@@ -332,10 +332,11 @@ function StewApproveSheet({ req, onClose, onDone }) {
   );
 }
 function StewCareRequests() {
+  const church = window.useStewardChurch ? window.useStewardChurch() : {};   // re-subscribe once the church key is ready (subscribe no-ops while churchPub is null)
   const [reqs, setReqs] = React.useState([]);
   const [approving, setApproving] = React.useState(null);
   const [chatting, setChatting] = React.useState(null);
-  React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, []);
+  React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [church.npub]);
   if (!reqs.length) return null;
   return (
     <div style={{ marginBottom: 16 }}>
@@ -348,7 +349,7 @@ function StewCareRequests() {
           </div>
           {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
-            <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="#fff" /> Set up help</button>
+            {!r.sealed ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="#fff" /> Set up help</button> : null}
             <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: (MEALS_TYPE_LABEL[r.type] || 'Help') })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
             <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Dismiss</button>
           </div>

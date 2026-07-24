@@ -120,3 +120,18 @@ test('shared thread: the asker can post + read; the care team reads; an unrelate
   const ws3 = await connect(); const asN = await reqCollect(ws3, 'h3', { kinds: [30078], '#d': [dM] }, N.sk); ws3.close();
   assert.equal(ofD(asN, dM).length, 0, 'an unrelated member cannot read the thread');
 });
+
+test('SAFEGUARDING: a non-cleared adult cannot join a MINOR asker’s thread; the child + their church can', async () => {
+  // mark the asker M as a minor of this church (owner-signed minors list)
+  const minors = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/minors:' + cp]], content: JSON.stringify({ pubkeys: [M.pub] }) }, church.sk);
+  assert.equal((await publish(pub, minors))[0], true, 'minors list stored');
+  await sleep(150);
+  // an uncleared adult member may NOT post into the child's thread (routing-around the kind-4 gate is blocked)
+  assert.equal((await publish(pub, chat(N, 'req1', 'sgN')))[0], false, 'a non-cleared adult cannot message a child');
+  // the child themselves may post, and the child's OWN church may reach them
+  assert.equal((await publish(pub, chat(M, 'req1', 'sgSelf')))[0], true, 'the child may post to their own thread');
+  assert.equal((await publish(pub, chat(church, 'req1', 'sgCh')))[0], true, 'the child’s own church may reach them');
+  // and an uncleared adult cannot READ the child's thread
+  const ws = await connect(); const asN = await reqCollect(ws, 'sg1', { kinds: [30078], '#d': [CARECHAT_D + 'req1:sgCh'] }, N.sk); ws.close();
+  assert.equal(ofD(asN, CARECHAT_D + 'req1:sgCh').length, 0, 'a non-cleared adult cannot read a child’s thread');
+});

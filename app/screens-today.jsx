@@ -191,7 +191,7 @@ function CareRequestCard({ r, ctx, onApprove, onDecline, canMessage, onMessage }
       {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device isn’t on the care team’s key list.</div>
         : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap', padding: '2px 0 4px' }}>{r.note}</div> : null}
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-        <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="#fff" stroke={2.6} /> Set up help</button>
+        {!r.sealed ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="#fff" stroke={2.6} /> Set up help</button> : null}
         {canMessage ? <button onClick={onMessage} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
         <button onClick={async () => { setBusy('d'); try { await onDecline(); } catch (e) {} setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Dismiss'}</button>
       </div>
@@ -255,8 +255,10 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
   const send = async () => {
     const t = text.trim(); if (!t || busy) return;
     setText(''); setBusy(true);
-    try { await window.Fellowship.sendCareChat(reqId, requesterPub, t); } catch (e) {}
+    let ok = null;
+    try { ok = await window.Fellowship.sendCareChat(reqId, requesterPub, t); } catch (e) {}
     setBusy(false);
+    if (!ok) setText(t);   // send failed → restore the text so it isn't silently lost
   };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 65, background: 'rgba(34,28,22,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
@@ -277,7 +279,7 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
           <div ref={endRef} />
         </div>
         <div style={{ display: 'flex', gap: 8, padding: '12px 14px calc(12px + env(safe-area-inset-bottom))', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
-          <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} />
+          <input value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} />
           <button onClick={send} disabled={busy || !text.trim()} aria-label="Send" style={{ flexShrink: 0, width: 44, height: 44, borderRadius: 999, border: 'none', background: text.trim() ? 'var(--clay)' : 'var(--surface-2)', color: text.trim() ? '#fff' : 'var(--ink-3)', cursor: text.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="send" size={18} color="currentColor" /></button>
         </div>
       </div>

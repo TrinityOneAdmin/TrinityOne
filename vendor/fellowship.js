@@ -6637,9 +6637,13 @@
       window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: pub } }));
     } catch {
     }
-    if (wasKeyless && sk) {
+    if (wasKeyless && sk && !_reconnectGuard) {
       for (const hub of _docsHubs.values()) {
         if (hub.closer) {
+          _reconnectGuard = true;
+          setTimeout(() => {
+            _reconnectGuard = false;
+          }, 1500);
           try {
             reconnectAll();
           } catch (e) {
@@ -6649,6 +6653,7 @@
       }
     }
   }
+  var _reconnectGuard = false;
   async function init() {
     if (window.TrinityIdentity && window.TrinityIdentity.ready) await window.TrinityIdentity.ready;
     await deriveFromIdentity();
@@ -8483,6 +8488,7 @@
       };
       const byId = /* @__PURE__ */ new Map();
       const statusById = /* @__PURE__ */ new Map();
+      const tomb = /* @__PURE__ */ new Map();
       const emit = () => {
         try {
           cb([...byId.values()].map((r) => {
@@ -8510,10 +8516,12 @@
           if (!d.startsWith(CAREREQ_D)) return;
           const id = d.slice(CAREREQ_D.length);
           if (e.tags.some((t) => t[0] === "deleted")) {
+            tomb.set(id, Math.max(tomb.get(id) || 0, e.created_at));
             byId.delete(id);
             emit();
             return;
           }
+          if ((tomb.get(id) || 0) >= e.created_at) return;
           const prev = byId.get(id);
           if (prev && prev._ts >= e.created_at) return;
           let body = null;
