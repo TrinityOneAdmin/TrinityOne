@@ -5797,6 +5797,7 @@
   var CAREREQ_D = "trinityone/carereq:";
   var CARETEAM_D = "trinityone/careteam:";
   var CAREREQSTATUS_D = "trinityone/carereqstatus:";
+  var CARECHAT_D = "trinityone/carechat:";
   var CARESKIP_D = "trinityone/careskip:";
   var CAREAVAIL_D = "trinityone/careavail:";
   var SAFETY_D = "trinityone/safetycheck:";

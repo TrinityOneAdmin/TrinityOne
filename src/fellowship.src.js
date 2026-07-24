@@ -67,6 +67,7 @@ const CARESLOT_D = 'trinityone/careslot:';// a member's offer for one (need,date
 const CAREREQ_D = 'trinityone/carereq:';  // a member's private "ask for help" request, sealed to the care team — d=carereq:<id>
 const CARETEAM_D = 'trinityone/careteam:';// church-published roster of care-team recipient pubkeys — d=careteam:<churchpub>
 const CAREREQSTATUS_D = 'trinityone/carereqstatus:';// the care team's resolution of a request (approved/declined/handled) — d=carereqstatus:<id>
+const CARECHAT_D = 'trinityone/carechat:'; // a message in a request's shared care-team↔asker thread — d=carechat:<reqId>:<msgId>
 const CARESKIP_D = 'trinityone/careskip:';// recipient marks a day they don't need help — d=careskip:<careId>:<iso>
 const CAREAVAIL_D = 'trinityone/careavail:';// a member's "I'm here to help" availability — d=careavail:<churchpub> (one per member per church)
 const SAFETY_D = 'trinityone/safetycheck:';// the church's active safety check ("are you safe?") — d=safetycheck:<churchpub>
