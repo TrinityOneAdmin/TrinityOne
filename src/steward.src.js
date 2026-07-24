@@ -327,6 +327,12 @@ function selfPublicRelay() { try { return normRelay(lsGet(SELF_PUB_LS) || ''); }
 // pass '' to CLEAR — the Cloudflare quick-tunnel url rotates every restart, so a cached url is dead once the
 // tunnel is reported down; keeping it would let joinUrl() embed a URL that resolves nowhere. Dispatch on change.
 function setSelfPublicRelay(wss) { try { const v = normRelay(wss || ''); if (v !== normRelay(lsGet(SELF_PUB_LS) || '')) { lsSet(SELF_PUB_LS, v); window.dispatchEvent(new CustomEvent('steward-relays')); } } catch (e) {} }
+// The relay's STABLE directory name (e.g. "grace-city"), cached alongside the tunnel url. joinUrl() embeds it so
+// a printed invite/QR survives a tunnel-URL rotation: the relay re-claims name→current-url on every restart, and
+// the member resolves the name at follow time. Only meaningful on the loopback-served desktop Suite.
+const SELF_NAME_LS = 'trinityone.steward.self-relay-name';
+function selfRelayName() { try { return String(lsGet(SELF_NAME_LS) || '').trim(); } catch { return ''; } }
+function setSelfRelayName(n) { try { const v = String(n || '').trim().toLowerCase(); if (v !== selfRelayName()) lsSet(SELF_NAME_LS, v); } catch (e) {} }
 let _localToken = null;
 async function localAdminToken() {
   if (_localToken) return _localToken;
@@ -336,7 +342,16 @@ async function localAdminToken() {
 function _authHdr(tok) { return tok ? { 'Authorization': 'Bearer ' + tok } : {}; }
 async function refreshSelfPublicRelay() {
   if (!ownIsLoopback()) return;
-  try { const tok = await localAdminToken(); if (!tok) return; const r = await fetch('/tunnel/state', { cache: 'no-store', headers: _authHdr(tok), signal: AbortSignal.timeout(5000) }); if (!r.ok) return; const j = await r.json(); setSelfPublicRelay(j && j.running && j.wss ? j.wss : ''); } catch (e) {}
+  try {
+    const tok = await localAdminToken(); if (!tok) return;
+    const r = await fetch('/tunnel/state', { cache: 'no-store', headers: _authHdr(tok), signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return;
+    const j = await r.json(); const up = !!(j && j.running && j.wss);
+    setSelfPublicRelay(up ? j.wss : '');
+    // cache the stable directory name while public (for a durable invite); clear it when the tunnel is down
+    if (up) { try { const nr = await fetch('/relay-names/mine', { cache: 'no-store', headers: _authHdr(tok), signal: AbortSignal.timeout(5000) }); if (nr.ok) { const nj = await nr.json(); setSelfRelayName((nj && nj.handle) || ''); } } catch (e) {} }
+    else setSelfRelayName('');
+  } catch (e) {}
 }
 try { setTimeout(refreshSelfPublicRelay, 1500); setInterval(refreshSelfPublicRelay, 60000); window.addEventListener('focus', refreshSelfPublicRelay); } catch (e) {}
 
@@ -2487,7 +2502,10 @@ window.Steward = {
     // Share the public tunnel url the relay exposes once "go public" is on (empty until then; the setup wizard
     // gates the invite on turning it on, so by the time a QR is handed out this carries a reachable address).
     const relay = (ownIsLoopback() && selfPublicRelay()) ? selfPublicRelay() : ownRelay();
-    return base + '/?follow=' + np + '&relay=' + encodeURIComponent(relay);
+    // Also carry the relay's STABLE directory name when self-hosted: the tunnel url above rotates on restart, so
+    // a printed QR's &relay= can go dead — the member resolves &relayname= to the relay's CURRENT url instead.
+    const nm = ownIsLoopback() ? selfRelayName() : '';
+    return base + '/?follow=' + np + '&relay=' + encodeURIComponent(relay) + (nm ? '&relayname=' + encodeURIComponent(nm) : '');
   },
   // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
   joinCode() { return window.Steward.npub || ''; },

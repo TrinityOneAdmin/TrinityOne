@@ -10887,6 +10887,21 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
+  var SELF_NAME_LS = "trinityone.steward.self-relay-name";
+  function selfRelayName() {
+    try {
+      return String(lsGet(SELF_NAME_LS) || "").trim();
+    } catch {
+      return "";
+    }
+  }
+  function setSelfRelayName(n) {
+    try {
+      const v = String(n || "").trim().toLowerCase();
+      if (v !== selfRelayName()) lsSet(SELF_NAME_LS, v);
+    } catch (e) {
+    }
+  }
   var _localToken = null;
   async function localAdminToken() {
     if (_localToken) return _localToken;
@@ -10912,7 +10927,18 @@ zoo`.split("\n");
       const r = await fetch("/tunnel/state", { cache: "no-store", headers: _authHdr(tok), signal: AbortSignal.timeout(5e3) });
       if (!r.ok) return;
       const j = await r.json();
-      setSelfPublicRelay(j && j.running && j.wss ? j.wss : "");
+      const up = !!(j && j.running && j.wss);
+      setSelfPublicRelay(up ? j.wss : "");
+      if (up) {
+        try {
+          const nr = await fetch("/relay-names/mine", { cache: "no-store", headers: _authHdr(tok), signal: AbortSignal.timeout(5e3) });
+          if (nr.ok) {
+            const nj = await nr.json();
+            setSelfRelayName(nj && nj.handle || "");
+          }
+        } catch (e) {
+        }
+      } else setSelfRelayName("");
     } catch (e) {
     }
   }
@@ -14258,7 +14284,8 @@ zoo`.split("\n");
       const isPublic = /^https:\/\//i.test(o) && !/^https:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(o);
       const base = isPublic ? o : PUBLIC_BASE;
       const relay = ownIsLoopback() && selfPublicRelay() ? selfPublicRelay() : ownRelay();
-      return base + "/?follow=" + np + "&relay=" + encodeURIComponent(relay);
+      const nm = ownIsLoopback() ? selfRelayName() : "";
+      return base + "/?follow=" + np + "&relay=" + encodeURIComponent(relay) + (nm ? "&relayname=" + encodeURIComponent(nm) : "");
     },
     // a short, human-shareable code (the npub itself — paste-able into the member app's "Follow a church")
     joinCode() {

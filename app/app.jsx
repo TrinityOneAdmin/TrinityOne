@@ -462,6 +462,16 @@ function App() {
       // SECURITY-AUDIT-2026-07-06 L5: require wss:// (encrypted). A crafted invite carrying ?relay=ws://attacker
       // would otherwise add a cleartext relay to the member's set → a network MITM reads/injects fellowship traffic.
       if (rm) { try { const relay = decodeURIComponent(rm[1]); if (/^wss:\/\//i.test(relay)) F.addRelay(relay); } catch (e) {} }
+      // A self-hosted relay behind a free tunnel gets a NEW url each restart, so a printed invite's ?relay= can
+      // go dead. The invite also carries the relay's STABLE directory name — resolve it against the shared
+      // directory to the relay's CURRENT url so an old QR still works after a restart. Best-effort + additive;
+      // L5 still enforced (must resolve to wss://).
+      const nmm = String(raw || '').match(/[?&]relayname=([^&\s]+)/);
+      if (nmm && F && F.addRelay) { try {
+        const name = decodeURIComponent(nmm[1]).toLowerCase().replace(/[^a-z0-9-]/g, '');
+        if (name) fetch('https://app.trinityone.church/relay-names/resolve/' + encodeURIComponent(name), { cache: 'no-store' })
+          .then(r => r.ok ? r.json() : null).then(j => { const u = j && j.url; if (u && /^wss:\/\//i.test(u)) F.addRelay(u); }).catch(() => {});
+      } catch (e) {} }
     }
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
