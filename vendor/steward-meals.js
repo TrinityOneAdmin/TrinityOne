@@ -8,6 +8,7 @@
     const NEED_D = NET + "/care:";
     const SLOT_D = NET + "/careslot:";
     const SKIP_D = NET + "/careskip:";
+    const CARETEAM_D = NET + "/careteam:";
     const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     const now = () => Math.floor(Date.now() / 1e3);
     const enKey = () => "trinityone.meals.enabled." + (S() && S().churchPub || "");
@@ -258,11 +259,19 @@
       if (!roster || !Array.isArray(roster.people)) return false;
       return roster.people.some((p) => p && p.pub && p.pub.toLowerCase() === memberPub.toLowerCase());
     }
+    function publishCareTeam(memberPubs) {
+      if (!S() || !S().publishSigned || !S().churchPub) return Promise.resolve(null);
+      const cp = S().churchPub;
+      const pubs = [.../* @__PURE__ */ new Set([cp, ...(memberPubs || []).map((p) => String(p || "").trim().toLowerCase()).filter(Boolean)])];
+      return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", CARETEAM_D + cp], ["t", NET]], content: JSON.stringify({ pubs, updated: now() }) });
+    }
     window.StewardMeals = {
       // settings
       subscribeSettings,
       setEnabled,
       cachedEnabled,
+      // care-team recipient roster (for the "ask for help" seal)
+      publishCareTeam,
       // needs
       publishNeed,
       removeNeed,

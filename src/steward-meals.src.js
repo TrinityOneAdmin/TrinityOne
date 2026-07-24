@@ -43,6 +43,7 @@
   const NEED_D    = NET + '/care:';          // + needId
   const SLOT_D    = NET + '/careslot:';      // + needId:isoDate
   const SKIP_D    = NET + '/careskip:';      // + needId:isoDate
+  const CARETEAM_D = NET + '/careteam:';     // + churchpub — the care-team recipient roster (pubkeys a member seals an "ask for help" request to)
 
   const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const now = () => Math.floor(Date.now() / 1000);
@@ -306,9 +307,21 @@
     return roster.people.some(p => p && p.pub && p.pub.toLowerCase() === memberPub.toLowerCase());
   }
 
+  // Publish the care-team RECIPIENT roster (careteam:<cp>) — the pubkeys a member seals an "ask for help"
+  // request to = the church key (always, so the owner can triage) + the care-team group's members (passed in
+  // from the console, which holds the rosters). Just pubkeys, no secrets. Re-published when the team changes.
+  function publishCareTeam(memberPubs) {
+    if (!S() || !S().publishSigned || !S().churchPub) return Promise.resolve(null);
+    const cp = S().churchPub;
+    const pubs = [...new Set([cp, ...((memberPubs || []).map(p => String(p || '').trim().toLowerCase()).filter(Boolean))])];
+    return S().publishSigned({ kind: 30078, created_at: now(), tags: [['d', CARETEAM_D + cp], ['t', NET]], content: JSON.stringify({ pubs, updated: now() }) });
+  }
+
   window.StewardMeals = {
     // settings
     subscribeSettings, setEnabled, cachedEnabled,
+    // care-team recipient roster (for the "ask for help" seal)
+    publishCareTeam,
     // needs
     publishNeed, removeNeed, subscribeNeeds, openNeed,   // openNeed exported so it is testable against the SHIPPED bundle
     // slots + skips (read slots; the steward can now WRITE skips to block a day for the recipient)

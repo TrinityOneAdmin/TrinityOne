@@ -64,6 +64,8 @@ function _sanitizeMsgTags(arr) {
 const CARE_D = 'trinityone/care:';        // a care need — d=care:<id>
 const ROSTER_PFX = 'trinityone/roster:';  // a team roster (people); the meals-admin one names the care-team admins (M2)
 const CARESLOT_D = 'trinityone/careslot:';// a member's offer for one (need,date) — d=careslot:<careId>:<iso>
+const CAREREQ_D = 'trinityone/carereq:';  // a member's private "ask for help" request, sealed to the care team — d=carereq:<id>
+const CARETEAM_D = 'trinityone/careteam:';// church-published roster of care-team recipient pubkeys — d=careteam:<churchpub>
 const CARESKIP_D = 'trinityone/careskip:';// recipient marks a day they don't need help — d=careskip:<careId>:<iso>
 const CAREAVAIL_D = 'trinityone/careavail:';// a member's "I'm here to help" availability — d=careavail:<churchpub> (one per member per church)
 const SAFETY_D = 'trinityone/safetycheck:';// the church's active safety check ("are you safe?") — d=safetycheck:<churchpub>
@@ -1734,6 +1736,68 @@ window.Fellowship = {
   subscribeCareSlots(churchNpub, cb) { return window.Fellowship._subCareTagged(churchNpub, CARESLOT_D, (o) => ({ note: String(o.note || '').trim() }), cb); },
   subscribeCareSkips(churchNpub, cb) { return window.Fellowship._subCareTagged(churchNpub, CARESKIP_D, (o) => ({ reason: String(o.reason || '').trim() }), cb); },
   // sign up to bring a meal / give a ride on one date of a need (idempotent per member+need+date).
+  // ── "Ask for help": a member opens a private care REQUEST, sealed to the care team (never the whole church).
+  // Fetch the church's care-team roster (careteam:<cp> — recipient pubkeys), wrap a one-off content key to each
+  // recipient + to ourselves (so we can read our own status back), and publish a member-signed carereq:<id>.
+  // The relay read-gates it to the care team; the content is NIP-44-sealed on top. Returns { id, ...body } | null.
+  async publishCareRequest(fields) {
+    const cp = window.Fellowship.churchPub;
+    if (!sk) { try { await window.Fellowship.ready; } catch {} }
+    if (!sk || !cp) return null;
+    let pubs = [];
+    try {
+      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CARETEAM_D + cp] }]);
+      let best = null; for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
+      if (best) { const o = JSON.parse(best.content); if (Array.isArray(o.pubs)) pubs = o.pubs.filter(Boolean); }
+    } catch (e) {}
+    // always seal to the church key (the owner can always triage) + ourselves; plus the published care team.
+    const recips = [...new Set([cp, pub, ...pubs].filter(Boolean))];
+    const body = {
+      v: 1, type: String(fields.type || 'other'),
+      forSelf: fields.forSelf !== false, forName: String(fields.forName || '').trim(),
+      when: String(fields.when || '').trim(), urgency: String(fields.urgency || '').trim(),
+      note: String(fields.note || '').trim(), by: pub, at: Math.floor(Date.now() / 1000),
+    };
+    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+    const keyHex = _hex(keyBytes);
+    let enc; try { enc = nip44e(JSON.stringify(body), keyBytes); } catch (e) { return null; }
+    const keys = {};
+    for (const p of recips) { try { keys[p] = nip44e(keyHex, nip44ck(sk, p)); } catch (e) {} }
+    const id = _hex(crypto.getRandomValues(new Uint8Array(8)));
+    const evt = finalizeEvent({ kind: 30078, created_at: body.at, tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp]], content: JSON.stringify({ keys, enc }) }, sk);
+    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] care request publish failed', e); return null; }
+    return { id, ...body };
+  },
+  // Subscribe to care requests. A member receives their OWN (the relay serves the author); the care team gets
+  // all. cb(list) with [{ id, from, at, sealed, ...body }] newest-first; entries we can decrypt carry the body.
+  subscribeCareRequests(cb) {
+    const cp = window.Fellowship.churchPub; if (!cp) return () => {};
+    const byId = new Map();
+    const emit = () => { try { cb([...byId.values()].sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
+    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#t': ['carereq'], '#church': [cp] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d.startsWith(CAREREQ_D)) return;
+        const id = d.slice(CAREREQ_D.length);
+        if (e.tags.some(t => t[0] === 'deleted')) { byId.delete(id); emit(); return; }
+        const prev = byId.get(id); if (prev && prev._ts >= e.created_at) return;
+        let body = null;
+        try { const o = JSON.parse(e.content); const mine = o.keys && o.keys[pub]; if (mine) { const kh = nip44d(mine, nip44ck(sk, e.pubkey)); body = JSON.parse(nip44d(o.enc, _unhex(kh))); } } catch (e2) {}
+        byId.set(id, { id, from: e.pubkey, at: (body && body.at) || e.created_at, _ts: e.created_at, sealed: !body, ...(body || {}) });
+        emit();
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // Member withdraws their own pending request.
+  async cancelCareRequest(id) {
+    const cp = window.Fellowship.churchPub;
+    if (!sk || !cp || !id) return null;
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp], ['deleted', '1']], content: '' }, sk);
+    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) {}
+    return evt;
+  },
   async fillCareSlot(careId, iso, note) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }

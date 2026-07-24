@@ -24,8 +24,8 @@ function ProgressRing({ value, size = 46, stroke = 4, color = 'var(--clay)' }) {
 }
 
 // ── Care / Meal trains: open needs the member can sign up to help with (Today card) ──
-const CARE_TYPE_LABEL = { meals: 'Meals', rides: 'Rides', moving: 'Moving', errands: 'Errands', diy: 'DIY', visits: 'Visits', childcare: 'Childcare' };
-const CARE_TYPE_ICON = { meals: 'gift', rides: 'calCheck', moving: 'users', errands: 'check', diy: 'hand', visits: 'heart', childcare: 'child' };
+const CARE_TYPE_LABEL = { meals: 'Meals', rides: 'Rides', moving: 'Moving', errands: 'Errands', diy: 'DIY', visits: 'Visits', childcare: 'Childcare', other: 'Other' };
+const CARE_TYPE_ICON = { meals: 'gift', rides: 'calCheck', moving: 'users', errands: 'check', diy: 'hand', visits: 'heart', childcare: 'child', other: 'sparkle' };
 function careDateRange(start, end) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '')) return [];
   const s = new Date(start + 'T00:00:00');
@@ -138,6 +138,120 @@ function CareAvailRow({ a, ctx, myPub }) {
         {a.note ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 4, whiteSpace: 'pre-wrap' }}>{a.note}</div> : null}
       </div>
       {canDM ? <button onClick={() => ctx.openDM(a.pubkey)} style={careBtnHelp}>Message</button> : null}
+    </div>
+  );
+}
+
+// ── "Ask for help": a member privately asks the care team, via a short form that mirrors the need categories.
+// It publishes a sealed request (care-team only) — not a public need. The care team approves it into a need or
+// opens a chat. Lives at the top of the Care tab.
+const CARE_WHEN = [['once', 'Just once'], ['ongoing', 'For a while'], ['unsure', 'Not sure yet']];
+const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No rush']];
+
+function MyRequestRow({ r, onCancel }) {
+  const [busy, setBusy] = React.useState(false);
+  const label = CARE_TYPE_LABEL[r.type] || 'Help';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)', marginBottom: 9 }}>
+      <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name={CARE_TYPE_ICON[r.type] || 'heart'} size={19} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>You asked for help{r.type ? ' · ' + label : ''}{!r.forSelf && r.forName ? ' · for ' + r.forName : ''}</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>Sent privately — your care team will be in touch.</div>
+      </div>
+      <button onClick={async () => { setBusy(true); try { await onCancel(); } catch (e) {} setBusy(false); }} disabled={busy} title="Withdraw this request" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700 }}>{busy ? '…' : 'Withdraw'}</button>
+    </div>
+  );
+}
+
+function AskForHelpForm({ ctx, onClose, onSent }) {
+  const [forSelf, setForSelf] = React.useState(true);
+  const [forName, setForName] = React.useState('');
+  const [type, setType] = React.useState('');
+  const [when, setWhen] = React.useState('');
+  const [urgency, setUrgency] = React.useState('');
+  const [note, setNote] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const TYPES = Object.keys(CARE_TYPE_LABEL);
+  const chip = (active) => ({ padding: '8px 13px', borderRadius: 999, border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', color: active ? 'var(--clay-deep, #b4462f)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 });
+  const lbl = { fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' };
+  const submit = async () => {
+    if (!type) { setErr('Pick what would help.'); return; }
+    setBusy(true); setErr('');
+    let ok = null;
+    try { ok = await window.Fellowship.publishCareRequest({ type, forSelf, forName: forSelf ? '' : forName, when, urgency, note }); } catch (e) {}
+    setBusy(false);
+    if (ok) onSent(); else setErr('Couldn’t send — check your connection and try again.');
+  };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Ask for help" style={{ width: '100%', maxWidth: 460, maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '22px 20px calc(24px + env(safe-area-inset-bottom))' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+          <Icon name="heart" size={20} color="var(--clay)" />
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Ask for help</div>
+        </div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 4px' }}>This goes privately to your care team — no one else sees it. Tell them what would help.</p>
+
+        <div style={lbl}>Who's this for?</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setForSelf(true)} style={chip(forSelf)}>Me</button>
+          <button onClick={() => setForSelf(false)} style={chip(!forSelf)}>Someone else</button>
+        </div>
+        {!forSelf ? <input value={forName} onChange={e => setForName(e.target.value)} placeholder="Their name (optional)" style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} /> : null}
+
+        <div style={lbl}>What would help?</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {TYPES.map(t => <button key={t} onClick={() => setType(t)} style={chip(type === t)}><Icon name={CARE_TYPE_ICON[t]} size={14} color="currentColor" /> {CARE_TYPE_LABEL[t]}</button>)}
+        </div>
+
+        <div style={lbl}>When?</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {CARE_WHEN.map(([k, l]) => <button key={k} onClick={() => setWhen(when === k ? '' : k)} style={chip(when === k)}>{l}</button>)}
+        </div>
+
+        <div style={lbl}>How urgent?</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {CARE_URGENCY.map(([k, l]) => <button key={k} onClick={() => setUrgency(urgency === k ? '' : k)} style={chip(urgency === k)}>{l}</button>)}
+        </div>
+
+        <div style={lbl}>Anything they should know?</div>
+        <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="A sentence or two — as much or as little as you like." style={{ width: '100%', boxSizing: 'border-box', minHeight: 84, resize: 'vertical', padding: 12, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none', lineHeight: 1.45 }} />
+
+        {err ? <div style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 12 }}>{err}</div> : null}
+        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Sending…' : 'Send to care team'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AskForHelp({ ctx }) {
+  const care = ctx.care || {};
+  const myPub = (care.myPub || '').toLowerCase();
+  const careOn = !!(care.settings && care.settings.enabled);
+  const [mine, setMine] = React.useState([]);
+  const [open, setOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
+    let unsub = null;
+    try { unsub = window.Fellowship.subscribeCareRequests(list => setMine((list || []).filter(r => (r.from || '').toLowerCase() === myPub))); } catch (e) {}
+    return () => { try { unsub && unsub(); } catch (e) {} };
+  }, [ctx.church && ctx.church.npub, myPub]);
+  if (!careOn) return null;
+  return (
+    <div style={{ marginBottom: 18 }}>
+      {mine.map(r => <MyRequestRow key={r.id} r={r} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} />)}
+      <button onClick={() => setOpen(true)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
+        <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Ask for help</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.4 }}>Tell your care team what would help — privately.</div>
+        </div>
+        <Icon name="chevR" size={18} color="var(--ink-3)" />
+      </button>
+      {open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={() => { setOpen(false); ctx.toast && ctx.toast('Sent to your care team'); }} /> : null}
     </div>
   );
 }
@@ -256,7 +370,7 @@ function CareCard({ ctx, embedded }) {
     </div>
   );
   // embedded = the Serving "Care" tab: availability module first (offer help + who's ready), then the needs.
-  if (embedded) return (<React.Fragment><CareAvailability ctx={ctx} />{needsBlock}</React.Fragment>);
+  if (embedded) return (<React.Fragment><AskForHelp ctx={ctx} /><CareAvailability ctx={ctx} />{needsBlock}</React.Fragment>);
   if (!live.length) return null;   // Today-card variant (currently unused): nothing to show with no needs
   return (
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>

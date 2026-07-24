@@ -13,6 +13,7 @@ const MEALS_TYPES = [
   ['diy',       'DIY',       'hand'],
   ['visits',    'Visits',    'heart'],
   ['childcare', 'Childcare', 'child'],
+  ['other',     'Other',     'sparkle'],
 ];
 const MEALS_TYPE_LABEL = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[1]]));
 const MEALS_TYPE_ICON  = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[2]]));
@@ -82,6 +83,17 @@ function DashMealsPanel({ church }) {
   const careRoster = rosters.find(r => r.team === s.adminGroupId);
   const teamPeople = (careRoster && careRoster.people) || [];
   const on = !!s.enabled;
+  // Keep the care-team RECIPIENT roster (careteam:<cp>) published so a member's "ask for help" seals to exactly
+  // the care team. Re-publish only when the team's membership actually changes (deduped, not every render).
+  const _careTeamPub = React.useRef('');
+  React.useEffect(() => {
+    if (!on) return;
+    const pubs = teamPeople.map(p => p && p.pub).filter(Boolean);
+    const key = pubs.slice().sort().join(',');
+    if (key === _careTeamPub.current) return;
+    _careTeamPub.current = key;
+    try { window.StewardMeals.publishCareTeam(pubs); } catch (e) {}
+  }, [on, teamPeople.map(p => p && p.pub).join(',')]);
   const setAll = (next) => window.StewardMeals.setEnabled(next.enabled !== undefined ? next.enabled : on, {
     visibility:   next.visibility   !== undefined ? next.visibility   : s.visibility,
     openedBy:     next.openedBy     !== undefined ? next.openedBy     : s.openedBy,

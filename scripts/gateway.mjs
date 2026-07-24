@@ -352,6 +352,8 @@ const NEED_D = 'trinityone/care:';        // a care need — d=care:<id> (church
 const SLOT_D = 'trinityone/careslot:';    // a member's fill for one (need,date) — d=careslot:<careId>:<iso> (member-signed, addressable per author)
 const SKIP_D = 'trinityone/careskip:';    // recipient marks a day they don't need help — d=careskip:<careId>:<iso> (RECIPIENT-only)
 const AVAIL_D = 'trinityone/careavail:';  // a member's "I'm here to help" availability — d=careavail:<churchpub> (member-signed, one per member per church; non-minors only)
+const CAREREQ_D = 'trinityone/carereq:';  // a member's private "ask for help" request — d=carereq:<id>, ['church',cp]; member-signed, content sealed to the care team. Read-gated to care-team ONLY (like SAFE_D), never the whole church. The care team approves it into a NEED_D or opens a chat.
+const CARETEAM_D = 'trinityone/careteam:'; // church/steward-signed roster of care-team recipient pubkeys — d=careteam:<churchpub>, content {pubs:[hex,…]}. Public-ish (pubkeys only, no secrets) so a member can seal a carereq: to exactly the care team.
 // SAFETY CHECK ("mark as safe" — emergency roll-call after a raid/disaster). A check is one active doc per
 // church (church/steward/care-team authored); each member replies with their OWN response doc, whose content
 // is NIP-44-encrypted to the check's CREATOR (p-tagged) so even a seized relay can't read who's safe / in danger.
@@ -712,11 +714,11 @@ const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church
 //   4. a member authored a reply and p-tagged the church (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:).
 // Returns '' when ownership can't be proven — the caller MUST treat that as deny, not as public.
 const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, STEWARDS_D, STEWARDREQ_D, BLOCKED_D, MINORS_D, APPROVED_D,
-  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
+  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
 // Doc types an ORDINARY MEMBER legitimately authors while church-tagging them. Their authority comes from
 // authorship, not from delegated church authority, so the revoked-steward roster check in canRead() must
 // not be applied to them (REVIEW-2026-07-20 B1 — it silently hid every care sign-up from the church).
-const MEMBER_WRITABLE_D = [SLOT_D, SKIP_D, AVAIL_D, SAFE_D, RSVP_D, REQREPLY_D, UNAVAIL_D, GUARDREQ_D, STEWARDREQ_D, MEMBER_D];
+const MEMBER_WRITABLE_D = [SLOT_D, SKIP_D, AVAIL_D, SAFE_D, RSVP_D, REQREPLY_D, UNAVAIL_D, GUARDREQ_D, STEWARDREQ_D, MEMBER_D, CAREREQ_D];
 function owningChurch(e, d) {
   const suf = CP_SUFFIXED_D.find(p => d.startsWith(p));
   if (suf) { const h = toHexPub(d.slice(suf.length)) || ''; if (h && CHURCH_PUBS.has(h)) return h; }
@@ -1199,6 +1201,9 @@ function accept(e) {
     // rework before it is safe to ship). The namespace is reserved and gated NOW so no member can squat the
     // d-tag in the meantime, and CP_SUFFIXED_D already read-gates it to effective members.
     if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    // the care-team recipient roster (d=careteam:<churchpub>) — church key or a current steward. Just pubkeys
+    // (no secrets), so a member can read it to seal an ask-for-help request to exactly the care team.
+    if (d.startsWith(CARETEAM_D)) { const cp = toHexPub(d.slice(CARETEAM_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
     // moderation: photo-suppression list — d=nophoto:<churchpub>, owner or a CURRENT steward of that church.
     // (Previously unlisted, so it fell to the generic member rule: any member could rewrite it.)
     if (d.startsWith(NOPHOTO_D)) { const cp = d.slice(NOPHOTO_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
@@ -1259,6 +1264,11 @@ function accept(e) {
     if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)
     if (d.startsWith(SAFETY_D)) { const cp = d.slice(SAFETY_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }   // start/close a safety check: church, steward, or care-team admin
     if (d.startsWith(SAFE_D)) { const cp = d.slice(SAFE_D.length); return CHURCH_PUBS.has(cp) && isMember; }   // mark yourself safe / needing help: any member (minors included — safety matters most)
+    // a private "ask for help" request (d=carereq:<id>, content sealed to the care team). Any member — MINORS
+    // INCLUDED, since a child in trouble must be able to reach the care team, and it's sealed + care-team-only —
+    // may open one. Must name a configured church; then falls through to the member rule so the per-member doc
+    // cap (below) still bounds it against a flood of unique d-tags.
+    if (d.startsWith(CAREREQ_D) && !namedChurch(e)) return false;
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
@@ -1325,6 +1335,10 @@ function canRead(e, authed) {
       // C3: `CHURCH_PUBS.has(authed)` was unscoped — ANY configured church key read every OTHER church's
       // safety responses. Scope it to the church this response belongs to.
       return !!authed && (authed === e.pubkey || authed === pHex || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp));
+    }
+    if (d.startsWith(CAREREQ_D)) {   // a member's private ask-for-help — CARE-TEAM ONLY (mirror SAFE_D), never served to the whole church
+      const cp = owningChurch(e, d);
+      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp));
     }
     // ── kind-30078 read policy: DEFAULT-DENY ──────────────────────────────────────────────────────
     // SECURITY-AUDIT-2026-07-20 C1. This gate used to be a DENY-list of private d-prefixes ending in a
