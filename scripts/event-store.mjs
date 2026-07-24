@@ -86,13 +86,23 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     if ((e.created_at || 0) > Math.floor(Date.now() / 1000) + 900) return 'future';
     if (qById.get(e.id)) return 'duplicate';   // already hold this exact event — no-op (no re-store/re-broadcast)
     const rk = replKey(e);
+    const ch = (church != null) ? church : churchOf(e);   // gateway passes the RESOLVED owning church; else the tag
     if (rk) {
       const rows = qByRepl.all(rk);
       for (const r of rows) if ((r.created_at || 0) > (e.created_at || 0)) return 'have-newer';
-      for (const r of rows) delById.run(r.id);
+      // AUDIT-2026-07-24: replacing a doc was DELETE-then-INSERT with no transaction, on the one hot path that
+      // destroys data (reattribute/importAll were already wrapped). A throw between the two — or a power cut,
+      // since synchronous=NORMAL lets the DELETE reach disk while the INSERT doesn't — left the church's
+      // roster / blocklist / stewards / sealed care need simply GONE, not stale. Make the swap atomic.
+      db.exec('BEGIN');
+      try {
+        for (const r of rows) delById.run(r.id);
+        ins.run(e.id, e.pubkey, e.kind, e.created_at || 0, dtagOf(e), ch, rk, 1, JSON.stringify(e));
+        db.exec('COMMIT');
+      } catch (err) { try { db.exec('ROLLBACK'); } catch {} throw err; }
+      return 'stored';
     }
-    const ch = (church != null) ? church : churchOf(e);   // gateway passes the RESOLVED owning church; else the tag
-    ins.run(e.id, e.pubkey, e.kind, e.created_at || 0, dtagOf(e), ch, rk, rk ? 1 : 0, JSON.stringify(e));
+    ins.run(e.id, e.pubkey, e.kind, e.created_at || 0, dtagOf(e), ch, rk, 0, JSON.stringify(e));
     return 'stored';
   }
 
