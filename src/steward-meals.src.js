@@ -229,16 +229,27 @@
   function subscribeNeeds(cb) {
     if (!S() || !S().subscribeMany || !S().churchPub) { cb([]); return () => {}; }
     const byId = new Map();
-    const emit = () => cb([...byId.values()].sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)));
+    // Deletion authority (mirrors the member client): when the church opens needs to ANY member, the relay lets
+    // any member author a care: doc — so a member could publish a tombstone for SOMEONE ELSE's need and, since
+    // the client keyed only on the d-tag, hide it from everyone. Only the church key, or the need's own author,
+    // may retract it. When needs are steward/care-team-only the relay already gates every care: write, so any
+    // tombstone that reaches us is authorised. Tracked per id so event order doesn't matter.
+    const tombs = new Map();          // careId -> Set(pubkeys that published a deletion)
+    let openedByMember = false;       // from the church-signed meals-settings (same sub — it's church-authored + NET-tagged)
+    const delOk = (by, need) => !openedByMember || by === S().churchPub || (!!need && need._by === by);
+    const retracted = (id, need) => { const s = tombs.get(id); if (!s) return false; for (const by of s) { if (delOk(by, need)) return true; } return false; };
+    const emit = () => cb([...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)));
     const sub = S().subscribeMany(
       [{ kinds: [30078], authors: [S().churchPub], '#t': [NET] }, { kinds: [30078], '#church': [S().churchPub], '#t': [NET] }],
       {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          // capture the church's openedBy so deletion authority can be judged (church-signed doc, same filters)
+          if (d === SETTINGS_D) { if (e.pubkey === S().churchPub) { try { openedByMember = JSON.parse(e.content || '{}').openedBy === 'member'; emit(); } catch (x) {} } return; }
           if (!d.startsWith(NEED_D)) return;
           const id = d.slice(NEED_D.length);
           const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
-          if (deleted) { byId.delete(id); emit(); return; }
+          if (deleted) { const s = tombs.get(id) || new Set(); s.add(e.pubkey); tombs.set(id, s); emit(); return; }
           try {
             // Decrypt the sealed half BEFORE normalising. A sealed need (H3) carries displayLabel / notes /
             // recipient / dietary inside `enc`, not as top-level keys — so _normNeed alone reads them as
@@ -246,7 +257,7 @@
             // decrypted fields back, or marks `_sealed` when this device has no care key. Carry `_sealed`
             // through so the UI can say "details hidden" and refuse to edit-save a blank over the real data.
             const opened = openNeed(JSON.parse(e.content));
-            byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, ts: e.created_at });
+            byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, _by: e.pubkey, ts: e.created_at });
             emit();
           } catch (err) {}
         },

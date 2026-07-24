@@ -8300,8 +8300,18 @@
       const rosterPeople = /* @__PURE__ */ new Map();
       let openedBy = "steward", adminGroupId = "", eosed = false;
       const careTrusted = (by) => _churchVoice(pubk, { _by: by }) || openedBy === "member" || !!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by);
+      const tombs = /* @__PURE__ */ new Map();
+      const careDelOk = (by, need) => _churchVoice(pubk, { _by: by }) || !!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by) || !!need && need._by === by;
+      const retracted = (id, need) => {
+        const s = tombs.get(id);
+        if (!s) return false;
+        for (const by of s) {
+          if (careDelOk(by, need)) return true;
+        }
+        return false;
+      };
       const emit = () => {
-        const v = [...byId.values()].filter((n) => careTrusted(n._by)).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
+        const v = [...byId.entries()].filter(([id, n]) => careTrusted(n._by) && !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
         if (!eosed && !v.length) return;
         cb(v);
       };
@@ -8338,7 +8348,9 @@
           if (!d.startsWith(CARE_D)) return;
           const id = d.slice(CARE_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
+            const s = tombs.get(id) || /* @__PURE__ */ new Set();
+            s.add(e.pubkey);
+            tombs.set(id, s);
             emit();
             return;
           }
@@ -8612,6 +8624,28 @@
       }
       await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: "approved", needId: id });
       return { id };
+    },
+    // The person a need is FOR closes it themselves ("I'm sorted, thanks"). Dignity: someone who asked for help
+    // shouldn't have to wait for a steward to stop the church organising around them. The relay's care: gate
+    // means this only lands when the church allows member-opened needs OR they're a steward/care-admin; when it
+    // can't, the caller falls back to telling them to ask the care team. Only ever for a need about THEM.
+    async closeMyCareNeed(need) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      if (!sk || !cp || !need || !need.id) return false;
+      if ((need.recipient || "").toLowerCase() !== (pub || "").toLowerCase()) return false;
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARE_D + need.id], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
+      try {
+        const r = await Promise.any(pool.publish(churchRelays(), evt));
+        return !!r || true;
+      } catch (e) {
+        return false;
+      }
     },
     // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
     // (+ the church + ourselves), so any care member can join in and the asker can reply. ──

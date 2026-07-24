@@ -1741,7 +1741,17 @@ window.Fellowship = {
     // only when church-voiced, so a forged settings/roster can't widen the trust. Author-filter at emit time
     // (with re-emit as settings/roster arrive) so ordering never hides a legitimate need.
     const careTrusted = (by) => _churchVoice(pubk, { _by: by }) || openedBy === 'member' || (!!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by));
-    const emit = () => { const v = [...byId.values()].filter(n => careTrusted(n._by)).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); if (!eosed && !v.length) return; cb(v); };
+    // DELETION is stricter than authorship: a church that opens needs to ANY member must not thereby let any
+    // member retract someone ELSE's need. (kind-30078 is per-author, so a stranger's tombstone never replaces
+    // the original on the relay — but the client keyed purely on the d-tag, so honouring it hid the need from
+    // everyone: a silent griefing/censorship vector.) Only the church/steward, a care-team admin, or the need's
+    // OWN author may retract it. Tracked as a set per id so it works whichever order the events arrive in.
+    const tombs = new Map();   // careId -> Set(pubkeys that published a deletion)
+    const careDelOk = (by, need) => _churchVoice(pubk, { _by: by })
+      || (!!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by))
+      || (!!need && need._by === by);
+    const retracted = (id, need) => { const s = tombs.get(id); if (!s) return false; for (const by of s) { if (careDelOk(by, need)) return true; } return false; };
+    const emit = () => { const v = [...byId.entries()].filter(([id, n]) => careTrusted(n._by) && !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); if (!eosed && !v.length) return; cb(v); };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
         // capture the church-signed meals config + admin-team roster so care authors can be verified
@@ -1749,7 +1759,7 @@ window.Fellowship = {
         if (d.startsWith(ROSTER_PFX)) { if (_churchVoice(pubk, { _by: e.pubkey })) { const team = d.slice(ROSTER_PFX.length); const set = new Set(); try { (JSON.parse(e.content || '{}').people || []).forEach(p => { const h = toPub(p && p.pub); if (h) set.add(h); }); } catch {} rosterPeople.set(team, set); emit(); } return; }
         if (!d.startsWith(CARE_D)) return;
         const id = d.slice(CARE_D.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(id); emit(); return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { const s = tombs.get(id) || new Set(); s.add(e.pubkey); tombs.set(id, s); emit(); return; }
         // H3: needs published on/after 2026-07-20 seal the identifying half under the church care key.
         // Merge the opened half over the clear one; a v1 cleartext doc still reads as-is so a church
         // mid-pilot doesn't lose its open needs. `_sealed` marks one we couldn't open (not yet keyed) so
@@ -1903,6 +1913,18 @@ window.Fellowship = {
     try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
     await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
     return { id };
+  },
+  // The person a need is FOR closes it themselves ("I'm sorted, thanks"). Dignity: someone who asked for help
+  // shouldn't have to wait for a steward to stop the church organising around them. The relay's care: gate
+  // means this only lands when the church allows member-opened needs OR they're a steward/care-admin; when it
+  // can't, the caller falls back to telling them to ask the care team. Only ever for a need about THEM.
+  async closeMyCareNeed(need) {
+    const cp = window.Fellowship.churchPub;
+    if (!sk) { try { await window.Fellowship.ready; } catch {} }
+    if (!sk || !cp || !need || !need.id) return false;
+    if ((need.recipient || '').toLowerCase() !== (pub || '').toLowerCase()) return false;   // only your own
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + need.id], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
+    try { const r = await Promise.any(pool.publish(churchRelays(), evt)); return !!r || true; } catch (e) { return false; }
   },
   // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
   // (+ the church + ourselves), so any care member can join in and the asker can reply. ──

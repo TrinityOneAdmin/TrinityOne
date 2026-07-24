@@ -116,10 +116,33 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
             );
           })}
           {(isRecipient || canManage) ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>{isRecipient ? <React.Fragment>This is for you. Tap <b>I’m covered</b> on any day you don’t need help</React.Fragment> : <React.Fragment>Care team: tap <b>Skip</b> on any day they’re already covered (e.g. if they’re not on the app)</React.Fragment>} — it comes off the list.</div> : null}
+          {isRecipient ? <CloseMyNeedButton need={need} /> : null}
         </div>
       )}
     </div>
   );
+}
+// The person a need is FOR can close the whole thing ("I'm sorted") — not just skip day by day. Without this
+// they must ask a steward to stop the church organising around them, which is the opposite of dignified.
+function CloseMyNeedButton({ need }) {
+  const [state, setState] = React.useState('');   // '' | 'confirm' | 'busy' | 'failed'
+  const close = async () => {
+    setState('busy');
+    let ok = false;
+    try { ok = await window.Fellowship.closeMyCareNeed(need); } catch (e) {}
+    setState(ok ? '' : 'failed');
+  };
+  if (state === 'failed') return <div style={{ fontSize: 11.5, color: 'var(--clay-deep, #b4462f)', marginTop: 8, lineHeight: 1.45 }}>Couldn’t close it from here — your church keeps that with the care team. Message them and they’ll close it.</div>;
+  if (state === 'confirm' || state === 'busy') return (
+    <div style={{ marginTop: 9, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, marginBottom: 9 }}>Close this? Your church will stop signing up to help — you can always ask again.</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={close} disabled={state === 'busy'} style={{ ...careBtnHelp, background: 'var(--clay)' }}>{state === 'busy' ? 'Closing…' : 'Yes, close it'}</button>
+        <button onClick={() => setState('')} disabled={state === 'busy'} style={careBtnGhost}>Keep it open</button>
+      </div>
+    </div>
+  );
+  return <button onClick={() => setState('confirm')} style={{ ...careBtnGhost, marginTop: 9 }}>I’m sorted — close this</button>;
 }
 const careBtnHelp = { flexShrink: 0, padding: '6px 11px', borderRadius: 9, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
 const careBtnGhost = { flexShrink: 0, padding: '6px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
@@ -417,7 +440,33 @@ function AskForHelp({ ctx }) {
   );
 }
 
-function CareAvailability({ ctx }) {
+// Collapsible heading for the Care tab. Asking for help and offering help are different frames of mind, and
+// interleaving them made the tab read as one undifferentiated list — so each lives under its own heading that
+// remembers whether you left it open.
+function CareSection({ id, title, sub, icon, count, defaultOpen = true, children }) {
+  const KEY = 'trinityone.care.sec.' + id;
+  const [open, setOpen] = React.useState(() => { try { const v = localStorage.getItem(KEY); return v === null ? defaultOpen : v === '1'; } catch (e) { return defaultOpen; } });
+  const toggle = () => { const v = !open; setOpen(v); try { localStorage.setItem(KEY, v ? '1' : '0'); } catch (e) {} };
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <button onClick={toggle} aria-expanded={open} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 4px', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', borderBottom: '1px solid var(--line)' }}>
+        <Icon name={icon} size={18} color="var(--clay)" />
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>{title}{typeof count === 'number' && count > 0 ? <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}> · {count}</span> : null}</span>
+          {sub ? <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', marginTop: 1, lineHeight: 1.35 }}>{sub}</span> : null}
+        </span>
+        <Icon name={open ? 'chevU' : 'chevD'} size={17} color="var(--ink-3)" />
+      </button>
+      {open ? <div style={{ paddingTop: 14 }}>{children}</div> : null}
+    </div>
+  );
+}
+
+// `part` splits this into its two halves so the Care tab can file them under different headings:
+//   'others' — the people who've said they're glad to help (you reach out to THEM when you need a hand)
+//   'mine'   — your own "I'm here to help" listing (what you offer the church)
+// No prop = both, as before.
+function CareAvailability({ ctx, part }) {
   const care = ctx.care || {};
   const myPub = (care.myPub || '').toLowerCase();
   const avail = care.avail || [];
@@ -443,16 +492,18 @@ function CareAvailability({ ctx }) {
   const showTags = (mine && mine.tags && mine.tags.length) ? mine.tags : tags;
   const box = { padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 14 };
   const chipStyle = (on) => ({ padding: '6px 12px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 16%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' });
+  const showOthers = part !== 'mine';
+  const showMine = part !== 'others';
   return (
     <div>
-      {others.length ? (
+      {showOthers && others.length ? (
         <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}><Icon name="heart" size={16} color="var(--sage)" /><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>Ready to help</div></div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>You don’t have to carry things alone. These friends have said they’re glad to help — reach out to one of them, or use “Ask for help” above.</div>
           {others.map(a => <CareAvailRow key={a.pubkey} a={a} ctx={ctx} myPub={myPub} />)}
         </div>
       ) : null}
-      {!isMinor ? (
+      {showMine && !isMinor ? (
         <div style={box}>
           {listed && !editing ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -528,7 +579,25 @@ function CareCard({ ctx, embedded }) {
     </div>
   );
   // embedded = the Serving "Care" tab: availability module first (offer help + who's ready), then the needs.
-  if (embedded) return (<React.Fragment><CareRequests ctx={ctx} /><AskForHelp ctx={ctx} /><CareAvailability ctx={ctx} />{needsBlock}</React.Fragment>);
+  // The Care tab under two headings: asking for help and offering it are different frames of mind, and mixing
+  // them read as one long list. (Care-team triage stays above both — it's neither.)
+  if (embedded) {
+    const readyCount = ((care.avail || []).filter(a => (a.pubkey || '').toLowerCase() !== (care.myPub || '').toLowerCase())).length;
+    return (
+      <React.Fragment>
+        <CareRequests ctx={ctx} />
+        <CareSection id="need" icon="heart" title="If you need help" sub="Ask your care team, or reach someone who’s offered">
+          <AskForHelp ctx={ctx} />
+          <CareAvailability ctx={ctx} part="others" />
+          {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>Nobody has listed themselves as available yet — asking your care team above reaches them directly.</div> : null}
+        </CareSection>
+        <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={live.length}>
+          <CareAvailability ctx={ctx} part="mine" />
+          {needsBlock}
+        </CareSection>
+      </React.Fragment>
+    );
+  }
   if (!live.length) return null;   // Today-card variant (currently unused): nothing to show with no needs
   return (
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>

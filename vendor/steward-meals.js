@@ -173,23 +173,46 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => cb([...byId.values()].sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0)));
+      const tombs = /* @__PURE__ */ new Map();
+      let openedByMember = false;
+      const delOk = (by, need) => !openedByMember || by === S().churchPub || !!need && need._by === by;
+      const retracted = (id, need) => {
+        const s = tombs.get(id);
+        if (!s) return false;
+        for (const by of s) {
+          if (delOk(by, need)) return true;
+        }
+        return false;
+      };
+      const emit = () => cb([...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0)));
       const sub = S().subscribeMany(
         [{ kinds: [30078], authors: [S().churchPub], "#t": [NET] }, { kinds: [30078], "#church": [S().churchPub], "#t": [NET] }],
         {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+            if (d === SETTINGS_D) {
+              if (e.pubkey === S().churchPub) {
+                try {
+                  openedByMember = JSON.parse(e.content || "{}").openedBy === "member";
+                  emit();
+                } catch (x) {
+                }
+              }
+              return;
+            }
             if (!d.startsWith(NEED_D)) return;
             const id = d.slice(NEED_D.length);
             const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
             if (deleted) {
-              byId.delete(id);
+              const s = tombs.get(id) || /* @__PURE__ */ new Set();
+              s.add(e.pubkey);
+              tombs.set(id, s);
               emit();
               return;
             }
             try {
               const opened = openNeed(JSON.parse(e.content));
-              byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, ts: e.created_at });
+              byId.set(id, { id, ..._normNeed(opened), _sealed: !!opened._sealed, _by: e.pubkey, ts: e.created_at });
               emit();
             } catch (err) {
             }
