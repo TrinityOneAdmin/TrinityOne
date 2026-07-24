@@ -705,7 +705,22 @@ const stewardOf = (pub, cp) => { const s = STEWARDS_BY.get(cp); return !!(cp && 
 // and thus cross-tenant care-PII reads. Scoped to the church the grant is actually for.
 const grantorOk = (src) => !!(src && (src.by === src.cp || networkOf(src.by, src.cp) || stewardOf(src.by, src.cp)));
 // is `pub` on the care-team of church `cp`? (a member of the roster of cp's configured care-team group)
-const careAdmin = (pub, cp) => { const g = cp && MEALS_ADMIN_GROUP.get(cp); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub) && grantorOk(ROSTER_BY.get(g))); };
+// AUDIT-2026-07-24 CRITICAL-2: team ids are a relay-GLOBAL namespace, and this never checked that the roster
+// it resolved actually BELONGS to cp. A co-tenant church published roster:<cp's team id> listing itself,
+// satisfying grantorOk with its own {by:B, cp:B} — and careAdmin() is a read grant for cp's carereq:, safe:,
+// safeguarding lists and (via the default-deny branch) every kind-30078 doc of that church. Require the
+// roster's own recorded church to be cp; ownership is additionally pinned at write time in note().
+const careAdmin = (pub, cp) => { const g = cp && MEALS_ADMIN_GROUP.get(cp); const src = g && ROSTER_BY.get(g); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub) && src && src.cp === cp && grantorOk(src)); };
+// FIRST-WRITER OWNERSHIP for relay-global id namespaces (group:<id>, roster:<id>). Nothing in the d-tag binds
+// an id to the church that created it, so any configured church key could republish another church's id and
+// take it over — flipping an invite-only group to public (its whole history then served to anonymous REQs) or
+// installing itself on a care-team roster. Once an id is known, only its owning church (or that church's
+// network/steward) may rewrite it. Mirrors the pattern EVENT_D/PIN_D/HIDE_D already use via GROUP_CHURCH.
+function idOwnerOk(owner, e) {
+  if (!owner) return true;                       // unknown id → first writer takes it
+  const cp = namedChurch(e) || e.pubkey;
+  return cp === owner || networkOf(e.pubkey, owner) || stewardOf(e.pubkey, owner);
+}
 // the church a steward-authored CONTENT event acts for: its ["church", <cp>] tag, validated to a configured church.
 const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church'); const h = t && (toHexPub(t[1]) || t[1]); return h && CHURCH_PUBS.has(h) ? h : ''; };
 // Resolve the church a kind-30078 doc BELONGS to, for the default-deny read gate (C1). Four shapes exist
@@ -1046,6 +1061,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   // B3: scoped — a network key may only define groups for a church that declared it, not for any church.
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
+    if (!idOwnerOk(GROUP_CHURCH.get(id), e)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
     if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); return; }
     GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
     if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60));
@@ -1088,6 +1104,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
+    { const prev = ROSTER_BY.get(id); if (!idOwnerOk(prev && prev.cp, e)) return; }   // AUDIT-2026-07-24 C2: a co-tenant church must not be able to rewrite this team's roster and become its care-admin
     if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_BY.delete(id); return; }
     const set = new Set(); try { (JSON.parse(e.content).people || []).forEach(p => { const h = p && toHexPub(p.pub); if (h) set.add(h); }); } catch {}
     ROSTER_PEOPLE.set(id, set); ROSTER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
@@ -1229,7 +1246,14 @@ function accept(e) {
     if (d.startsWith(GROUP_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
       || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(REQUEST_D)
       || d.startsWith(ROOM_D) || d.startsWith(BOOKING_D) || d.startsWith(RUNSHEET_D)
-      || d.startsWith(CATEGORY_D) || d.startsWith(PINSERMON_D)) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
+      || d.startsWith(CATEGORY_D) || d.startsWith(PINSERMON_D)) {
+      // AUDIT-2026-07-24 CRITICAL-1/2: group: and roster: ids are relay-GLOBAL, so being *a* church key was
+      // enough to rewrite ANOTHER church's group (→ flip invite-only to public) or care-team roster (→ grant
+      // yourself care-admin over their private corpus). Refuse at the door once an id has an owner.
+      if (d.startsWith(GROUP_D) && !idOwnerOk(GROUP_CHURCH.get(d.slice(GROUP_D.length)), e)) return false;
+      if (d.startsWith(ROSTER_D)) { const src = ROSTER_BY.get(d.slice(ROSTER_D.length)); if (!idOwnerOk(src && src.cp, e)) return false; }
+      return isLeader || stewardOf(e.pubkey, namedChurch(e));   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
+    }
     if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
       if (isMember) return true;                               // a known member asking to help: always
@@ -1261,7 +1285,11 @@ function accept(e) {
       const want = CARE_SKIPHASH.get(careId);
       const wantHash = want && ((want.perDay && want.perDay.get(date)) || want.legacy || '');
       const tokOk = !!(wantHash && tok && createHash('sha256').update(String(tok)).digest('hex') === wantHash);
-      return !!careId && (tokOk || e.pubkey === CARE_RECIPIENT.get(careId) || isLeader || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp));
+      // AUDIT-2026-07-24: `isLeader` folds in an UNSCOPED network check for an untagged event, so any church
+      // key — or any key any church ever declared a network — could forge "the recipient doesn't need help
+      // that day" against ANY need on the box, defeating the per-day skiphash directly above. Same B-2 fix
+      // already applied to NEED_D: resolve the owning church and scope to it.
+      return !!careId && (tokOk || e.pubkey === CARE_RECIPIENT.get(careId) || (!!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp))));
     }
     if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)
     if (d.startsWith(SAFETY_D)) { const cp = d.slice(SAFETY_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }   // start/close a safety check: church, steward, or care-team admin
@@ -1305,7 +1333,12 @@ function accept(e) {
       const gcp = GROUP_CHURCH.get(g) || namedChurch(e);
       return !!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardOf(e.pubkey, gcp));
     }
-    if (g && GROUP_VIS.get(g) === 'invite') { const mem = GROUP_MEMBERS.get(g); return isLeader || stewardOf(e.pubkey, namedChurch(e)) || !!(mem && mem.has(e.pubkey)); }  // invite-only group
+    // invite-only group. AUDIT-2026-07-24: `isLeader` was unscoped here too (sibling of the BROADCAST fix
+    // just above) — any co-tenant church key could post into another congregation's private group.
+    if (g && GROUP_VIS.get(g) === 'invite') {
+      const gcp = GROUP_CHURCH.get(g) || namedChurch(e); const mem = GROUP_MEMBERS.get(g);
+      return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardOf(e.pubkey, gcp))) || !!(mem && mem.has(e.pubkey));
+    }
     return isMember;
   }
   if (k === 4) {   // NIP-04 direct message — safeguarding gate
