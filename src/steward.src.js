@@ -1151,6 +1151,19 @@ window.Steward = {
   careSeal(obj) { try { return _careKeyHex ? nip44e(JSON.stringify(obj), _unhex(_careKeyHex)) : null; } catch (e) { return null; } },
   careOpen(ct) { try { return _careKeyHex ? JSON.parse(nip44d(ct, _unhex(_careKeyHex))) : null; } catch (e) { return null; } },
   careSealTo(recipientPub, obj) { try { return nip44e(JSON.stringify(obj), nip44ck(sk, recipientPub)); } catch (e) { return null; } },
+  // open a payload sealed to a SET of pubkeys ({keys:{pub:wrapped}, enc}) — the "ask for help" request + its
+  // shared thread. The sender wrapped the content key to each care-team recipient incl. the church, so an OWNER
+  // console (acting as the church key) unwraps its copy. null if not addressed to us.
+  openSealedFromPeer(o, authorPub) { try { const mine = o && o.keys && pub && o.keys[pub]; if (!mine || !sk) return null; return JSON.parse(nip44d(o.enc, _unhex(nip44d(mine, nip44ck(sk, authorPub))))); } catch (e) { return null; } },
+  // seal a payload TO a set of pubkeys (a console reply into a care thread) — mirrors fellowship _sealToPubs.
+  sealToPubs(recips, obj) {
+    try {
+      const kb = crypto.getRandomValues(new Uint8Array(32)); const khex = Array.from(kb).map(x => x.toString(16).padStart(2, '0')).join('');
+      const enc = nip44e(JSON.stringify(obj), kb); const keys = {};
+      for (const p of [...new Set((recips || []).filter(Boolean))]) { try { keys[p] = nip44e(khex, nip44ck(sk, p)); } catch (e) {} }
+      return { keys, enc };
+    } catch (e) { return null; }
+  },
   hasCareKey() { return !!_careKeyHex; },
   careKeyChecked() { return _careKeyChecked; },
   // the console feeds the live steward roster in, so the envelope's author check stays current when a

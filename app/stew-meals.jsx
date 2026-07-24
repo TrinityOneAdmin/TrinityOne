@@ -273,6 +273,93 @@ function SafetyCheckPanel() {
   );
 }
 
+// Console-side "Ask for help" triage: incoming requests → Set up help (a need) / Message (shared thread) /
+// Dismiss. Mirrors the members-app care-admin view; the owner console decrypts via the church key.
+function StewCareChat({ reqId, requesterPub, title, onClose }) {
+  const [msgs, setMsgs] = React.useState([]);
+  const [text, setText] = React.useState('');
+  const endRef = React.useRef(null);
+  React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareChat(reqId, setMsgs); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [reqId]);
+  React.useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ block: 'end' }); } catch (e) {} }, [msgs.length]);
+  const send = async () => { const t = text.trim(); if (!t) return; setText(''); try { await window.StewardMeals.sendCareChat(reqId, requesterPub, t); } catch (e) {} };
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="heart" size={17} color="var(--clay)" /><div style={{ flex: 1, fontWeight: 800, fontSize: 15 }}>{title || 'Care conversation'}</div><button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={18} color="currentColor" /></button></div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {msgs.length === 0 ? <div style={{ margin: 'auto', color: 'var(--ink-3)', fontSize: 13 }}>No messages yet.</div> : null}
+          {msgs.map(m => <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', padding: '8px 12px', borderRadius: 13, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>)}
+          <div ref={endRef} />
+        </div>
+        <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--line)' }}>
+          <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
+          <button onClick={send} className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="#fff" /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function StewApproveSheet({ req, onClose, onDone }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [start, setStart] = React.useState(today);
+  const [end, setEnd] = React.useState(today);
+  const [notes, setNotes] = React.useState(req.note || '');
+  const [busy, setBusy] = React.useState(false);
+  const submit = async () => {
+    setBusy(true);
+    const dates = []; try { let d = new Date(start + 'T00:00:00'); const e = new Date((end < start ? start : end) + 'T00:00:00'); for (let i = 0; i < 90 && d <= e; i++) { dates.push(d.toISOString().slice(0, 10)); d = new Date(d.getTime() + 86400000); } } catch (x) {}
+    let ok = null; try { ok = await window.StewardMeals.approveCareRequest(req, { dates, notes }); } catch (x) {}
+    setBusy(false); if (ok) onDone();
+  };
+  const fld = { width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14 };
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '92%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', padding: 24 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>Set up help</div>
+        <p style={{ fontSize: 13, color: 'var(--ink-2)', margin: '6px 0 14px', lineHeight: 1.5 }}>Opens a need the church can sign up for. Pick the dates.</p>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}><div style={mealsLbl}>FROM</div><input type="date" value={start} onChange={e => setStart(e.target.value)} style={fld} /></div>
+          <div style={{ flex: 1 }}><div style={mealsLbl}>TO</div><input type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} style={fld} /></div>
+        </div>
+        <div style={{ ...mealsLbl, marginTop: 12 }}>NOTES</div>
+        <textarea value={notes} onChange={e => setNotes(e.target.value)} style={{ ...fld, minHeight: 64, resize: 'vertical' }} />
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
+          <button onClick={submit} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11 }}>{busy ? 'Setting up…' : 'Open the need'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function StewCareRequests() {
+  const [reqs, setReqs] = React.useState([]);
+  const [approving, setApproving] = React.useState(null);
+  const [chatting, setChatting] = React.useState(null);
+  React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, []);
+  if (!reqs.length) return null;
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>REQUESTS FOR HELP · {reqs.length}</div>
+      {reqs.map(r => (
+        <div key={r.id} style={{ padding: 14, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--clay) 32%, var(--line))', marginBottom: 9 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={MEALS_TYPE_ICON[r.type] || 'heart'} size={18} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{MEALS_TYPE_LABEL[r.type] || 'Help'}{r.forSelf === false && r.forName ? ' · for ' + r.forName : ''}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Asked for help</div></div>
+          </div>
+          {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
+          <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
+            <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="#fff" /> Set up help</button>
+            <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: (MEALS_TYPE_LABEL[r.type] || 'Help') })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
+            <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Dismiss</button>
+          </div>
+        </div>
+      ))}
+      {approving ? <StewApproveSheet req={approving} onClose={() => setApproving(null)} onDone={() => setApproving(null)} /> : null}
+      {chatting ? <StewCareChat reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
+    </div>
+  );
+}
+
 function DashMeals() {
   const needs = window.useMealsNeeds ? window.useMealsNeeds() : [];
   const slots = window.useMealsSlots ? window.useMealsSlots() : [];
@@ -293,6 +380,8 @@ function DashMeals() {
       </div>
 
       <SafetyCheckPanel />
+
+      <StewCareRequests />
 
       {!detail && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>

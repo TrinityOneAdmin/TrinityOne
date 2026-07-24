@@ -12020,6 +12020,36 @@ zoo`.split("\n");
         return null;
       }
     },
+    // open a payload sealed to a SET of pubkeys ({keys:{pub:wrapped}, enc}) — the "ask for help" request + its
+    // shared thread. The sender wrapped the content key to each care-team recipient incl. the church, so an OWNER
+    // console (acting as the church key) unwraps its copy. null if not addressed to us.
+    openSealedFromPeer(o, authorPub) {
+      try {
+        const mine = o && o.keys && pub && o.keys[pub];
+        if (!mine || !sk) return null;
+        return JSON.parse(decrypt3(o.enc, _unhex(decrypt3(mine, getConversationKey(sk, authorPub)))));
+      } catch (e) {
+        return null;
+      }
+    },
+    // seal a payload TO a set of pubkeys (a console reply into a care thread) — mirrors fellowship _sealToPubs.
+    sealToPubs(recips, obj) {
+      try {
+        const kb = crypto.getRandomValues(new Uint8Array(32));
+        const khex = Array.from(kb).map((x) => x.toString(16).padStart(2, "0")).join("");
+        const enc = encrypt3(JSON.stringify(obj), kb);
+        const keys = {};
+        for (const p of [...new Set((recips || []).filter(Boolean))]) {
+          try {
+            keys[p] = encrypt3(khex, getConversationKey(sk, p));
+          } catch (e) {
+          }
+        }
+        return { keys, enc };
+      } catch (e) {
+        return null;
+      }
+    },
     hasCareKey() {
       return !!_careKeyHex;
     },

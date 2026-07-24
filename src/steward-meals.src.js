@@ -44,6 +44,9 @@
   const SLOT_D    = NET + '/careslot:';      // + needId:isoDate
   const SKIP_D    = NET + '/careskip:';      // + needId:isoDate
   const CARETEAM_D = NET + '/careteam:';     // + churchpub — the care-team recipient roster (pubkeys a member seals an "ask for help" request to)
+  const CAREREQ_D  = NET + '/carereq:';      // + id — a member's sealed "ask for help" request
+  const CARESTATUS_D = NET + '/carereqstatus:'; // + id — the care team's resolution
+  const CARECHAT_D = NET + '/carechat:';     // + reqId:msgId — a message in the shared thread
 
   const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const now = () => Math.floor(Date.now() / 1000);
@@ -110,7 +113,7 @@
     const isoDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? String(s) : '';
     const MEALS_OK = ['breakfast', 'lunch', 'dinner'];
     const normMeals = (a) => (Array.isArray(a) ? a : []).filter(m => MEALS_OK.includes(m));
-    const type = ['meals', 'rides', 'errands', 'visits', 'childcare'].includes(n.type) ? n.type : 'meals';
+    const type = ['meals', 'rides', 'moving', 'errands', 'diy', 'visits', 'childcare', 'other'].includes(n.type) ? n.type : 'meals';
     // additive days are the source of truth; startDate/endDate are derived (min/max) for sorting + the live filter
     const days = [...new Set((Array.isArray(n.dates) ? n.dates : []).map(isoDate).filter(Boolean))].sort().slice(0, 90);
     const isMeals = type === 'meals';
@@ -317,11 +320,74 @@
     return S().publishSigned({ kind: 30078, created_at: now(), tags: [['d', CARETEAM_D + cp], ['t', NET]], content: JSON.stringify({ pubs, updated: now() }) });
   }
 
+  // ---- "Ask for help" requests (console/owner side): triage, approve into a need, chat ----
+  // The owner console holds the church key and is on the care-team roster, so requests sealed to the church
+  // unwrap via S().openSealedFromPeer. (A delegated steward who isn't in the roster can't decrypt — they use
+  // the members app as a care-admin, or are added to the care team.)
+  function subscribeCareRequests(cb) {
+    if (!S() || !S().subscribeMany || !S().churchPub) { cb([]); return () => {}; }
+    const cp = S().churchPub; const byId = new Map(), statusById = new Map();
+    const emit = () => { try { cb([...byId.values()].map(r => { const s = statusById.get(r.id) || {}; return { ...r, status: s.status || 'open', needId: s.needId || '' }; }).sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
+    const sub = S().subscribeMany([{ kinds: [30078], '#t': ['carereq', 'carereqstatus'], '#church': [cp] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d.startsWith(CARESTATUS_D)) { const id = d.slice(CARESTATUS_D.length); const p = statusById.get(id); if (p && p._ts >= e.created_at) return; try { const s = JSON.parse(e.content || '{}'); statusById.set(id, { status: String(s.status || 'handled'), needId: String(s.needId || ''), _ts: e.created_at }); emit(); } catch (x) {} return; }
+        if (!d.startsWith(CAREREQ_D)) return;
+        const id = d.slice(CAREREQ_D.length);
+        if (e.tags.some(t => t[0] === 'deleted')) { byId.delete(id); emit(); return; }
+        const p = byId.get(id); if (p && p._ts >= e.created_at) return;
+        let body = null; try { body = S().openSealedFromPeer(JSON.parse(e.content), e.pubkey); } catch (x) {}
+        byId.set(id, { id, from: e.pubkey, at: (body && body.at) || e.created_at, _ts: e.created_at, sealed: !body, ...(body || {}) });
+        emit();
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch (e) {} };
+  }
+  function setCareRequestStatus(reqId, requesterPub, opts) {
+    if (!S() || !S().publishSigned || !S().churchPub || !reqId) return Promise.resolve(null);
+    const o = opts || {}; const tags = [['d', CARESTATUS_D + reqId], ['t', NET], ['t', 'carereqstatus'], ['church', S().churchPub]];
+    if (requesterPub) tags.push(['p', requesterPub]);
+    return S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify({ status: String(o.status || 'handled'), needId: String(o.needId || ''), at: now() }) });
+  }
+  function declineCareRequest(req) { return (req && req.id) ? setCareRequestStatus(req.id, req.from, { status: 'declined' }) : Promise.resolve(null); }
+  async function approveCareRequest(req, fields) {
+    if (!req) return null;
+    const f = fields || {};
+    const dates = [...new Set((Array.isArray(f.dates) ? f.dates : []).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)))].sort();
+    const saved = await publishNeed({ type: req.type || 'other', displayLabel: req.forSelf ? (f.who || 'A member') : (req.forName || 'A member'), recipient: req.forSelf ? req.from : '', notes: String(f.notes != null ? f.notes : (req.note || '')).trim(), dates, dietary: [], meals: [] });
+    if (saved && saved.id) await setCareRequestStatus(req.id, req.from, { status: 'approved', needId: saved.id });
+    return saved;
+  }
+  function subscribeCareChat(reqId, cb) {
+    if (!S() || !S().subscribeMany || !S().churchPub || !reqId) { cb([]); return () => {}; }
+    const cp = S().churchPub, prefix = CARECHAT_D + reqId + ':', byId = new Map();
+    const emit = () => { try { cb([...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0))); } catch (e) {} };
+    const sub = S().subscribeMany([{ kinds: [30078], '#t': ['carechat'], '#church': [cp] }], {
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(prefix)) return; const id = d.slice(prefix.length); if (byId.has(id)) return; let b = null; try { b = S().openSealedFromPeer(JSON.parse(e.content), e.pubkey); } catch (x) {} if (!b || !b.text) return; byId.set(id, { id, from: e.pubkey, mine: e.pubkey === cp, at: b.at || e.created_at, text: String(b.text) }); emit(); },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch (e) {} };
+  }
+  async function sendCareChat(reqId, requesterPub, text) {
+    if (!S() || !S().publishSigned || !S().churchPub || !reqId) return null;
+    const body = String(text || '').trim(); if (!body) return null;
+    const cp = S().churchPub; let team = [];
+    try { const ev = await new Promise(res => { let best = null; const s = S().subscribeMany([{ kinds: [30078], '#d': [CARETEAM_D + cp] }], { onevent(e) { if (!best || e.created_at > best.created_at) best = e; }, oneose() { try { s.close(); } catch (x) {} res(best); } }); setTimeout(() => { try { s.close(); } catch (x) {} res(best); }, 4000); }); if (ev) { const o = JSON.parse(ev.content); if (Array.isArray(o.pubs)) team = o.pubs.filter(Boolean); } } catch (e) {}
+    const sealed = S().sealToPubs([cp, requesterPub, ...team], { text: body, by: cp, at: now() });
+    if (!sealed) return null;
+    const tags = [['d', CARECHAT_D + reqId + ':' + Math.random().toString(36).slice(2, 10)], ['t', NET], ['t', 'carechat'], ['church', cp]];
+    if (requesterPub) tags.push(['p', requesterPub]);
+    return S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(sealed) });
+  }
+
   window.StewardMeals = {
     // settings
     subscribeSettings, setEnabled, cachedEnabled,
     // care-team recipient roster (for the "ask for help" seal)
     publishCareTeam,
+    // "ask for help" requests (console side): triage / approve / decline / thread
+    subscribeCareRequests, setCareRequestStatus, declineCareRequest, approveCareRequest, subscribeCareChat, sendCareChat,
     // needs
     publishNeed, removeNeed, subscribeNeeds, openNeed,   // openNeed exported so it is testable against the SHIPPED bundle
     // slots + skips (read slots; the steward can now WRITE skips to block a day for the recipient)
