@@ -5877,6 +5877,49 @@
       return null;
     }
   }
+  function _sealToPubs(recips, bodyObj) {
+    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+    const keyHex = _hex(keyBytes);
+    let enc;
+    try {
+      enc = encrypt(JSON.stringify(bodyObj), keyBytes);
+    } catch (e) {
+      return null;
+    }
+    const keys = {};
+    for (const p of [...new Set((recips || []).filter(Boolean))]) {
+      try {
+        keys[p] = encrypt(keyHex, getConversationKey(sk, p));
+      } catch (e) {
+      }
+    }
+    return { keys, enc };
+  }
+  function _openSealed(o, authorPub) {
+    try {
+      const mine = o && o.keys && o.keys[pub];
+      if (!mine) return null;
+      const kh = decrypt(mine, getConversationKey(sk, authorPub));
+      return JSON.parse(decrypt(o.enc, _unhex(kh)));
+    } catch (e) {
+      return null;
+    }
+  }
+  async function _fetchCareTeam(cp) {
+    try {
+      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], "#d": [CARETEAM_D + cp] }]);
+      let best = null;
+      for (const e of evs || []) {
+        if (!best || e.created_at > best.created_at) best = e;
+      }
+      if (best) {
+        const o = JSON.parse(best.content);
+        if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean);
+      }
+    } catch (e) {
+    }
+    return [];
+  }
   function _decEvt(cp, e) {
     if (!e.tags || !e.tags.some((t) => t[0] === "enc")) return e;
     const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
@@ -8560,6 +8603,70 @@
       }
       await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: "approved", needId: id });
       return { id };
+    },
+    // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
+    // (+ the church + ourselves), so any care member can join in and the asker can reply. ──
+    async sendCareChat(reqId, requesterPub, text) {
+      const cp = window.Fellowship.churchPub;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch {
+        }
+      }
+      const body = String(text || "").trim();
+      if (!sk || !cp || !reqId || !body) return null;
+      const team = await _fetchCareTeam(cp);
+      const sealed = _sealToPubs([cp, pub, requesterPub, ...team], { text: body, by: pub, at: Math.floor(Date.now() / 1e3) });
+      if (!sealed) return null;
+      const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
+      const tags = [["d", CARECHAT_D + reqId + ":" + msgId], ["t", NET], ["t", "carechat"], ["church", cp]];
+      if (requesterPub) tags.push(["p", requesterPub]);
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify(sealed) }, sk);
+      try {
+        await Promise.any(pool.publish(churchRelays(), evt));
+      } catch (e) {
+        return null;
+      }
+      return { id: msgId };
+    },
+    subscribeCareChat(reqId, cb) {
+      const cp = window.Fellowship.churchPub;
+      if (!cp || !reqId) return () => {
+      };
+      const prefix = CARECHAT_D + reqId + ":";
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => {
+        try {
+          cb([...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0)));
+        } catch (e) {
+        }
+      };
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], "#t": ["carechat"], "#church": [cp] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(prefix)) return;
+          const id = d.slice(prefix.length);
+          if (byId.has(id)) return;
+          let body = null;
+          try {
+            body = _openSealed(JSON.parse(e.content), e.pubkey);
+          } catch (e2) {
+          }
+          if (!body || !body.text) return;
+          byId.set(id, { id, from: e.pubkey, mine: e.pubkey === pub, at: body.at || e.created_at, text: String(body.text) });
+          emit();
+        },
+        oneose() {
+          emit();
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
     },
     async fillCareSlot(careId, iso, note) {
       const cp = window.Fellowship.churchPub;

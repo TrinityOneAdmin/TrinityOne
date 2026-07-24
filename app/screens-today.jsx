@@ -148,7 +148,7 @@ function CareAvailRow({ a, ctx, myPub }) {
 const CARE_WHEN = [['once', 'Just once'], ['ongoing', 'For a while'], ['unsure', 'Not sure yet']];
 const CARE_URGENCY = [['soon', 'This week'], ['month', 'Soon'], ['norush', 'No rush']];
 
-function MyRequestRow({ r, onCancel }) {
+function MyRequestRow({ r, onCancel, onMessage }) {
   const [busy, setBusy] = React.useState(false);
   const label = CARE_TYPE_LABEL[r.type] || 'Help';
   const st = r.status || 'open';
@@ -164,7 +164,10 @@ function MyRequestRow({ r, onCancel }) {
         <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>You asked for help{r.type ? ' · ' + label : ''}{!r.forSelf && r.forName ? ' · for ' + r.forName : ''}</div>
         <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{sub}</div>
       </div>
-      {st === 'open' ? <button onClick={async () => { setBusy(true); try { await onCancel(); } catch (e) {} setBusy(false); }} disabled={busy} title="Withdraw this request" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700 }}>{busy ? '…' : 'Withdraw'}</button> : null}
+      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        {onMessage ? <button onClick={onMessage} title="Message the care team about this" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="chat" size={13} color="currentColor" /> Message</button> : null}
+        {st === 'open' ? <button onClick={async () => { setBusy(true); try { await onCancel(); } catch (e) {} setBusy(false); }} disabled={busy} title="Withdraw this request" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 12, fontFamily: 'var(--font-ui)', fontWeight: 700 }}>{busy ? '…' : 'Withdraw'}</button> : null}
+      </div>
     </div>
   );
 }
@@ -235,6 +238,53 @@ function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
   );
 }
 
+// A request's shared care-team↔asker thread. Live (fixes the original "doesn't update till reload"): messages
+// come from Fellowship.subscribeCareChat and re-render as they arrive; sending goes through sendCareChat.
+function CareChatSheet({ reqId, requesterPub, title, onClose }) {
+  const [msgs, setMsgs] = React.useState([]);
+  const [text, setText] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const endRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!(window.Fellowship && window.Fellowship.subscribeCareChat)) return;
+    let unsub = null;
+    try { unsub = window.Fellowship.subscribeCareChat(reqId, list => setMsgs(list || [])); } catch (e) {}
+    return () => { try { unsub && unsub(); } catch (e) {} };
+  }, [reqId]);
+  React.useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }); } catch (e) {} }, [msgs.length]);
+  const send = async () => {
+    const t = text.trim(); if (!t || busy) return;
+    setText(''); setBusy(true);
+    try { await window.Fellowship.sendCareChat(reqId, requesterPub, t); } catch (e) {}
+    setBusy(false);
+  };
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 65, background: 'rgba(34,28,22,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: '100%', maxWidth: 500, height: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 18px', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
+          <Icon name="heart" size={19} color="var(--clay)" />
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title || 'Care conversation'}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>Private — you and the care team</div></div>
+          <button onClick={onClose} aria-label="Close" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 4, display: 'flex' }}><Icon name="x" size={20} color="currentColor" /></button>
+        </div>
+        <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {msgs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto', maxWidth: 250, lineHeight: 1.5 }}>No messages yet. Anything here stays between you and the care team.</div> : null}
+          {msgs.map(m => (
+            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
+              {!m.mine ? <div style={{ fontSize: 11, color: 'var(--ink-3)', margin: '0 0 2px 11px' }}>{careName(m.from, '')}</div> : null}
+              <div style={{ padding: '9px 13px', borderRadius: 15, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>
+            </div>
+          ))}
+          <div ref={endRef} />
+        </div>
+        <div style={{ display: 'flex', gap: 8, padding: '12px 14px calc(12px + env(safe-area-inset-bottom))', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
+          <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} />
+          <button onClick={send} disabled={busy || !text.trim()} aria-label="Send" style={{ flexShrink: 0, width: 44, height: 44, borderRadius: 999, border: 'none', background: text.trim() ? 'var(--clay)' : 'var(--surface-2)', color: text.trim() ? '#fff' : 'var(--ink-3)', cursor: text.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="send" size={18} color="currentColor" /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CareRequests({ ctx }) {
   const care = ctx.care || {};
   const myPub = (care.myPub || '').toLowerCase();
@@ -242,6 +292,7 @@ function CareRequests({ ctx }) {
   const isCareAdmin = (() => { const roster = (ctx.churchRosters || []).find(r => r.team === s.adminGroupId); return !!(roster && (roster.people || []).some(p => (p.pub || '').toLowerCase() === myPub)); })();
   const [reqs, setReqs] = React.useState([]);
   const [approving, setApproving] = React.useState(null);
+  const [chatting, setChatting] = React.useState(null);
   React.useEffect(() => {
     if (!isCareAdmin || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
     let unsub = null;
@@ -252,8 +303,9 @@ function CareRequests({ ctx }) {
   return (
     <div style={{ marginBottom: 18 }}>
       <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-deep, #b4462f)', margin: '2px 0 10px', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="heart" size={15} color="var(--clay)" /> REQUESTS FOR HELP · {reqs.length}</div>
-      {reqs.map(r => <CareRequestCard key={r.id} r={r} ctx={ctx} onApprove={() => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(r.from)))} onMessage={() => ctx.openDM && ctx.openDM(r.from)} />)}
+      {reqs.map(r => <CareRequestCard key={r.id} r={r} ctx={ctx} onApprove={() => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />)}
       {approving ? <ApproveNeedSheet req={approving} ctx={ctx} onClose={() => setApproving(null)} onDone={() => { setApproving(null); ctx.toast && ctx.toast('Opened as a need'); }} /> : null}
+      {chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
     </div>
   );
 }
@@ -328,6 +380,7 @@ function AskForHelp({ ctx }) {
   const careOn = !!(care.settings && care.settings.enabled);
   const [mine, setMine] = React.useState([]);
   const [open, setOpen] = React.useState(false);
+  const [chatting, setChatting] = React.useState(null);
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
     let unsub = null;
@@ -337,7 +390,8 @@ function AskForHelp({ ctx }) {
   if (!careOn) return null;
   return (
     <div style={{ marginBottom: 18 }}>
-      {mine.map(r => <MyRequestRow key={r.id} r={r} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} />)}
+      {mine.map(r => <MyRequestRow key={r.id} r={r} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: 'Your care team' })} />)}
+      {chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
       <button onClick={() => setOpen(true)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
         <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>

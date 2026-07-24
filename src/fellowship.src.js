@@ -146,6 +146,31 @@ function _careSeal(cp, obj) {
   if (!key) return null;
   try { return nip44e(JSON.stringify(obj), key); } catch { return null; }
 }
+// Seal a body to an explicit set of PUBKEYS (asymmetric): one-off content key, NIP-44-wrapped to each recipient
+// (incl. ourselves so we can read it back), body encrypted under that key. Used for the ask-for-help request +
+// its shared thread — the sender is outside the church care-key audience, so it must wrap per-recipient.
+function _sealToPubs(recips, bodyObj) {
+  const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+  const keyHex = _hex(keyBytes);
+  let enc; try { enc = nip44e(JSON.stringify(bodyObj), keyBytes); } catch (e) { return null; }
+  const keys = {};
+  for (const p of [...new Set((recips || []).filter(Boolean))]) { try { keys[p] = nip44e(keyHex, nip44ck(sk, p)); } catch (e) {} }
+  return { keys, enc };
+}
+// Reverse of _sealToPubs: unwrap our copy of the content key (conv-key with the AUTHOR) → decrypt the body.
+// Returns null if we're not a recipient (a non-audience "garbage" doc) — callers use that to filter it out.
+function _openSealed(o, authorPub) {
+  try { const mine = o && o.keys && o.keys[pub]; if (!mine) return null; const kh = nip44d(mine, nip44ck(sk, authorPub)); return JSON.parse(nip44d(o.enc, _unhex(kh))); } catch (e) { return null; }
+}
+// Fetch the church's published care-team recipient roster (careteam:<cp> → [pubkeys]).
+async function _fetchCareTeam(cp) {
+  try {
+    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], '#d': [CARETEAM_D + cp] }]);
+    let best = null; for (const e of (evs || [])) { if (!best || e.created_at > best.created_at) best = e; }
+    if (best) { const o = JSON.parse(best.content); if (Array.isArray(o.pubs)) return o.pubs.filter(Boolean); }
+  } catch (e) {}
+  return [];
+}
 // transparently decrypt an encrypted group message → event with plaintext content; null if it's
 // encrypted and I don't hold the key (so the UI simply never sees it).
 function _decEvt(cp, e) {
@@ -1872,6 +1897,43 @@ window.Fellowship = {
     try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
     await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
     return { id };
+  },
+  // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
+  // (+ the church + ourselves), so any care member can join in and the asker can reply. ──
+  async sendCareChat(reqId, requesterPub, text) {
+    const cp = window.Fellowship.churchPub;
+    if (!sk) { try { await window.Fellowship.ready; } catch {} }
+    const body = String(text || '').trim();
+    if (!sk || !cp || !reqId || !body) return null;
+    const team = await _fetchCareTeam(cp);
+    const sealed = _sealToPubs([cp, pub, requesterPub, ...team], { text: body, by: pub, at: Math.floor(Date.now() / 1000) });
+    if (!sealed) return null;
+    const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
+    const tags = [['d', CARECHAT_D + reqId + ':' + msgId], ['t', NET], ['t', 'carechat'], ['church', cp]];
+    if (requesterPub) tags.push(['p', requesterPub]);
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify(sealed) }, sk);
+    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { return null; }
+    return { id: msgId };
+  },
+  subscribeCareChat(reqId, cb) {
+    const cp = window.Fellowship.churchPub; if (!cp || !reqId) return () => {};
+    const prefix = CARECHAT_D + reqId + ':';
+    const byId = new Map();
+    const emit = () => { try { cb([...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0))); } catch (e) {} };
+    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#t': ['carechat'], '#church': [cp] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d.startsWith(prefix)) return;
+        const id = d.slice(prefix.length);
+        if (byId.has(id)) return;
+        let body = null; try { body = _openSealed(JSON.parse(e.content), e.pubkey); } catch (e2) {}
+        if (!body || !body.text) return;   // undecryptable (non-audience) or empty → skip
+        byId.set(id, { id, from: e.pubkey, mine: e.pubkey === pub, at: body.at || e.created_at, text: String(body.text) });
+        emit();
+      },
+      oneose() { emit(); },
+    });
+    return () => { try { sub.close(); } catch {} };
   },
   async fillCareSlot(careId, iso, note) {
     const cp = window.Fellowship.churchPub;

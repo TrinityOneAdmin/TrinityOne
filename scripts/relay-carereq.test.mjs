@@ -21,7 +21,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 
 const PORT = 8856;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
-const MEMBER_D = 'trinityone/member:', CAREREQ_D = 'trinityone/carereq:', CARETEAM_D = 'trinityone/careteam:', CARESTATUS_D = 'trinityone/carereqstatus:';
+const MEMBER_D = 'trinityone/member:', CAREREQ_D = 'trinityone/carereq:', CARETEAM_D = 'trinityone/careteam:', CARESTATUS_D = 'trinityone/carereqstatus:', CARECHAT_D = 'trinityone/carechat:';
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -39,6 +39,8 @@ const carereq = (who, id, ct, tagChurch = true) => finalizeEvent({ kind: 30078, 
 const careteam = (by) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', CARETEAM_D + cp]], content: JSON.stringify({ pubs: [church.pub] }) }, by.sk);
 // the care team's resolution of req1, p-tagged to requester M so the asker can read it
 const status = (by, id, st) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', CARESTATUS_D + id], ['t', 'trinityone'], ['t', 'carereqstatus'], ['church', cp], ['p', M.pub]], content: JSON.stringify({ status: st, needId: '', by: by.pub, at: now() }) }, by.sk);
+// a message in req1's shared thread, p-tagged to asker M (content stands in for the sealed payload)
+const chat = (by, reqId, mid) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', CARECHAT_D + reqId + ':' + mid], ['t', 'trinityone'], ['t', 'carechat'], ['church', cp], ['p', M.pub]], content: JSON.stringify({ keys: {}, enc: 'x' }) }, by.sk);
 
 function reqCollect(ws, subId, filter, authSk, window = 700) {
   return new Promise((resolve) => {
@@ -105,4 +107,16 @@ test('the requester reads their resolution (p-tagged); another member cannot', a
   assert.equal(ofD(asM, CARESTATUS_D + 'req1').length, 1, 'the asker sees their request was resolved');
   const ws2 = await connect(); const asN = await reqCollect(ws2, 's2', { kinds: [30078], '#d': [CARESTATUS_D + 'req1'] }, N.sk); ws2.close();
   assert.equal(ofD(asN, CARESTATUS_D + 'req1').length, 0, 'an unrelated member cannot read the resolution');
+});
+
+test('shared thread: the asker can post + read; the care team reads; an unrelated member cannot', async () => {
+  const dM = CARECHAT_D + 'req1:m1';
+  assert.equal((await publish(pub, chat(M, 'req1', 'm1')))[0], true, 'the asker (a member) can post to the thread');
+  assert.equal((await publish(pub, chat(rando, 'req1', 'm2')))[0], false, 'a non-member outsider cannot post');
+  const ws1 = await connect(); const asChurch = await reqCollect(ws1, 'h1', { kinds: [30078], '#d': [dM] }, church.sk); ws1.close();
+  assert.equal(ofD(asChurch, dM).length, 1, 'the care team reads the thread');
+  const ws2 = await connect(); const asM = await reqCollect(ws2, 'h2', { kinds: [30078], '#d': [dM] }, M.sk); ws2.close();
+  assert.equal(ofD(asM, dM).length, 1, 'the asker reads the thread');
+  const ws3 = await connect(); const asN = await reqCollect(ws3, 'h3', { kinds: [30078], '#d': [dM] }, N.sk); ws3.close();
+  assert.equal(ofD(asN, dM).length, 0, 'an unrelated member cannot read the thread');
 });

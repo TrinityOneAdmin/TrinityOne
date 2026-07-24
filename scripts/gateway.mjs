@@ -355,6 +355,7 @@ const AVAIL_D = 'trinityone/careavail:';  // a member's "I'm here to help" avail
 const CAREREQ_D = 'trinityone/carereq:';  // a member's private "ask for help" request — d=carereq:<id>, ['church',cp]; member-signed, content sealed to the care team. Read-gated to care-team ONLY (like SAFE_D), never the whole church. The care team approves it into a NEED_D or opens a chat.
 const CARETEAM_D = 'trinityone/careteam:'; // church/steward-signed roster of care-team recipient pubkeys — d=careteam:<churchpub>, content {pubs:[hex,…]}. Public-ish (pubkeys only, no secrets) so a member can seal a carereq: to exactly the care team.
 const CAREREQSTATUS_D = 'trinityone/carereqstatus:'; // the care team's resolution of a request — d=carereqstatus:<id>, ['church',cp], ['p',requester]. Care-admin/steward/church-authored; read by the care team AND the p-tagged requester (so they see "approved"/"handled"). Clears the queue + tells the asker.
+const CARECHAT_D = 'trinityone/carechat:'; // a message in a request's shared care-team↔asker thread — d=carechat:<reqId>:<msgId>, ['church',cp], ['p',requester]. Content sealed to the care team + the asker; read-gated to the care team + the p-tagged asker (+ the author). Member-writable so the asker can reply; the per-member doc cap + client-side decryptability filtering bound spam.
 // SAFETY CHECK ("mark as safe" — emergency roll-call after a raid/disaster). A check is one active doc per
 // church (church/steward/care-team authored); each member replies with their OWN response doc, whose content
 // is NIP-44-encrypted to the check's CREATOR (p-tagged) so even a seized relay can't read who's safe / in danger.
@@ -1273,6 +1274,10 @@ function accept(e) {
     // may open one. Must name a configured church; then falls through to the member rule so the per-member doc
     // cap (below) still bounds it against a flood of unique d-tags.
     if (d.startsWith(CAREREQ_D) && !namedChurch(e)) return false;
+    // a message in a request's shared care-team↔asker thread. Member-writable (so the asker can reply); must
+    // name its church, then falls to the member rule + per-member cap. The content is sealed to the care team +
+    // asker, so a non-audience write is unreadable garbage the recipients' client filters out on decryption.
+    if (d.startsWith(CARECHAT_D) && !namedChurch(e)) return false;
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
@@ -1345,6 +1350,11 @@ function canRead(e, authed) {
       return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp));
     }
     if (d.startsWith(CAREREQSTATUS_D)) {   // a request's resolution — the care team AND the p-tagged requester (so the asker sees "approved"/"handled")
+      const cp = owningChurch(e, d);
+      const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
+      return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp) || (!!pHex && authed === pHex));
+    }
+    if (d.startsWith(CARECHAT_D)) {   // a request thread message — the care team + the p-tagged asker + the author
       const cp = owningChurch(e, d);
       const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';
       return !!authed && !!cp && (authed === e.pubkey || authed === cp || stewardOf(authed, cp) || careAdmin(authed, cp) || (!!pHex && authed === pHex));
