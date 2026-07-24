@@ -139,6 +139,7 @@ const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (l
 //     different author, which replKey() does not replace. Use churchSk/churchPub (this device's own key),
 //     exactly as _ingestGroupKey does above.
 const CAREKEY_D = 'trinityone/carekey:';
+const CARENEED_D = 'trinityone/care:';   // a care need — its sealed half depends on the care key existing
 let _careKeyHex = null;          // this device's copy of the church care key
 let _careKeyDocKeys = null;      // the envelope's wrapped-per-member map (to detect who is missing)
 let _careKeyRev = 0;             // envelope revision — rotation is NOT wired yet, but readers must tolerate it
@@ -185,6 +186,21 @@ const _authFuture = (e) => e.created_at > now() + _CLOCK_SKEW;
 const _byChurch = (e) => e.pubkey === pub;
 const _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
 
+// Does this church already have care needs on the relay? If so a care key MUST exist (a need can't be sealed
+// without one), so minting a fresh key would orphan every one of them — refuse. Only ever runs on the mint
+// path (once per church in its life), so the bounded scan is cheap. An unreachable relay returns no rows and
+// this says "no needs" — but the _relayAuthed guard has already blocked that case before we get here.
+async function _churchHasCareNeeds() {
+  const cp = actingChurch || pub; if (!cp) return false;
+  try {
+    const evs = await pool.querySync(relays(), [{ kinds: [30078], authors: [cp], '#t': [NET], limit: 400 },
+                                                { kinds: [30078], '#church': [cp], '#t': [NET], limit: 400 }]);
+    return (evs || []).some(e => {
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+      return d.startsWith(CARENEED_D) && !e.tags.some(t => t[0] === 'deleted') && !!e.content;
+    });
+  } catch (e) { return false; }
+}
 // Care-key envelope handling, factored out so both the live subscription AND the pending-buffer re-check
 // share one code path. See the mint-gate race notes at the top of this file (care-key section).
 const _careKeyAuthed = (e) => { const cp = actingChurch || pub; return e.pubkey === cp || _careRoster.has(e.pubkey); };
@@ -431,7 +447,12 @@ function _b64ToU8(base64) {
 
 let sk = null, pub = null;                 // the ACTIVE signing identity (church, or an owned network when toggled)
 // NIP-42: prove the church/network key when a relay challenges, so the console reads invite-only groups.
-pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); return finalizeEvent(authEvent, sk); };
+// True once we have actually completed a NIP-42 auth with a relay. The care-key mint gate depends on this:
+// the envelope is a PRIVATE doc, so an unauthenticated (or unreachable) relay answers "nothing" — which is
+// indistinguishable from "this church has no key yet". Minting on that answer creates a second key generation
+// and permanently orphans everything sealed with the first. See the mint gate in ensureCareKeyForMembers.
+let _relayAuthed = false;
+pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); _relayAuthed = true; return finalizeEvent(authEvent, sk); };
 let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
 let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
 // DELEGATED steward mode (phase 2b): when this console acts as a steward of a church it does NOT own,
@@ -1147,6 +1168,17 @@ window.Steward = {
     if (_careKeyPending.length) return false;                 // an unverified envelope may be a REAL one whose author is still loading — never mint a second key over it
     if (!_careKeyHex) {
       if (_careKeyDocKeys) return false;                      // an envelope EXISTS and we're not in it; the owner must add us
+      // ── MINT GATE (data-integrity critical) ───────────────────────────────────────────────────────────
+      // Minting a second key permanently orphans every need sealed with the first — the ciphertext survives
+      // but nothing can open it. "The relay returned no envelope" is NOT proof that none exists: the envelope
+      // is private, so an unauthenticated or unreachable relay returns exactly the same empty answer. That
+      // really happened (2026-07-24): a console reloaded while its relay was restarting concluded "no key",
+      // minted a throwaway, sealed a need with it, and the key was gone on the next reload — the need's name,
+      // notes and recipient are unrecoverable. Both guards below fail CLOSED: refusing to mint leaves a
+      // visible, recoverable error ("care key hasn't reached this device"), whereas minting wrongly destroys
+      // data silently.
+      if (!_relayAuthed) return false;                        // (1) never conclude "no key" from an unauthenticated read
+      if (await _churchHasCareNeeds()) return false;          // (2) needs exist → a key MUST exist; minting would orphan them
       _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
       _careKeyRev = 1;
     }

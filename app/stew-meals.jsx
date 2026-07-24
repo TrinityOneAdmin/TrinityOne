@@ -17,7 +17,10 @@ const MEALS_TYPES = [
 ];
 const MEALS_TYPE_LABEL = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[1]]));
 const MEALS_TYPE_ICON  = Object.fromEntries(MEALS_TYPES.map(t => [t[0], t[2]]));
-// A need is `_sealed` when this device lacks the church care key, so its name/notes couldn't be decrypted.
+// Does THIS device hold the church care key? Distinguishes "the key hasn't synced here yet" (fixable) from
+// "we have the key and this need still won't open" (sealed with a lost key generation — unrecoverable).
+const _hasCareKey = () => { try { return !!(window.Steward && window.Steward.hasCareKey && window.Steward.hasCareKey()); } catch (e) { return false; } };
+// A need is `_sealed` when its name/notes couldn't be decrypted — see _hasCareKey above for the two causes.
 // Say that plainly instead of showing the no-name fallback, which would read as a real nameless need.
 const needTitle = (need) => need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church');
 const MEALS_DIET = ['Vegetarian', 'Vegan', 'Carnivore', 'Pescatarian', 'Keto', 'Gluten-free', 'Dairy-free', 'Nut-free'];
@@ -491,13 +494,18 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21, color: need._sealed ? 'var(--ink-3)' : 'var(--ink)', fontStyle: need._sealed ? 'italic' : 'normal' }}>{needTitle(need)}</div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{MEALS_TYPE_LABEL[need.type] || 'Care'} · {dates.length} day{dates.length === 1 ? '' : 's'}</div>
           </div>
-          {/* No care key on this device → can't edit without blanking the sealed name/notes. Point at the fix. */}
+          {/* Sealed = we couldn't decrypt this need's name/notes. Two VERY different causes, and telling them
+              apart matters: no key on this device is a sync problem that fixes itself, whereas holding the key
+              and still failing means THIS need was sealed with a key nobody has — unrecoverable, so don't send
+              the steward to Members forever chasing a sync that will never help. */}
           {need._sealed
-            ? <span style={{ fontSize: 12, color: 'var(--ink-3)', maxWidth: 150, textAlign: 'right', lineHeight: 1.4 }}>Open Members to sync the care key, then edit</span>
+            ? <span style={{ fontSize: 12, color: 'var(--ink-3)', maxWidth: 150, textAlign: 'right', lineHeight: 1.4 }}>{_hasCareKey() ? 'Can’t be opened — recreate this need' : 'Open Members to sync the care key, then edit'}</span>
             : <button onClick={onEdit} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>}
         </div>
         {need._sealed
-          ? <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>The name, notes and recipient of this need are encrypted for the member’s privacy, and this device doesn’t hold the church’s care key yet. The schedule below still works. Open <b>Members</b> once so the key can sync.</div>
+          ? <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>{_hasCareKey()
+              ? <React.Fragment>This need’s name, notes and recipient were sealed with a key that no longer exists, so they <b>can’t be recovered</b> — this device holds your church’s care key and still can’t open them. The schedule below still works; to restore the details, close this need and open it again.</React.Fragment>
+              : <React.Fragment>The name, notes and recipient of this need are encrypted for the member’s privacy, and this device doesn’t hold the church’s care key yet. The schedule below still works. Open <b>Members</b> once so the key can sync.</React.Fragment>}</div>
           : (need.notes ? <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{need.notes}</div> : null)}
       </div>
 

@@ -10627,6 +10627,7 @@ zoo`.split("\n");
   var PINSERMON_D = "trinityone/pinsermon:";
   var BACKUPMETA_D = "trinityone/backup-meta:";
   var CAREKEY_D = "trinityone/carekey:";
+  var CARENEED_D = "trinityone/care:";
   var _careKeyHex = null;
   var _careKeyDocKeys = null;
   var _careKeyRev = 0;
@@ -10677,6 +10678,22 @@ zoo`.split("\n");
   var _authFuture = (e) => e.created_at > now() + _CLOCK_SKEW;
   var _byChurch = (e) => e.pubkey === pub;
   var _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
+  async function _churchHasCareNeeds() {
+    const cp = actingChurch || pub;
+    if (!cp) return false;
+    try {
+      const evs = await pool.querySync(relays(), [
+        { kinds: [30078], authors: [cp], "#t": [NET], limit: 400 },
+        { kinds: [30078], "#church": [cp], "#t": [NET], limit: 400 }
+      ]);
+      return (evs || []).some((e) => {
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        return d.startsWith(CARENEED_D) && !e.tags.some((t) => t[0] === "deleted") && !!e.content;
+      });
+    } catch (e) {
+      return false;
+    }
+  }
   var _careKeyAuthed = (e) => {
     const cp = actingChurch || pub;
     return e.pubkey === cp || _careRoster.has(e.pubkey);
@@ -11049,8 +11066,10 @@ zoo`.split("\n");
   }
   var sk = null;
   var pub = null;
+  var _relayAuthed = false;
   pool.automaticallyAuth = () => async (authEvent) => {
     if (!sk) throw new Error("no key");
+    _relayAuthed = true;
     return finalizeEvent2(authEvent, sk);
   };
   var churchSk = null;
@@ -12006,6 +12025,8 @@ zoo`.split("\n");
       if (_careKeyPending.length) return false;
       if (!_careKeyHex) {
         if (_careKeyDocKeys) return false;
+        if (!_relayAuthed) return false;
+        if (await _churchHasCareNeeds()) return false;
         _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
         _careKeyRev = 1;
       }
