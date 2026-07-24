@@ -1,0 +1,96 @@
+<!doctype html>
+<!-- Social share-card template for TrinityOne. NOT web-served — rendered to PNG at
+     build time by scripts/make-og-cards.sh (headless chromium, 1200x630).
+     Variants via ?v=join (the church join link) or ?v=site (any marketing page).
+     Edit the copy in CARDS below, then re-run the script. -->
+<meta charset="utf-8">
+<link rel="stylesheet" href="../vendor/fonts/fonts.css">
+<style>
+  :root{
+    --paper:#F4EEE2; --paper-soft:#FBF6EC;
+    --ink:#221C16; --ink-2:#6B6052;
+    --clay:#C25A38; --clay-deep:#9C4327; --gold:#C8962E; --line:#E4D8C4;
+    --serif:'Newsreader',Georgia,serif; --ui:'Sora',system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:1200px;height:630px}
+  body{
+    background:
+      radial-gradient(120% 90% at 50% -10%, var(--paper-soft) 0%, var(--paper) 62%);
+    font-family:var(--ui); color:var(--ink);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .card{
+    width:100%; height:100%;
+    border:1px solid var(--line);
+    box-shadow:inset 0 0 0 10px var(--paper), inset 0 0 0 11px var(--line);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; padding:0 96px;
+  }
+  .icon{
+    width:132px; height:132px; border-radius:30px;
+    box-shadow:0 14px 34px rgba(156,67,39,.22), 0 3px 8px rgba(34,28,22,.10);
+  }
+  .eyebrow{
+    display:none;
+    font-weight:700; font-size:20px; letter-spacing:4.5px;
+    text-transform:uppercase; color:var(--clay); margin-top:30px;
+  }
+  h1{
+    font-family:var(--serif); font-style:italic; font-weight:500;
+    font-size:70px; line-height:1.04; letter-spacing:-1px;
+    margin-top:34px; max-width:16ch; text-wrap:balance;
+  }
+  .sub{
+    font-weight:400; font-size:29px; line-height:1.42; color:var(--ink-2);
+    margin-top:22px; max-width:26ch; text-wrap:balance;
+  }
+  .cta{
+    display:none;
+    margin-top:40px; font-weight:600; font-size:25px;
+    color:var(--clay-deep); letter-spacing:.2px;
+  }
+  .cta::before{content:"";}
+  /* per-variant switches, toggled by the boot script's class on <body> */
+  body.v-join .cta{display:block}
+  /* eyebrow supported but unused; shown only if a variant sets non-empty eyebrow text */
+  body.has-eyebrow .eyebrow{display:block}
+  body.has-eyebrow h1{margin-top:16px}
+</style>
+<body>
+  <div class="card">
+    <img class="icon" src="../icons/halo.svg" alt="">
+    <div class="eyebrow" id="eyebrow"></div>
+    <h1 id="head"></h1>
+    <div class="sub" id="sub"></div>
+    <div class="cta" id="cta"></div>
+  </div>
+<script>
+  var CARDS = {
+    // The church JOIN link (join.html / welcome.html / install-anywhere.html / migrate.html)
+    join: {
+      eyebrow: '',
+      head: 'Join your church on TrinityOne',
+      sub: 'Scripture, prayer, groups and care — one private place. No account, nothing to install.',
+      cta: 'Tap to join'
+    },
+    // Any marketing page (index / features / why / about / help / downloads) — a plain site URL,
+    // i.e. a church LEADER arriving, not an invited member. Mirrors the join card: "Build" vs "Join".
+    site: {
+      eyebrow: '',
+      head: 'Build your church on TrinityOne',
+      sub: 'Scripture, prayer, groups, serving and care — on your church’s own server. No Big Tech, no ads.',
+      cta: ''
+    }
+  };
+  var v = (new URLSearchParams(location.search).get('v') || 'join');
+  var c = CARDS[v] || CARDS.join;
+  document.body.className = 'v-' + (CARDS[v] ? v : 'join') + (c.eyebrow ? ' has-eyebrow' : '');
+  document.getElementById('eyebrow').textContent = c.eyebrow;
+  document.getElementById('head').textContent = c.head;
+  document.getElementById('sub').textContent = c.sub;
+  document.getElementById('cta').textContent = c.cta;
+  document.title = 'og-' + v;
+</script>
+</body>
