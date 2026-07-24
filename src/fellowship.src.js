@@ -300,8 +300,23 @@ pool.automaticallyAuth = () => async (authEvent) => {
   if (!_needAuth) throw new Error('nip42: auth declined — no gated resource for this member');
   if (!sk) { try { await window.Fellowship.ready; } catch {} }
   if (!sk) throw new Error('no key');
+  _armAuthRefetch();   // once we auth, re-fetch the gated docs that were withheld before we proved membership
   return finalizeEvent(authEvent, sk);
 };
+// A member's church docs (groups, care, roster, chat tags) are NIP-42-gated, and auth is LAZY — it only
+// happens once a gated REQ draws a challenge. On a fresh member's first boot the church-docs hub fetches and
+// EOSEs BEFORE that auth round-trip finishes, so the relay withholds the gated docs and nothing re-fetches —
+// the member sees an empty-looking church until a background+resume. Fix: the first time we sign an auth on a
+// (re)connection, force ONE re-fetch a moment later, when the socket is authenticated. Debounced + armed once
+// per connect (reconnectAll re-arms), so it never loops (a re-fetch on an already-authed socket draws no new
+// challenge). Belt-and-braces with the existing resume re-fetch, which stays as the backstop on slow links.
+let _authRefetchArmed = false, _authRefetchT = null;
+function _armAuthRefetch() {
+  if (_authRefetchArmed) return;
+  _authRefetchArmed = true;
+  if (_authRefetchT) clearTimeout(_authRefetchT);
+  _authRefetchT = setTimeout(() => { _authRefetchT = null; try { refetchChurchDocs(); } catch (e) {} }, 1300);
+}
 // FEDERATION Phase 2 — enforcement probe. Before ADOPTING a relay a church declares in its signed NIP-65
 // list, confirm the relay actually applies TrinityOne's membership/safeguarding policy by reading its
 // NIP-11 doc and checking `trinityone.enforces`. This is a CAPABILITY check, not the trust anchor — the
@@ -646,6 +661,7 @@ function displayFor(pubkey) {
 }
 
 async function deriveFromIdentity() {
+  const wasKeyless = !sk;
   const mnemonic = window.TrinityIdentity ? await window.TrinityIdentity.exportMnemonic() : null;
   if (!mnemonic) throw new Error('no identity available to sign with');
   sk = privateKeyFromSeedWords(mnemonic);
@@ -662,6 +678,12 @@ async function deriveFromIdentity() {
   // signal that the signing key is now ready, so listeners (e.g. the app's serving subscriptions,
   // which bail when myPubkey is null) re-run with a valid pubkey instead of needing a restart.
   try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch {}
+  // keyless→keyed: any church-doc socket opened BEFORE the key existed (a fresh join creates the identity
+  // mid-session; a boot race opens hubs before this derive finishes) ran NIP-42 auth as NOBODY and got only
+  // PUBLIC docs — so the member sees an empty church (no groups/care/roster) until a background+resume.
+  // Reopening a sub on that socket won't re-challenge; only a NEW socket does. So if we just gained the key
+  // and hubs are already open, force authenticated reconnections. Covers fresh-join, boot race, AND unlock.
+  if (wasKeyless && sk) { for (const hub of _docsHubs.values()) { if (hub.closer) { try { reconnectAll(); } catch (e) {} break; } } }
 }
 async function init() {
   if (window.TrinityIdentity && window.TrinityIdentity.ready) await window.TrinityIdentity.ready;
@@ -671,7 +693,8 @@ async function init() {
     if (raw) { const p = JSON.parse(raw); profiles[pub] = p; window.Fellowship.myProfile = p; }
   } catch {}
 }
-// keep the signing key in step with identity regeneration / restore
+// keep the signing key in step with identity regeneration / restore (deriveFromIdentity self-heals the
+// keyless→keyed reconnection, so a fresh join / restore re-auths its already-open sockets automatically)
 window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch(() => {}); });
 
 // UNLOCK RECOVERY (PIN feature): on a PIN-locked boot the signing key does not exist yet, so any relay
@@ -681,6 +704,7 @@ window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch((
 // already-open sockets never re-challenge. So when the identity unlocks, derive the key THEN force fresh,
 // authenticated reconnections. Only fires on a real keyless→keyed transition, so a no-PIN boot never churns.
 function reconnectAll() {
+  _authRefetchArmed = false;   // a new connection will auth again → re-arm the post-auth re-fetch
   // drop every church-doc hub's live sub so it re-opens fresh (buffer + cursor stay warm in memory)
   for (const hub of _docsHubs.values()) { const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }
   // close the underlying relay sockets so the reopened subs run a NEW NIP-42 challenge with the key present
@@ -690,10 +714,7 @@ function reconnectAll() {
   // nudge the app to re-run its serving subscriptions (connTick) → fresh, authenticated sockets
   try { window.dispatchEvent(new CustomEvent('trinity-reconnect')); } catch (e) {}
 }
-window.addEventListener('trinity-identity-lock', () => {
-  const wasKeyless = !sk;
-  deriveFromIdentity().then(() => { if (wasKeyless && sk) reconnectAll(); }).catch(() => {});
-});
+window.addEventListener('trinity-identity-lock', () => { deriveFromIdentity().catch(() => {}); });
 
 // ── OUTBOX (UX-AUDIT-2026-07-20 E1) ───────────────────────────────────────────────────────────────
 // A message that couldn't be sent used to be gone: the composer cleared, the transport logged a warning,

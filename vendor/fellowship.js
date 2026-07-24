@@ -6024,8 +6024,23 @@
       }
     }
     if (!sk) throw new Error("no key");
+    _armAuthRefetch();
     return finalizeEvent2(authEvent, sk);
   };
+  var _authRefetchArmed = false;
+  var _authRefetchT = null;
+  function _armAuthRefetch() {
+    if (_authRefetchArmed) return;
+    _authRefetchArmed = true;
+    if (_authRefetchT) clearTimeout(_authRefetchT);
+    _authRefetchT = setTimeout(() => {
+      _authRefetchT = null;
+      try {
+        refetchChurchDocs();
+      } catch (e) {
+      }
+    }, 1300);
+  }
   var _relayInfoCache = /* @__PURE__ */ new Map();
   function _relayInfo(wssUrl) {
     if (_relayInfoCache.has(wssUrl)) return _relayInfoCache.get(wssUrl);
@@ -6551,6 +6566,7 @@
     return { pubkey, handle, name: handle, color: av.color || base.color, av, picture: p && p.picture, nip05: p && p.nip05 || "" };
   }
   async function deriveFromIdentity() {
+    const wasKeyless = !sk;
     const mnemonic = window.TrinityIdentity ? await window.TrinityIdentity.exportMnemonic() : null;
     if (!mnemonic) throw new Error("no identity available to sign with");
     sk = privateKeyFromSeedWords(mnemonic);
@@ -6567,6 +6583,17 @@
     try {
       window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: pub } }));
     } catch {
+    }
+    if (wasKeyless && sk) {
+      for (const hub of _docsHubs.values()) {
+        if (hub.closer) {
+          try {
+            reconnectAll();
+          } catch (e) {
+          }
+          break;
+        }
+      }
     }
   }
   async function init() {
@@ -6587,6 +6614,7 @@
     });
   });
   function reconnectAll() {
+    _authRefetchArmed = false;
     for (const hub of _docsHubs.values()) {
       const c = hub.closer;
       hub.closer = null;
@@ -6611,10 +6639,7 @@
     }
   }
   window.addEventListener("trinity-identity-lock", () => {
-    const wasKeyless = !sk;
-    deriveFromIdentity().then(() => {
-      if (wasKeyless && sk) reconnectAll();
-    }).catch(() => {
+    deriveFromIdentity().catch(() => {
     });
   });
   var OUTBOX_KEY = "trinityone.outbox";

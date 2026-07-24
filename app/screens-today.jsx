@@ -284,14 +284,8 @@ function CareAvailability({ ctx }) {
       {others.length ? (
         <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}><Icon name="heart" size={16} color="var(--sage)" /><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>Ready to help</div></div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>You don’t have to carry things alone. These friends have said they’re glad to help — reach out to one of them, or ask the care team.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>You don’t have to carry things alone. These friends have said they’re glad to help — reach out to one of them, or use “Ask for help” above.</div>
           {others.map(a => <CareAvailRow key={a.pubkey} a={a} ctx={ctx} myPub={myPub} />)}
-        </div>
-      ) : null}
-      {churchPub ? (
-        <div style={{ marginBottom: 14 }}>
-          {others.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Need a hand with something? Your care team is here — just ask.</div> : null}
-          <button onClick={() => ctx.openDM(churchPub)} style={{ ...careBtnGhost, width: '100%', justifyContent: 'center', padding: '10px', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={13} /> Ask the care team</button>
         </div>
       ) : null}
       {!isMinor ? (
