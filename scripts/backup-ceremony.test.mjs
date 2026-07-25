@@ -9,6 +9,9 @@
 // The member wizard puts the phrase and the quiz on separate STEPS. The console hides the phrase the moment the
 // box is ticked, and re-drawing it costs you a different three. Either satisfies the rule; both are guarded here
 // because the failure is invisible — the ceremony still looks and feels complete when it has been defeated.
+//
+// There is now exactly ONE console setup wizard. A second one (StewWizard, stew-console.jsx) was deleted on
+// 2026-07-25 — it had the same flaw and I fixed it there FIRST, which changed nothing a steward would ever see.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -20,43 +23,8 @@ const MEMBER = readFileSync(new URL('../app/identity.jsx', import.meta.url), 'ut
 // stew-console.jsx would have looked complete and changed nothing the owner reported.
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 
-function wizBackup() {
-  const at = CONSOLE.indexOf('function WizBackup(');
-  assert.notEqual(at, -1, 'WizBackup missing — the church key backup ceremony is gone');
-  const end = CONSOLE.indexOf('\nfunction ', at + 10);
-  return CONSOLE.slice(at, end === -1 ? CONSOLE.length : end);
-}
 
-test('the console hides the twelve words before asking for any of them', () => {
-  const src = wizBackup();
-  // the word grid must be rendered only while the "I've written these down" box is UNticked
-  assert.match(src, /\{!ack \? \(<React\.Fragment>/,
-    'the recovery words are not gated on !ack — they would still be on screen during the check, which makes the check meaningless');
-  // and the quiz must be gated on ack, i.e. the opposite branch
-  assert.match(src, /\{ack && words\.length >= 6 \?/,
-    'the quiz is not gated on ack — the two could be shown together');
-  // the grid and the quiz must not both live in the same unconditional block
-  const gridAt = src.indexOf('{words.map((w, i) => (');
-  const quizAt = src.indexOf('WORD {idx + 1}');
-  assert.ok(gridAt !== -1 && quizAt !== -1, 'expected both the word grid and the quiz in WizBackup');
-  const between = src.slice(gridAt, quizAt);
-  assert.match(between, /\) : \(/, 'the words and the quiz must sit on opposite branches of a conditional');
-});
 
-test('looking at the words again costs a FRESH three (no free retry with the answers in view)', () => {
-  const src = wizBackup();
-  assert.match(src, /Show my words again/, 'there must be a way back to the phrase — otherwise a typo traps the steward');
-  assert.match(src, /onClick=\{\(\) => \{ setAck\(false\); setSaved\(false\); setAnswers\(\['', '', ''\]\); setCheckErr\(''\); \}\}/,
-    'going back must clear the answers and the confirmation');
-  assert.match(src, /React\.useEffect\(\(\) => \{\s*if \(!ack \|\| words\.length < 6\) return;[\s\S]*?\}, \[ack\]\);/,
-    'the three positions must be re-drawn whenever ack flips, so re-reading the phrase does not hand over the same answers');
-});
-
-test('the console actually verifies the typed words against the phrase', () => {
-  const src = wizBackup();
-  assert.match(src, /answers\[i\] \|\| ''\)\.trim\(\)\.toLowerCase\(\) === \(words\[idx\] \|\| ''\)\.toLowerCase\(\)/,
-    'the check must compare what was typed against the real words — a ceremony that accepts anything is worse than none');
-});
 
 test('the member wizard keeps its phrase and quiz on separate steps', () => {
   // step 1 shows the twelve words; step 2 asks for three. If they ever collapse onto one step it has the same flaw.
@@ -88,4 +56,13 @@ test('the first-run wizard draws its three positions at RANDOM, not hardcoded', 
     'the positions must be drawn randomly when the phrase is hidden');
   assert.match(DASH, /\}, \[saved, words\.length\]\);/,
     're-drawn on every saved flip, so going back to read the phrase costs a fresh question');
+});
+
+test('there is exactly one console setup wizard', () => {
+  // The duplicate is how the meetings step ended up in a flow nobody ran, and how a fix for this very ceremony
+  // first landed in a component no steward can reach. One wizard, or the divergence starts again.
+  assert.doesNotMatch(CONSOLE, /function StewWizard\(/, 'the second setup wizard is back');
+  assert.doesNotMatch(CONSOLE, /window\.StewWizard =/, 'the second setup wizard is still exported');
+  assert.match(CONSOLE, /function WizMeetings\(/, 'WizMeetings must stay — the surviving wizard renders it');
+  assert.match(CONSOLE, /function ConsoleChrome\(/, 'ConsoleChrome must stay — the dashboard renders it');
 });

@@ -476,9 +476,10 @@ function StewardRoot() {
   const params = new URLSearchParams(location.search);
   const showcase = params.get('showcase') === '1';   // ?showcase=1 = the design gallery (reference)
   const [surface, setSurface] = useSt(SURFACES.some(s => s.key === params.get('surface')) ? params.get('surface') : 'console');
-  // Setup wizard is for a church that doesn't exist yet — never gate it behind an unlock PIN. So ?setup=1 only
-  // opens the wizard when there's NO church key; an existing church (locked or not) goes to its normal console.
-  const [consoleView, setConsoleView] = useSt((params.get('setup') === '1' && !window.Steward.hasKey) ? 'wizard' : 'dashboard');
+  // There is ONE setup wizard: the first-run flow inside StewDashboard, gated on
+  // `trinityone.steward.wizard.done`. A second, divergent wizard (StewWizard, reachable only via ?setup=1 with
+  // no church key) used to live in stew-console.jsx — two flows for the same job, and the meetings step ended
+  // up in the one nobody ran, so real churches finished setup with an empty calendar. Deleted 2026-07-25.
   // a fresh install has no church key → welcome; an encrypted key → unlock gate; otherwise → console.
   const [ks, setKs] = useSt(() => ({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }));
   useStE(() => { const f = () => setKs({ has: !!window.Steward.hasKey, locked: !!window.Steward.locked }); window.addEventListener('steward-key', f); return () => window.removeEventListener('steward-key', f); }, []);
@@ -513,14 +514,14 @@ function StewardRoot() {
         {ks.locked ? <StewardUnlock />
           : !ks.has ? <StewardWelcome />
           : needsPin ? <StewardForcedPin />
-          : consoleView === 'wizard' ? <StewWizard onDone={() => setConsoleView('dashboard')} /> : <StewDashboard initial={params.get('tab') || 'overview'} />}
+          : <StewDashboard initial={params.get('tab') || 'overview'} />}
       </div>
     );
   }
 
   // ── ?showcase=1: the design gallery of every surface (kept for reference) ──
   let body = null;
-  if (surface === 'console') body = <Frame w={1180} h={800}>{consoleView === 'wizard' ? <StewWizard onDone={() => setConsoleView('dashboard')} /> : <StewDashboard initial={params.get('tab') || 'overview'} />}</Frame>;
+  if (surface === 'console') body = <Frame w={1180} h={800}><StewDashboard initial={params.get('tab') || 'overview'} /></Frame>;
   else if (surface === 'relay') body = <Frame w={1180} h={760}><RelayNodeApp initial={params.get('relay') === 'setup' ? 'setup' : 'running'} /></Frame>;
   else if (surface === 'extension') body = params.get('ext') === 'home' ? <StewExtensionHome /> : <StewExtensionRequest />;
   else if (surface === 'phone') body = <StewPhone initial={params.get('phone') || 'home'} />;
@@ -536,12 +537,6 @@ function StewardRoot() {
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.5px', color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 6px' }}>SHOWCASE</span>
         </div>
         <div style={{ flex: 1 }} />
-        {surface === 'console' ? (
-          <div style={seg}>
-            <SegBtn on={consoleView === 'dashboard'} onClick={() => setConsoleView('dashboard')}>Dashboard</SegBtn>
-            <SegBtn on={consoleView === 'wizard'} onClick={() => setConsoleView('wizard')}>Setup</SegBtn>
-          </div>
-        ) : null}
         <div style={seg}>
           {SURFACES.map(s => <SegBtn key={s.key} on={s.key === surface} icon={s.ic} onClick={() => setSurface(s.key)}>{s.label}</SegBtn>)}
         </div>
