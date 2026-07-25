@@ -3182,6 +3182,10 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024,   // 
   } });
 const MAX_CONNS = 5000;         // SECURITY-AUDIT-2026-07-18 M1: global concurrent-WebSocket ceiling (FD/memory-exhaustion guard). Deliberately NO per-IP cap — persecuted-church members routinely share one exit IP (VPN/Tor/national NAT/church WiFi), so a per-IP cap would throttle a legitimate congregation.
 const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (members, chat, profiles, etc.)
+// How long to hold an EOSE open while we wait for a challenged client to AUTH. Long enough for a round trip on
+// a thin pipe, short enough to stay under nostr-tools' own EOSE timeout so a client that never authenticates
+// still gets a real EOSE from us rather than its own synthetic one. See the REQ handler.
+const EOSE_AUTH_GRACE_MS = 2500;
 const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is a cheap unauthenticated CPU-DoS — cap it
 const MAX_REQ_EVENTS = 20000;   // aggregate events one REQ may materialize+serialize across all its filters (DoS ceiling; real reads are far smaller)
 const MAX_WS_BUFFER = 16 * 1024 * 1024; // if a client isn't draining and our socket buffer passes this, it's a slow-loris/OOM lever — stop sending + close
@@ -3191,9 +3195,12 @@ server.on('upgrade', (req, socket, head) => {
   if (wss.clients.size >= MAX_CONNS) { try { socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n'); } catch {} socket.destroy(); return; }   // SECURITY-AUDIT-2026-07-18 M1: shed new connections past the ceiling rather than exhaust FDs/memory
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
 });
-wss.on('connection', ws => {
+wss.on('connection', (ws, req) => {
   subs.set(ws, new Map());
   ws.isAlive = true;
+  // The host this client actually dialled, for the NIP-42 relay-binding check below. Cloudflare/Tailscale
+  // tunnels forward the original Host, so this is the public name the member typed/was invited to.
+  ws._host = String((req && req.headers && req.headers.host) || '').split(':')[0].toLowerCase();
   ws._auth = null;                                    // pubkey once the client proves it via NIP-42 AUTH
   ws._rl = { n: 0, t: Date.now(), drop: 0 };          // per-connection inbound rate limit (CPU-DoS guard)
   ws._challenge = randomBytes(16).toString('hex');    // per-connection nonce
@@ -3276,14 +3283,38 @@ wss.on('connection', ws => {
       const lim = Math.max(0, ...filters.map(f => f.limit || 0));
       if (lim) matched = matched.slice(-lim);
       for (const e of matched) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }   // backpressure: a client that isn't reading can't make us buffer unbounded
-      ws.send(JSON.stringify(['EOSE', subId]));
+      // AUDIT-2026-07-24 (root cause of a whole class of client-side data loss): when we WITHHELD private docs
+      // from an unauthenticated connection, an immediate EOSE says "that is everything" — indistinguishable
+      // from "this church has none". Clients then act on that emptiness destructively: mint a second care key,
+      // republish a one-entry minors list over the real one, re-seed the finance book. We already challenge
+      // here, so hold the EOSE until the AUTH round-trip resolves (the AUTH handler replays what was withheld
+      // and then flushes these), or until a short timeout if the client never authenticates. A late EOSE is
+      // ordinary; a premature one is a lie. NOT ["CLOSED", …, "auth-required: …"] — nostr-tools only recovers
+      // from that when a per-subscription `onauth` is passed, which SimplePool's automaticallyAuth does not
+      // set, so CLOSED would silently kill the subscription instead.
+      if (wantsSafeguard && !ws._auth) {
+        if (!ws._pendingEose) ws._pendingEose = new Map();
+        const prev = ws._pendingEose.get(subId); if (prev) clearTimeout(prev);
+        ws._pendingEose.set(subId, setTimeout(() => {
+          if (ws._pendingEose) ws._pendingEose.delete(subId);
+          if (ws.readyState === 1) { try { ws.send(JSON.stringify(['EOSE', subId])); } catch {} }
+        }, EOSE_AUTH_GRACE_MS));
+      } else ws.send(JSON.stringify(['EOSE', subId]));
     } else if (type === 'AUTH') {
       // NIP-42: the client proves which pubkey it controls, so we can serve it invite-only group reads
       const evt = rest[0];
       try {
         const ch = evt && (evt.tags.find(t => t[0] === 'challenge') || [])[1];
         const fresh = evt && Math.abs(Math.floor(Date.now() / 1000) - (evt.created_at || 0)) < 600;
-        if (evt && evt.kind === 22242 && ch === ws._challenge && fresh && verifyEvent(evt) && !BLOCKED.has(evt.pubkey)) {
+        // AUDIT-2026-07-24 (HIGH): NIP-42's ['relay', …] tag exists to bind an auth to ONE relay, and we never
+        // read it. The client signs an auth for any relay in its pool, and invites carry ?relay= / ?relayname=
+        // straight from a QR — so a hostile relay could open a socket to the church's real relay, harvest its
+        // challenge, hand it to the member's app as its own, and replay the signed result to authenticate AS
+        // that member: their DMs, the roster, care records. Require the tag to name the host this connection
+        // was actually dialled on. (Tunnels forward the original Host, so this is the name the member used.)
+        let boundToUs = false;
+        try { const rt = evt && (evt.tags.find(t => t[0] === 'relay') || [])[1]; boundToUs = !!rt && !!ws._host && new URL(String(rt)).hostname.toLowerCase() === ws._host; } catch { boundToUs = false; }
+        if (evt && evt.kind === 22242 && ch === ws._challenge && fresh && boundToUs && verifyEvent(evt) && !BLOCKED.has(evt.pubkey)) {
           // SECURITY-AUDIT-2026-07-06 H1: a BLOCKED pubkey must never satisfy a read gate — refuse to authenticate it.
           ws._auth = evt.pubkey; ws.send(JSON.stringify(['OK', evt.id, true, '']));
           // now authed: replay everything the open subs were waiting on that the connection can NOW read
@@ -3304,11 +3335,17 @@ wss.on('connection', ws => {
               if (!canRead(e, null)) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }
             }
           }
-        } else ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed: bad challenge or signature']));
+          // the replay above is what the deferred EOSEs were waiting for — now the client really does have
+          // everything it may read, so end those subscriptions' backlog honestly.
+          if (ws._pendingEose) {
+            for (const [sid, t] of ws._pendingEose) { clearTimeout(t); try { ws.send(JSON.stringify(['EOSE', sid])); } catch {} }
+            ws._pendingEose.clear();
+          }
+        } else ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, boundToUs ? 'auth-failed: bad challenge or signature' : 'auth-failed: this auth is not addressed to this relay']));
       } catch { ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed'])); }
     } else if (type === 'CLOSE') { subs.get(ws)?.delete(rest[0]); }
   });
-  ws.on('close', () => subs.delete(ws));
+  ws.on('close', () => { subs.delete(ws); if (ws._pendingEose) { for (const t of ws._pendingEose.values()) clearTimeout(t); ws._pendingEose.clear(); } });
 });
 // keepalive: ping every 25s so idle relay sockets stay open through the Tailscale Funnel / mobile NAT
 // (otherwise live pushes silently stop until the client reconnects). Terminate sockets that miss a pong.
