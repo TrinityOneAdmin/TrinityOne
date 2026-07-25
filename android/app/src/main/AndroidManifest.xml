@@ -23,6 +23,24 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!--
+              App link for church invites. Without this the app had only a LAUNCHER filter, so a member who
+              followed an invite, installed the APK and opened it arrived at a blank first-run with the invite
+              context (?follow=&relay=&name=) thrown away — they then had to type the church name by hand.
+              With it, /join opens straight into the app with the invite intact.
+
+              autoVerify makes Android fetch https://<host>/.well-known/assetlinks.json and check our signing
+              cert; the relay serves that (see gateway.mjs). If verification fails — self-hosted church on a
+              domain we don't serve, no network at install time — the link simply opens in the browser exactly
+              as it does today. Nothing regresses; the app path is a bonus when it verifies.
+            -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="app.trinityone.church" android:pathPrefix="/join" />
+            </intent-filter>
+
         </activity>
 
         <provider

@@ -30,7 +30,25 @@
     getApp.href = APK;
     getApp.setAttribute('download','');
     document.getElementById('getAppLabel').innerHTML = 'Get the Android app';
-    note.innerHTML = 'Tapping <b>Open now</b> joins you instantly in your browser. Prefer an app icon? Install the Android app, then open it and follow your church — or just use <b>Open now</b>.';
+    // AUDIT-2026-07-24. Two honest additions, both about the biggest drop-off on this page:
+    //   1. Android WILL ask permission to install an app from the browser. People who aren't warned read that
+    //      prompt as "this is unsafe" and stop. Saying it first turns a scare into an expected step.
+    //   2. The app now claims this link (app-link + assetlinks.json), so after installing, re-tapping the invite
+    //      carries the church straight in. But that only works if the link still exists — so show the code as
+    //      text too, for the person who installs and then can't find the message again.
+    note.innerHTML = 'Tapping <b>Open now</b> joins you instantly in your browser — nothing to install.'
+      + '<br><br>Prefer an app icon? Tap <b>Get the Android app</b>. Android will ask you to allow installing '
+      + 'from your browser — that’s normal, and you only do it once. When it’s installed, tap this invite '
+      + 'link again and it opens straight in the app, already joined.';
+    // the fallback for someone who installs the app and then loses the invite message
+    if (follow) {
+      var code = document.createElement('p');
+      code.className = 'joincode';
+      code.innerHTML = 'Lost this link after installing? Open the app and paste this church code:<br>'
+        + '<code id="joincodeval"></code>';
+      note.parentNode.insertBefore(code, note.nextSibling);
+      try { document.getElementById('joincodeval').textContent = follow; } catch(e){}
+    }
   } else if (isIOS) {
     note.innerHTML = 'Tap <b>Open now</b>, then Share <span aria-hidden="true">⬆️</span> → <b>Add to Home Screen</b> to keep TrinityOne like an app. (An App Store version is on the way.)';
   } else {

@@ -62,6 +62,10 @@ function stagingHasSymlink(p) {
 })();
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
 const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');                 // legacy JSON store (migrated from, once)
+// SHA-256 of the release signing certificate (android/app/keystore.properties -> release.keystore, alias
+// trinityone). Public by design — see /.well-known/assetlinks.json below. Override per-deployment if a church
+// ships its own signed build.
+const ANDROID_CERT_SHA256 = process.env.ANDROID_CERT_SHA256 || '9A:51:21:F0:9D:60:6B:83:E7:0F:19:22:06:CD:C6:17:05:2A:49:41:79:97:B8:24:C6:BB:97:97:AD:8C:A6:00';
 const SQLITE_DB = process.env.RELAY_SQLITE || join(DATA_DIR,'relay.sqlite');       // durable event store
 const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 20000;   // ephemeral budget; raise on a shared/public relay
 // FEDERATION Phase 3a — relay OFFER (opt-in): an operator willing to host OTHER churches sets RELAY_OPEN=1,
@@ -2902,6 +2906,23 @@ function serveStatic(req, res) {
         res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); res.end('ok');
       } catch { res.writeHead(400).end('bad'); }
     });
+    return;
+  }
+  // Digital Asset Links — proves to Android that this domain and the TrinityOne app belong to the same owner,
+  // which is what lets a /join invite open IN THE APP instead of the browser. Without it, a member who installs
+  // the APK from an invite link loses the invite context entirely and has to type the church name by hand
+  // (AUDIT-2026-07-24, the #1 onboarding drop-off after the sideload prompt itself).
+  //
+  // Served from code rather than a static file so a self-hosting church gets it automatically on its own domain —
+  // the whole point is that any church's relay can host the join page. The fingerprint is the release signing
+  // key's SHA-256 (`android/app/keystore.properties`); it is PUBLIC by design — it is a checksum of a cert, and
+  // Android fetches this file in the clear. Verification failure is graceful: the link opens the browser as now.
+  if (route === '/.well-known/assetlinks.json') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' });
+    res.end(JSON.stringify([{
+      relation: ['delegate_permission/common.handle_all_urls'],
+      target: { namespace: 'android_app', package_name: 'com.trinityone.app', sha256_cert_fingerprints: [ANDROID_CERT_SHA256] },
+    }], null, 2));
     return;
   }
   // NIP-05: serve verified `name@thisrelay` handles for this relay's people (the church + its members),

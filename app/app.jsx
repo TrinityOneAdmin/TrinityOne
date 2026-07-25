@@ -380,6 +380,48 @@ function App() {
   // the in-app wallet is the member's, always-on (rides on their key) — boot it once so the balance is
   // ready everywhere (profile hub, Giving tab), independent of any church's giving switch.
   useAE(() => { if (WALLET_ENABLED && window.TrinityWallet) window.TrinityWallet.init().catch(() => {}); }, []);
+  // App links (AUDIT-2026-07-24). The manifest now claims https://app.trinityone.church/join, so tapping an
+  // invite opens the APP rather than the browser — but Android hands us the URL as an intent, and every join
+  // param in this file is read from location.search at mount. Without this the app would open on a blank
+  // first-run and silently drop the invite, which is worse than the browser path it replaced.
+  //
+  // We re-enter the app with just the join params in the query, which reloads the local page and lets the
+  // EXISTING follow/invite/name/relay handling run unchanged — no second implementation to keep in sync.
+  useAE(() => {
+    const JOIN_KEYS = ['follow', 'invite', 'name', 'relay', 'c'];
+    // Same rule as join.js: never carry a cleartext or hostile relay in from a public link, only wss://.
+    const safeQuery = (url) => {
+      let u; try { u = new URL(url); } catch (e) { return null; }
+      if (!/\/join(\/|$)/.test(u.pathname)) return null;
+      const out = new URLSearchParams();
+      for (const k of JOIN_KEYS) {
+        const v = u.searchParams.get(k);
+        if (!v) continue;
+        if (k === 'relay' && !/^wss:\/\//i.test(v)) continue;
+        out.set(k, v);
+      }
+      return out.get('follow') || out.get('invite') ? out.toString() : null;
+    };
+    const apply = (url) => {
+      const q = safeQuery(url);
+      if (!q) return;
+      // getLaunchUrl keeps returning the same URL after we reload, so remember what we've handled or the app
+      // reload-loops forever on a cold start from a link.
+      try { if (sessionStorage.getItem('trinityone.handledLink') === url) return; sessionStorage.setItem('trinityone.handledLink', url); } catch (e) {}
+      if (location.search.replace(/^\?/, '') === q) return;   // already showing this invite
+      location.search = '?' + q;
+    };
+    let remove = null;
+    try {
+      const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+      if (AppP) {
+        if (AppP.getLaunchUrl) Promise.resolve(AppP.getLaunchUrl()).then(r => { if (r && r.url) apply(r.url); }).catch(() => {});
+        if (AppP.addListener) Promise.resolve(AppP.addListener('appUrlOpen', (e) => { if (e && e.url) apply(e.url); }))
+          .then(h => { remove = (h && h.remove) ? () => h.remove() : null; }).catch(() => {});
+      }
+    } catch (e) {}
+    return () => { if (remove) { try { remove(); } catch (e) {} } };
+  }, []);
   // connTick bumps when the app returns to the foreground or the network reconnects. Relay WebSockets
   // drop while a phone is backgrounded, and a dropped socket silently misses live pushes — so we tear
   // down and re-establish the church subscriptions on resume, which re-queries and catches up anything
