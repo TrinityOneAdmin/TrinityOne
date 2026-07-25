@@ -13525,7 +13525,7 @@ zoo`.split("\n");
       const tags = [["d", EVENT_D + id], ["t", NET]];
       if (groupId) tags.push(["t", groupId]);
       if (actingChurch) tags.push(["p", actingChurch]);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags, content }, signer)).then(() => ({ id, ...JSON.parse(content) }));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags, content }, signer)).then((ok) => ok ? { id, ...JSON.parse(content) } : null);
     },
     removeEvent(id) {
       if (!sk) return Promise.resolve(null);

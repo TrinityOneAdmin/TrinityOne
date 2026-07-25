@@ -162,6 +162,17 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
 
   function count() { return qCount.get().n; }
 
+  // A tiny key/value table for relay bookkeeping that must survive restarts (currently the deletion-backfill
+  // watermark). Kept here so it shares the store's transaction + file, not a second sidecar to keep in sync.
+  const qKindCount = db.prepare('SELECT COUNT(*) AS n FROM events WHERE kind = ?');
+  function countKind(k) { return qKindCount.get(k).n; }
+  db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);');
+  const qMetaGet = db.prepare('SELECT v FROM meta WHERE k = ?');
+  const qMetaSet = db.prepare('INSERT INTO meta (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v = excluded.v');
+  function getMeta(k) { const r = qMetaGet.get(k); return r ? r.v : null; }
+  function setMeta(k, v) { qMetaSet.run(k, String(v)); }
+  function countDeletions() { return db.prepare('SELECT COUNT(*) AS n FROM deletions').get().n; }
+
   // NIP-09 support: the author of a stored event (or null), and a hard delete by id.
   function authorOf(id) { const r = qAuthorById.get(id); return r ? r.pubkey : null; }
   function del(id) { try { return delById.run(id).changes > 0; } catch { return false; } }
@@ -187,8 +198,7 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   );`);
   db.exec('CREATE INDEX IF NOT EXISTS idx_deletions_church ON deletions(church);');
   const insTomb   = db.prepare('INSERT OR IGNORE INTO deletions (target_id,pubkey,church,at) VALUES (?,?,?,?)');
-  const qTomb     = db.prepare('SELECT pubkey FROM deletions WHERE target_id = ?');
-  const qTombCh   = db.prepare('SELECT target_id FROM deletions WHERE church = ?');
+  const qTombMine = db.prepare('SELECT 1 FROM deletions WHERE target_id = ? AND pubkey = ?');
   const qRowById  = db.prepare('SELECT pubkey, church FROM events WHERE id = ?');
 
   // Apply one NIP-09 deletion: `pubkey` asks to delete `targetId`. Deletes it if we hold it AND the requester is
@@ -201,10 +211,19 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     try { insTomb.run(targetId, pubkey, (row && row.church) || '', at || Math.floor(Date.now() / 1000)); } catch {}
     return row ? del(targetId) : false;
   }
-  // Is this event tombstoned by its own author? (put() refuses to store it; sync refuses to re-offer it.)
+  // Is this event tombstoned BY ITS OWN AUTHOR?
+  //
+  // AUDIT 2026-07-25 (CRITICAL, defeated the whole feature): this used to fetch ONE row for the target id and
+  // compare its pubkey. The table is keyed (target_id, pubkey), so MANY pubkeys can tombstone the same id, and
+  // SQLite served that read from the autoindex — i.e. the LEXICOGRAPHICALLY LOWEST pubkey, whatever the insert
+  // order. kind-5 is world-readable and broadcast, so any member could watch for deletions, echo the same
+  // e-tag under their own key, and — whenever their key sorted below the author's — permanently un-delete it.
+  // "You can never unsend anything on this relay", available to anyone who could read the relay.
+  // The query must be index-EXACT on (target_id, pubkey). No null-pubkey branch: a caller that omits the
+  // author would match a forged tombstone, which is the same bug with a different entry point.
   function isDeleted(id, pubkey) {
-    const t = qTomb.get(id);
-    return !!t && (pubkey == null || t.pubkey === pubkey);
+    if (!id || !pubkey) return false;
+    return !!qTombMine.get(id, pubkey);
   }
 
   // Backup: every stored event this relay holds for one church, oldest-first, as parsed objects. `cp` is the
@@ -219,14 +238,16 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // negentropy resync: just the event IDs a church holds (for bucketed set-difference), and the raw events for a
   // given ID list (to pull only the true difference). Cheap ID-only scan; the events fetch is bounded by the caller.
   const qChurchIds = db.prepare('SELECT id FROM events WHERE church = ?');
-  // Include TOMBSTONED ids in what we claim to hold. Without this, negentropy sees the deleted id as missing
-  // on our side every single round, re-offers it every sync forever, and we re-fetch and re-refuse it —
-  // correct, but it burns a member's data plan on an event we will never store.
-  function churchEventIds(cp) {
-    const ids = qChurchIds.all(cp).map((r) => r.id);
-    for (const r of qTombCh.all(cp)) ids.push(r.target_id);
-    return ids;
-  }
+  // Claim ONLY what we actually hold.
+  //
+  // This briefly also returned tombstoned ids, to stop negentropy re-offering a deleted event every round. That
+  // was wrong: a tombstone's `church` is whatever we knew at the moment the kind-5 arrived ('' when the target
+  // was not held yet), so two relays applying the SAME genuine deletion file it under different churches. The
+  // bucket fingerprints then never match, the bucket is re-diffed every pass, the peer asks for an event we
+  // will never send, and the responder re-scans the whole church every time — reintroducing, on the responder
+  // side, the 256-full-scans stall that was just removed from the requester side. AUDIT 2026-07-25.
+  // Re-offering a deleted id costs one refused write per sync; non-convergence costs a permanent loop.
+  function churchEventIds(cp) { return qChurchIds.all(cp).map((r) => r.id); }
   const qEventByIdCh = db.prepare('SELECT raw FROM events WHERE church = ? AND id = ?');
   function syncEventsByIds(cp, ids) { const out = []; if (!Array.isArray(ids)) return out; for (const id of ids) { const r = qEventByIdCh.get(cp, id); if (r) { try { out.push(JSON.parse(r.raw)); } catch {} } } return out; }
 
@@ -311,5 +332,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     try { oldest = (qOldest.get() || {}).t | 0; } catch {}
     return { days: n, daily, kinds, churches, oldest };
   }
-  return { db, put, query, eachKind, count, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, eachKind, count, countKind, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }

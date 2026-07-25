@@ -13,6 +13,34 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+const CONSOLE = readFileSync(new URL('../app/stew-console.jsx', import.meta.url), 'utf8');
+
+// Execute the REAL id generator rather than counting calls to it. The previous version of this file asserted
+// `_wizMeetingId()` appeared twice — which stayed green when the generator itself was changed to a colliding
+// one, i.e. it passed while reproducing the exact bug named in its own comment.
+function realWizMeetingId() {
+  const m = CONSOLE.match(/function _wizMeetingId\(\) \{[^}]*\}/);
+  assert.ok(m, '_wizMeetingId missing from app/stew-console.jsx');
+  return new Function(m[0] + '; return _wizMeetingId;')();
+}
+// The full statement starting at `header`, balancing (), [] and {} together — balancing braces alone breaks on
+// a destructuring header like `const [a, setA] = ...` and silently returns a truncated slice, which is how a
+// structural assertion ends up passing against text it never actually read.
+function bodyOf(src, header) {
+  const at = src.indexOf(header);
+  assert.notEqual(at, -1, `not found: ${header}`);
+  const open = { '(': ')', '[': ']', '{': '}' };
+  const stack = []; let started = false;
+  for (let i = at + header.length; i < src.length; i++) {
+    const c = src[i];
+    if (open[c]) { stack.push(open[c]); started = true; }
+    else if (c === ')' || c === ']' || c === '}') {
+      if (stack.pop() !== c) assert.fail(`unbalanced near ${header}`);
+      if (started && !stack.length) return src.slice(at, i + 1);
+    }
+  }
+  assert.fail(`unterminated: ${header}`);
+}
 
 test('the first-run wizard has a meetings step that publishes', () => {
   assert.match(DASH, /title="Your regular meetings"/, 'the meetings step is gone — new churches finish with an empty calendar again');
@@ -21,16 +49,28 @@ test('the first-run wizard has a meetings step that publishes', () => {
     'publishing must be awaited — fire-and-forget lands the steward on an empty calendar with no error');
 });
 
-test('the two prefilled meetings cannot collide', () => {
-  // Both rows are created in one expression. Keying them on Date.now() alone gave them the SAME id, and these
-  // are replaceable docs — so the second silently DELETED the first and only one meeting survived.
-  const at = DASH.indexOf('const [meetings, setMeetings] = React.useState');
-  assert.notEqual(at, -1, 'the prefilled meetings are gone');
-  const block = DASH.slice(at, at + 420);
+test('the id generator really is collision-free within one tick', () => {
+  // Both rows are created in one synchronous expression, and these are REPLACEABLE docs — two rows sharing an
+  // id means the second silently DELETES the first, so only one meeting ever reaches the calendar.
+  // Drawn in a tight loop so Date.now() is constant across draws: that is exactly the failing condition.
+  const gen = realWizMeetingId();
+  const seen = new Set();
+  for (let i = 0; i < 5000; i++) seen.add(gen());
+  assert.equal(seen.size, 5000, 'ids collide when generated in the same millisecond — the second meeting would delete the first');
+});
+
+test('both prefilled meetings are created with generated ids', () => {
+  const block = bodyOf(DASH, 'const [meetings, setMeetings] = React.useState');
   assert.match(block, /Sunday Service/); assert.match(block, /Midweek/);
-  const ids = block.match(/_wizMeetingId\(\)/g) || [];
-  assert.equal(ids.length, 2, 'each meeting must get its own generated id');
-  assert.doesNotMatch(block, /id: 'evt' \+ Date\.now\(\)/, 'Date.now() alone collides for rows created together');
+  assert.equal((block.match(/_wizMeetingId\(\)/g) || []).length, 2, 'each meeting must get its own generated id');
+});
+
+test('every filled meeting is published — no slicing or capping', () => {
+  const body = bodyOf(DASH, 'const saveMeetings = async () =>');
+  assert.match(body, /const rows = meetings\.filter\(m => m\.title\.trim\(\)\);/, 'rows must be every titled meeting');
+  assert.match(body, /for \(const m of rows\)/, 'the publish loop must iterate ALL rows');
+  assert.doesNotMatch(body, /\.slice\(/, 'the publish list must not be sliced — a cap silently drops meetings');
+  assert.doesNotMatch(body, /rows\[0\]/, 'only publishing the first row would drop every other meeting');
 });
 
 test('the step order and progress bar stay consistent', () => {

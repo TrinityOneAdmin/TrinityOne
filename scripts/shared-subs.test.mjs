@@ -117,3 +117,36 @@ test('one caller throwing does not starve the others', () => {
   assert.deepEqual(good, [['still delivered']], 'a throwing subscriber must not stop the rest of the app updating');
   off1(); off2();
 });
+
+test('two callers passing the SAME function reference do not collapse', () => {
+  // A Set of callbacks silently merged them, so the first unsubscribe closed the stream under a screen that was
+  // still mounted — a silent empty list. Screens do pass stable setState identities, so this is reachable.
+  const _shared = realShared();
+  const [st, open] = fakeStream();
+  const sub = _shared('k6', open);
+  const seen = [];
+  const cb = v => seen.push(v);
+  const off1 = sub(cb);
+  const off2 = sub(cb);          // same reference
+  off1();
+  assert.equal(st.closes, 0, 'the stream must stay open for the second caller');
+  st.emit(['still live']);
+  assert.ok(seen.some(v => v[0] === 'still live'), 'the surviving caller must still receive events');
+  off2();
+  assert.equal(st.closes, 1);
+});
+
+test('a stream that fails to open does not poison the key', () => {
+  const _shared = realShared();
+  let attempts = 0;
+  const boom = () => { attempts++; throw new Error('relay unreachable'); };
+  assert.throws(() => _shared('k7', boom)(() => {}), /relay unreachable/);
+  // a later caller must get a FRESH attempt, not an entry with no stream behind it
+  const [st, ok] = fakeStream();
+  const got = [];
+  const off = _shared('k7', ok)(v => got.push(v));
+  assert.equal(st.opens, 1, 'the retry must actually open a stream');
+  st.emit(['recovered']);
+  assert.deepEqual(got, [['recovered']]);
+  off();
+});

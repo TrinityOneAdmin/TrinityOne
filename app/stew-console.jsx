@@ -44,8 +44,10 @@ function WizMeetings({ meetings, setMeetings }) {
   const fld = { padding: '11px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14, outline: 'none', boxSizing: 'border-box' };
   const set = (i, patch) => setMeetings(a => a.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   return (
-    <div style={{ marginTop: 22 }}>
-      <div style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.6, marginBottom: 18 }}>Set your weekly rhythm — Sunday service, midweek, and so on. These fill your calendar automatically, so members always see what’s on. You can edit them or add more any time from the Calendar.</div>
+    // No intro paragraph and no top margin: this used to be the whole body of a StewWizard step, but it now sits
+    // inside WizShell, which already renders the heading and `sub`. Keeping its own copy printed the same
+    // sentence twice on the step, near-verbatim.
+    <div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {meetings.map((m, i) => (
           <div key={i} style={{ padding: 14, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 9 }}>

@@ -22,6 +22,38 @@ import { readFileSync } from 'node:fs';
 
 const APP = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
 
+// The effect's own body, so assertions read what actually RUNS rather than what merely appears in the file.
+function healBody() {
+  const marker = 'if (!activeChurch || churches.find(c => c.id === activeChurch)) return;';
+  const at = APP.indexOf(marker);
+  assert.notEqual(at, -1, 'the self-heal guard is gone — a stale active church would silently blank every church feature again');
+  const start = APP.lastIndexOf('useAE(() => {', at);
+  assert.notEqual(start, -1, 'the guard is no longer inside an effect');
+  const end = APP.indexOf('\n  }, [', start);
+  assert.notEqual(end, -1);
+  const depsEnd = APP.indexOf(');', end);
+  return { body: APP.slice(start, end), deps: APP.slice(end, depsEnd + 2), guardAt: at, start };
+}
+
+test('the effect cannot be short-circuited before it heals', () => {
+  // The previous version asserted the guard LINE existed. Inserting `if (true) return;` directly above it left
+  // every regex satisfied while the effect did nothing at all — the silent-blank bug, fully restored, green suite.
+  const { body, guardAt, start } = healBody();
+  const before = APP.slice(start + 'useAE(() => {'.length, guardAt);
+  assert.doesNotMatch(before, /\breturn\b/,
+    'something returns BEFORE the heal guard — the effect would be inert while still matching every structural check');
+  assert.match(body, /setActiveChurch\(next\);/, 'the effect must actually re-point the active church');
+  assert.match(body, /lsSet\('trinityone\.activeChurch', next\);/, 'and persist it, or it re-heals on every launch');
+});
+
+test('the effect re-runs when the church list arrives', () => {
+  // `churches` is populated asynchronously. With an empty dep array the heal fires once on mount — before the
+  // followed churches load — and then never again, which is exactly the situation it exists to repair.
+  const { deps } = healBody();
+  assert.match(deps, /\[activeChurch, churches\]/,
+    'the heal must depend on BOTH the active church and the church list, or it runs too early and never again');
+});
+
 test('the reconciliation effect is present', () => {
   assert.match(APP, /if \(!activeChurch \|\| churches\.find\(c => c\.id === activeChurch\)\) return;/,
     'the self-heal guard is gone — a stale active church would silently blank every church feature again');
@@ -42,6 +74,8 @@ test('it prefers a real followed church, and cannot loop', () => {
 test('every activeChurch resolution still funnels through the same find()', () => {
   // If a new call site resolves the active church differently, it would not benefit from the heal above and
   // could reintroduce the silent-blank path on its own.
+  // An exact count, not a floor: the old `>= 4` passed while 26 of the 30 real sites could have been rewritten.
   const sites = [...APP.matchAll(/churches\.find\((\w+) => \1\.id === activeChurch\)/g)];
-  assert.ok(sites.length >= 4, `expected the known resolution sites, found ${sites.length}`);
+  assert.equal(sites.length, 30,
+    `the active-church resolution sites changed (${sites.length} vs 30) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });

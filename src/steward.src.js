@@ -2132,8 +2132,11 @@ window.Steward = {
     const tags = [['d', EVENT_D + id], ['t', NET]];
     if (groupId) tags.push(['t', groupId]);   // lets a group's chat filter to its own events
     if (actingChurch) tags.push(['p', actingChurch]);   // delegated steward: p-tag the church so members' group view shows it
+    // AUDIT 2026-07-25: publish() never rejects — on total failure it returns false — and this discarded that,
+    // resolving with a fabricated success object. Every caller that "awaited the ACK" was awaiting nothing.
+    // Resolve null when no relay accepted, so a caller can tell (existing callers ignore the value entirely).
     return publish(feChurch({ kind: 30078, created_at: now(), tags, content }, signer))   // feChurch stamps ['church',cp] in delegated mode so the relay accepts it
-      .then(() => ({ id, ...JSON.parse(content) }));
+      .then((ok) => (ok ? { id, ...JSON.parse(content) } : null));
   },
   removeEvent(id) {
     if (!sk) return Promise.resolve(null);

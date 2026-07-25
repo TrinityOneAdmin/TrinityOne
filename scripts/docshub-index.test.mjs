@@ -41,10 +41,19 @@ function prefixConstants() {
 }
 
 // every _onChurchDocs registration that declares `want`, paired with the guard inside its own onevent
+// Parse each registration's `want` and the first guard inside its own onevent, tolerating anything between
+// them. The previous version required want -> onevent -> guard on consecutive lines; adding one benign property
+// (`emit,`) made it silently match ZERO registrations while every assertion still passed, because the count was
+// only floored at >= 5. A structural test that can quietly stop reading its own subject is worse than none.
 function registrations() {
   const out = [];
-  const re = /_onChurchDocs\(\w+, \{\s*\n\s*want: \[([^\]]+)\],[^\n]*\n\s*onevent\(e, d\) \{[^\n]*\n\s*if \(!?d(?:\.startsWith\((\w+)\)|\s*!==\s*(\w+))\) return;/g;
-  for (const m of SRC.matchAll(re)) out.push({ want: m[1].trim(), guard: (m[2] || m[3] || '').trim(), exact: !m[2] });
+  for (const m of SRC.matchAll(/_onChurchDocs\(\w+, \{/g)) {
+    const block = SRC.slice(m.index, m.index + 1500);
+    const w = block.match(/want: \[([^\]]+)\]/);
+    if (!w) continue;
+    const g = block.match(/onevent\(e, d\) \{[\s\S]*?if \(!?d(?:\.startsWith\((\w+)\)|\s*!==\s*(\w+))\) return;/);
+    out.push({ want: w[1].trim(), guard: g ? (g[1] || g[2] || '').trim() : null, exact: g ? !g[1] : null });
+  }
   return out;
 }
 
@@ -59,7 +68,12 @@ test('every handler replays the SAME slice its own guard accepts', () => {
   const dkey = realDkeyOf();
   const consts = prefixConstants();
   const regs = registrations();
-  assert.ok(regs.length >= 5, `expected the indexed handlers, found ${regs.length}`);
+  // EXACT, not a floor: a floor let registrations drop out of coverage unnoticed, which is exactly what happened.
+  const declared = (SRC.match(/want: \[/g) || []).length;
+  assert.equal(regs.length, declared,
+    `parsed ${regs.length} registrations but ${declared} declare want — the parser stopped seeing some, so they are unguarded`);
+  assert.ok(declared >= 5, `expected the indexed handlers, found ${declared}`);
+  for (const r of regs) assert.ok(r.guard, `a handler declares want: [${r.want}] but no d-prefix guard was found in its onevent`);
   for (const r of regs) {
     assert.equal(r.want, r.guard,
       `handler declares want: [${r.want}] but its onevent guards on ${r.guard} — it will replay the wrong slice and render blank`);

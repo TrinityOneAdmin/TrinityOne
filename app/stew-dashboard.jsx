@@ -309,15 +309,27 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     { id: _wizMeetingId(), title: 'Sunday Service', day: 0, time: '10:00', recur: 'weekly' },
     { id: _wizMeetingId(), title: 'Midweek', day: 3, time: '19:30', recur: 'weekly' },
   ]));
+  const [meetingErr, setMeetingErr] = React.useState('');
   const saveMeetings = async () => {
     const rows = meetings.filter(m => m.title.trim());
-    if (rows.length) {
-      setBusy(true);
-      // awaited, not fire-and-forget: publishEvent resolves after the relay ACKs, so a failure leaves the
-      // steward on this step with the rows still editable rather than landing on an empty calendar later.
-      for (const m of rows) await Promise.resolve(window.Steward.publishMeeting({ id: m.id, title: m.title.trim(), day: m.day, time: m.time, recur: m.recur }));
-      setBusy(false);
-    }
+    if (!rows.length) { next(); return; }   // deliberately skipped — nothing to publish
+    setBusy(true); setMeetingErr('');
+    let failed = 0;
+    try {
+      // publishMeeting resolves null when no relay accepted. The previous version awaited it and advanced
+      // regardless, so an offline or wrong-key relay produced exactly the empty calendar this step exists to
+      // prevent — with the only signal a generic 9-second toast the steward was already scrolling past.
+      for (const m of rows) {
+        const r = await Promise.resolve(window.Steward.publishMeeting({ id: m.id, title: m.title.trim(), day: m.day, time: m.time, recur: m.recur }));
+        if (!r) failed++;
+      }
+    } catch (e) { failed = rows.length; }
+    finally { setBusy(false); }   // ALWAYS: `busy` is shared by every step's primary button, so leaving it set
+                                  // disabled Continue AND Back AND the other steps — a silent, inescapable
+                                  // wizard with no error text anywhere on screen.
+    if (failed) { setMeetingErr(failed === rows.length
+      ? 'Couldn’t save your meetings — the relay didn’t accept them. Check you’re online and try again; your rows are still here.'
+      : `Saved ${rows.length - failed} of ${rows.length}. Try again to save the rest.`); return; }
     next();
   };
 
@@ -454,6 +466,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={saveMeetings} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{meetings.filter(m => m.title.trim()).length ? `Add ${meetings.filter(m => m.title.trim()).length} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <WizMeetings meetings={meetings} setMeetings={setMeetings} />
+      {meetingErr ? <div style={{ marginTop: 12, padding: '11px 13px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 34%, transparent)', fontSize: 13, color: 'var(--ink)', lineHeight: 1.45 }}>{meetingErr}</div> : null}
     </WizShell>
   );
 

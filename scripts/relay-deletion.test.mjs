@@ -142,6 +142,40 @@ test("a kind-5 still cannot delete someone else's event", async () => {
   assert.equal(ok, true, "a forged tombstone does not lock N's own event out");
 });
 
+test('a MIRRORED tombstone cannot undo someone else\u2019s deletion', async () => {
+  // AUDIT 2026-07-25, CRITICAL. The deletions table is keyed (target_id, pubkey), so MANY pubkeys can tombstone
+  // the same id — but isDeleted() fetched ONE row and compared it. SQLite serves that from the autoindex, i.e.
+  // the lexicographically lowest pubkey. kind-5 is world-readable and broadcast, so any member could watch for
+  // deletions, echo the same e-tag under their own key, and — whenever their key sorted lower than the author's
+  // — permanently disable that deletion. "You can never unsend anything on this relay."
+  const m = msg(M, 'M retracts this, N tries to force it back');
+  await publish(pub, m);
+  assert.equal((await publish(pub, del(M, m.id)))[0], true, 'M deletes their own message');
+  await sleep(150);
+  assert.equal(await holds(m.id, M.sk), false, 'gone');
+
+  // N mirrors the deletion it just saw on the public kind-5 stream, under N's own key.
+  assert.equal((await publish(pub, del(N, m.id)))[0], true, 'the mirrored kind-5 is itself a valid event');
+  await sleep(150);
+
+  const [ok] = await publish(pub, m);
+  await sleep(150);
+  assert.equal(ok, false, 'M\u2019s deletion still stands — a second pubkey\u2019s tombstone must not overrule it');
+  assert.equal(await holds(m.id, M.sk), false, 'the message must STAY deleted');
+});
+
+test('a forged tombstone for an event the relay has not seen cannot block its author', async () => {
+  // The mirror above needs the author's own tombstone present. This is the other ordering: a hostile tombstone
+  // planted for an id the relay does not hold yet. It must never stop the real author publishing.
+  const m = msg(N, 'N publishes this after M pre-emptively tombstoned it');
+  assert.equal((await publish(pub, del(M, m.id)))[0], true, 'M forges a tombstone for an id nobody holds');
+  await sleep(150);
+  const [ok] = await publish(pub, m);
+  await sleep(150);
+  assert.equal(ok, true, 'N\u2019s own event must still store — a stranger cannot pre-block it');
+  assert.ok(await holds(m.id, N.sk), 'and it is readable');
+});
+
 test('a replaceable write that lost the newest-wins race is NOT ACKed as success', async () => {
   const t = now();
   const newer = doc(M, 'trinityone/deltest:' + t, { v: 2 }, t + 5);

@@ -88,9 +88,17 @@ const _gkKey = (cp, gid) => (cp || '') + '|' + gid;
 // emit rebuilds and re-sorts the WHOLE collection and fires a React setState — so replaying a backfill of n
 // events costs O(n² log n) and n renders. Deferring to the end of the tick makes it one rebuild per batch,
 // which is what the UI actually needs. (audit 2026-07-24)
+// Coalesce repeated emits into one per tick. AUDIT 2026-07-25 (HIGH): this had NO cancel, so an emit queued by
+// an arriving event still fired a macrotask AFTER its subscription was torn down. In the chat-unread effect that
+// late emit opened a fresh `subscribeGroups` REQ that nothing would ever close — one leaked subscription per
+// church switch, marching straight at the relay's 64-per-connection cap, which is the known cause of member
+// names going blank. Elsewhere it painted the OLD church's groups/needs under the NEW church's header.
+// The returned function carries .cancel(); every caller must call it from its unsubscribe path.
 function _coalesce(fn) {
-  let queued = false;
-  return function () { if (queued) return; queued = true; setTimeout(() => { queued = false; try { fn(); } catch (e) {} }, 0); };
+  let t = null;
+  const run = function () { if (t) return; t = setTimeout(() => { t = null; try { fn(); } catch (e) { console.error('[fellowship] emit failed', e); } }, 0); };
+  run.cancel = () => { if (t) { clearTimeout(t); t = null; } };
+  return run;
 }
 // PERF (AUDIT-2026-07-24): share ONE relay subscription between callers that want the same stream. Several
 // streams were opened twice because two screens each wanted them — sermons (Watch + Extras), the safety check
@@ -100,21 +108,29 @@ function _coalesce(fn) {
 //
 // Late joiners get the last value immediately, so a second screen paints from memory instead of re-fetching.
 // The underlying subscription closes only when the LAST caller unsubscribes, so nothing leaks.
-const _sharedSubs = new Map();   // key -> { cbs:Set, last, closer }
+const _sharedSubs = new Map();   // key -> { cbs:Map(token->cb), last, closer }
 function _shared(key, open) {
   let e = _sharedSubs.get(key);
   if (!e) {
-    e = { cbs: new Set(), last: undefined, closer: null };
+    // cbs is a Map keyed by a unique token, NOT a Set of functions: two screens can legitimately pass the SAME
+    // callback reference (a stable setState identity), and a Set would silently collapse them — the first
+    // unsubscribe would then drop cbs to 0 and close the stream under a screen still mounted. AUDIT 2026-07-25.
+    e = { cbs: new Map(), last: undefined, closer: null, seq: 0 };
     _sharedSubs.set(key, e);
-    e.closer = open((v) => { e.last = v; for (const cb of [...e.cbs]) { try { cb(v); } catch (err) { console.error(err); } } });
+    // If open() throws, drop the key instead of leaving a poisoned entry (closer null, cbs empty) that every
+    // later caller would join — a permanent silent-empty for the rest of the session.
+    try {
+      e.closer = open((v) => { e.last = v; for (const cb of [...e.cbs.values()]) { try { cb(v); } catch (err) { console.error(err); } } });
+    } catch (err) { _sharedSubs.delete(key); throw err; }
   }
   return (cb) => {
-    e.cbs.add(cb);
+    const token = ++e.seq;
+    e.cbs.set(token, cb);
     if (e.last !== undefined) { try { cb(e.last); } catch (err) {} }   // paint immediately from the shared buffer
     let off = false;
     return () => {
       if (off) return; off = true;
-      e.cbs.delete(cb);
+      e.cbs.delete(token);
       if (!e.cbs.size) { _sharedSubs.delete(key); const c = e.closer; e.closer = null; if (c) { try { c(); } catch (err) {} } }
     };
   };
@@ -659,6 +675,7 @@ function _onChurchDocs(cp, h) {
   let off = false;
   return () => {
     if (off) return; off = true;
+    if (h.emit && h.emit.cancel) h.emit.cancel();   // kill a queued emit so it cannot fire after teardown
     hub.handlers.delete(h);
     // at 0 refs close the relay sub and flush; the hub object (buffer + cursor) stays warm in memory,
     // so the app-level reconnect (connTick tears everything down, then re-registers) re-opens with the
@@ -988,7 +1005,7 @@ window.Fellowship = {
       },
       oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} };
+    return () => { emit.cancel(); try { sub.close(); } catch {} };   // cancel the queued emit: it would otherwise fire a tick after teardown
   },
   // the church's currently-featured/pinned sermon (or null) — drives a Today card + a notification.
   subscribePinnedSermon(churchNpub, onPinned) {
@@ -1394,7 +1411,7 @@ window.Fellowship = {
       // turns "slow" into "messages missing", which is the worse failure for a church.
       { kinds: [4], authors: [pub], limit: 1000 }, { kinds: [4], '#p': [pub], limit: 1000 },
     ], { onevent: handle, oneose() { emit(); } });
-    return () => { try { sub.close(); } catch {} };
+    return () => { emit.cancel(); try { sub.close(); } catch {} };   // cancel the queued emit: it would otherwise fire a tick after teardown
   },
 
   // live connection status of each configured relay (throwaway WS probe)
@@ -1527,7 +1544,7 @@ window.Fellowship = {
       },
       oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} };
+    return () => { emit.cancel(); try { sub.close(); } catch {} };   // cancel the queued emit: it would otherwise fire a tick after teardown
   },
   // ── moderation actions a GROUP LEADER may take (signed by me, scoped to the group, p-tagged to the
   // church). The relay only accepts these from the group's leaders (or the church), like group events. ──
@@ -1577,6 +1594,7 @@ window.Fellowship = {
     const emit = _coalesce(() => { const v = [...byId.values()].filter(g => _churchVoice(pubk, g)); if (!eosed && !v.length) return; saveDocCache('groups', pubk, v); onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); });
     if (byId.size) emit();   // paint cached groups before the shared hub replays/answers
     return _onChurchDocs(pubk, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
       want: [GROUP_D],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {   // (the hub absorbs the steward roster + group-key envelopes centrally)
         if (!d.startsWith(GROUP_D)) return;
@@ -1608,6 +1626,7 @@ window.Fellowship = {
     const emit = _coalesce(() => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); if (!eosed && !v.length) return; saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); });
     if (byId.size) emit();   // paint cached categories before the shared hub replays/answers
     return _onChurchDocs(pubk, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
       want: [CATEGORY_D],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (!d.startsWith(CATEGORY_D)) return;
@@ -1805,6 +1824,7 @@ window.Fellowship = {
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = _coalesce(() => { const v = [...byId.values()].filter(x => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0)); if (!eosed && !v.length) return; onItems(v); });   // roster-trust (M2)
     return _onChurchDocs(pubk, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
       want: [prefix],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (!d.startsWith(prefix)) return;
@@ -1833,6 +1853,7 @@ window.Fellowship = {
     if (!pubk) { cb({ ...OFF }); return () => {}; }
     let best = { ts: 0, doc: { ...OFF } };
     return _onChurchDocs(pubk, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
       want: [MEALS_SETTINGS_D],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (d !== MEALS_SETTINGS_D) return;   // the relay write-gates settings to the church/stewards (accept policy), so trust what it serves here — don't drop it on a not-yet-loaded roster, which hid the whole Care module from members
@@ -1852,6 +1873,7 @@ window.Fellowship = {
     if (!pubk) { cb(null); return () => {}; }
     let bestTs = 0;
     return _onChurchDocs(pubk, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
       onevent(e, d) {
         if (d !== MSGTAGS_D || (e.created_at || 0) <= bestTs) return;
         bestTs = e.created_at || 0;
@@ -1890,6 +1912,7 @@ window.Fellowship = {
     const retracted = (id, need) => { const s = tombs.get(id); if (!s) return false; for (const by of s) { if (careDelOk(by, need)) return true; } return false; };
     const emit = _coalesce(() => { const v = [...byId.entries()].filter(([id, n]) => careTrusted(n._by) && !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); if (!eosed && !v.length) return; cb(v); });
     return _onChurchDocs(pubk, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
       onevent(e, d) {
         // capture the church-signed meals config + admin-team roster so care authors can be verified
         if (d === MEALS_SETTINGS_D) { if (_churchVoice(pubk, { _by: e.pubkey })) { try { const c = JSON.parse(e.content || '{}'); openedBy = c.openedBy === 'member' ? 'member' : 'steward'; adminGroupId = String(c.adminGroupId || ''); } catch {} emit(); } return; }
@@ -1926,6 +1949,7 @@ window.Fellowship = {
     // the shared hub's union filter is a superset of the old '#church'-only one; the d-prefix guard
     // below keeps the delivered set identical (careslot:/careskip: docs are always church-tagged)
     return _onChurchDocs(pubk, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
       want: [prefix],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (!d.startsWith(prefix)) return;
@@ -2105,7 +2129,7 @@ window.Fellowship = {
       },
       oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} };
+    return () => { emit.cancel(); try { sub.close(); } catch {} };   // cancel the queued emit: it would otherwise fire a tick after teardown
   },
   async fillCareSlot(careId, iso, note) {
     const cp = window.Fellowship.churchPub;

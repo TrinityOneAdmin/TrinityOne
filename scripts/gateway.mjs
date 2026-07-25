@@ -1005,8 +1005,19 @@ const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !
 // the stored row, so a member can retract their own message but never someone else's. It also writes a TOMBSTONE,
 // which is what makes the deletion survive: without one, the next negentropy round with a peer that still held the
 // event pulled it straight back in. Safe to call on every delivery of the same kind-5 — it is idempotent.
+// AUDIT 2026-07-25 (HIGH): unbounded. A single 1 MB frame carries ~14,000 e-tags; applying them was ~900 ms of
+// SYNCHRONOUS event-loop stall and 5.4 MB of permanent, un-cullable rows — from one member, one socket. The
+// kind-5 itself is ephemeral and gets culled; the tombstones it created never were. Cap it: no honest client
+// retracts more than a handful of messages in one event, and the cap is per EVENT, so a real bulk delete just
+// sends more of them.
+const MAX_DELETE_TAGS = 64;
 function applyDeletions(evt) {
-  for (const t of (evt.tags || [])) if (t[0] === 'e' && t[1]) store.applyDeletion(t[1], evt.pubkey, evt.created_at);
+  let n = 0;
+  for (const t of (evt.tags || [])) {
+    if (t[0] !== 'e' || !t[1]) continue;
+    if (++n > MAX_DELETE_TAGS) { console.warn(`[relay] kind-5 ${String(evt.id).slice(0, 8)} exceeded ${MAX_DELETE_TAGS} e-tags — ignoring the rest`); break; }
+    store.applyDeletion(t[1], evt.pubkey, evt.created_at);
+  }
 }
 
 function resolveChurch(e) {
@@ -1057,10 +1068,31 @@ function hydrateMaps() {
 // is cheap and safe to run on every start (it is also the self-heal for a relay that has been resyncing with an
 // unpatched peer).
 function backfillDeletions() {
-  let n = 0;
-  try { store.eachKind([5], (e) => { for (const t of (e.tags || [])) if (t[0] === 'e' && t[1]) { if (store.applyDeletion(t[1], e.pubkey, e.created_at)) n++; } }); }
-  catch (err) { console.warn('[relay] deletion backfill failed', err && err.message); return; }
-  if (n) console.log(`[relay] deletion backfill: re-applied ${n} deletion(s) that had resurrected`);
+  // Watermarked. This replayed every stored kind-5 on every boot, synchronously, before serving anything —
+  // ~190 ms per 14k-tag event, so a few thousand of them made the relay take minutes to start, every time, for
+  // no benefit after the first pass. Skip when the kind-5 population is unchanged since the last successful
+  // run. AUDIT 2026-07-25 (HIGH).
+  // Watermark on BOTH populations. Keying on the kind-5 count alone would skip the one case this exists for:
+  // an upgraded relay whose kind-5s are all present but whose tombstones are missing entirely.
+  let count = 0, tombs = 0;
+  try { count = store.countKind(5); tombs = store.countDeletions(); } catch (err) { console.warn('[relay] deletion backfill: store lacks bookkeeping', err && err.message); return; }
+  let seen = null;
+  try { seen = store.getMeta('deletions_backfill'); } catch {}
+  if (seen === count + ':' + tombs) return;
+  let n = 0, ev = 0;
+  try {
+    store.eachKind([5], (e) => {
+      ev++;
+      let t = 0;
+      for (const tag of (e.tags || [])) {
+        if (tag[0] !== 'e' || !tag[1]) continue;
+        if (++t > MAX_DELETE_TAGS) break;
+        if (store.applyDeletion(tag[1], e.pubkey, e.created_at)) n++;
+      }
+    });
+  } catch (err) { console.warn('[relay] deletion backfill failed', err && err.message); return; }
+  try { store.setMeta('deletions_backfill', store.countKind(5) + ':' + store.countDeletions()); } catch {}
+  if (n) console.log(`[relay] deletion backfill: re-applied ${n} deletion(s) that had resurrected (${ev} kind-5 scanned)`);
 }
 
 // persist the current church allow-list to church.json (so a clone-registered church survives a relay restart).
@@ -2913,12 +2945,16 @@ function serveStatic(req, res) {
   // the APK from an invite link loses the invite context entirely and has to type the church name by hand
   // (AUDIT-2026-07-24, the #1 onboarding drop-off after the sideload prompt itself).
   //
-  // Served from code rather than a static file so a self-hosting church gets it automatically on its own domain —
-  // the whole point is that any church's relay can host the join page. The fingerprint is the release signing
-  // key's SHA-256 (`android/app/keystore.properties`); it is PUBLIC by design — it is a checksum of a cert, and
-  // Android fetches this file in the clear. Verification failure is graceful: the link opens the browser as now.
+  // NOTE (corrected 2026-07-25): this does NOT give a self-hosting church the in-app path. AndroidManifest.xml
+  // hard-codes android:host="app.trinityone.church", so Android only ever fetches assetlinks from that one host
+  // and this file is inert on any other domain — a self-hosted church's /join link always opens the browser.
+  // Serving it from code still beats a static file (no deploy step, no cache), but the earlier claim here was
+  // wrong and would have had an operator expecting a feature that cannot work. Making it work needs a second
+  // intent-filter per church domain, which the manifest cannot know at build time.
+  // The fingerprint is the release signing key's SHA-256; it is PUBLIC by design — a checksum of a certificate
+  // every installer already holds. Verification failure is graceful: the link opens the browser.
   if (route === '/.well-known/assetlinks.json') {
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' });
+    res.writeHead(200, { ...SEC_HEADERS, 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' });
     res.end(JSON.stringify([{
       relation: ['delegate_permission/common.handle_all_urls'],
       target: { namespace: 'android_app', package_name: 'com.trinityone.app', sha256_cert_fingerprints: [ANDROID_CERT_SHA256] },
@@ -3327,16 +3363,19 @@ wss.on('connection', (ws, req) => {
       // durable store handles replaceable dedup + smart retention (structure kept, oldest ephemeral culled).
       // 'have-newer' / 'duplicate' → acknowledge but don't re-broadcast.
       const putRes = store.put(evt, resolveChurch(evt));
-      // NIP-09 BEFORE the early returns: a re-sent kind-5 comes back as 'duplicate', and the old code returned
-      // on that without ever applying the deletion — so the second and every later delivery of a deletion was a
-      // no-op. That is the usual case after a reconnect or a resync, which is exactly when it matters.
-      if (evt.kind === 5) applyDeletions(evt);
+      // NIP-09 BEFORE the duplicate/have-newer early returns: a re-sent kind-5 comes back as 'duplicate', and
+      // the old code returned on that without ever applying the deletion — so the second and every later
+      // delivery of a deletion was a no-op. That is the usual case after a reconnect or a resync.
+      // NOT before the 'future' return, though: a future-dated kind-5 is refused and never replicates, so
+      // applying it would delete locally, tombstone permanently, and then ACK false — a divergence this relay
+      // could never heal. AUDIT 2026-07-25.
+      if (evt.kind === 5 && putRes !== 'future') applyDeletions(evt);
       // AUDIT-2026-07-24: a discarded write was ACKed as `OK … true`. A client that lost the newest-wins race
       // was told its edit saved; the next read showed the other version and looked like data loss. Say no.
-      if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, false, 'rejected: a newer version of this is already stored — reload and edit again'])); return; }
-      if (putRes === 'deleted') { ws.send(JSON.stringify(['OK', evt.id, false, 'rejected: this event was deleted by its author'])); return; }
+      if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: a newer version of this is already stored — reload and edit again'])); return; }
+      if (putRes === 'deleted') { ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: this event was deleted by its author'])); return; }
       if (putRes === 'duplicate') { ws.send(JSON.stringify(['OK', evt.id, true, 'duplicate'])); return; }
-      if (putRes === 'future') { ws.send(JSON.stringify(['OK', evt.id, false, 'rejected: timestamp is too far in the future — check this device’s clock'])); return; }
+      if (putRes === 'future') { ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: timestamp is too far in the future — check this device’s clock'])); return; }
       if (++_putsSinceCull >= 256) { _putsSinceCull = 0; store.cull(); }   // E6: throttle the GROUP BY cull off the per-event hot path (was every stored event)
       maybePush(evt);   // notify the targeted member if this is a serving request
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join

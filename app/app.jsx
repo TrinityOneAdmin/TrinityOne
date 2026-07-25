@@ -388,26 +388,48 @@ function App() {
   // We re-enter the app with just the join params in the query, which reloads the local page and lets the
   // EXISTING follow/invite/name/relay handling run unchanged — no second implementation to keep in sync.
   useAE(() => {
-    const JOIN_KEYS = ['follow', 'invite', 'name', 'relay', 'c'];
-    // Same rule as join.js: never carry a cleartext or hostile relay in from a public link, only wss://.
+    // AUDIT 2026-07-25. `invite` is NOT here, deliberately: it carries a 12-word seed and `?invite=` triggers
+    // importMnemonic(), i.e. it REPLACES the device identity. Nothing in the product ever builds /join?invite= —
+    // inviteUrlFor() puts the seed in the URL FRAGMENT at the root path precisely so it never persists — so the
+    // only party who could produce one is an attacker, and the app-link made it a single tap into the native app
+    // rather than a browser tab. `relayname` IS here: a self-hosted church behind a free tunnel gets a new URL
+    // each restart, so a printed invite's ?relay= goes stale and the stable name is the only recovery. Dropping
+    // it made the app path strictly worse than the browser path it replaced (member joins, sees nothing, ever).
+    const JOIN_KEYS = ['follow', 'name', 'relay', 'relayname', 'c'];
+    const APP_HOST = 'app.trinityone.church';
     const safeQuery = (url) => {
       let u; try { u = new URL(url); } catch (e) { return null; }
-      if (!/\/join(\/|$)/.test(u.pathname)) return null;
+      // Scheme + host, not just path. MainActivity is exported and Capacitor hands us getData() from ANY launch
+      // intent with no host check, so without this any installed app could fire a crafted intent at us with zero
+      // permissions and no user interaction, and have it treated as a real invite.
+      if (u.protocol !== 'https:' || u.host !== APP_HOST) return null;
+      // The manifest claims pathPrefix="/join", which also matches the real assets /join.html and /join.js.
+      // Accept those too, or tapping a /join.html invite opens the app and silently discards the invite —
+      // the exact failure this feature exists to remove.
+      if (!/^\/join(\.html|\.js)?\/?$/.test(u.pathname)) return null;
       const out = new URLSearchParams();
       for (const k of JOIN_KEYS) {
         const v = u.searchParams.get(k);
         if (!v) continue;
-        if (k === 'relay' && !/^wss:\/\//i.test(v)) continue;
+        if (k === 'relay' && !/^wss:\/\//i.test(v)) continue;   // encrypted transport only (NOT a trust check)
         out.set(k, v);
       }
-      return out.get('follow') || out.get('invite') ? out.toString() : null;
+      return out.get('follow') ? out.toString() : null;
     };
     const apply = (url) => {
       const q = safeQuery(url);
       if (!q) return;
       // getLaunchUrl keeps returning the same URL after we reload, so remember what we've handled or the app
-      // reload-loops forever on a cold start from a link.
-      try { if (sessionStorage.getItem('trinityone.handledLink') === url) return; sessionStorage.setItem('trinityone.handledLink', url); } catch (e) {}
+      // reload-loops forever on a cold start from a link. Store a HASH, never the URL: a link can carry
+      // credential-grade material, and this slot is never cleared (SECURITY-AUDIT-2026-07-06 L3 moved the seed
+      // out of persisted storage for exactly this reason). Keep the last few so tapping link A then link B
+      // doesn't re-apply A on the next load.
+      const h = (() => { let x = 5381; for (let i = 0; i < url.length; i++) x = ((x << 5) + x + url.charCodeAt(i)) | 0; return String(x); })();
+      try {
+        const seen = (sessionStorage.getItem('trinityone.handledLinks') || '').split(',').filter(Boolean);
+        if (seen.includes(h)) return;
+        sessionStorage.setItem('trinityone.handledLinks', [...seen, h].slice(-5).join(','));
+      } catch (e) {}
       if (location.search.replace(/^\?/, '') === q) return;   // already showing this invite
       location.search = '?' + q;
     };
