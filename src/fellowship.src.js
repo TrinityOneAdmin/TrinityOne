@@ -492,6 +492,12 @@ const _dtag = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
 const _slimEvt = (e) => ({ id: e.id, pubkey: e.pubkey, created_at: e.created_at, kind: e.kind, tags: e.tags, content: e.content });   // drop sig — the relay already verified it
 const _hubCursor = (hub, e) => { const t = e.created_at || 0; if (t > hub.since && t <= Math.floor(Date.now() / 1000) + FUTURE_SKEW) { hub.since = t; hub.dirty = true; } };
 const _hubSince = (hub) => { const nowS = Math.floor(Date.now() / 1000); hub.pendingFull = !hub.since || (nowS - (hub.fullAt || 0)) > FULL_SYNC_S; return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP); };
+// PERF (audit 2026-07-24): the member hub carries BOTH the church's docs and its kind-1 chatter, and the daily
+// full re-sync therefore re-downloaded the entire chat history — the relay cap is 5,000 events, ~1.5 MB raw,
+// several minutes on 2G — every 24h, on every member's phone. Every one of those messages is then discarded
+// except `msgs++`/lastTs for the People directory. The docs still get their periodic full sync (they're small,
+// replaceable, and a missed update matters); kind-1 only ever needs the incremental window.
+const _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
 const _hubEosed = (hub) => { hub.eosed = true; if (hub.pendingFull) { hub.pendingFull = false; hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; } };
 
 // ── docs hub: the church's kind-30078 corpus (groups, plans, devotionals, serving, care, …) ──
@@ -647,7 +653,12 @@ function _memHubOpen(hub) {
   const MEMBER_D = 'trinityone/member:';
   const since = _hubSince(hub);
   const filters = [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }];
-  if (since) for (const f of filters) f.since = since;
+  // The docs half takes the ordinary cursor (with its periodic full re-sync). The kind-1 half NEVER full-syncs:
+  // re-pulling the church's whole chat history to recompute a member count is megabytes over 2G, daily, for a
+  // number. Incremental only — see _hubSinceKind1.
+  if (since) filters[1].since = since;
+  const k1since = _hubSinceKind1(hub);
+  if (k1since) filters[0].since = k1since;
   const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
     onevent(e) {
       _hubCursor(hub, e);
@@ -860,7 +871,21 @@ async function _outboxFlush() {
 }
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => { _outboxFlush(); });   // NB: navigator.onLine lies on native, but the EVENT still fires on a real transition
-  setInterval(() => { _outboxFlush(); }, 45000);                  // and a slow tick, because the event is not reliable on Android
+  // Backoff (audit 2026-07-24): this fired every 45s forever. A member in a low-coverage area with a queued
+  // message woke the radio every 45 seconds for hours — continuous battery drain for exactly the audience least
+  // able to charge. Back off on repeated failure (45s → 15min cap) and reset the moment anything succeeds or the
+  // device comes back online / to the foreground (those listeners already exist above).
+  let _obFails = 0, _obTimer = null;
+  const _obDelay = () => Math.min(900000, 45000 * Math.pow(2, Math.min(_obFails, 5)));
+  window.__trinityOutboxOk = () => { _obFails = 0; };
+  const _obTick = async () => {
+    const before = _outbox.length;
+    try { await _outboxFlush(); } catch (e) {}
+    const after = _outbox.length;
+    if (after > 0 && after >= before) _obFails++; else _obFails = 0;   // nothing drained → back off
+    _obTimer = setTimeout(_obTick, _obDelay());
+  };
+  _obTimer = setTimeout(_obTick, 45000);
 }
 
 window.Fellowship = {

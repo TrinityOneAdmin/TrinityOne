@@ -83,7 +83,10 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
     if (!(window.Fellowship && window.Fellowship.relayStatus)) { setRelayList(window.TrinityData.RELAYS); return; }
     let live = true;
     const load = () => window.Fellowship.relayStatus().then(r => { if (live) setRelayList(r); }).catch(() => {});
-    load(); const iv = setInterval(load, 4000);
+    // PERF (audit 2026-07-24): relayStatus() DIALS a throwaway WebSocket per relay per tick. At 4s, with two
+    // relays, that is two TLS+WS handshakes every 4 seconds — on 2G a handshake takes longer than the
+    // interval, so the radio never idles. Slower, and only while the sheet is actually visible.
+    load(); const iv = setInterval(() => { if (typeof document === 'undefined' || document.visibilityState === 'visible') load(); }, 30000);
     window.addEventListener('trinity-relays', load);
     return () => { live = false; clearInterval(iv); window.removeEventListener('trinity-relays', load); };
   }, [open]);

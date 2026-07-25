@@ -189,7 +189,8 @@ function useStewardRelays() {
   useStE(() => {
     let alive = true;
     const probe = () => window.Steward.relayStatus().then(s => { if (alive) setStatus(s); }).catch(() => {});
-    probe(); const t = setInterval(probe, 10000);
+    // same as the member app: don't dial sockets on a timer while the tab is hidden (see screens-chat.jsx)
+    probe(); const t = setInterval(() => { if (typeof document === 'undefined' || document.visibilityState === 'visible') probe(); }, 30000);
     window.addEventListener('steward-relays', probe);
     return () => { alive = false; clearInterval(t); window.removeEventListener('steward-relays', probe); };
   }, []);

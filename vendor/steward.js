@@ -14350,8 +14350,15 @@ zoo`.split("\n");
     // plus how many of those are the church's own announcements (kind-1 it authored)
     subscribeStats(onStats) {
       const ids = /* @__PURE__ */ new Set(), ann = /* @__PURE__ */ new Set();
-      const emit = () => onStats({ events: ids.size, announcements: ann.size });
-      const sub = pool.subscribeMany(relays(), [{ authors: [pub] }, { "#p": [pub] }], {
+      let _statsT = null;
+      const emit = () => {
+        if (_statsT) return;
+        _statsT = setTimeout(() => {
+          _statsT = null;
+          onStats({ events: ids.size, announcements: ann.size });
+        }, 120);
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 500 }, { kinds: [1, 30078], "#p": [pub], limit: 500 }], {
         onevent(e) {
           ids.add(e.id);
           if (e.kind === 1 && e.pubkey === pub) ann.add(e.id);
@@ -14371,8 +14378,15 @@ zoo`.split("\n");
     // a live, recent activity feed derived from real events (groups, joins, posts) — newest first
     subscribeActivity(onActivity, max2 = 12) {
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => onActivity([...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max2));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub] }, { kinds: [1, 30078], "#p": [pub] }], {
+      let _actT = null;
+      const emit = () => {
+        if (_actT) return;
+        _actT = setTimeout(() => {
+          _actT = null;
+          onActivity([...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max2));
+        }, 120);
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 200 }, { kinds: [1, 30078], "#p": [pub], limit: 200 }], {
         onevent(e) {
           const own = e.pubkey === pub;
           let item = null;

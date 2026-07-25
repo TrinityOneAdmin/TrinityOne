@@ -6277,6 +6277,7 @@
     hub.pendingFull = !hub.since || nowS - (hub.fullAt || 0) > FULL_SYNC_S;
     return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP);
   };
+  var _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
   var _hubEosed = (hub) => {
     hub.eosed = true;
     if (hub.pendingFull) {
@@ -6530,7 +6531,9 @@
     const MEMBER_D = "trinityone/member:";
     const since = _hubSince(hub);
     const filters = [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }];
-    if (since) for (const f of filters) f.since = since;
+    if (since) filters[1].since = since;
+    const k1since = _hubSinceKind1(hub);
+    if (k1since) filters[0].since = k1since;
     const sub = pool.subscribeMany(relaysForChurch(cp), filters, {
       // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
       onevent(e) {
@@ -6797,9 +6800,23 @@
     window.addEventListener("online", () => {
       _outboxFlush();
     });
-    setInterval(() => {
-      _outboxFlush();
-    }, 45e3);
+    let _obFails = 0, _obTimer = null;
+    const _obDelay = () => Math.min(9e5, 45e3 * Math.pow(2, Math.min(_obFails, 5)));
+    window.__trinityOutboxOk = () => {
+      _obFails = 0;
+    };
+    const _obTick = async () => {
+      const before = _outbox.length;
+      try {
+        await _outboxFlush();
+      } catch (e) {
+      }
+      const after = _outbox.length;
+      if (after > 0 && after >= before) _obFails++;
+      else _obFails = 0;
+      _obTimer = setTimeout(_obTick, _obDelay());
+    };
+    _obTimer = setTimeout(_obTick, 45e3);
   }
   window.Fellowship = {
     relays: loadRelays(),

@@ -3226,7 +3226,12 @@ const MAX_SUBS_PER_CONN = 256;  // headroom: a real client opens many subs (memb
 // still gets a real EOSE from us rather than its own synthetic one. See the REQ handler.
 const EOSE_AUTH_GRACE_MS = 2500;
 const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is a cheap unauthenticated CPU-DoS — cap it
-const MAX_REQ_EVENTS = 20000;   // aggregate events one REQ may materialize+serialize across all its filters (DoS ceiling; real reads are far smaller)
+// Aggregate events one REQ may materialize+serialize across all its filters (DoS ceiling; real reads are far
+// smaller). PERF/audit-2026-07-24: was 20000 — roughly 40-60 MB of V8 heap for a SINGLE in-flight REQ once
+// parsed, so a handful of concurrent broad reads OOMs the 1 GB Raspberry Pi a self-hosting church runs on. The
+// truncation also happens after all the work. 5000 matches the store's own default page and is still far above
+// any real client read.
+const MAX_REQ_EVENTS = 5000;
 const MAX_WS_BUFFER = 16 * 1024 * 1024; // if a client isn't draining and our socket buffer passes this, it's a slow-loris/OOM lever — stop sending + close
 let _gossipMergeBusy = false;   // one /relay-names/sync merge at a time (bounds unauthenticated schnorr-verify CPU)
 server.on('upgrade', (req, socket, head) => {
@@ -3323,7 +3328,12 @@ wss.on('connection', (ws, req) => {
       // gets an identical AUTH whether or not a check is live — no "is this church under attack right now?" distinguisher.
       const wantsSafetyD = !ws._auth && filters.some(f => (f['#d'] || []).some(d => typeof d === 'string' && (d.startsWith(SAFETY_D) || d.startsWith(SAFE_D))));
       if (wantsInvite || wantsSafeguard || wantsSafetyD) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }   // safeguarding: challenge so a member's client auths + gets the lists (AUTH-success re-delivers)
-      const lim = Math.max(0, ...filters.map(f => f.limit || 0));
+      // NIP-01's `limit` is per-filter. Taking the MAX across the merged union meant a REQ mixing one limited
+      // and one unlimited filter was bounded only by the 5,000 default — the shipped client sends two
+      // 1000-limit DM filters and could receive 1000 total instead of 1000+1000. Sum the declared limits so a
+      // multi-filter REQ still gets what each filter asked for, and an unlimited filter still caps at the max.
+      const _lims = filters.map(f => f.limit || 0);
+      const lim = _lims.every(l => l > 0) ? Math.min(MAX_REQ_EVENTS, _lims.reduce((a, b) => a + b, 0)) : Math.max(0, ..._lims);
       if (lim) matched = matched.slice(-lim);
       for (const e of matched) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }   // backpressure: a client that isn't reading can't make us buffer unbounded
       // AUDIT-2026-07-24 (root cause of a whole class of client-side data loss): when we WITHHELD private docs

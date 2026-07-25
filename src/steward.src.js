@@ -2588,8 +2588,13 @@ window.Steward = {
   // plus how many of those are the church's own announcements (kind-1 it authored)
   subscribeStats(onStats) {
     const ids = new Set(), ann = new Set();
-    const emit = () => onStats({ events: ids.size, announcements: ann.size });
-    const sub = pool.subscribeMany(relays(), [{ authors: [pub] }, { '#p': [pub] }], {
+    // PERF (audit 2026-07-24): this was `[{authors:[pub]}, {'#p':[pub]}]` — no kinds, no limit. On the relay a
+    // kind-less tag filter cannot use an index, so it walks and JSON-parses the WHOLE table (one steward opening
+    // a dashboard drove a full-table parse on a shared relay), and it pulled up to 10k events over a member's
+    // data plan to display two integers. emit() also ran per arriving event. Narrow, cap, and coalesce.
+    let _statsT = null;
+    const emit = () => { if (_statsT) return; _statsT = setTimeout(() => { _statsT = null; onStats({ events: ids.size, announcements: ann.size }); }, 120); };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 500 }, { kinds: [1, 30078], '#p': [pub], limit: 500 }], {
       onevent(e) { ids.add(e.id); if (e.kind === 1 && e.pubkey === pub) ann.add(e.id); emit(); },
       oneose() { emit(); },
     });
@@ -2599,8 +2604,12 @@ window.Steward = {
   // a live, recent activity feed derived from real events (groups, joins, posts) — newest first
   subscribeActivity(onActivity, max = 12) {
     const byId = new Map();
-    const emit = () => onActivity([...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max));
-    const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub] }, { kinds: [1, 30078], '#p': [pub] }], {
+    // PERF (audit 2026-07-24): unbounded filters feeding a full sort+slice PER ARRIVING EVENT — O(n² log n)
+    // across a backfill, ~60M comparisons at 5k events on a phone, to render `max` (12) rows. Cap the pull and
+    // coalesce the rebuild to one per tick.
+    let _actT = null;
+    const emit = () => { if (_actT) return; _actT = setTimeout(() => { _actT = null; onActivity([...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max)); }, 120); };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 200 }, { kinds: [1, 30078], '#p': [pub], limit: 200 }], {
       onevent(e) {
         const own = e.pubkey === pub;
         let item = null;
