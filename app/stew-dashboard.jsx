@@ -3181,7 +3181,7 @@ function DashCheckin() {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || ('Child ' + (pub || '').slice(-6)); };
   const guardiansOf = (pub) => (guardians[pub] || []).map(nameFor).filter(Boolean);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const todays = recs.filter(r => r.date === today);
   const present = todays.filter(r => !r.out).sort((a, b) => (b.in || 0) - (a.in || 0));
   const out = todays.filter(r => r.out).sort((a, b) => (b.out || 0) - (a.out || 0));

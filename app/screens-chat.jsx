@@ -1088,7 +1088,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayISO();
   const groupEvents = (ctx.churchEvents || [])
     .filter(e => e.groupId && e.groupId === group.id && (e.date || '') >= todayIso)
     .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);

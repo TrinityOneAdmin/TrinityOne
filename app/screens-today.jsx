@@ -551,7 +551,7 @@ function CareCard({ ctx, embedded }) {
   const s = care.settings || {};
   const [openId, setOpenId] = React.useState(() => (embedded && ctx.careFocus) || null);   // deep-link: auto-open the focused need
   if (!s.enabled) return null;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const myPub = (care.myPub || '').toLowerCase();
   // visibility 'team' → only the care team (roster of the configured admin group) sees the list;
   // a recipient always sees their own need so they can mark skip-days.
@@ -891,7 +891,7 @@ function TodayScreen({ ctx }) {
   // am I being cared for right now? (a live care need names me as the recipient) → gentle banner near the top
   const _care = ctx.care || {};
   const _myPub = (_care.myPub || '').toLowerCase();
-  const _careToday = new Date().toISOString().slice(0, 10);
+  const _careToday = todayISO();
   const myCareNeed = (_care.settings && _care.settings.enabled) ? (_care.needs || []).find(n => n.recipient && n.recipient.toLowerCase() === _myPub && (!n.endDate || n.endDate >= _careToday)) : null;
   const beingCaredFor = !!myCareNeed;
   // the recipient can dismiss the care banner with ✕; it snoozes until the need changes (new id or edited ts)

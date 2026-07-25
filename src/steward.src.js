@@ -138,6 +138,10 @@ const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (l
 //     the lookup could never succeed — every console open minted and published a competing envelope under a
 //     different author, which replKey() does not replace. Use churchSk/churchPub (this device's own key),
 //     exactly as _ingestGroupKey does above.
+// The LOCAL calendar day. `toISOString().slice(0,10)` is the UTC day and is wrong for a human 'today':
+// east of Greenwich it reads as yesterday for part of every evening (that shipped care needs dated
+// yesterday, and a kids check-in roll that emptied mid-service). Fine for timestamps/filenames only.
+const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const CAREKEY_D = 'trinityone/carekey:';
 const CARENEED_D = 'trinityone/care:';   // a care need — its sealed half depends on the care key existing
 let _careKeyHex = null;          // this device's copy of the church care key
@@ -714,7 +718,7 @@ window.Steward = {
   // _sealToChurch. The steward can turn it OFF for a plain-readable JSONL (it's their data). Throws on failure.
   async exportChurchData({ encrypt = true, includeMedia = true } = {}) {
     if (!sk || !pub) throw new Error('No church key on this device');
-    const base = _blobBase(), date = new Date().toISOString().slice(0, 10);
+    const base = _blobBase(), date = new Date().toISOString().slice(0, 10);   // UTC day is correct here: it only stamps the backup filename
     // 1. events — the JSONL corpus
     const er = await fetch(base + '/export', { headers: { Authorization: _nip98(base + '/export') } });
     if (!er.ok) throw new Error('Backup failed — the relay returned ' + er.status);
@@ -2009,7 +2013,7 @@ window.Steward = {
   publishCheckin(rec) {
     const id = rec.id || ('ci' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
     return window.Steward.encPublish('trinityone/checkin:' + id, {
-      id, child: rec.child || '', childName: rec.childName || '', date: rec.date || new Date().toISOString().slice(0, 10),
+      id, child: rec.child || '', childName: rec.childName || '', date: rec.date || _todayISO(),
       in: rec.in || Math.floor(Date.now() / 1000), out: rec.out != null ? rec.out : null, code: rec.code || '', room: rec.room || '', note: rec.note || '',
     });
   },
@@ -2076,7 +2080,7 @@ window.Steward = {
   subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day }), onEvents); },
   // publish a recurring meeting (the church's rhythm): a normal event with recur + day-of-week, expanded into
   // occurrences client-side by expandEvents(). `m` = { id?, title, day (0-6), time, where?, recur, from? (anchor) }.
-  publishMeeting(m) { return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || '', date: m.from || new Date().toISOString().slice(0, 10), recur: m.recur || 'weekly', day: m.day, accent: m.accent || 'var(--clay)' }); },
+  publishMeeting(m) { return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || '', date: m.from || _todayISO(), recur: m.recur || 'weekly', day: m.day, accent: m.accent || 'var(--clay)' }); },
   // a single group's upcoming events (for the group chat window) — the church's own + its stewards' (church-tagged)
   subscribeGroupEvents(groupId, onEvents) {
     const byId = new Map();

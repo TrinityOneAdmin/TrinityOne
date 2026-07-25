@@ -10626,6 +10626,10 @@ zoo`.split("\n");
   var SERMON_D = "trinityone/sermon:";
   var PINSERMON_D = "trinityone/pinsermon:";
   var BACKUPMETA_D = "trinityone/backup-meta:";
+  var _todayISO = () => {
+    const d = /* @__PURE__ */ new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  };
   var CAREKEY_D = "trinityone/carekey:";
   var CARENEED_D = "trinityone/care:";
   var _careKeyHex = null;
@@ -13359,7 +13363,7 @@ zoo`.split("\n");
         id,
         child: rec.child || "",
         childName: rec.childName || "",
-        date: rec.date || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+        date: rec.date || _todayISO(),
         in: rec.in || Math.floor(Date.now() / 1e3),
         out: rec.out != null ? rec.out : null,
         code: rec.code || "",
@@ -13439,7 +13443,7 @@ zoo`.split("\n");
     // publish a recurring meeting (the church's rhythm): a normal event with recur + day-of-week, expanded into
     // occurrences client-side by expandEvents(). `m` = { id?, title, day (0-6), time, where?, recur, from? (anchor) }.
     publishMeeting(m) {
-      return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || "", date: m.from || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), recur: m.recur || "weekly", day: m.day, accent: m.accent || "var(--clay)" });
+      return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || "", date: m.from || _todayISO(), recur: m.recur || "weekly", day: m.day, accent: m.accent || "var(--clay)" });
     },
     // a single group's upcoming events (for the group chat window) — the church's own + its stewards' (church-tagged)
     subscribeGroupEvents(groupId, onEvents) {

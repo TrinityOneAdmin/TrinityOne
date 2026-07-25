@@ -37,4 +37,11 @@
 
   window.expandEvents = expandEvents;
   window.RECUR_DOW = DOW;
+  // THE canonical "what calendar day is it here?" for both shells (this file loads in each).
+  // `new Date().toISOString().slice(0,10)` is the UTC day and is WRONG for a calendar date: east of Greenwich
+  // it is yesterday for part of every evening, west of it, tomorrow. That shipped real bugs — a care need
+  // published dated yesterday (already expired, invisible), and the kids check-in roll emptying mid-service
+  // when the UTC day rolled over. Use this for anything a human would call "today"; toISOString is fine only
+  // for timestamps and export filenames.
+  window.todayISO = () => iso(new Date());
 })();
