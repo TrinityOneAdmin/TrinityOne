@@ -117,6 +117,9 @@ function StewWizard({ onDone }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
               {WIZ_STEPS.map((s, i) => <div key={s.key} style={{ width: i === step ? 18 : 7, height: 7, borderRadius: 999, background: i < step ? 'var(--sage)' : i === step ? 'var(--clay)' : 'var(--surface-2)', border: i > step ? '1px solid var(--line)' : 'none', transition: 'width .2s' }} />)}
             </div>
+            {/* On a phone the rail collapses to five unlabelled dots — no step names, no sense of how far in
+                you are. Name the step; the dots keep the progress. */}
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginLeft: 9, whiteSpace: 'nowrap' }}>{(WIZ_STEPS[step] && WIZ_STEPS[step].t) || ''}</div>
           </div>
         ) : null}
         {/* rail (desktop) */}
@@ -143,7 +146,7 @@ function StewWizard({ onDone }) {
           </div>
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5 }}>
-            <Icon name="shield" size={15} color="var(--sage)" /> Takes about 10 minutes. Nothing is published until you’re ready.
+            <Icon name="shield" size={15} color="var(--sage)" /> Takes about 10 minutes. Each step is saved as you go.
           </div>
         </div>
         ) : null}
@@ -182,6 +185,25 @@ function WizBackup({ saved, setSaved }) {
   const [shown, setShown] = React.useState(false);
   const phrase = (window.Steward && window.Steward.exportMnemonic && window.Steward.exportMnemonic()) || '';
   const words = phrase.trim().split(/\s+/).filter(Boolean);
+  // A CHURCH key is worth far more than a member's — losing it costs every group, every notice, and the
+  // congregation's ability to verify anything is really from their church ("These 12 words ARE your church",
+  // below). Yet this step asked only for a tick-box, while the MEMBER wizard demands three typed words. Same
+  // ceremony here. Positions are re-drawn each time the box is re-ticked, so re-reading costs a different three.
+  const [ack, setAck] = React.useState(false);
+  const [checkIdx, setCheckIdx] = React.useState([]);
+  const [answers, setAnswers] = React.useState(['', '', '']);
+  const [checkErr, setCheckErr] = React.useState('');
+  React.useEffect(() => {
+    if (!ack || words.length < 6) return;
+    const idx = []; let g = 0;
+    while (idx.length < 3 && g++ < 200) { const r = Math.floor(Math.random() * words.length); if (!idx.includes(r)) idx.push(r); }
+    setCheckIdx(idx.sort((a, b) => a - b)); setAnswers(['', '', '']); setCheckErr('');
+  }, [ack]);
+  const canConfirm = checkIdx.length === 3 && checkIdx.every((_, i) => (answers[i] || '').trim());
+  const confirmWords = () => {
+    const ok = checkIdx.length === 3 && checkIdx.every((idx, i) => (answers[i] || '').trim().toLowerCase() === (words[idx] || '').toLowerCase());
+    if (ok) { setSaved(true); setCheckErr(''); } else setCheckErr('That’s not quite right — check your written copy and try again.');
+  };
   return (
     <div style={{ marginTop: 24 }}>
       <div style={{ fontSize: 12.5, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 12 }}>Back up your recovery phrase</div>
@@ -202,8 +224,29 @@ function WizBackup({ saved, setSaved }) {
             ))}
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 12, cursor: 'pointer', fontSize: 13.5, color: 'var(--ink-2)', fontWeight: 600 }}>
-            <input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} /> I’ve written these down somewhere safe
+            <input type="checkbox" checked={ack} onChange={e => { setAck(e.target.checked); if (!e.target.checked) { setSaved(false); setAnswers(['', '', '']); setCheckErr(''); } }} /> I’ve written these down somewhere safe
           </label>
+          {ack && words.length >= 6 ? (
+            <div style={{ marginTop: 12, padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>
+                {saved ? 'Thank you — that matches. Your church’s key is backed up.' : 'One check, so we know the copy you wrote down is right. Type these three words from your list:'}
+              </div>
+              {!saved ? (
+                <React.Fragment>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {checkIdx.map((idx, i) => (
+                      <label key={idx} style={{ flex: '1 1 120px' }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4 }}>WORD {idx + 1}</div>
+                        <input value={answers[i] || ''} onChange={e => { const a = [...answers]; a[i] = e.target.value; setAnswers(a); setCheckErr(''); }} autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14, fontFamily: 'var(--font-ui)' }} />
+                      </label>
+                    ))}
+                  </div>
+                  {checkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 8 }}>{checkErr}</div> : null}
+                  <button onClick={confirmWords} disabled={!canConfirm} className="sk-btn sk-btn--clay" style={{ marginTop: 10, padding: '9px 14px', fontSize: 13.5, opacity: canConfirm ? 1 : 0.5 }}>Check these words</button>
+                </React.Fragment>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
     </div>
