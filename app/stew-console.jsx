@@ -215,6 +215,12 @@ function WizBackup({ saved, setSaved }) {
         <button onClick={() => setShown(true)} className="sk-btn sk-btn--ghost" style={{ marginTop: 12, padding: '10px 14px', fontSize: 13.5 }}><Icon name="lock" size={15} color="currentColor" /> Reveal recovery phrase</button>
       ) : (
         <div style={{ marginTop: 12 }}>
+          {/* The words and the quiz must NEVER be on screen together — otherwise the "check" is just copying
+              from the line above and proves nothing about what was written on paper. Ticking the box HIDES the
+              phrase and only then asks. Going back to look re-draws a DIFFERENT three (the effect above keys on
+              `ack`), so re-reading costs you a fresh question instead of handing you the answers. Same rule as
+              the member wizard, which puts the two on separate steps. */}
+          {!ack ? (<React.Fragment>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
             {words.map((w, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 11px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
@@ -226,6 +232,16 @@ function WizBackup({ saved, setSaved }) {
           <label style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 12, cursor: 'pointer', fontSize: 13.5, color: 'var(--ink-2)', fontWeight: 600 }}>
             <input type="checkbox" checked={ack} onChange={e => { setAck(e.target.checked); if (!e.target.checked) { setSaved(false); setAnswers(['', '', '']); setCheckErr(''); } }} /> I’ve written these down somewhere safe
           </label>
+          </React.Fragment>) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 11, background: 'var(--surface-2)', border: '1px dashed var(--line)' }}>
+            <Icon name="lock" size={15} color="var(--ink-3)" style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+              {saved ? 'Recovery phrase hidden.' : 'Phrase hidden — answer from the copy you wrote down.'}
+            </div>
+            <button type="button" onClick={() => { setAck(false); setSaved(false); setAnswers(['', '', '']); setCheckErr(''); }}
+              className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5, flexShrink: 0 }}>Show my words again</button>
+          </div>
+          )}
           {ack && words.length >= 6 ? (
             <div style={{ marginTop: 12, padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>

@@ -257,7 +257,17 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const npub = church.npub || window.Steward.npub || '';
   // backup check: after they tick "written down", make them re-type 3 of the 12 words before continuing
   const words = phrase ? phrase.trim().split(/\s+/) : [];
-  const challenge = words.length >= 12 ? [2, 6, 10] : [];   // words #3, #7, #11
+  // The three positions are drawn at RANDOM each time the phrase is hidden, not fixed. They used to be
+  // hardcoded to #3/#7/#11 — the same question for every church on earth, which is a pattern to learn rather
+  // than a check. Re-drawn whenever the steward goes back to look at the phrase again, so re-reading it costs
+  // a fresh question instead of handing over the answers.
+  const [challenge, setChallenge] = React.useState([]);
+  React.useEffect(() => {
+    if (!saved || words.length < 12) return;
+    const idx = []; let guard = 0;
+    while (idx.length < 3 && guard++ < 200) { const r = Math.floor(Math.random() * words.length); if (!idx.includes(r)) idx.push(r); }
+    setChallenge(idx.sort((a, b) => a - b));
+  }, [saved, words.length]);
   const [vw, setVw] = React.useState(['', '', '']);
   const verified = challenge.length === 3 && challenge.every((pos, i) => vw[i].trim().toLowerCase() === (words[pos] || '').toLowerCase());
   const canContinue = !phrase || (saved && verified);
@@ -310,12 +320,26 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={() => { if (canContinue) next(); }} disabled={!canContinue} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: canContinue ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>RECOVERY PHRASE — 12 WORDS</div>
+      {/* The phrase and the check must NEVER share a screen. With the words still visible the "quick check" is
+          copying from the box above — it proves nothing about what was written on paper, and it teaches the
+          steward to click through the one ceremony standing between them and losing the church key for good.
+          Ticking the box hides the phrase; going back to read it re-draws a different three. */}
+      {!saved ? (<React.Fragment>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 14.5, lineHeight: 1.8, wordSpacing: 3, color: 'var(--ink)', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', borderRadius: 12, padding: '14px 16px' }}>{phrase || 'No recovery phrase available for this key.'}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 2px' }}>
         {phrase ? <button onClick={() => { copyText(phrase); setKeyCopied(true); setTimeout(() => setKeyCopied(false), 1400); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name={keyCopied ? 'check' : 'receipt'} size={14} color="currentColor" /> {keyCopied ? 'Copied' : 'Copy'}</button> : null}
         <span style={{ fontSize: 12, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{npub.slice(0, 22)}…</span>
       </div>
-      {phrase ? (
+      </React.Fragment>) : (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 15px', borderRadius: 12, background: 'var(--surface-2)', border: '1px dashed var(--line)' }}>
+        <Icon name="lock" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} />
+        <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+          {verified ? 'Recovery phrase hidden.' : 'Phrase hidden — answer from the paper copy you just wrote.'}
+        </div>
+        <button onClick={() => { setSaved(false); setVw(['', '', '']); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 12.5, flexShrink: 0 }}>Show my words again</button>
+      </div>
+      )}
+      {phrase && !saved ? (
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', fontSize: 13.5, fontWeight: 600 }}>
         <input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
         I’ve written these 12 words on paper and stored them safely
