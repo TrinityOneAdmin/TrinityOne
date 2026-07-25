@@ -231,7 +231,27 @@ if (typeof document !== 'undefined' && !window.__t1EscWired) {
 // panel container (NOT its first input — auto-focusing an input would pop the mobile soft-keyboard on every
 // sheet open, a regression for this touch-first audience); trap Tab within the panel; on close, restore focus
 // to where it was. panelRef points at the panel element (which must carry tabIndex={-1}).
-function useDialogA11y(active, panelRef) {
+// `onClose` is optional so existing callers keep working; when given, Escape closes the dialog. The console's
+// useStewDialog has always done this and the member app's twin never did — so a keyboard user could open a
+// sheet and have no way out without a pointer.
+// ACCESSIBLE NAME for a dialog. Every BottomSheet/Overlay supports a `label`, and not one of the 59 call
+// sites passes it — so with a screen reader they all announce as a bare "dialog". Rather than hand-label 59
+// sites (and watch them drift as copy changes), derive the name from the sheet's own first line of text when
+// no explicit label is given. An explicit label always wins.
+function useAutoDialogLabel(active, panelRef, label) {
+  const [auto, setAuto] = useU('');
+  useUE(() => {
+    if (!active || label) return;
+    const t = setTimeout(() => {
+      const p = panelRef.current; if (!p) return;
+      const line = (p.innerText || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
+      if (line) setAuto(line.slice(0, 60));
+    }, 80);   // after the panel has rendered its content
+    return () => clearTimeout(t);
+  }, [active, label]);
+  return label || auto || undefined;
+}
+function useDialogA11y(active, panelRef, onClose) {
   const prevFocus = useUR(null);
   useUE(() => {
     if (!active) return;
@@ -240,6 +260,7 @@ function useDialogA11y(active, panelRef) {
     // sheet that deliberately autofocuses its input); stealing that would drop the caret + hide the keyboard.
     const t = setTimeout(() => { const p = panelRef.current; if (p && !p.contains(document.activeElement)) { try { p.focus(); } catch (e) {} } }, 60);
     const onKey = (e) => {
+      if (e.key === 'Escape' && onClose) { e.stopPropagation(); onClose(); return; }
       if (e.key !== 'Tab') return;
       const p = panelRef.current; if (!p) return;
       const nodes = p.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])');
@@ -263,7 +284,8 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
   // a11y: a passthrough sheet leaves the page behind interactive (e.g. verse-select over the Bible), so it is
   // NOT a modal dialog — don't trap focus or mark aria-modal there. All other sheets are true modals.
   const modal = !docked && !passthrough;
-  useDialogA11y(open && modal, panelRef);
+  useDialogA11y(open && modal, panelRef, onClose);
+  const _label = useAutoDialogLabel(open && modal, panelRef, label);
   if (!mounted && !open) return null;
   if (docked) {
     return (
@@ -280,7 +302,7 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
         position: 'absolute', inset: 0, background: 'rgba(20,14,8,.42)',
         opacity: open ? 1 : 0, transition: 'opacity .28s',
       }} />}
-      <div ref={panelRef} {...(modal ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label={label} tabIndex={-1} onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
+      <div ref={panelRef} {...(modal ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label={_label} tabIndex={-1} onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
         maxWidth: 500, marginLeft: 'auto', marginRight: 'auto',   // centered column on a wide screen; full-width on a phone (maxWidth > viewport)
         background: 'var(--surface)', borderRadius: '30px 30px 0 0',
@@ -308,7 +330,8 @@ function Overlay({ open, onClose, children, docked, label }) {
   const [mounted, setMounted] = useU(open);
   const panelRef = useUR(null);
   useUE(() => { if (open) setMounted(true); }, [open]);
-  useDialogA11y(open && !docked, panelRef);   // a11y: focus-trap + return-focus (a docked overlay is an inline pane, not a modal)
+  useDialogA11y(open && !docked, panelRef, onClose);   // a11y: focus-trap + return-focus + Escape (a docked overlay is an inline pane, not a modal)
+  const _label = useAutoDialogLabel(open && !docked, panelRef, label);
   if (!mounted && !open) return null;
   if (docked) {
     return (
@@ -318,7 +341,7 @@ function Overlay({ open, onClose, children, docked, label }) {
     );
   }
   return (
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label={_label} tabIndex={-1} onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
       position: 'absolute', inset: 0, zIndex: 55, background: 'var(--paper)',
       transform: open ? 'translateY(0)' : 'translateY(100%)',
       transition: 'transform .4s cubic-bezier(.32,.72,0,1)',
@@ -333,9 +356,19 @@ function Overlay({ open, onClose, children, docked, label }) {
 }
 
 // ── Small bits ──
+// A sensible accessible name per icon, so an icon-only button is never announced as just "button". 56 of 58
+// call sites pass no title — these are the close/back controls of nearly every full-screen surface, so with a
+// screen reader Giving announced as "dialog … button … button". An explicit title still wins.
+const ICON_LABELS = {
+  chevL: 'Back', chevR: 'Forward', chevU: 'Collapse', chevD: 'Expand', x: 'Close', plus: 'Add',
+  share: 'Share', trash: 'Delete', pen: 'Edit', check: 'Confirm', search: 'Search', bell: 'Notifications',
+  qr: 'Show QR code', link: 'Copy link', chat: 'Message', send: 'Send', settings: 'Settings', user: 'Profile',
+  refresh: 'Refresh', download: 'Download', play: 'Play', pause: 'Pause', heart: 'Care', calendar: 'Calendar',
+};
 function IconBtn({ name, onClick, size = 20, badge, style = {}, stroke = 1.9, title, ...rest }) {
+  const _name = title || ICON_LABELS[name] || undefined;
   return (
-    <button onClick={onClick} title={title} aria-label={title} {...rest} style={{
+    <button onClick={onClick} title={title} aria-label={_name} {...rest} style={{
       width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
       background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer',
       display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
