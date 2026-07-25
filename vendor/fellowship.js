@@ -6880,7 +6880,7 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const emit = _coalesce(() => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))));
       const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], "#t": [NET] }], {
         onevent(e) {
           if (e.pubkey !== cp) return;
@@ -7873,12 +7873,12 @@
         if (g && g.id) byId.set(g.id, g);
       }
       let eosed = false;
-      const emit = () => {
+      const emit = _coalesce(() => {
         const v = [...byId.values()].filter((g) => _churchVoice(pubk, g));
         if (!eosed && !v.length) return;
         saveDocCache("groups", pubk, v);
         onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
-      };
+      });
       if (byId.size) emit();
       return _onChurchDocs(pubk, {
         onevent(e, d) {
@@ -7925,12 +7925,12 @@
         if (c && c.id) byId.set(c.id, c);
       }
       let eosed = false;
-      const emit = () => {
+      const emit = _coalesce(() => {
         const v = [...byId.values()].filter((c) => _churchVoice(pubk, c));
         if (!eosed && !v.length) return;
         saveDocCache("categories", pubk, v);
         onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
-      };
+      });
       if (byId.size) emit();
       return _onChurchDocs(pubk, {
         onevent(e, d) {
@@ -8270,11 +8270,11 @@
       }
       const byId = /* @__PURE__ */ new Map();
       let eosed = false;
-      const emit = () => {
+      const emit = _coalesce(() => {
         const v = [...byId.values()].filter((x) => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0));
         if (!eosed && !v.length) return;
         onItems(v);
-      };
+      });
       return _onChurchDocs(pubk, {
         onevent(e, d) {
           if (!d.startsWith(prefix)) return;

@@ -922,7 +922,7 @@ window.Fellowship = {
   subscribeSermons(churchNpub, onSermons) {
     const cp = toPub(churchNpub); if (!cp) { onSermons([]); return () => {}; }
     const byId = new Map();
-    const emit = () => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const emit = _coalesce(() => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))));
     const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], '#t': [NET] }], {
       onevent(e) {
         if (e.pubkey !== cp) return; const d = _dtag(e); if (!d.startsWith(SERMON_D)) return;
@@ -1516,7 +1516,7 @@ window.Fellowship = {
     for (const g of loadDocCache('groups', pubk)) { if (g && g.id) byId.set(g.id, g); }   // paint cached instantly
     // honour the steward's chosen order; client-roster-trust filters out forged/revoked authors (M2)
     let eosed = false;   // sticky: hold last-known until the relay's EOSE — don't blank on a transient/roster-lagged empty
-    const emit = () => { const v = [...byId.values()].filter(g => _churchVoice(pubk, g)); if (!eosed && !v.length) return; saveDocCache('groups', pubk, v); onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
+    const emit = _coalesce(() => { const v = [...byId.values()].filter(g => _churchVoice(pubk, g)); if (!eosed && !v.length) return; saveDocCache('groups', pubk, v); onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); });
     if (byId.size) emit();   // paint cached groups before the shared hub replays/answers
     return _onChurchDocs(pubk, {
       onevent(e, d) {   // (the hub absorbs the steward roster + group-key envelopes centrally)
@@ -1546,7 +1546,7 @@ window.Fellowship = {
     const byId = new Map();
     for (const c of loadDocCache('categories', pubk)) { if (c && c.id) byId.set(c.id, c); }   // paint cached instantly
     let eosed = false;   // sticky: hold last-known until EOSE
-    const emit = () => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); if (!eosed && !v.length) return; saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); };
+    const emit = _coalesce(() => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); if (!eosed && !v.length) return; saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); });
     if (byId.size) emit();   // paint cached categories before the shared hub replays/answers
     return _onChurchDocs(pubk, {
       onevent(e, d) {
@@ -1741,7 +1741,7 @@ window.Fellowship = {
     if (!pubk) { onItems([]); return () => {}; }
     const byId = new Map();
     let eosed = false;   // sticky: hold last-known until EOSE
-    const emit = () => { const v = [...byId.values()].filter(x => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0)); if (!eosed && !v.length) return; onItems(v); };   // roster-trust (M2)
+    const emit = _coalesce(() => { const v = [...byId.values()].filter(x => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0)); if (!eosed && !v.length) return; onItems(v); });   // roster-trust (M2)
     return _onChurchDocs(pubk, {
       onevent(e, d) {
         if (!d.startsWith(prefix)) return;
