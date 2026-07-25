@@ -530,7 +530,15 @@ function DashFinance() {
     const unsub = S.encSubscribe('finance/', items => {
       const docs = items.map(finItemToDoc).filter(Boolean);
       if (!docs.length) {
-        if (seeded) return; seeded = true;
+        // AUDIT-2026-07-24: "no docs came back" is NOT proof this church has no book. Finance docs are private,
+        // so an unauthenticated or restarting relay returns exactly this empty result — and seeding republishes
+        // finance/settings and finance/account:<id>, which are REPLACEABLE, so the church's real currency,
+        // fiscal year and chart of accounts are overwritten and hard-deleted. The journal survives under
+        // different d-tags and then replays against a chart it no longer matches. Only seed once we've had an
+        // authenticated read (same guard as the care key).
+        if (seeded) return;
+        if (window.Steward && window.Steward.relayAuthed && !window.Steward.relayAuthed()) return;
+        seeded = true;
         const b = booksFresh(); bookRef.current = b; bump();
         S.encPublish('finance/settings', { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart });
         for (const a of b.accounts.values()) S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type });

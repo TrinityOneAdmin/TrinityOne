@@ -87,7 +87,9 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
     window.addEventListener('trinity-relays', load);
     return () => { live = false; clearInterval(iv); window.removeEventListener('trinity-relays', load); };
   }, [open]);
-  const addRelay = () => { const u = relayInput.trim(); if (!/^wss?:\/\//i.test(u)) { ctx.toast('Use a ws:// or wss:// URL'); return; } FS.addRelay(u); setRelayInput(''); ctx.toast('Relay added'); };
+  // addRelay returns false (never throws) for a duplicate or an address we already use — don't claim success
+  // for something that didn't happen; the member would think their church had another carrier when it doesn't.
+  const addRelay = () => { const u = relayInput.trim(); if (!/^wss?:\/\//i.test(u)) { ctx.toast('Use a ws:// or wss:// URL'); return; } const added = FS.addRelay(u); if (added) { setRelayInput(''); ctx.toast('Relay added'); } else ctx.toast('Already in your list, or not a valid address'); };
 
   const copyNpub = () => { if (ID && ID.copyNpub) ID.copyNpub(); else if (navigator.clipboard) navigator.clipboard.writeText(id.npub).catch(() => {}); ctx.toast('Public key copied'); };
   const regen = async () => { if (ID && ID.regenerate) { await ID.regenerate(); ctx.toast('New anonymous identity created'); } };
@@ -1088,7 +1090,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayISO();
   const groupEvents = (ctx.churchEvents || [])
     .filter(e => e.groupId && e.groupId === group.id && (e.date || '') >= todayIso)
     .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);

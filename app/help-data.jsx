@@ -140,7 +140,12 @@ window.HelpData = {
         { type: 'p', text: 'A gentle word about that “key” you may have read about:' },
         { type: 'list', items: [
           { lead: 'You don’t manage it day to day.', text: 'The key is just how the app quietly proves it’s really you posting — there’s no password to type and nothing to log into. You simply use the app.' },
-          { lead: 'Your church can’t see your private things.', text: 'Your notes stay on your phone, and your direct messages can only be read by you and the person you’re writing to.' },
+          // HONESTY (audit 2026-07-24): this used to say the church "can't see your private things" full stop.
+          // The CONTENT of a message is genuinely sealed, but a direct message carries an unencrypted "to" tag,
+          // so the relay — which for a self-hosting church IS the church — can see WHO messaged whom and when.
+          // For a congregation where the social graph is the danger, someone could act on the old sentence in a
+          // way that gets them hurt. Say exactly what is and isn't hidden, and where to ask.
+          { lead: 'What you write stays between you.', text: 'Your notes stay on your phone. What’s inside a direct message can only be read by you and the person you’re writing to — not your church, not us. The server that carries it can still see that you messaged someone, and when. If that matters where you live, ask your leaders how your church’s server is run.' },
           { lead: 'The one thing to keep safe is your 12 words.', text: 'They’re the backup for everything — your name and your groups. Write them on paper once and you’re covered, even on a new phone.' },
         ] },
         { type: 'callout', tone: 'sage', text: 'Not sure about the 12 words? It really is just one small thing to do once — the guide “Your 12 words” walks you through it gently, and any steward at church will happily help.' },

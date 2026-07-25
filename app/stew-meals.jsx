@@ -361,7 +361,7 @@ function StewCareRequests() {
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
             {!r.sealed ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="#fff" /> Set up help</button> : null}
             <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: (MEALS_TYPE_LABEL[r.type] || 'Help') })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
-            <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Dismiss</button>
+            <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Close — not needed</button>
           </div>
         </div>
       ))}
@@ -377,7 +377,7 @@ function DashMeals() {
   const skips = window.useMealsSkips ? window.useMealsSkips() : [];
   const [editing, setEditing] = React.useState(null);   // null | 'new' | <need>
   const [openId, setOpenId]   = React.useState(null);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const live    = (needs || []).filter(n => !n.endDate || n.endDate >= today);
   // "Recently closed" is capped at 5 below, and subscribeNeeds sorts OLDEST-first — so slicing straight off that
   // order showed the five oldest and hid the ones that just closed (a need that closed today fell off the list
@@ -539,7 +539,7 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
 // ────────────────────────────────────────────────────────────────────────────────
 function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const isEdit = !!need;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const [label, setLabel]   = React.useState(need ? need.displayLabel : '');
   const [type, setType]     = React.useState(need ? need.type : 'meals');
   // additive day picker — each day is added individually (not a contiguous range), e.g. Tue + Thu + Sun

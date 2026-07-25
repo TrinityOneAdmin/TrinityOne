@@ -138,6 +138,10 @@ const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (l
 //     the lookup could never succeed — every console open minted and published a competing envelope under a
 //     different author, which replKey() does not replace. Use churchSk/churchPub (this device's own key),
 //     exactly as _ingestGroupKey does above.
+// The LOCAL calendar day. `toISOString().slice(0,10)` is the UTC day and is wrong for a human 'today':
+// east of Greenwich it reads as yesterday for part of every evening (that shipped care needs dated
+// yesterday, and a kids check-in roll that emptied mid-service). Fine for timestamps/filenames only.
+const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const CAREKEY_D = 'trinityone/carekey:';
 const CARENEED_D = 'trinityone/care:';   // a care need — its sealed half depends on the care key existing
 let _careKeyHex = null;          // this device's copy of the church care key
@@ -190,6 +194,23 @@ const _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
 // without one), so minting a fresh key would orphan every one of them — refuse. Only ever runs on the mint
 // path (once per church in its life), so the bounded scan is cheap. An unreachable relay returns no rows and
 // this says "no needs" — but the _relayAuthed guard has already blocked that case before we get here.
+// GUARD FOR WHOLE-LIST REPLACEMENTS (data-integrity critical, AUDIT-2026-07-24).
+// The church's authority lists — minors, cleared adults, guardians, blocklist, admitted members, stewards —
+// are each a SINGLE replaceable document, and every edit is read-modify-write: the console takes the list it
+// currently holds, adds or removes one entry, and republishes the whole thing. Those lists are private, so an
+// unauthenticated or unreachable relay serves NOTHING and the console's view is legitimately empty — the same
+// empty it would see for a church that has no list at all. Marking one child as a minor in that window
+// publishes a one-entry list over the real one, and the previous version is hard-deleted: every OTHER child
+// silently stops being a minor and the relay stops blocking adult↔minor DMs for them. Same shape unbans every
+// blocked member, returns the whole congregation to "waiting for approval", or revokes every steward.
+// Fail CLOSED: refuse the write while our view is untrustworthy. A refused edit is visible and retryable; a
+// wiped safeguarding list is silent and permanent. (Sibling of the care-key mint gate above.)
+function _requireTrustedView(what) {
+  if (_relayAuthed) return;
+  const err = new Error('Can’t save the ' + what + ' yet — this device hasn’t finished connecting to your church’s relay, so it can’t see the current list. Wait a moment and try again.');
+  try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message: err.message } })); } catch (e) {}
+  throw err;
+}
 async function _churchHasCareNeeds() {
   const cp = actingChurch || pub; if (!cp) return false;
   try {
@@ -697,7 +718,7 @@ window.Steward = {
   // _sealToChurch. The steward can turn it OFF for a plain-readable JSONL (it's their data). Throws on failure.
   async exportChurchData({ encrypt = true, includeMedia = true } = {}) {
     if (!sk || !pub) throw new Error('No church key on this device');
-    const base = _blobBase(), date = new Date().toISOString().slice(0, 10);
+    const base = _blobBase(), date = new Date().toISOString().slice(0, 10);   // UTC day is correct here: it only stamps the backup filename
     // 1. events — the JSONL corpus
     const er = await fetch(base + '/export', { headers: { Authorization: _nip98(base + '/export') } });
     if (!er.ok) throw new Error('Backup failed — the relay returned ' + er.status);
@@ -1115,6 +1136,13 @@ window.Steward = {
   // so the host (and any cloud backup) only ever holds ciphertext; only members hold the key to decrypt.
   async mediaEncryptor(memberPubs) {
     if (!sk) throw new Error('no key');
+    // AUDIT-2026-07-24: this is the care-key mint bug verbatim, and weaker — subscribeMediaKey's oneose is
+    // empty, so there is no "we looked" flag at all, and _mediaKeyHex is in-memory (null on every console
+    // open). Uploading a sermon against an unauthenticated/restarting relay minted a fresh key, encrypted the
+    // sermon with it and REPLACED the envelope — every previously-encrypted sermon then undecryptable by the
+    // church and every member, permanently. Refuse to mint on an untrustworthy read (fail closed: the steward
+    // sees "try again in a moment"; the alternative is silent, unrecoverable loss of the church's archive).
+    if (!_mediaKeyHex && !_relayAuthed) throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key. Wait a moment and try again.');
     if (!_mediaKeyHex) _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const keys = {}; const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
     for (const mp of targets) { try { keys[mp] = nip44e(_mediaKeyHex, nip44ck(sk, mp)); } catch (e) {} }
@@ -1212,6 +1240,10 @@ window.Steward = {
     } catch (e) { return null; }
   },
   hasCareKey() { return !!_careKeyHex; },
+  // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
+  // from "the relay didn't serve it to us" before doing anything destructive. See _requireTrustedView.
+  relayAuthed() { return _relayAuthed; },
+
   careKeyChecked() { return _careKeyChecked; },
   // the console feeds the live steward roster in, so the envelope's author check stays current when a
   // steward is revoked (a revoked steward's envelope must stop being accepted, same as their content)
@@ -1501,6 +1533,12 @@ window.Steward = {
     if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
     const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])];
     let key = _skeys[groupId];
+    // AUDIT-2026-07-24: the contract above ("must NOT mint a new key — would orphan history") was enforced only
+    // for the background reuseOnly path. The INTERACTIVE path — a steward adding one member to an existing
+    // encrypted group — minted whenever `key` was missing, and `_skeys` is populated only when the envelope has
+    // arrived. Adding a member before it landed re-keyed the group and orphaned every prior message in it,
+    // permanently. A missing key is only safe to interpret as "new group" once we've had an authenticated read.
+    if (!opts.rotate && !key && !_relayAuthed) return Promise.resolve(null);
     if (opts.rotate || !key) { key = crypto.getRandomValues(new Uint8Array(32)); _srev[groupId] = (_srev[groupId] || 0) + 1; }
     _skeys[groupId] = key;
     const rev = _srev[groupId] || 1; _srev[groupId] = rev;
@@ -1530,6 +1568,7 @@ window.Steward = {
     return () => { try { sub.close(); } catch {} };
   },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys)
+    _requireTrustedView('blocked list');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
     const content = JSON.stringify({ pubkeys: list });
@@ -1563,16 +1602,19 @@ window.Steward = {
     return () => { try { sub.close(); } catch {} };
   },
   setNoPhoto(pubkeys) {   // replace the whole photo-suppression list (church-signed, owner-only)
+    _requireTrustedView('photo settings');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
   },
   setMinors(pubkeys) {   // replace the whole minors list (pass hex pubkeys)
+    _requireTrustedView('list of children');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
   },
   setApproved(pubkeys) {   // replace the whole approved-adults list (pass hex pubkeys)
+    _requireTrustedView('cleared-adults list');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
@@ -1619,6 +1661,7 @@ window.Steward = {
     return () => { try { sub.close(); } catch {} };
   },
   setGuardians(links) {   // replace the whole parent↔child map: { childPub: [parentPub, …] }
+    _requireTrustedView('parent links');
     if (!sk) return Promise.resolve(null);
     const clean = {};
     for (const [c, ps] of Object.entries(links || {})) { const arr = [...new Set((ps || []).filter(Boolean))]; if (c && arr.length) clean[c] = arr; }
@@ -1680,6 +1723,7 @@ window.Steward = {
     return () => { try { sub.close(); } catch {} };
   },
   setAdmitted(pubkeys) {   // replace the whole admitted list (pass hex pubkeys)
+    _requireTrustedView('approved-members list');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ADMITTED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
@@ -1706,6 +1750,7 @@ window.Steward = {
     return () => { try { sub.close(); } catch {} };
   },
   setStewards(pubkeys) {   // OWNER-ONLY: replace the whole steward roster (pass hex pubkeys)
+    _requireTrustedView('steward roster');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
@@ -1968,7 +2013,7 @@ window.Steward = {
   publishCheckin(rec) {
     const id = rec.id || ('ci' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
     return window.Steward.encPublish('trinityone/checkin:' + id, {
-      id, child: rec.child || '', childName: rec.childName || '', date: rec.date || new Date().toISOString().slice(0, 10),
+      id, child: rec.child || '', childName: rec.childName || '', date: rec.date || _todayISO(),
       in: rec.in || Math.floor(Date.now() / 1000), out: rec.out != null ? rec.out : null, code: rec.code || '', room: rec.room || '', note: rec.note || '',
     });
   },
@@ -2035,7 +2080,7 @@ window.Steward = {
   subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day }), onEvents); },
   // publish a recurring meeting (the church's rhythm): a normal event with recur + day-of-week, expanded into
   // occurrences client-side by expandEvents(). `m` = { id?, title, day (0-6), time, where?, recur, from? (anchor) }.
-  publishMeeting(m) { return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || '', date: m.from || new Date().toISOString().slice(0, 10), recur: m.recur || 'weekly', day: m.day, accent: m.accent || 'var(--clay)' }); },
+  publishMeeting(m) { return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || '', date: m.from || _todayISO(), recur: m.recur || 'weekly', day: m.day, accent: m.accent || 'var(--clay)' }); },
   // a single group's upcoming events (for the group chat window) — the church's own + its stewards' (church-tagged)
   subscribeGroupEvents(groupId, onEvents) {
     const byId = new Map();

@@ -179,8 +179,11 @@ function MyRequestRow({ r, onCancel, onMessage }) {
   const [busy, setBusy] = React.useState(false);
   const label = CARE_TYPE_LABEL[r.type] || 'Help';
   const st = r.status || 'open';
+  // "Declined" must not read like help is coming. Someone who worked up the courage to ask, and is told the
+  // team "has this in hand", waits — and loses the chance to ask someone else. Say it's closed, and make the
+  // row a doorway (the Message button sits right beside this) rather than a wall.
   const sub = st === 'approved' ? 'Your care team set it up — see Open needs below.'
-    : st === 'declined' ? 'Your care team has this in hand.'
+    : st === 'declined' ? 'Your care team has closed this one. If you still need help, message them or ask again.'
     : st === 'handled' ? 'Your care team is on it.'
     : 'Sent privately — your care team will be in touch.';
   const tint = st === 'open' ? 'var(--sage)' : st === 'declined' ? 'var(--ink-3)' : 'var(--sage)';
@@ -220,7 +223,7 @@ function CareRequestCard({ r, ctx, onApprove, onDecline, canMessage, onMessage }
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
         {!r.sealed ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="#fff" stroke={2.6} /> Set up help</button> : null}
         {canMessage ? <button onClick={onMessage} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
-        <button onClick={async () => { setBusy('d'); try { await onDecline(); } catch (e) {} setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Dismiss'}</button>
+        <button onClick={async () => { setBusy('d'); try { await onDecline(); } catch (e) {} setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Close — not needed'}</button>
       </div>
     </div>
   );
@@ -551,7 +554,7 @@ function CareCard({ ctx, embedded }) {
   const s = care.settings || {};
   const [openId, setOpenId] = React.useState(() => (embedded && ctx.careFocus) || null);   // deep-link: auto-open the focused need
   if (!s.enabled) return null;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const myPub = (care.myPub || '').toLowerCase();
   // visibility 'team' → only the care team (roster of the configured admin group) sees the list;
   // a recipient always sees their own need so they can mark skip-days.
@@ -891,7 +894,7 @@ function TodayScreen({ ctx }) {
   // am I being cared for right now? (a live care need names me as the recipient) → gentle banner near the top
   const _care = ctx.care || {};
   const _myPub = (_care.myPub || '').toLowerCase();
-  const _careToday = new Date().toISOString().slice(0, 10);
+  const _careToday = todayISO();
   const myCareNeed = (_care.settings && _care.settings.enabled) ? (_care.needs || []).find(n => n.recipient && n.recipient.toLowerCase() === _myPub && (!n.endDate || n.endDate >= _careToday)) : null;
   const beingCaredFor = !!myCareNeed;
   // the recipient can dismiss the care banner with ✕; it snoozes until the need changes (new id or edited ts)

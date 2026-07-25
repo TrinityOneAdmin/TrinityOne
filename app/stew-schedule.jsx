@@ -348,7 +348,7 @@ function DashRota({ onNewTeam }) {
   // pod serves every Nth week automatically. Preserves other teams' assignments on those services.
   const rotatePods = (team) => {
     const r = rosterFor(team.id); const pods = r.pods || []; if (!pods.length) return 0;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayISO();
     const upcoming = (services || []).filter(s => (s.date || '') >= today).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     upcoming.forEach((s, i) => {
       const pod = pods[i % pods.length];
@@ -908,7 +908,7 @@ function DashRooms() {
   const [bkModal, setBkModal] = React.useState(null);
   const [showPast, setShowPast] = React.useState(false);
   const roomById = Object.fromEntries(rooms.map(r => [r.id, r]));
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const addRoom = () => { const n = newRoom.trim(); if (n) { window.Steward.publishRoom({ name: n }); setNewRoom(''); } };
   const sorted = [...bookings].filter(b => b.roomId && b.date).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
   const upcoming = sorted.filter(b => b.date >= today);
@@ -978,7 +978,7 @@ window.DashRooms = DashRooms;
 
 function RoomBookingModal({ bk, rooms, bookings, onClose }) {
   const [roomId, setRoomId] = React.useState(bk.roomId || (rooms[0] && rooms[0].id) || '');
-  const [date, setDate] = React.useState(bk.date || new Date().toISOString().slice(0, 10));
+  const [date, setDate] = React.useState(bk.date || todayISO());
   const [start, setStart] = React.useState(bk.start || '10:00');
   const [end, setEnd] = React.useState(bk.end || '11:00');
   const [title, setTitle] = React.useState(bk.title || '');

@@ -38,11 +38,20 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
     return () => { cancelled = true; };
   }, [step]);
   // pick two distinct positions to confirm when we reach the check step
-  useIdE(() => { if (step === 2 && checkIdx.length === 0 && words.length >= 6) { const n = words.length; const idx = []; let g = 0; while (idx.length < 3 && g++ < 200) { const r = Math.floor(Math.random() * n); if (!idx.includes(r)) idx.push(r); } setCheckIdx(idx.sort((x, y) => x - y)); setAnswers(['', '', '']); setCheckErr(''); } }, [step, words]);
+  // Re-draw the three positions EVERY time the check is entered. They used to be drawn once, and step 2 offers
+  // "← Show my words again" — so you could read the same three, come back and type them without ever having
+  // written anything down. Re-reading now costs you a different three words, which is the point of the check.
+  useIdE(() => { if (step === 2 && words.length >= 6) { const n = words.length; const idx = []; let g = 0; while (idx.length < 3 && g++ < 200) { const r = Math.floor(Math.random() * n); if (!idx.includes(r)) idx.push(r); } setCheckIdx(idx.sort((x, y) => x - y)); setAnswers(['', '', '']); setCheckErr(''); } }, [step, words]);
   if (!open) return null;
   const finish = () => onSave({ name: name.trim(), avatar: av });
   const canConfirm = checkIdx.length === 3 && checkIdx.every((_, i) => (answers[i] || '').trim());
-  const confirmWords = () => { const ok = checkIdx.length === 3 && checkIdx.every((idx, i) => (answers[i] || '').trim().toLowerCase() === (words[idx] || '').toLowerCase()); if (ok) setStep(3); else setCheckErr('That’s not quite right — check your written copy and try again.'); };
+  // Record that this member really did back up their recovery phrase. Nothing wrote this flag, so the Today
+  // nudge ("Secure your account — set up recovery so you never lose access") kept firing at exactly the people
+  // who HAD written the words down and passed the check — training them to dismiss the one warning that
+  // matters, so it can no longer reach the people who skipped. Only set on the confirmed path: skipping past
+  // the check must still nag. (Same key + shape as RecoverySheet.markSaved, which is the other writer.)
+  const markBackedUp = () => { try { const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub; if (np) localStorage.setItem('trinityone.backedup.' + np, '1'); } catch (e) {} };
+  const confirmWords = () => { const ok = checkIdx.length === 3 && checkIdx.every((idx, i) => (answers[i] || '').trim().toLowerCase() === (words[idx] || '').toLowerCase()); if (ok) { markBackedUp(); setStep(3); } else setCheckErr('That’s not quite right — check your written copy and try again.'); };
   const savePin = async () => {
     if (pin.length < 6) { setPinErr('Use at least 6 digits.'); return; }
     if (pin !== pin2) { setPinErr('The two PINs don’t match.'); return; }
