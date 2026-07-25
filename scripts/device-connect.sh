@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # Put the test phone on wireless adb so on-device testing doesn't need a cable.
 #
-#   scripts/device-connect.sh            # phone plugged in: arm wireless adb, then connect over the LAN
-#   scripts/device-connect.sh 100.x.y.z  # already armed: connect to that address (e.g. its Tailscale IP)
+#   scripts/device-connect.sh pair 192.168.1.50:37123 429518   # Android 11+ Wireless debugging (PREFERRED)
+#   scripts/device-connect.sh 100.x.y.z                        # connect to an already-paired/armed device
+#   scripts/device-connect.sh                                  # phone plugged in: arm legacy `adb tcpip`
+#
+# PREFERRED PATH — Android's built-in Wireless debugging (survives reboots, no cable ever):
+#   Phone: Settings → Developer options → Wireless debugging → ON
+#          → "Pair device with pairing code"  (shows an ip:port and a 6-digit code)
+#   Here:  scripts/device-connect.sh pair <ip:pairing-port> <code>
+#   Then the main screen shows a DIFFERENT ip:port for the connection — the script connects to it for you.
 #
 # WHY. Every on-device check (CDP bridge, boot checks, care/chat round-trips) needs `adb`, and adb over USB
 # means the phone must be physically at the dev box. Wireless adb over Tailscale means it can be anywhere.
@@ -16,6 +23,29 @@
 # real identity. This is a TEST device workflow.
 set -euo pipefail
 PORT=5555
+
+# Android 11+ pairing: `adb pair` takes a one-time code and a DIFFERENT port from the connect port.
+if [ "${1:-}" = "pair" ]; then
+  ADDR="${2:-}"; CODE="${3:-}"
+  [ -n "$ADDR" ] && [ -n "$CODE" ] || { echo "usage: $0 pair <ip:pairing-port> <6-digit-code>" >&2; exit 1; }
+  echo "pairing with $ADDR …"
+  printf '%s\n' "$CODE" | adb pair "$ADDR"
+  HOST="${ADDR%%:*}"
+  echo
+  echo "Paired. Now connecting — the phone's Wireless debugging screen shows the CONNECT port"
+  echo "(different from the pairing port)."
+  read -r -p "  connect port for $HOST [37000]: " CPORT || true
+  CPORT="${CPORT:-37000}"
+  adb connect "$HOST:$CPORT" && adb devices
+  echo
+  echo "Reconnect later with:  scripts/device-connect.sh $HOST:$CPORT"
+  exit 0
+fi
+
+# An explicit host:port (Wireless debugging uses a random high port, so accept both forms).
+if [ $# -ge 1 ] && [[ "$1" == *:* ]]; then
+  echo "connecting to $1 …"; adb connect "$1"; adb devices; exit 0
+fi
 
 if [ $# -ge 1 ]; then
   TARGET="$1"
