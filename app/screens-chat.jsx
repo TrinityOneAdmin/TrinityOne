@@ -985,7 +985,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         });
       });
       const unsubP = window.Fellowship.subscribeGroupPin ? window.Fellowship.subscribeGroupPin(group.id, setPin) : null;
-      const unsubH = window.Fellowship.subscribeHidden ? window.Fellowship.subscribeHidden(setHidden) : null;
+      const unsubH = window.Fellowship.subscribeHidden ? window.Fellowship.subscribeHidden(group.id, setHidden) : null;
       return () => { unsub(); unsubR(); if (unsubP) unsubP(); if (unsubH) unsubH(); };
     }
     setMsgs((window.TrinityData.GROUP_MESSAGES[group.id] || []).map(m => ({ ...m }))); // fallback: mock seed

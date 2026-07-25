@@ -7699,9 +7699,16 @@
       };
     },
     // the set of removed message ids for the active church → cb(Set<msgId>) on change. Unsub fn.
-    subscribeHidden(cb) {
+    // PERF (audit 2026-07-24): this asked for `{kinds:[30078], '#p':[cp]}` — EVERY member-authored doc in the
+    // church (joins, RSVPs, serving replies, unavailability, pins) with no limit and no cursor — to learn which
+    // message ids a steward had hidden, and it runs on every chat-room open. In an established church that is
+    // thousands of docs, megabytes over a 2G link, per room, per open. hideMessage() tags the group it belongs
+    // to, and this only ever runs inside one room, so ask for that group's docs instead.
+    // Caveat: a legacy hide published before the ['t',gid] tag existed is no longer matched — hiding is rare and
+    // re-hiding is one tap, which is a fair trade for not re-downloading the church on every room open.
+    subscribeHidden(groupId, cb) {
       const cp = window.Fellowship.churchPub;
-      if (!cp) {
+      if (!cp || !groupId) {
         cb(/* @__PURE__ */ new Set());
         return () => {
         };
@@ -7709,7 +7716,7 @@
       const HIDE_D = "trinityone/hidden:";
       const hidden = /* @__PURE__ */ new Map();
       const emit = () => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id)));
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#p": [cp] }], {
+      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": [groupId] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(HIDE_D)) return;

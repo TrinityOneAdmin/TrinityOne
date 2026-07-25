@@ -3082,11 +3082,25 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   const digUrl = peerBase + '/sync-digest?church=' + encodeURIComponent(cp);
   let peerBuckets; try { const r = await fetch(digUrl, { headers: { Authorization: relayProof(digUrl, 'GET', cp) } }); if (!r.ok) return 0; peerBuckets = (await r.json()).buckets || {}; } catch { return 0; }
   const mine = _bucketDigest(cp), missing = [];
+  // PERF (audit 2026-07-24): this used to call store.churchEventIds(cp) — the church's ENTIRE id list —
+  // once per mismatched bucket, inside the loop. Buckets are the first two hex chars of an event id, so there
+  // are 256 of them, and a relay that has been offline or is newly paired mismatches on essentially all. For a
+  // Raspberry Pi holding 20k events that is 256 × 20k row reads every sync pass, and node:sqlite is
+  // SYNCHRONOUS — so the relay stopped answering every connected member for the duration, every 5–7 minutes.
+  // Read it once and bucket it once; the work is now O(events) per pass instead of O(256 × events).
+  let _haveByBucket = null;
+  const haveIn = (b) => {
+    if (!_haveByBucket) {
+      _haveByBucket = new Map();
+      for (const id of store.churchEventIds(cp)) { const k = id.slice(0, 2); let s = _haveByBucket.get(k); if (!s) { s = new Set(); _haveByBucket.set(k, s); } s.add(id); }
+    }
+    return _haveByBucket.get(b) || new Set();
+  };
   for (const b in peerBuckets) {
     if (mine[b] && mine[b].fp === peerBuckets[b].fp) continue;   // bucket identical on both sides -> nothing to do
     const idsUrl = peerBase + '/sync-ids?church=' + encodeURIComponent(cp) + '&bucket=' + b;
     let peerIds; try { const r = await fetch(idsUrl, { headers: { Authorization: relayProof(idsUrl, 'GET', cp) } }); if (!r.ok) continue; peerIds = (await r.json()).ids || []; } catch { continue; }
-    const have = new Set(store.churchEventIds(cp).filter((id) => id.slice(0, 2) === b));
+    const have = haveIn(b);
     for (const id of peerIds) if (/^[0-9a-f]{64}$/.test(id) && !have.has(id)) missing.push(id);
   }
   if (!missing.length) return 0;

@@ -44,6 +44,10 @@ sed -i \
 rm -f "$WWW"/vendor/babel.min.js
 rm -f "$WWW"/app/stew-*.js "$WWW"/app/steward-root.js
 rm -f "$WWW"/vendor/steward*.js "$WWW"/vendor/jspdf.umd.min.js
+# The in-app wallet is parked for the pilot (app/app.jsx WALLET_ENABLED = false) and its <script> tag in
+# index.html is commented out — but the bundle was still being copied in, ~294 KB of the APK that no code
+# path can reach. Prune it while it stays disabled; re-enabling the wallet means deleting this line too.
+if grep -q 'const WALLET_ENABLED = false' "$ROOT/app/app.jsx" 2>/dev/null; then rm -f "$WWW"/vendor/wallet.js; fi
 rm -f "$WWW"/vendor/fonts/f00[123].woff2 "$WWW"/vendor/fonts/f01[0123].woff2   # unused Bricolage Grotesque + Plus Jakarta Sans faces (only Sora + Newsreader are referenced)
 
 # Bible/lexicon modules are NOT embedded in the app — they download on demand (BSB auto-installs on
