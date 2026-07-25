@@ -6301,6 +6301,22 @@
     }
   };
   var _docsHubs = /* @__PURE__ */ new Map();
+  function _dkeyOf(d) {
+    const s0 = String(d || "");
+    if (s0.lastIndexOf("trinityone/", 0) !== 0) return "";
+    const rest = s0.slice(11), c = rest.indexOf(":");
+    return c === -1 ? rest : rest.slice(0, c);
+  }
+  function _hubBufSet(hub, key, e) {
+    hub.buf.set(key, e);
+    const dk = _dkeyOf(_dtag(e));
+    let sl = hub.idx.get(dk);
+    if (!sl) {
+      sl = /* @__PURE__ */ new Map();
+      hub.idx.set(dk, sl);
+    }
+    sl.set(key, e);
+  }
   function _docsHubSaveNow(hub) {
     if (hub.saveT) {
       clearTimeout(hub.saveT);
@@ -6332,7 +6348,7 @@
   function _docsHub(cp) {
     let hub = _docsHubs.get(cp);
     if (hub) return hub;
-    hub = { cp, handlers: /* @__PURE__ */ new Set(), refs: 0, eosed: false, buf: /* @__PURE__ */ new Map(), since: 0, fullAt: 0, pendingFull: false, dirty: false, saveT: null, closer: null };
+    hub = { cp, handlers: /* @__PURE__ */ new Set(), refs: 0, eosed: false, buf: /* @__PURE__ */ new Map(), idx: /* @__PURE__ */ new Map(), since: 0, fullAt: 0, pendingFull: false, dirty: false, saveT: null, closer: null };
     _docsHubs.set(cp, hub);
     try {
       const raw = JSON.parse(localStorage.getItem(DOCSHUB_KEY + cp) || "null");
@@ -6340,7 +6356,7 @@
         hub.since = raw.since || 0;
         hub.fullAt = raw.fullAt || 0;
         for (const e of raw.events) {
-          if (e && e.pubkey && Array.isArray(e.tags)) hub.buf.set(e.pubkey + "|" + _dtag(e), e);
+          if (e && e.pubkey && Array.isArray(e.tags)) _hubBufSet(hub, e.pubkey + "|" + _dtag(e), e);
         }
       }
     } catch {
@@ -6366,7 +6382,7 @@
         const key = e.pubkey + "|" + d;
         const prev = hub.buf.get(key);
         if (prev && (e.created_at || 0) < (prev.created_at || 0)) return;
-        hub.buf.set(key, _slimEvt(e));
+        _hubBufSet(hub, key, _slimEvt(e));
         hub.dirty = true;
         _hubCursor(hub, e);
         _docsHubSaveSoon(hub);
@@ -6442,7 +6458,16 @@
     hub.refs++;
     hub.handlers.add(h);
     _docsHubOpen(hub);
-    const replay = [...hub.buf.values()].sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+    let pool0;
+    if (Array.isArray(h.want) && h.want.length) {
+      const keys = new Set(h.want.map(_dkeyOf));
+      pool0 = [];
+      for (const k of keys) {
+        const sl = hub.idx.get(k);
+        if (sl) for (const e of sl.values()) pool0.push(e);
+      }
+    } else pool0 = [...hub.buf.values()];
+    const replay = pool0.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
     for (const e of replay) {
       const d = _dtag(e);
       if (d === "trinityone/stewards:" + cp || d.startsWith(GROUPKEY_D)) continue;
@@ -7881,6 +7906,8 @@
       });
       if (byId.size) emit();
       return _onChurchDocs(pubk, {
+        want: [GROUP_D],
+        // replay only this slice of the hub (see _hubBufSet)
         onevent(e, d) {
           if (!d.startsWith(GROUP_D)) return;
           const id = d.slice(GROUP_D.length);
@@ -7933,6 +7960,8 @@
       });
       if (byId.size) emit();
       return _onChurchDocs(pubk, {
+        want: [CATEGORY_D],
+        // replay only this slice of the hub (see _hubBufSet)
         onevent(e, d) {
           if (!d.startsWith(CATEGORY_D)) return;
           const id = d.slice(CATEGORY_D.length);
@@ -8175,6 +8204,8 @@
       };
       if (byId.size) emit();
       const stop = _onChurchDocs(pubk, {
+        want: [PLAN_D],
+        // replay only this slice of the hub (see _hubBufSet)
         onevent(e, d) {
           if (!d.startsWith(PLAN_D)) return;
           const id = d.slice(PLAN_D.length);
@@ -8230,6 +8261,8 @@
       };
       if (byId.size) emit();
       const stop = _onChurchDocs(pubk, {
+        want: [DEVO_D],
+        // replay only this slice of the hub (see _hubBufSet)
         onevent(e, d) {
           if (!d.startsWith(DEVO_D)) return;
           const id = d.slice(DEVO_D.length);
@@ -8276,6 +8309,8 @@
         onItems(v);
       });
       return _onChurchDocs(pubk, {
+        want: [prefix],
+        // replay only this slice of the hub (see _hubBufSet)
         onevent(e, d) {
           if (!d.startsWith(prefix)) return;
           const id = d.slice(prefix.length);
@@ -8331,6 +8366,8 @@
       }
       let best = { ts: 0, doc: { ...OFF } };
       return _onChurchDocs(pubk, {
+        want: [MEALS_SETTINGS_D],
+        // replay only this slice of the hub (see _hubBufSet)
         onevent(e, d) {
           if (d !== MEALS_SETTINGS_D) return;
           if ((e.created_at || 0) <= best.ts) return;
@@ -8486,6 +8523,8 @@
         cb(v);
       });
       return _onChurchDocs(pubk, {
+        want: [prefix],
+        // replay only this slice of the hub (see _hubBufSet)
         onevent(e, d) {
           if (!d.startsWith(prefix)) return;
           const rest = d.slice(prefix.length).split(":");

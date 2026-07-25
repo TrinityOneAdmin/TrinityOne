@@ -510,6 +510,24 @@ const _hubEosed = (hub) => { hub.eosed = true; if (hub.pendingFull) { hub.pendin
 
 // ── docs hub: the church's kind-30078 corpus (groups, plans, devotionals, serving, care, …) ──
 const _docsHubs = new Map();   // churchPubHex -> hub (kept warm for the app's lifetime; sub closes at 0 refs)
+// PERF (AUDIT-2026-07-24): replaying the docs hub was O(handlers x corpus). Every _onChurchDocs registration
+// copied the WHOLE buffer, sorted it, and dispatched all of it to a handler that then discarded everything not
+// matching its own d-prefix — and the member app registers ~17 handlers, re-run on every reconnect. Index the
+// buffer by doc TYPE (the segment after 'trinityone/') so a handler that declares `want` replays only its own
+// slice. Handlers without `want` still get the full replay, so this is additive and nothing breaks by omission.
+function _dkeyOf(d) {
+  const s0 = String(d || '');
+  if (s0.lastIndexOf('trinityone/', 0) !== 0) return '';
+  const rest = s0.slice(11), c = rest.indexOf(':');
+  return c === -1 ? rest : rest.slice(0, c);
+}
+function _hubBufSet(hub, key, e) {
+  hub.buf.set(key, e);
+  const dk = _dkeyOf(_dtag(e));
+  let sl = hub.idx.get(dk);
+  if (!sl) { sl = new Map(); hub.idx.set(dk, sl); }
+  sl.set(key, e);
+}
 function _docsHubSaveNow(hub) {
   if (hub.saveT) { clearTimeout(hub.saveT); hub.saveT = null; }
   if (!hub.dirty) return;
@@ -525,13 +543,13 @@ function _docsHubSaveSoon(hub) { if (!hub.saveT && hub.dirty) hub.saveT = setTim
 function _docsHub(cp) {
   let hub = _docsHubs.get(cp);
   if (hub) return hub;
-  hub = { cp, handlers: new Set(), refs: 0, eosed: false, buf: new Map(), since: 0, fullAt: 0, pendingFull: false, dirty: false, saveT: null, closer: null };
+  hub = { cp, handlers: new Set(), refs: 0, eosed: false, buf: new Map(), idx: new Map(), since: 0, fullAt: 0, pendingFull: false, dirty: false, saveT: null, closer: null };
   _docsHubs.set(cp, hub);
   try {
     const raw = JSON.parse(localStorage.getItem(DOCSHUB_KEY + cp) || 'null');
     if (raw && Array.isArray(raw.events)) {
       hub.since = raw.since || 0; hub.fullAt = raw.fullAt || 0;
-      for (const e of raw.events) { if (e && e.pubkey && Array.isArray(e.tags)) hub.buf.set(e.pubkey + '|' + _dtag(e), e); }
+      for (const e of raw.events) { if (e && e.pubkey && Array.isArray(e.tags)) _hubBufSet(hub, e.pubkey + '|' + _dtag(e), e); }
     }
   } catch {}
   // absorb hub-level docs from the persisted corpus BEFORE any feature registers: the steward roster
@@ -557,7 +575,7 @@ function _docsHubOpen(hub) {
       // since-slop window — never let it overwrite the newer state we already hold/replayed. Equal
       // timestamps still re-deliver (idempotent for every handler), like the old multi-relay behaviour.
       if (prev && (e.created_at || 0) < (prev.created_at || 0)) return;
-      hub.buf.set(key, _slimEvt(e)); hub.dirty = true;
+      _hubBufSet(hub, key, _slimEvt(e)); hub.dirty = true;
       _hubCursor(hub, e);
       _docsHubSaveSoon(hub);
       if (_absorbRoster(cp, d, e)) {
@@ -596,7 +614,15 @@ function _onChurchDocs(cp, h) {
   const hub = _docsHub(cp);
   hub.refs++; hub.handlers.add(h);
   _docsHubOpen(hub);
-  const replay = [...hub.buf.values()].sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest first, so the newest version of a doc wins
+  // h.want = the d-prefixes this handler actually consumes. Replay only those slices instead of the whole
+  // corpus; a handler that declares nothing still gets everything (see _hubBufSet).
+  let pool0;
+  if (Array.isArray(h.want) && h.want.length) {
+    const keys = new Set(h.want.map(_dkeyOf));
+    pool0 = [];
+    for (const k of keys) { const sl = hub.idx.get(k); if (sl) for (const e of sl.values()) pool0.push(e); }
+  } else pool0 = [...hub.buf.values()];
+  const replay = pool0.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest first, so the newest version of a doc wins
   for (const e of replay) {
     const d = _dtag(e);
     if (d === 'trinityone/stewards:' + cp || d.startsWith(GROUPKEY_D)) continue;   // hub-level docs, already absorbed
@@ -1519,6 +1545,7 @@ window.Fellowship = {
     const emit = _coalesce(() => { const v = [...byId.values()].filter(g => _churchVoice(pubk, g)); if (!eosed && !v.length) return; saveDocCache('groups', pubk, v); onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); });
     if (byId.size) emit();   // paint cached groups before the shared hub replays/answers
     return _onChurchDocs(pubk, {
+      want: [GROUP_D],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {   // (the hub absorbs the steward roster + group-key envelopes centrally)
         if (!d.startsWith(GROUP_D)) return;
         const id = d.slice(GROUP_D.length);
@@ -1549,6 +1576,7 @@ window.Fellowship = {
     const emit = _coalesce(() => { const v = [...byId.values()].filter(c => _churchVoice(pubk, c)); if (!eosed && !v.length) return; saveDocCache('categories', pubk, v); onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0))); });
     if (byId.size) emit();   // paint cached categories before the shared hub replays/answers
     return _onChurchDocs(pubk, {
+      want: [CATEGORY_D],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (!d.startsWith(CATEGORY_D)) return;
         const id = d.slice(CATEGORY_D.length);
@@ -1689,6 +1717,7 @@ window.Fellowship = {
     };
     if (byId.size) emit();   // paint cached plans before the shared hub replays/answers
     const stop = _onChurchDocs(pubk, {
+      want: [PLAN_D],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (!d.startsWith(PLAN_D)) return;
         const id = d.slice(PLAN_D.length);
@@ -1722,6 +1751,7 @@ window.Fellowship = {
     };
     if (byId.size) emit();   // paint cached devotionals before the shared hub replays/answers
     const stop = _onChurchDocs(pubk, {
+      want: [DEVO_D],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
@@ -1743,6 +1773,7 @@ window.Fellowship = {
     let eosed = false;   // sticky: hold last-known until EOSE
     const emit = _coalesce(() => { const v = [...byId.values()].filter(x => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0)); if (!eosed && !v.length) return; onItems(v); });   // roster-trust (M2)
     return _onChurchDocs(pubk, {
+      want: [prefix],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (!d.startsWith(prefix)) return;
         const id = d.slice(prefix.length);
@@ -1770,6 +1801,7 @@ window.Fellowship = {
     if (!pubk) { cb({ ...OFF }); return () => {}; }
     let best = { ts: 0, doc: { ...OFF } };
     return _onChurchDocs(pubk, {
+      want: [MEALS_SETTINGS_D],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (d !== MEALS_SETTINGS_D) return;   // the relay write-gates settings to the church/stewards (accept policy), so trust what it serves here — don't drop it on a not-yet-loaded roster, which hid the whole Care module from members
         if ((e.created_at || 0) <= best.ts) return;
@@ -1862,6 +1894,7 @@ window.Fellowship = {
     // the shared hub's union filter is a superset of the old '#church'-only one; the d-prefix guard
     // below keeps the delivered set identical (careslot:/careskip: docs are always church-tagged)
     return _onChurchDocs(pubk, {
+      want: [prefix],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (!d.startsWith(prefix)) return;
         const rest = d.slice(prefix.length).split(':');

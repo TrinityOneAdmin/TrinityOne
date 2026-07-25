@@ -632,6 +632,20 @@ function App() {
     })();
     return () => { if (cleanup) cleanup(); };
   }, []);
+  // SELF-HEAL a dangling active church. Every church subscription resolves the active church by
+  // `churches.find(c => c.id === activeChurch)`, and when that finds nothing it quietly passes null — so the
+  // app subscribes to NOTHING while the header still shows a church name and every list renders empty with no
+  // error anywhere. leaveChurch() re-points it on the in-app path, but nothing repaired it when the stored id
+  // went stale by any other route (a restored backup, a church dropped from the list, hand-edited storage), and
+  // it never recovered on its own — the member just had a permanently empty app that looked fine.
+  // Found on the test phone: the stored id named a church no longer followed and every subscription read 0.
+  useAE(() => {
+    if (!activeChurch || churches.find(c => c.id === activeChurch)) return;   // resolves fine — nothing to do
+    const next = (churches.find(c => c.npub) || churches[0] || {}).id || null;
+    if (next === activeChurch) return;                                        // no better option; don't loop
+    console.warn('[trinity] active church', activeChurch, 'is not in the followed list — falling back to', next);
+    setActiveChurch(next); lsSet('trinityone.activeChurch', next);
+  }, [activeChurch, churches]);
   // scope outgoing chat to the active church, so its steward sees who's participating (Members)
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
