@@ -10633,6 +10633,7 @@ zoo`.split("\n");
   var CAREKEY_D = "trinityone/carekey:";
   var CARENEED_D = "trinityone/care:";
   var _careKeyHex = null;
+  var _careKeyRing = [];
   var _careKeyDocKeys = null;
   var _careKeyRev = 0;
   var _careKeyChecked = false;
@@ -10718,7 +10719,17 @@ zoo`.split("\n");
       _careKeyDocKeys = o.keys || null;
       _careKeyRev = o.rev || 1;
       const mine = o.keys && churchPub && o.keys[churchPub];
-      if (mine && churchSk) _careKeyHex = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+      if (mine && churchSk) {
+        const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+        let ring = null;
+        try {
+          const p = JSON.parse(plain);
+          if (Array.isArray(p)) ring = p.filter((k) => typeof k === "string" && k);
+        } catch (x) {
+        }
+        _careKeyRing = ring && ring.length ? ring : [plain];
+        _careKeyHex = _careKeyRing[0];
+      }
     } catch (x) {
     }
     _careKeyChecked = true;
@@ -12042,15 +12053,17 @@ zoo`.split("\n");
         if (!_relayAuthed) return false;
         if (await _churchHasCareNeeds()) return false;
         _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+        _careKeyRing = [_careKeyHex];
         _careKeyRev = 1;
       }
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))];
       const have = _careKeyDocKeys || {};
       if (want.every((p2) => have[p2])) return false;
       const keys = {};
+      const _ring = JSON.stringify(_careKeyRing.length ? _careKeyRing : [_careKeyHex]);
       for (const mp of want) {
         try {
-          keys[mp] = encrypt3(_careKeyHex, getConversationKey(sk, mp));
+          keys[mp] = encrypt3(_ring, getConversationKey(sk, mp));
         } catch (e) {
         }
       }
@@ -12067,12 +12080,15 @@ zoo`.split("\n");
         return null;
       }
     },
+    // Try the whole ring: a need sealed before a rotation still opens with the key of its day.
     careOpen(ct) {
-      try {
-        return _careKeyHex ? JSON.parse(decrypt3(ct, _unhex(_careKeyHex))) : null;
-      } catch (e) {
-        return null;
+      for (const k of _careKeyRing.length ? _careKeyRing : _careKeyHex ? [_careKeyHex] : []) {
+        try {
+          return JSON.parse(decrypt3(ct, _unhex(k)));
+        } catch (e) {
+        }
       }
+      return null;
     },
     careSealTo(recipientPub, obj) {
       try {
@@ -12113,6 +12129,39 @@ zoo`.split("\n");
     },
     hasCareKey() {
       return !!_careKeyHex;
+    },
+    // ROTATE the church care key — call when someone is removed (blocked / taken off the roster). Until now the
+    // key was only ever ADDED to, so a member who was blocked kept a working copy of the church's care key for
+    // ever: "we removed him" did not mean "he can no longer read the care records".
+    //
+    // What this does and does NOT buy you, stated plainly: everything sealed BEFORE the rotation was already
+    // readable by that person and they may have kept it — no key change can retract what someone has already
+    // seen. Rotation protects everything sealed AFTERWARDS. The old key stays in the ring so the church itself
+    // never loses access to its own history (dropping it is how you destroy your records, not how you secure
+    // them), and the new envelope simply isn't wrapped to the person who left.
+    async rotateCareKey(memberPubs, stewardPubs) {
+      const cp = actingChurch || pub;
+      if (!sk || !cp || !churchPub) return false;
+      if (!_careKeyChecked || !_relayAuthed) return false;
+      if (!_careKeyHex) return false;
+      const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      const ring = [fresh, ..._careKeyRing.length ? _careKeyRing : [_careKeyHex]].slice(0, 12);
+      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))];
+      const keys = {};
+      const payload = JSON.stringify(ring);
+      for (const mp of want) {
+        try {
+          keys[mp] = encrypt3(payload, getConversationKey(sk, mp));
+        } catch (e) {
+        }
+      }
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: (_careKeyRev || 1) + 1 }) }));
+      if (ok === false) return false;
+      _careKeyRing = ring;
+      _careKeyHex = fresh;
+      _careKeyRev = (_careKeyRev || 1) + 1;
+      _careKeyDocKeys = keys;
+      return true;
     },
     // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
     // from "the relay didn't serve it to us" before doing anything destructive. See _requireTrustedView.

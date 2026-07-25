@@ -5855,25 +5855,35 @@
       if ((env.rev || 1) < (_carekeyRev[cp] || 0)) return;
       _carekeyRev[cp] = env.rev || 1;
       const mine = env.keys && pub && env.keys[pub];
-      if (mine && sk) _carekeys[cp] = _unhex(decrypt(mine, getConversationKey(sk, e.pubkey)));
-      else if (!mine) delete _carekeys[cp];
+      if (mine && sk) {
+        const plain = decrypt(mine, getConversationKey(sk, e.pubkey));
+        let ring = null;
+        try {
+          const p = JSON.parse(plain);
+          if (Array.isArray(p)) ring = p.filter((k) => typeof k === "string" && k);
+        } catch (x) {
+        }
+        _carekeys[cp] = (ring && ring.length ? ring : [plain]).map(_unhex);
+      } else if (!mine) delete _carekeys[cp];
     } catch {
     }
   }
   function _careOpen(cp, ct) {
-    const key = _carekeys[cp];
-    if (!key) return null;
-    try {
-      return JSON.parse(decrypt(ct, key));
-    } catch {
-      return null;
+    const ring = _carekeys[cp];
+    if (!ring || !ring.length) return null;
+    for (const key of ring) {
+      try {
+        return JSON.parse(decrypt(ct, key));
+      } catch (e) {
+      }
     }
+    return null;
   }
   function _careSeal(cp, obj) {
-    const key = _carekeys[cp];
-    if (!key) return null;
+    const ring = _carekeys[cp];
+    if (!ring || !ring.length) return null;
     try {
-      return encrypt(JSON.stringify(obj), key);
+      return encrypt(JSON.stringify(obj), ring[0]);
     } catch {
       return null;
     }

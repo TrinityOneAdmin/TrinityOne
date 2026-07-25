@@ -2894,6 +2894,7 @@ window.BulkInviteModal = BulkInviteModal;
 
 function DashMembers() {
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
+  const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];   // care-key rotation must keep stewards keyed
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
   const photosAllowed = !(church.features && church.features.memberPhotos === false);   // member photos on by default; church can opt out
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
@@ -2961,7 +2962,19 @@ function DashMembers() {
   const ql = q.trim().toLowerCase();
   const matchQ = (m) => !ql || (m.name || '').toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql) || (m.npub || '').toLowerCase().includes(ql);
   const doCopy = (np) => { copyText(np); setCopied(np); setTimeout(() => setCopied(''), 1400); };
-  const block = (pk) => { setConfirmBlock(null); window.Steward.setBlocked([...blockedList, pk]); };
+  // Blocking is how a member is removed. Rotate the church's care key at the same time, re-wrapped to everyone
+  // EXCEPT them — otherwise "we removed him" left him holding a working copy of the key to the congregation's
+  // care records for ever. The ring keeps the old keys so the church never loses its own history; he simply
+  // never receives the new one, so nothing sealed from now on is readable to him. (Past records he could
+  // already read are past — no key change can retract those, and we don't pretend otherwise.)
+  const block = (pk) => {
+    setConfirmBlock(null);
+    window.Steward.setBlocked([...blockedList, pk]);
+    try {
+      const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !blockedSet.has(p));
+      if (window.Steward.rotateCareKey) window.Steward.rotateCareKey(remaining, stewardRoster || []);
+    } catch (e) {}
+  };
   const unblock = (pk) => window.Steward.setBlocked(blockedList.filter(p => p !== pk));
   const total = members.length;
   // "last seen" = newest of a post or a membership heartbeat. No activity in 90 days → inactive list.

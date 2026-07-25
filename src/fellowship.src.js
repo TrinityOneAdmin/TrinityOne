@@ -130,22 +130,30 @@ function _ingestCareKey(cp, e) {
     if ((env.rev || 1) < (_carekeyRev[cp] || 0)) return;   // never step backwards to an older key generation
     _carekeyRev[cp] = env.rev || 1;
     const mine = env.keys && pub && env.keys[pub];
-    if (mine && sk) _carekeys[cp] = _unhex(nip44d(mine, nip44ck(sk, e.pubkey)));
-    else if (!mine) delete _carekeys[cp];   // no longer keyed (left the church) → lose the key
+    // KEY RING (audit 2026-07-24): the church rotates its care key when someone is removed, and the envelope
+    // carries the current key followed by the superseded ones so a need sealed before the rotation still
+    // opens. A wrapped value is a JSON array now; older envelopes hold a bare hex string — accept both.
+    if (mine && sk) {
+      const plain = nip44d(mine, nip44ck(sk, e.pubkey));
+      let ring = null; try { const p = JSON.parse(plain); if (Array.isArray(p)) ring = p.filter(k => typeof k === 'string' && k); } catch (x) {}
+      _carekeys[cp] = (ring && ring.length ? ring : [plain]).map(_unhex);
+    }
+    else if (!mine) delete _carekeys[cp];   // no longer keyed (removed from the church) → lose the key
   } catch {}
 }
 // open the sealed half of a care need; null when we hold no key (the UI shows "details hidden")
 function _careOpen(cp, ct) {
-  const key = _carekeys[cp];
-  if (!key) return null;
-  try { return JSON.parse(nip44d(ct, key)); } catch { return null; }
+  const ring = _carekeys[cp];
+  if (!ring || !ring.length) return null;
+  for (const key of ring) { try { return JSON.parse(nip44d(ct, key)); } catch (e) {} }   // newest first; older keys open pre-rotation needs
+  return null;
 }
 // seal a care need's identifying half with the church care key (care-admins approving a request into a need);
 // null when this device holds no care key, so the caller can refuse rather than publish PII in the clear.
 function _careSeal(cp, obj) {
-  const key = _carekeys[cp];
-  if (!key) return null;
-  try { return nip44e(JSON.stringify(obj), key); } catch { return null; }
+  const ring = _carekeys[cp];
+  if (!ring || !ring.length) return null;
+  try { return nip44e(JSON.stringify(obj), ring[0]); } catch { return null; }   // always seal with the CURRENT key
 }
 // Seal a body to an explicit set of PUBKEYS (asymmetric): one-off content key, NIP-44-wrapped to each recipient
 // (incl. ourselves so we can read it back), body encrypted under that key. Used for the ask-for-help request +
