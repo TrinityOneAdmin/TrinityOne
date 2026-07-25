@@ -49,6 +49,10 @@ function useBible(){
 }
 
 // ── share verse card ──
+// The verse as shareable text. The share/save buttons on this card used to be decorative — they toasted
+// "Saved to Photos" / "Card ready to share" and did nothing at all. Sharing the words is what a member
+// actually wants, and unlike rendering the card to an image it needs no extra library.
+function verseShareText(v) { if (!v) return ''; const t = String(v.text || '').trim(); const r = String(v.ref || '').trim(); return r ? (t + '\n\n' + r) : t; }
 const CARD_STYLES = [
   { id: 'clay', bg: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', fg: '#fff', serif: true },
   { id: 'sage', bg: 'linear-gradient(155deg, #6BA17C, #3C6E57)', fg: '#fff', serif: true },
@@ -66,7 +70,10 @@ function ShareCard({ verse, open, onClose, ctx }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Share verse</span>
-          <IconBtn name="share" onClick={() => { onClose(); ctx.toast('Card ready to share'); }} />
+          {/* These two used to be theatre: one toasted "Card ready to share" and the other "Saved to Photos",
+              and neither rendered, saved or shared anything. ctx.shareText is the real thing (native share
+              sheet, then Web Share, then clipboard), so share the verse itself rather than lie about a file. */}
+          <IconBtn name="share" title="Share this verse" onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you'); }} />
         </div>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 26px' }}>
           <div style={{
@@ -94,11 +101,11 @@ function ShareCard({ verse, open, onClose, ctx }) {
               }} />
             ))}
           </div>
-          <button onClick={() => { onClose(); ctx.toast('Saved to Photos'); }} style={{
+          <button onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you'); }} style={{
             width: '100%', padding: 15, borderRadius: 16, border: 'none', background: 'var(--clay)', color: '#fff',
             fontWeight: 700, fontSize: 15.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-          }}><Icon name="arrowUp" size={18} color="#fff" /> Save image</button>
+          }}><Icon name="share" size={18} color="#fff" /> Share this verse</button>
         </div>
       </div>
     </Overlay>

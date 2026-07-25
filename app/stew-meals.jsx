@@ -361,7 +361,7 @@ function StewCareRequests() {
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
             {!r.sealed ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="#fff" /> Set up help</button> : null}
             <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: (MEALS_TYPE_LABEL[r.type] || 'Help') })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
-            <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Dismiss</button>
+            <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Close — not needed</button>
           </div>
         </div>
       ))}

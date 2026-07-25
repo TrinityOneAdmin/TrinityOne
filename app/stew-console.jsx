@@ -255,8 +255,15 @@ function WizRelays({ ownRelay, setOwnRelay }) {
   ];
   const addOwn = () => {
     const u = (relayUrl || '').trim(); if (!u) return;
-    try { window.Steward.addRelay(u); setAddMsg({ ok: true, text: '✓ Added — your church now uses this relay too.' }); setRelayUrl(''); }
-    catch (e) { setAddMsg({ ok: false, text: '✗ ' + ((e && e.message) || 'That doesn’t look like a relay address.') }); }
+    // addRelay RETURNS false for a malformed address, a duplicate, or one that's already this church's own —
+    // it never throws. So the catch was unreachable and every rejected address still showed the green tick and
+    // cleared the box: a leader who typoed their relay address walked away believing their church was on their
+    // own hardware when it was still entirely on community nodes. Check the return value.
+    try {
+      const added = window.Steward.addRelay(u);
+      if (added) { setAddMsg({ ok: true, text: '✓ Added — your church now uses this relay too.' }); setRelayUrl(''); }
+      else setAddMsg({ ok: false, text: '✗ That didn’t work. Check it starts with wss:// and isn’t already in the list above.' });
+    } catch (e) { setAddMsg({ ok: false, text: '✗ ' + ((e && e.message) || 'That doesn’t look like a relay address.') }); }
   };
   return (
     <div style={{ marginTop: 18 }}>
