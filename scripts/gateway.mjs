@@ -823,6 +823,12 @@ function safeguardAllows(minorPub, other) {
 const GROUP_VIS = new Map();     // groupId -> 'open' | 'invite'
 const GROUP_MEMBERS = new Map(); // groupId -> Set(pubkey) allowed to post in an invite-only group
 const GROUP_NAMES = new Map();   // groupId -> display name (for push titles)
+// AUDIT-2026-07-24: which groups a church marked child-safe. Until now this flag lived ONLY in the client
+// (app/screens-chat.jsx filtered the group list with it), so the adults-only boundary was a UI preference: a
+// minor on a modified build, an old build, or any raw REQ could read and post in adult-only group chat. It was
+// the one safeguarding control that wasn't relay-enforced, while the kind-4 DM gate, the NIP-17 block and the
+// care-thread gate all are. Recorded here so accept()/canRead() can enforce it like the rest.
+const GROUP_CHILDSAFE = new Set();   // groupIds a church explicitly marked child-safe
 
 // ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
 const SUBS_FILE = join(DATA_DIR,'subscribers.json');
@@ -1062,7 +1068,8 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardOf(e.pubkey, namedChurch(e)))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
     if (!idOwnerOk(GROUP_CHURCH.get(id), e)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
-    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); return; }
+    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); GROUP_CHILDSAFE.delete(id); return; }
+    if (c.childsafe === true) GROUP_CHILDSAFE.add(id); else GROUP_CHILDSAFE.delete(id);   // safeguarding: adults-only unless the church says otherwise
     GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
     if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60));
     if (c.kind === 'broadcast') BROADCAST.add(id); else BROADCAST.delete(id);
@@ -1339,6 +1346,9 @@ function accept(e) {
       const gcp = GROUP_CHURCH.get(g) || namedChurch(e); const mem = GROUP_MEMBERS.get(g);
       return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardOf(e.pubkey, gcp))) || !!(mem && mem.has(e.pubkey));
     }
+    // SAFEGUARDING (relay-enforced): a child may only post in a group their church marked child-safe. Was a
+    // client-side list filter only, so a modified/old build could post into adult-only rooms.
+    if (g && MINORS.has(e.pubkey) && !GROUP_CHILDSAFE.has(g)) return false;
     return isMember;
   }
   if (k === 4) {   // NIP-04 direct message — safeguarding gate
@@ -1469,6 +1479,16 @@ function canRead(e, authed) {
   }
   if (e.kind !== 1) return true;
   const g = gidOf(e);
+  // SAFEGUARDING: an adults-only group (one the church has NOT marked child-safe) is served only to a reader
+  // who has proved they are not a child. Gating on `authed && MINORS.has(authed)` alone would be theatre — a
+  // minor closes the loophole by simply not authenticating, and anonymous reads of open groups were allowed.
+  // So a non-child-safe group now requires AUTH to read at all, which also stops a passer-by harvesting a
+  // congregation's chat. Child-safe groups are unaffected, and the REQ handler challenges for these so a real
+  // client authenticates and carries on transparently.
+  if (g && !GROUP_CHILDSAFE.has(g)) {
+    if (!authed) return false;
+    if (MINORS.has(authed)) return false;
+  }
   if (!g || GROUP_VIS.get(g) !== 'invite') return true;
   if (!authed) return false;
   // REVIEW-2026-07-20 B3: this was the SAME unscoped check the C3/C4 fix removed from the 30078 branch, left
@@ -3275,7 +3295,11 @@ wss.on('connection', (ws, req) => {
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
       // is NOT challenged — those messages are just silently withheld — so ordinary reads pay no auth cost.
-      const wantsInvite = !ws._auth && filters.some(f => (f['#t'] || []).some(t => GROUP_VIS.get(t) === 'invite'));
+      // Challenge when the REQ names a group whose messages we withhold from an unauthenticated reader: an
+      // invite-only group, or (safeguarding) any group not marked child-safe. Without this the client would
+      // just receive an empty room. Still filter-driven, so a broad query that merely happens to match such a
+      // message is not challenged — the lazy-auth decision stands for ordinary browsing.
+      const wantsInvite = !ws._auth && filters.some(f => (f['#t'] || []).some(t => (GROUP_VIS.get(t) === 'invite') || (GROUP_CHURCH.has(t) && !GROUP_CHILDSAFE.has(t))));
       // Emergency-timing oracle: challenge from the FILTER (not only a found event) so an anon REQ for a safety d-tag
       // gets an identical AUTH whether or not a check is live — no "is this church under attack right now?" distinguisher.
       const wantsSafetyD = !ws._auth && filters.some(f => (f['#d'] || []).some(d => typeof d === 'string' && (d.startsWith(SAFETY_D) || d.startsWith(SAFE_D))));
