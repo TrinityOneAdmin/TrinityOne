@@ -202,7 +202,7 @@ function AvatarCropModal({ file, onSave, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 12, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-          <button onClick={save} disabled={!img || busy} style={{ flex: 2, padding: 12, borderRadius: 12, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (!img || busy) ? .6 : 1 }}>{busy ? 'Saving…' : 'Use photo'}</button>
+          <button onClick={save} disabled={!img || busy} style={{ flex: 2, padding: 12, borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (!img || busy) ? .6 : 1 }}>{busy ? 'Saving…' : 'Use photo'}</button>
         </div>
       </div>
     </div>

@@ -164,7 +164,7 @@ function BookReader({ book, open, onClose, ctx }) {
               {hasFull ? (
                 <div style={{ textAlign: 'center', marginTop: 18 }}>
                   <button onClick={getFull} disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, border: 'none',
-                    background: 'var(--clay)', color: '#fff', padding: '12px 22px', borderRadius: 14, fontWeight: 700, fontSize: 14.5,
+                    background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 22px', borderRadius: 14, fontWeight: 700, fontSize: 14.5,
                     cursor: loading ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', opacity: loading ? .7 : 1 }}>
                     <Icon name="cloud" size={17} color="#fff" /> {loading ? 'Downloading…' : 'Download full book'}</button>
                   <p style={{ marginTop: 12, fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{pages} pages · reads offline once downloaded</p>

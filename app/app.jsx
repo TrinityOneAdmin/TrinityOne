@@ -1,11 +1,24 @@
 // app.jsx — TrinityOne root: nav, theme, shared state, overlays, tweaks
 const { useState: useA, useEffect: useAE, useRef: useAR } = React;
 
+// `on` = the text colour that sits ON the accent fill. a11y (audit 2026-07-24): white on every DARK-mode
+// accent measured 2.16-2.69:1 — below even the 3:1 large-text floor — and dark mode is disproportionately
+// chosen by low-vision users. A dark ink on those same accents measures 6.18-7.70:1.
+// WCAG relative luminance → pick dark ink or white for text sitting on this colour.
+function _readableOn(hex) {
+  try {
+    const h = String(hex).replace('#', '');
+    const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h.slice(0, 6);
+    const c = (full.match(/../g) || []).map(x => parseInt(x, 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+    const L = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    return L > 0.42 ? '#2A1B12' : '#fff';
+  } catch (e) { return '#fff'; }
+}
 const ACCENTS = {
-  clay:   { light: { c: '#C25A38', i: '#A8462A', s: '#F3DECF', d: '#9C4327' }, dark: { c: '#E68A66', i: '#EE9E7E', s: '#43271B', d: '#C2613B' } },
-  indigo: { light: { c: '#5360D6', i: '#3E49B8', s: '#E2E3F7', d: '#3A43A0' }, dark: { c: '#8E97EE', i: '#A6ADF2', s: '#262A52', d: '#5A63C0' } },
-  teal:   { light: { c: '#1F9488', i: '#147A70', s: '#D2EEEA', d: '#136B62' }, dark: { c: '#52C2B4', i: '#6FD0C3', s: '#16403B', d: '#2E9488' } },
-  berry:  { light: { c: '#C24B7A', i: '#A53A65', s: '#F6D8E4', d: '#9C3A60' }, dark: { c: '#E681A8', i: '#EE9BBC', s: '#4A2333', d: '#C25C84' } },
+  clay:   { light: { c: '#C25A38', i: '#A8462A', s: '#F3DECF', d: '#9C4327', on: '#fff' }, dark: { c: '#E68A66', i: '#EE9E7E', s: '#43271B', d: '#C2613B', on: '#2A1B12' } },
+  indigo: { light: { c: '#5360D6', i: '#3E49B8', s: '#E2E3F7', d: '#3A43A0' , on: '#fff' }, dark: { c: '#8E97EE', i: '#A6ADF2', s: '#262A52', d: '#5A63C0' , on: '#2A1B12' } },
+  teal:   { light: { c: '#1F9488', i: '#147A70', s: '#D2EEEA', d: '#136B62' , on: '#fff' }, dark: { c: '#52C2B4', i: '#6FD0C3', s: '#16403B', d: '#2E9488' , on: '#2A1B12' } },
+  berry:  { light: { c: '#C24B7A', i: '#A53A65', s: '#F6D8E4', d: '#9C3A60' , on: '#fff' }, dark: { c: '#E681A8', i: '#EE9BBC', s: '#4A2333', d: '#C25C84' , on: '#2A1B12' } },
 };
 const READ_FONTS = {
   Newsreader: "'Newsreader', Georgia, serif",
@@ -102,7 +115,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
             ))}
           </div>
           <button onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you'); }} style={{
-            width: '100%', padding: 15, borderRadius: 16, border: 'none', background: 'var(--clay)', color: '#fff',
+            width: '100%', padding: 15, borderRadius: 16, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
             fontWeight: 700, fontSize: 15.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
           }}><Icon name="share" size={18} color="#fff" /> Share this verse</button>
@@ -142,7 +155,7 @@ function DevotionalView({ open, onClose, ctx }) {
             <Icon name="pen" size={16} /> REFLECT</div>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.55, color: 'var(--ink)', margin: '0 0 14px', fontStyle: 'italic' }}>{d.prompt}</p>
           <button onClick={() => { onClose(); ctx.go('library'); ctx.toast('Opening journal'); }} style={{
-            border: 'none', background: 'var(--clay)', color: '#fff', padding: '11px 18px', borderRadius: 13,
+            border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '11px 18px', borderRadius: 13,
             fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Write a reflection</button>
         </div>
         <button onClick={() => { onClose(); ctx.toast('Day 4 complete · streak 13'); }} style={{
@@ -201,7 +214,7 @@ function EmptyState({ loading, error, onBrowse }) {
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 13 }}>
             <button onClick={onBrowse} style={{
               display: 'inline-flex', alignItems: 'center', gap: 10, border: 'none', cursor: 'pointer',
-              background: 'var(--clay)', color: '#fff', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 16,
+              background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 16,
               padding: '15px 26px', borderRadius: 16, boxShadow: 'var(--shadow-lg)' }}>
               <Icon name="plus" size={20} color="#fff" /> Browse translations
             </button>
@@ -1320,12 +1333,15 @@ function App() {
   const ca = (ctx.church && typeof ctx.church.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(ctx.church.accent.trim())) ? ctx.church.accent.trim() : null;
   const brand = ca ? {
     '--clay': ca,
+    // A church picks an arbitrary hex, so the readable text colour on it has to be computed, not assumed —
+    // white on a pale brand colour is exactly the failure this audit found in dark mode.
+    '--on-clay': _readableOn(ca),
     '--clay-ink': `color-mix(in oklab, ${ca} 86%, #000)`,
     '--clay-soft': t.dark ? `color-mix(in oklab, ${ca} 30%, #16120c)` : `color-mix(in oklab, ${ca} 16%, #fff)`,
     '--clay-deep': `color-mix(in oklab, ${ca} 74%, #000)`,
   } : null;
   const rootStyle = {
-    '--clay': ap.c, '--clay-ink': ap.i, '--clay-soft': ap.s, '--clay-deep': ap.d,
+    '--clay': ap.c, '--clay-ink': ap.i, '--clay-soft': ap.s, '--clay-deep': ap.d, '--on-clay': ap.on || '#fff',
     ...(brand || {}),
     '--read-scale': t.readScale,
   };
@@ -1463,7 +1479,7 @@ function App() {
               <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 20px' }}>You can reopen it any time — you’ll pick up right where you left off.</p>
               <div style={{ display: 'flex', gap: 10 }}>
                 <button onClick={() => setConfirmExit(false)} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Stay</button>
-                <button onClick={() => { const C = window.Capacitor; if (C && C.Plugins && C.Plugins.App) C.Plugins.App.exitApp(); else setConfirmExit(false); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Close</button>
+                <button onClick={() => { const C = window.Capacitor; if (C && C.Plugins && C.Plugins.App) C.Plugins.App.exitApp(); else setConfirmExit(false); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Close</button>
               </div>
             </div>
           </div>

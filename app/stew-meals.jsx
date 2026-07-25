@@ -296,7 +296,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--line)' }}>
           <input value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
-          <button onClick={send} className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="#fff" /></button>
+          <button onClick={send} className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
         </div>
       </div>
     </div>
@@ -359,7 +359,7 @@ function StewCareRequests() {
           </div>
           {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
-            {!r.sealed ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="#fff" /> Set up help</button> : null}
+            {!r.sealed ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="var(--on-clay)" /> Set up help</button> : null}
             <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: (MEALS_TYPE_LABEL[r.type] || 'Help') })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
             <button onClick={() => window.StewardMeals.declineCareRequest(r)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Close — not needed</button>
           </div>
@@ -399,7 +399,7 @@ function DashMeals() {
 
       {!detail && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
-          <button onClick={() => setEditing('new')} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14 }}><Icon name="plus" size={15} color="#fff" /> Start care</button>
+          <button onClick={() => setEditing('new')} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Start care</button>
         </div>
       )}
 
@@ -678,7 +678,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
           {isEdit ? <button onClick={remove} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13.5, color: 'var(--clay)' }}><Icon name="trash" size={14} color="var(--clay)" /> Close need</button> : null}
           <div style={{ flex: 1 }} />
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13.5 }}>Cancel</button>
-          <button onClick={save} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: canSave ? 1 : 0.5 }}><Icon name="check" size={14} color="#fff" /> {isEdit ? 'Save changes' : 'Open this need'}</button>
+          <button onClick={save} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: canSave ? 1 : 0.5 }}><Icon name="check" size={14} color="var(--on-clay)" /> {isEdit ? 'Save changes' : 'Open this need'}</button>
         </div>
       </div>
     </div>

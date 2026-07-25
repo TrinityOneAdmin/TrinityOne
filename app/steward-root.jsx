@@ -303,7 +303,7 @@ function StewardWelcome() {
 
         {mode === 'choose' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-            <button onClick={seedNewChurch} className="sk-btn sk-btn--clay" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="plus" size={17} color="#fff" /> Start a new church</button>
+            <button onClick={seedNewChurch} className="sk-btn sk-btn--clay" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="plus" size={17} color="var(--on-clay)" /> Start a new church</button>
             <button onClick={() => { setErr(''); setMode('restore'); }} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="refresh" size={17} color="currentColor" /> Restore a church</button>
             <button onClick={becomeSteward} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="shield" size={17} color="currentColor" /> Help run a church</button>
             <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', marginTop: 4, lineHeight: 1.5 }}>“Help run a church” makes your steward code — the church’s owner adds it to make you a steward (no key shared).</div>
@@ -317,11 +317,11 @@ function StewardWelcome() {
             </div>
             <SkKey value={npub || '—'} label="your steward code" />
             <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              <button onClick={() => { copyText(code); setCopied(true); setTimeout(() => setCopied(false), 1400); }} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name={copied ? 'check' : 'receipt'} size={14} color="#fff" /> {copied ? 'Copied' : 'Copy code'}</button>
+              <button onClick={() => { copyText(code); setCopied(true); setTimeout(() => setCopied(false), 1400); }} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name={copied ? 'check' : 'receipt'} size={14} color="var(--on-clay)" /> {copied ? 'Copied' : 'Copy code'}</button>
               <button onClick={() => setShowQR(s => !s)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={14} color="currentColor" /> {showQR ? 'Hide QR' : 'Show QR'}</button>
             </div>
             {showQR && window.Steward.qrSVG ? <div role="img" aria-label="Handoff QR code — or use the code shown below" style={{ width: 184, height: 184, margin: '12px auto 0', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(code) }} /> : null}
-            <button onClick={() => { setErr(''); setMode('steward-pin'); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 16 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
+            <button onClick={() => { setErr(''); setMode('steward-pin'); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 16 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
             <button onClick={() => { try { location.reload(); } catch (e) {} }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 8 }}>Start over</button>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can find this code again anytime under Settings → Security → Become a steward.</div>
           </div>
@@ -330,7 +330,7 @@ function StewardWelcome() {
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Set a PIN to protect this device. Your steward key can act for a church, so it’s <b>encrypted on this device</b> and the PIN unlocks it — a lost or shared phone can’t act as a church without it.</div>
             <input type="password" inputMode="numeric" value={pinVal} onChange={e => { setPinVal(e.target.value); setErr(''); }} autoFocus placeholder="Choose a PIN (6+ chars, or a longer passphrase)" onKeyDown={e => { if (e.key === 'Enter' && pinVal.length >= 6 && !pinBusy) finishWithPin(); }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{err}</div> : null}
-            <button onClick={finishWithPin} disabled={pinVal.length < 6 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 6 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="#fff" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
+            <button onClick={finishWithPin} disabled={pinVal.length < 6 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 6 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
             <button onClick={() => { setErr(''); setMode('steward'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 8 }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
             {/* SECURITY-AUDIT-2026-06-25 Critical-2: Skip is gone — PIN is mandatory. If the user
                 bypasses this screen anyway (back-button, refresh), the StewardForcedPin modal will
@@ -344,12 +344,12 @@ function StewardWelcome() {
           </div>
         ) : (
           <div>
-            {isNative ? <button onClick={() => { setErr(''); setMode('scanning'); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 14 }}><Icon name="qr" size={16} color="#fff" /> Scan the handoff QR</button> : null}
+            {isNative ? <button onClick={() => { setErr(''); setMode('scanning'); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 14 }}><Icon name="qr" size={16} color="var(--on-clay)" /> Scan the handoff QR</button> : null}
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>{isNative ? 'OR PASTE THE 12-WORD PHRASE' : 'PASTE THE 12-WORD PHRASE'}</div>
             <textarea value={phrase} onChange={e => setPhrase(e.target.value)} rows={3} placeholder="word one  word two  word three …" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>{err}</div> : null}
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <button onClick={() => adopt(phrase)} disabled={!phrase.trim()} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14, opacity: phrase.trim() ? 1 : 0.5 }}><Icon name="refresh" size={15} color="#fff" /> Restore church</button>
+              <button onClick={() => adopt(phrase)} disabled={!phrase.trim()} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14, opacity: phrase.trim() ? 1 : 0.5 }}><Icon name="refresh" size={15} color="var(--on-clay)" /> Restore church</button>
               <button onClick={() => { setErr(''); setMode('choose'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 14 }}>Back</button>
             </div>
           </div>
@@ -418,7 +418,7 @@ function StewardForcedPin() {
           placeholder="Choose a PIN (4+ chars; passphrase OK)" inputMode="numeric" autoComplete="new-password"
           style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
-        <button onClick={submit} disabled={pin.length < 4 || busy} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (pin.length >= 4 && !busy) ? 1 : .5 }}><Icon name="lock" size={16} color="#fff" /> {busy ? 'Setting…' : 'Set PIN & enter'}</button>
+        <button onClick={submit} disabled={pin.length < 4 || busy} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (pin.length >= 4 && !busy) ? 1 : .5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {busy ? 'Setting…' : 'Set PIN & enter'}</button>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 11, lineHeight: 1.5 }}>
           Required. If you forget the PIN, recover the church via your 12-word phrase on any device.
         </div>

@@ -207,7 +207,7 @@ function PlansScreen({ ctx }) {
           {featured ? (
             <div onClick={() => ctx.openPlan(featured)} style={{
               borderRadius: 24, padding: 20, cursor: 'pointer', marginBottom: 24, position: 'relative', overflow: 'hidden',
-              background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow-lg)',
+              background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow-lg)',
               animation: 'trinityFade .5s ease .05s both',
             }}>
               <div style={{ position: 'absolute', right: -30, top: -30, opacity: .16 }}><Icon name="read" size={170} stroke={1.2} color="#fff" /></div>
@@ -242,7 +242,7 @@ function PlansScreen({ ctx }) {
             <div style={{ textAlign: 'center', padding: '20px 16px 28px', color: 'var(--ink-2)' }}>
               <Icon name="read" size={40} stroke={1.4} color="var(--ink-3)" />
               <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '8px auto 14px' }}>No plans yet. Browse and add one to start reading a little every day.</p>
-              <button onClick={() => setTab('browse')} style={{ padding: '11px 18px', borderRadius: 13, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Browse plans</button>
+              <button onClick={() => setTab('browse')} style={{ padding: '11px 18px', borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Browse plans</button>
             </div>
           ) : null}
 
@@ -311,7 +311,7 @@ function PlanDetail({ plan, open, onClose, ctx }) {
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, var(--clay), var(--clay-deep))', color: '#fff', position: 'relative', overflow: 'hidden' }}>
+      <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', right: -30, top: 0, opacity: .15 }}><Icon name="read" size={180} stroke={1.2} color="#fff" /></div>
         <div style={{ padding: '10px 16px 22px', position: 'relative' }}>
           <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
@@ -543,7 +543,7 @@ function ChurchDevoView({ devo, open, onClose, ctx }) {
   const pct = parsed.count ? doneSet.size / parsed.count : 0;
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, var(--clay), var(--clay-deep))', color: '#fff', position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
+      <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
         <div style={{ position: 'absolute', right: -30, top: 0, opacity: .15 }}><Icon name="read" size={180} stroke={1.2} color="#fff" /></div>
         <div style={{ padding: '10px 16px 22px', position: 'relative' }}>
           <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>

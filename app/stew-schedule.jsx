@@ -140,7 +140,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
 
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14 }}><Icon name="check" size={16} color="#fff" /> Save roster</button>
+        <button onClick={save} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14 }}><Icon name="check" size={16} color="var(--on-clay)" /> Save roster</button>
       </div>
     </SchModal>
   );
@@ -225,7 +225,7 @@ function SchAddServiceModal({ onClose }) {
       {repeat !== 'none' && until && until <= date ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} disabled={!date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: date ? 1 : 0.55 }}><Icon name="plus" size={16} color="#fff" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
+        <button onClick={save} disabled={!date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: date ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
       </div>
     </SchModal>
   );
@@ -445,7 +445,7 @@ function DashRota({ onNewTeam }) {
           <div style={{ width: 56, height: 56, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="hand" size={28} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 6 }}>Build your first team</div>
           <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 16 }}>Create a ministry team (Welcome, Worship, Kids…) with the roles it fills. Then add a service and put people on — gaps glow gold so coverage reads at a glance.</p>
-          <button onClick={onNewTeam} className="sk-btn sk-btn--clay" style={{ padding: '11px 18px' }}><Icon name="plus" size={16} color="#fff" /> New team</button>
+          <button onClick={onNewTeam} className="sk-btn sk-btn--clay" style={{ padding: '11px 18px' }}><Icon name="plus" size={16} color="var(--on-clay)" /> New team</button>
         </div>
       </div>
     );
@@ -502,7 +502,7 @@ function DashRota({ onNewTeam }) {
               ) : null}
             </div>
             <button onClick={() => setRunsheetOpen(true)} title="Plan the order of service — items, who leads each, and songs" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="note" size={15} color="currentColor" /> Run sheet</button>
-            <button onClick={publish} className={isPublished ? 'sk-btn' : 'sk-btn sk-btn--clay'} style={{ padding: '9px 15px', fontSize: 13, background: isPublished ? 'var(--sage)' : undefined, color: '#fff' }}>
+            <button onClick={publish} className={isPublished ? 'sk-btn' : 'sk-btn sk-btn--clay'} style={{ padding: '9px 15px', fontSize: 13, background: isPublished ? 'var(--sage)' : undefined, color: 'var(--on-clay)' }}>
               <Icon name={isPublished ? 'check' : 'send'} size={15} color="#fff" /> {isPublished ? 'Published' : (pers && pers.published ? 'Publish changes' : 'Publish rota')}</button>
             </div>
           </div>
@@ -690,7 +690,7 @@ function SchEventModal({ day, onClose }) {
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} disabled={!title.trim() || !date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="#fff" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
+        <button onClick={save} disabled={!title.trim() || !date} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
       </div>
     </SchModal>
   );
@@ -919,7 +919,7 @@ function DashRooms() {
 
   return (
     <Panel title="Rooms" action={
-      <button onClick={() => setBkModal({})} disabled={!rooms.length} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: rooms.length ? 1 : 0.5 }}><Icon name="plus" size={14} color="#fff" /> Book a room</button>
+      <button onClick={() => setBkModal({})} disabled={!rooms.length} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: rooms.length ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Book a room</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
 
       <DismissibleNote id="rooms-intro" icon="marker" tone="sage" style={{ marginBottom: 14 }}>Your church's bookable spaces and who's using them when. Booking warns you of a <b>clash</b> so the hall is never double-booked.</DismissibleNote>

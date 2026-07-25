@@ -142,7 +142,7 @@ function SearchScreen({ ctx, onBack }) {
                     No verses in this translation match “{active}”. Try another word, switch translations in the reader, or add another from the catalogue.
                   </p>
                   <button onClick={() => ctx.openStore('language', 'bibles')} style={{ display: 'inline-flex', alignItems: 'center', gap: 9,
-                    padding: '12px 16px', borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14.5,
+                    padding: '12px 16px', borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5,
                     fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
                     <Icon name="globe" size={17} color="#fff" /> Search 1,000+ translations</button>
                 </React.Fragment>

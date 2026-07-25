@@ -25,6 +25,8 @@ function ConsoleChrome({ children, bg = 'var(--paper)', showcase = false, url = 
 }
 
 // ════════════════════════════ WIZARD ════════════════════════════
+// A collision-proof id for a wizard meeting row: Date.now() alone repeats within one synchronous loop.
+function _wizMeetingId() { return 'evt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 const WIZ_STEPS = [
   { key: 'key', t: 'Create your church key', ic: 'key' },
   { key: 'identity', t: 'Name your church', ic: 'shield' },
@@ -68,7 +70,7 @@ function WizMeetings({ meetings, setMeetings }) {
             </div>
           </div>
         ))}
-        <button onClick={() => setMeetings(a => [...a, { title: '', day: 0, time: '10:00', recur: 'weekly' }])} className="sk-btn sk-btn--ghost" style={{ padding: '11px 15px', fontSize: 14, justifyContent: 'center' }}><Icon name="plus" size={16} color="currentColor" /> Add another meeting</button>
+        <button onClick={() => setMeetings(a => [...a, { id: _wizMeetingId(), title: '', day: 0, time: '10:00', recur: 'weekly' }])} className="sk-btn sk-btn--ghost" style={{ padding: '11px 15px', fontSize: 14, justifyContent: 'center' }}><Icon name="plus" size={16} color="currentColor" /> Add another meeting</button>
       </div>
     </div>
   );
@@ -80,7 +82,12 @@ function StewWizard({ onDone }) {
   const [name, setName] = React.useState(church.name || '');
   const [nip05, setNip05] = React.useState('');
   const [ownRelay, setOwnRelay] = React.useState(false);
-  const [meetings, setMeetings] = React.useState([{ title: 'Sunday Service', day: 0, time: '10:00', recur: 'weekly' }, { title: 'Midweek', day: 3, time: '19:30', recur: 'weekly' }]);
+  // Each row carries its OWN id. Without one, publishEvent fell back to 'evt' + Date.now() for every row in
+  // the same synchronous loop — so both default meetings got the SAME id, and since these are replaceable
+  // documents the second silently overwrote the first: a church's Sunday service vanished from every
+  // member's calendar at first run. Stable ids also make re-publishing idempotent, so stepping back and
+  // forward through the wizard updates the same two meetings instead of creating duplicates.
+  const [meetings, setMeetings] = React.useState([{ id: _wizMeetingId(), title: 'Sunday Service', day: 0, time: '10:00', recur: 'weekly' }, { id: _wizMeetingId(), title: 'Midweek', day: 3, time: '19:30', recur: 'weekly' }]);
   const [backupSaved, setBackupSaved] = React.useState(false);   // step 0 can't advance until the recovery phrase is confirmed written down
   const last = step === WIZ_STEPS.length - 1;
   // responsive: a phone/narrow window swaps the 296px step-rail for a compact top progress bar
@@ -94,7 +101,7 @@ function StewWizard({ onDone }) {
     }
   };
   // publish the church's regular meetings (recurring calendar events) when leaving that step
-  const publishMeetings = () => { if (window.Steward && window.Steward.publishMeeting) { for (const m of meetings.filter(x => x.title.trim())) window.Steward.publishMeeting({ title: m.title.trim(), day: m.day, time: m.time, recur: m.recur }); } };
+  const publishMeetings = () => { if (window.Steward && window.Steward.publishMeeting) { for (const m of meetings.filter(x => x.title.trim())) window.Steward.publishMeeting({ id: m.id, title: m.title.trim(), day: m.day, time: m.time, recur: m.recur }); } };
   const goNext = () => { const k = WIZ_STEPS[step].key; if (k === 'identity') publishIdentity(); if (k === 'meetings') publishMeetings(); setStep(s => s + 1); };
   const finish = () => { try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch (e) {} if (onDone) onDone(); else setStep(0); };
 
@@ -160,9 +167,9 @@ function StewWizard({ onDone }) {
               <Icon name="chevL" size={16} color="currentColor" /> Back
             </button>
             {last ? (
-              <button className="sk-btn sk-btn--clay" onClick={finish}>Open Steward Console <Icon name="chevR" size={16} color="#fff" /></button>
+              <button className="sk-btn sk-btn--clay" onClick={finish}>Open Steward Console <Icon name="chevR" size={16} color="var(--on-clay)" /></button>
             ) : (
-              <button className="sk-btn sk-btn--clay" onClick={goNext} disabled={step === 0 && !backupSaved} style={step === 0 && !backupSaved ? { opacity: .5, cursor: 'not-allowed' } : undefined} title={step === 0 && !backupSaved ? 'Reveal your recovery phrase and tick that you’ve saved it first' : undefined}>Continue <Icon name="chevR" size={16} color="#fff" /></button>
+              <button className="sk-btn sk-btn--clay" onClick={goNext} disabled={step === 0 && !backupSaved} style={step === 0 && !backupSaved ? { opacity: .5, cursor: 'not-allowed' } : undefined} title={step === 0 && !backupSaved ? 'Reveal your recovery phrase and tick that you’ve saved it first' : undefined}>Continue <Icon name="chevR" size={16} color="var(--on-clay)" /></button>
             )}
           </div>
         </div>

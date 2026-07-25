@@ -295,7 +295,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       footer={<React.Fragment>
         <button onClick={onDone} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip setup</button>
         <div style={{ flex: 1 }} />
-        <button onClick={saveName} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (busy || !name.trim()) ? .5 : 1 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
+        <button onClick={saveName} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (busy || !name.trim()) ? .5 : 1 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>CHURCH NAME</div>
       <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && name.trim()) saveName(); }} placeholder="Your church’s name" style={fld} />
@@ -307,7 +307,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       footer={<React.Fragment>
         <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
-        <button onClick={() => { if (canContinue) next(); }} disabled={!canContinue} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: canContinue ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="#fff" /></button>
+        <button onClick={() => { if (canContinue) next(); }} disabled={!canContinue} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: canContinue ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>RECOVERY PHRASE — 12 WORDS</div>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 14.5, lineHeight: 1.8, wordSpacing: 3, color: 'var(--ink)', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', borderRadius: 12, padding: '14px 16px' }}>{phrase || 'No recovery phrase available for this key.'}</div>
@@ -365,7 +365,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={() => setStep(1)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={() => next()} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip for now</button>
-        <button onClick={savePin} disabled={pinBusy || !pinA || !pinB} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (pinBusy || !pinA || !pinB) ? .5 : 1 }}>{pinBusy ? 'Setting…' : 'Set a PIN'} <Icon name="chevR" size={15} color="#fff" /></button>
+        <button onClick={savePin} disabled={pinBusy || !pinA || !pinB} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (pinBusy || !pinA || !pinB) ? .5 : 1 }}>{pinBusy ? 'Setting…' : 'Set a PIN'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>PIN OR PASSPHRASE</div>
       <input type="password" autoFocus value={pinA} onChange={e => { setPinA(e.target.value); setPinErr(''); }} placeholder="At least 6 characters" inputMode="numeric" autoComplete="new-password" style={fld} />
@@ -381,7 +381,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       footer={<React.Fragment>
         <button onClick={() => setStep(2)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
-        <button onClick={saveGroups} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{picks.size ? `Create ${picks.size} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="#fff" /></button>
+        <button onClick={saveGroups} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{picks.size ? `Create ${picks.size} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {STARTERS.map(s => {
@@ -393,7 +393,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
                 <div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.name}{s.kind === 'broadcast' ? <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginLeft: 7 }}>Broadcast</span> : null}</div>
                 <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>{s.sub}</div>
               </div>
-              <div style={{ width: 22, height: 22, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? 'var(--clay)' : 'transparent', border: on ? 'none' : '1.5px solid var(--line)' }}>{on ? <Icon name="check" size={14} color="#fff" /> : null}</div>
+              <div style={{ width: 22, height: 22, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? 'var(--clay)' : 'transparent', border: on ? 'none' : '1.5px solid var(--line)' }}>{on ? <Icon name="check" size={14} color="var(--on-clay)" /> : null}</div>
             </button>
           );
         })}
@@ -406,7 +406,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       footer={<React.Fragment>
         <button onClick={() => setStep(3)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
-        <button onClick={saveTeam} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{teamName.trim() ? 'Create team & continue' : 'I’ll do this later'} <Icon name="chevR" size={15} color="#fff" /></button>
+        <button onClick={saveTeam} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{teamName.trim() ? 'Create team & continue' : 'I’ll do this later'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>FIRST TEAM (OPTIONAL)</div>
       <input value={teamName} onChange={e => setTeamName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveTeam(); }} placeholder="e.g. Welcome Team" style={fld} />
@@ -418,7 +418,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     <WizShell step={step} title="You’re all set 🎉" sub="Your church is live. Hand members a joining code from “Invite code”, and post your first note any time."
       footer={<React.Fragment>
         <div style={{ flex: 1 }} />
-        <button onClick={() => { if (onTab) onTab('overview'); onDone(); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 22px' }}><Icon name="check" size={16} color="#fff" /> Go to dashboard</button>
+        <button onClick={() => { if (onTab) onTab('overview'); onDone(); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 22px' }}><Icon name="check" size={16} color="var(--on-clay)" /> Go to dashboard</button>
       </React.Fragment>}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
         {[
@@ -577,8 +577,8 @@ function StewDashboard({ initial = 'overview' }) {
     <React.Fragment>
       <button onClick={() => setInvite(true)} title="Show your church’s joining code and QR for new members" className="sk-btn sk-btn--ghost" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> {narrow ? '' : 'Invite code'}</button>
       {tab === 'rota'
-        ? <button onClick={() => setAddingTeam(true)} title="Create a new serving team" className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {narrow ? '' : 'New team'}</button>
-        : <button onClick={() => setPosting(true)} title="Write a new post for your church" className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="#fff" /> {narrow ? '' : 'New post'}</button>}
+        ? <button onClick={() => setAddingTeam(true)} title="Create a new serving team" className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> {narrow ? '' : 'New team'}</button>
+        : <button onClick={() => setPosting(true)} title="Write a new post for your church" className="sk-btn sk-btn--clay" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="send" size={15} color="var(--on-clay)" /> {narrow ? '' : 'New post'}</button>}
       <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={999} accent="var(--sage)" /></button>
     </React.Fragment>
   );
@@ -967,7 +967,7 @@ function InvitePosterModal({ church, url, svg, onClose }) {
         </div>
         <div className="no-print" style={{ display: 'flex', flexWrap: 'wrap', gap: 9, marginTop: 20, justifyContent: 'center' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5 }}>Done</button>
-          <button onClick={savePdf} disabled={pdfBusy} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 13.5, opacity: pdfBusy ? 0.6 : 1 }}><Icon name={pdfBusy ? 'refresh' : 'receipt'} size={15} color="#fff" /> {pdfBusy ? 'Making PDF…' : 'Save PDF'}</button>
+          <button onClick={savePdf} disabled={pdfBusy} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 13.5, opacity: pdfBusy ? 0.6 : 1 }}><Icon name={pdfBusy ? 'refresh' : 'receipt'} size={15} color="var(--on-clay)" /> {pdfBusy ? 'Making PDF…' : 'Save PDF'}</button>
           {isNative
             ? <button onClick={shareInvite} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5 }}><Icon name="share" size={15} color="currentColor" /> Share link</button>
             : <button onClick={() => window.print()} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5 }}><Icon name="receipt" size={15} color="currentColor" /> Print</button>}
@@ -1099,7 +1099,7 @@ function JoinCard({ qrSize = 92, center = false }) {
         {/* full key, selectable — so copy works even if the buttons can't reach the clipboard */}
         <textarea readOnly value={np} onFocus={e => e.target.select()} style={{ width: '100%', maxWidth: 280, height: 38, resize: 'none', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--ink-3)', fontFamily: 'var(--mono)', fontSize: 10.5, padding: '6px 8px', marginTop: 4, lineHeight: 1.3, wordBreak: 'break-all' }} />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12, justifyContent: center ? 'center' : 'flex-start' }}>
-          <button onClick={() => doCopy('code', codeText)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'code' ? 'check' : 'receipt'} size={14} color="#fff" /> {copied === 'code' ? 'Copied' : 'Copy code'}</button>
+          <button onClick={() => doCopy('code', codeText)} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'code' ? 'check' : 'receipt'} size={14} color="var(--on-clay)" /> {copied === 'code' ? 'Copied' : 'Copy code'}</button>
           <button onClick={() => doCopy('link', url)} title="Copy a join link to paste into WhatsApp, email or a group chat" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied === 'link' ? 'check' : 'link'} size={14} color="currentColor" /> {copied === 'link' ? 'Copied' : 'Copy link'}</button>
           <button onClick={shareLink} title="Share the join link (e.g. straight into a WhatsApp group)" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="share" size={14} color="currentColor" /> Share</button>
           <button onClick={saveQrPng} title="Save the QR as an image to post in a chat or on a poster" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="qr" size={14} color="currentColor" /> Save QR</button>
@@ -1160,7 +1160,7 @@ function NewPostModal({ onClose }) {
         <textarea value={text} onChange={e => setText(e.target.value)} autoFocus rows={4} placeholder="Write to your church…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface-2)', padding: '13px 15px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.5 }} />
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={post} disabled={!text.trim() || sending} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (!text.trim() || sending) ? 0.55 : 1 }}><Icon name="send" size={16} color="#fff" /> {sending ? 'Posting…' : 'Post'}</button>
+          <button onClick={post} disabled={!text.trim() || sending} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (!text.trim() || sending) ? 0.55 : 1 }}><Icon name="send" size={16} color="var(--on-clay)" /> {sending ? 'Posting…' : 'Post'}</button>
         </div>
       </div>
     </div>
@@ -1272,12 +1272,12 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const pendingCount = (joinApproval && rosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)).length : 0;
   const pendingBanner = pendingCount ? (
     <button onClick={() => onTab('members')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-      <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pray" size={22} color="#fff" /></div>
+      <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pray" size={22} color="var(--on-clay)" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--clay-ink)' }}>{pendingCount} {pendingCount === 1 ? 'person is' : 'people are'} waiting to join</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Review and approve them in Members.</div>
       </div>
-      <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="#fff" /></span>
+      <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
   ) : null;
   // people asking to become a steward — surfaced big too, so a request never just sits unseen in Settings
@@ -1289,7 +1289,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
         <div style={{ fontWeight: 800, fontSize: 16, color: '#8a6717' }}>{stewardReqs.length} {stewardReqs.length === 1 ? 'person wants' : 'people want'} to help steward</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Approve them under Settings → Security → Delegated stewards.</div>
       </div>
-      <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="#fff" /></span>
+      <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
   ) : null;
   // on narrow, panels size to content and the page scrolls; on wide they fill a fixed-height grid + scroll inside
@@ -1380,7 +1380,7 @@ function DashGiving() {
     if (name && name.trim()) window.Steward.publishFund({ name: name.trim(), custody: 'Custodial · Strike', icon: 'gift' });
   };
   return (
-    <Panel title="Funds" action={<button onClick={newFund} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New fund</button>} style={{ height: '100%' }}>
+    <Panel title="Funds" action={<button onClick={newFund} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> New fund</button>} style={{ height: '100%' }}>
       <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 1.3fr 1fr 1fr 0.4fr', padding: '0 8px 12px', borderBottom: '1px solid var(--line)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>
         <div>Fund</div><div>Custody</div><div style={{ textAlign: 'right' }}>This month</div><div style={{ textAlign: 'right' }}>Year to date</div><div></div>
       </div>
@@ -1436,7 +1436,7 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, em
   const move = (idx, dir) => { const arr = items.slice(); const j = idx + dir; if (j < 0 || j >= arr.length) return; const t = arr[idx]; arr[idx] = arr[j]; arr[j] = t; if (onReorder) onReorder(arr); };
   const fld = { width: '100%', boxSizing: 'border-box', height: 40, padding: '0 14px 0 38px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   return (
-    <Panel title={title} action={<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerExtra || null}<button onClick={onAdd} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> {addLabel}</button></div>} style={{ height: '100%' }} scroll>
+    <Panel title={title} action={<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerExtra || null}<button onClick={onAdd} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> {addLabel}</button></div>} style={{ height: '100%' }} scroll>
       {searchable ? (
         <div style={{ position: 'relative', marginBottom: 12, flexShrink: 0 }}>
           <Icon name="search" size={16} color="var(--ink-3)" style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
@@ -1570,7 +1570,7 @@ function NewGroupModal({ open, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 10, padding: '20px 26px 22px' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px' }}>Cancel</button>
-          <button onClick={create} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: name.trim() ? 1 : .5 }}><Icon name="plus" size={16} color="#fff" /> Create group</button>
+          <button onClick={create} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: name.trim() ? 1 : .5 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Create group</button>
         </div>
       </div>
     </div>
@@ -1621,7 +1621,7 @@ function EditGroupMembersModal({ group, onClose }) {
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, padding: '8px 24px 0', lineHeight: 1.45 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '16px 24px 20px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}>Cancel</button>
-          <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}><Icon name="check" size={16} color="#fff" /> {busy ? 'Saving…' : 'Save members'}</button>
+          <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}><Icon name="check" size={16} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save members'}</button>
         </div>
       </div>
     </div>
@@ -1746,7 +1746,7 @@ function GroupChatModal({ group, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 9, padding: '12px 14px', borderTop: '1px solid var(--line)' }}>
           <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="Message your church…" style={{ flex: 1, height: 42, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
-          <button onClick={send} disabled={!text.trim()} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: text.trim() ? 1 : 0.55 }}><Icon name="send" size={16} color="#fff" /></button>
+          <button onClick={send} disabled={!text.trim()} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: text.trim() ? 1 : 0.55 }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
         </div>
         {evDetail && window.SchEventDetail ? React.createElement(window.SchEventDetail, { event: evDetail, onClose: () => setEvDetail(null) }) : null}
     </div>
@@ -1780,7 +1780,7 @@ function CategoriesModal({ cats, groups, onClose }) {
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18, lineHeight: 1.5 }}>Name your own groupings — e.g. <b>Lifegroups</b>, <b>Cell groups</b>, <b>Ministries</b> — then sort each group into one. Members see their groups under these headings.</div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
             <input autoFocus value={adding} onChange={e => setAdding(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }} placeholder="New category name…" style={fld} />
-            <button onClick={add} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: adding.trim() ? 1 : .5 }}><Icon name="plus" size={15} color="#fff" /> Add</button>
+            <button onClick={add} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: adding.trim() ? 1 : .5 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add</button>
           </div>
           {cats.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '24px 10px', color: 'var(--ink-3)', fontSize: 13.5 }}>No categories yet. Add one above, then assign groups to it.</div>
@@ -1818,7 +1818,7 @@ function CategoriesModal({ cats, groups, onClose }) {
             <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px' }}>The category is removed. Its {countIn(pendingDelete.id)} group{countIn(pendingDelete.id) === 1 ? '' : 's'} stay — they just become uncategorised.</p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setPendingDelete(null)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Keep it</button>
-              <button onClick={del} className="sk-btn" style={{ flex: 1, padding: 12, background: 'var(--clay)', color: '#fff' }}><Icon name="trash" size={15} color="#fff" /> Delete</button>
+              <button onClick={del} className="sk-btn" style={{ flex: 1, padding: 12, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="trash" size={15} color="var(--on-clay)" /> Delete</button>
             </div>
           </div>
         </div>
@@ -1881,7 +1881,7 @@ function DashGroups() {
             <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 20px' }}>Past messages stay on the relay but won’t be shown. You can undo this for a few seconds.</p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setPendingDelete(null)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Keep it</button>
-              <button onClick={confirmDelete} className="sk-btn" style={{ flex: 1, padding: 13, fontSize: 14, background: 'var(--clay)', color: '#fff' }}><Icon name="trash" size={15} color="#fff" /> Delete</button>
+              <button onClick={confirmDelete} className="sk-btn" style={{ flex: 1, padding: 13, fontSize: 14, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="trash" size={15} color="var(--on-clay)" /> Delete</button>
             </div>
           </div>
         </div>
@@ -1932,7 +1932,7 @@ function DashGroups() {
               {teamMembers.people.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No one on this team yet — add people via the team’s roster on the Rota page.</div>
                 : teamMembers.people.map((p, i) => (
                   <div key={p.id || p.pub || i} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${teamMembers.team.accent || 'var(--clay)'}, color-mix(in oklab, ${teamMembers.team.accent || 'var(--clay)'} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{(p.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
+                    <div style={{ width: 32, height: 32, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${teamMembers.team.accent || 'var(--clay)'}, color-mix(in oklab, ${teamMembers.team.accent || 'var(--clay)'} 60%, #16120c))`, color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{(p.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
                     <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{p.name}</div>{p.pub ? <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)' }}>linked member</div> : <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>not linked to an app account</div>}</div>
                   </div>
                 ))}
@@ -1990,7 +1990,7 @@ function GroupLeadersModal({ group, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1 }}><Icon name="check" size={15} color="#fff" /> {saving ? 'Saving…' : 'Save leaders'}</button>
+          <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save leaders'}</button>
         </div>
       </div>
     </div>
@@ -2051,7 +2051,7 @@ function NewTeamModal({ open, onClose }) {
         <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={fld} />
         <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={create} disabled={!name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: name.trim() ? 1 : 0.55 }}><Icon name="plus" size={16} color="#fff" /> Create team</button>
+          <button onClick={create} disabled={!name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: name.trim() ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Create team</button>
         </div>
       </div>
     </div>
@@ -2242,7 +2242,7 @@ function DashRelaysCard() {
             <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
               placeholder="nos.lol  ·  relay.damus.io  ·  wss://relay.example.com" spellCheck={false} autoCapitalize="none"
               style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-            <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Add relay</button>
+            <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
           </div>
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
           <button onClick={autoFind} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
@@ -2365,7 +2365,7 @@ function NewPlanModal({ onClose }) {
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
           <button onClick={() => create(true)} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }} title="Hold it — members won’t see it until you publish">Save as draft</button>
-          <button onClick={() => create(false)} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }}><Icon name="send" size={15} color="#fff" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
+          <button onClick={() => create(false)} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
         </div>
       </div>
     </div>
@@ -2390,10 +2390,10 @@ function DashPlans() {
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{p.sub || (p.days ? p.days.length + ' days' : '')}{p.tag ? ' · ' + p.tag : ''}{isShared && p.publishAt && p.publishAt * 1000 > Date.now() ? ' · ' + new Date(p.publishAt * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</div>
       </div>
-      {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="#fff" /> Publish</button> : null}
+      {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
       {isShared
         ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
-        : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="#fff" /> Share</button>}
+        : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
     </div>
   );
   return (
@@ -2403,8 +2403,8 @@ function DashPlans() {
       <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 }}>
       <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
-          {planDrafts.length > 0 ? <button onClick={() => { if (confirm(`Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="#fff" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}
-          <button onClick={() => setCreating(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> New plan</button>
+          {planDrafts.length > 0 ? <button onClick={() => { if (confirm(`Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}
+          <button onClick={() => setCreating(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> New plan</button>
         </div>}>
         {shared.length === 0
           ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>No plans shared yet — make your own with “New plan”, or pick one from the library below.</div>
@@ -2493,10 +2493,10 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
           {wasDraft ? (
             <React.Fragment>
               <button onClick={() => create(true)} disabled={!canSave} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canSave ? 1 : 0.55 }} title="Hold it — members won’t see it until you publish">{busy ? '…' : 'Save as draft'}</button>
-              <button onClick={() => create(false)} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canSave ? 1 : 0.55 }}><Icon name="send" size={15} color="#fff" /> {busy ? 'Saving…' : (isFuture ? 'Schedule' : 'Publish now')}</button>
+              <button onClick={() => create(false)} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canSave ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> {busy ? 'Saving…' : (isFuture ? 'Schedule' : 'Publish now')}</button>
             </React.Fragment>
           ) : (
-            <button onClick={() => create(false)} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: canSave ? 1 : 0.55 }}><Icon name="check" size={16} color="#fff" /> {busy ? 'Saving…' : 'Save changes'}</button>
+            <button onClick={() => create(false)} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: canSave ? 1 : 0.55 }}><Icon name="check" size={16} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save changes'}</button>
           )}
         </div>
       </div>
@@ -2588,9 +2588,9 @@ function DashDevotionals() {
       {seriesSchedule ? <SeriesScheduleModal label={seriesSchedule.label} count={seriesSchedule.items.length} onApply={(start, interval) => scheduleSeries(seriesSchedule.items, start, interval)} onClear={() => unscheduleSeries(seriesSchedule.items)} onClose={() => setSeriesSchedule(null)} /> : null}
       <Panel scroll title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {draftCount > 0 ? <button onClick={() => { if (confirm(`Publish ${draftCount} draft${draftCount === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) publishDrafts(devos); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held drafts live (keeping any schedules)"><Icon name="send" size={15} color="#fff" /> Publish {draftCount} draft{draftCount === 1 ? '' : 's'}</button> : null}
+          {draftCount > 0 ? <button onClick={() => { if (confirm(`Publish ${draftCount} draft${draftCount === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) publishDrafts(devos); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held drafts live (keeping any schedules)"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {draftCount} draft{draftCount === 1 ? '' : 's'}</button> : null}
           <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
-          <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Upload devotional</button>
+          <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Upload devotional</button>
         </div>} style={{ height: '100%' }}>
         {devos.length === 0 ? (
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Upload a .txt or .md reflection on a passage — your congregation reads it in their app.</div>
@@ -2629,7 +2629,7 @@ function DashDevotionals() {
                 </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0, justifyContent: narrow ? 'flex-end' : 'initial' }}>
-                {d.draft ? <button onClick={() => republish(d, { draft: false })} title="Publish this one now" style={{ border: 'none', background: 'var(--clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: '#fff', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="send" size={13} color="#fff" /> Publish</button> : null}
+                {d.draft ? <button onClick={() => republish(d, { draft: false })} title="Publish this one now" style={{ border: 'none', background: 'var(--clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
                 <button onClick={() => setEditing(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
                 <button onClick={() => window.Steward.removeDevotional(d.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
                 </div>
@@ -2757,7 +2757,7 @@ function BulkUploadModal({ kind, onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 26px 20px', borderTop: '1px solid var(--line)' }}>
           <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink-3)' }}>{busy ? `Publishing… ${done}/${valid.length}` : (valid.length ? `${valid.length} ready${items.length - valid.length ? ` · ${items.length - valid.length} skipped` : ''}` : 'No files yet')}</div>
           <button onClick={onClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, opacity: busy ? .5 : 1 }}>Cancel</button>
-          <button onClick={publishAll} disabled={busy || !valid.length} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 13.5, opacity: (busy || !valid.length) ? .5 : 1 }}><Icon name="plus" size={15} color="#fff" /> Add {valid.length || ''} as draft{valid.length === 1 ? '' : 's'}</button>
+          <button onClick={publishAll} disabled={busy || !valid.length} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 13.5, opacity: (busy || !valid.length) ? .5 : 1 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add {valid.length || ''} as draft{valid.length === 1 ? '' : 's'}</button>
         </div>
       </div>
     </div>
@@ -2885,7 +2885,7 @@ function BulkInviteModal({ onClose }) {
       <textarea value={names} onChange={e => setNames(e.target.value)} placeholder={'Maria Gonzalez\nJohn Park\nGrace Okafor\n…'} style={{ width: '100%', boxSizing: 'border-box', minHeight: 170, border: '1px solid var(--line)', borderRadius: 12, padding: 12, fontSize: 14, fontFamily: 'var(--font-ui)', background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', resize: 'vertical' }} />
       <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
-        <button onClick={printSlips} disabled={!list.length} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: list.length ? 1 : 0.5 }}><Icon name="qr" size={15} color="#fff" /> Make {list.length || ''} join slips</button>
+        <button onClick={printSlips} disabled={!list.length} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: list.length ? 1 : 0.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Make {list.length || ''} join slips</button>
       </div>
     </CkModal>
   );
@@ -3007,7 +3007,7 @@ function DashMembers() {
               <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
             {confirmBlock === m.pubkey
               ? <React.Fragment>
-                  <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                  <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
                   <button onClick={() => setConfirmBlock(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="x" size={15} color="currentColor" /></button>
                 </React.Fragment>
               : <button onClick={() => setConfirmBlock(m.pubkey)} title="Remove / block this member" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="shield" size={15} color="currentColor" /></button>}
@@ -3071,7 +3071,7 @@ function DashMembers() {
                     <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
                     <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
                   </div>
-                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="#fff" /> Approve</button>
+                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
                   <button onClick={() => block(m.pubkey)} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
                 </div>
               );
@@ -3096,7 +3096,7 @@ function DashMembers() {
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>child {idOf(r.child)}</div>
                   <div style={{ marginTop: 5, fontSize: 11.5, color: 'var(--ink-3)' }}>Confirming lets this person DM the child directly and marks the child as under-18. Check both npubs are who you expect.</div>
                 </div>
-                <button onClick={() => approveGuardian(r)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="#fff" /> Confirm</button>
+                <button onClick={() => approveGuardian(r)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm</button>
               </div>
             ))}
           </div>
@@ -3211,7 +3211,7 @@ function DashCheckin() {
   };
   return (
     <Panel title="Kids check-in" action={
-      <button onClick={() => setPicking(true)} disabled={!minors.length} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: minors.length ? 1 : 0.5 }}><Icon name="plus" size={14} color="#fff" /> Check a child in</button>
+      <button onClick={() => setPicking(true)} disabled={!minors.length} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, opacity: minors.length ? 1 : 0.5 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Check a child in</button>
     } style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <DismissibleNote id="kids-checkin-intro" icon="shield" tone="sage" style={{ marginBottom: 14 }}>Check children in and give the parent the <b>pickup code</b>. At collection, match the code on their slip before checking out. Records are <b>encrypted to your church key</b> — only this console sees who’s present.</DismissibleNote>
       {!minors.length ? (
@@ -3373,7 +3373,7 @@ function NetworkAnnounceComposer() {
       </div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 9 }}>Reaches every member of every church in the network.</div>
       <textarea value={text} onChange={e => setText(e.target.value)} rows={3} placeholder="Share news with the whole network…" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '11px 13px', fontSize: 14, lineHeight: 1.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical', marginBottom: 9 }} />
-      <button onClick={post} disabled={!text.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13.5, opacity: text.trim() ? 1 : 0.55 }}><Icon name={sent ? 'check' : 'send'} size={15} color="#fff" /> {sent ? 'Sent' : 'Post announcement'}</button>
+      <button onClick={post} disabled={!text.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13.5, opacity: text.trim() ? 1 : 0.55 }}><Icon name={sent ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {sent ? 'Sent' : 'Post announcement'}</button>
       {posts.length ? (
         <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Recent</div>
@@ -3420,7 +3420,7 @@ function DashNetworksPanel() {
             <input value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doCreate(); }} autoFocus placeholder="e.g. Regions Beyond" style={{ width: '100%', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => { setNaming(false); setNewName(''); }} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-              <button onClick={doCreate} disabled={!newName.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: newName.trim() ? 1 : 0.55 }}><Icon name="globe" size={15} color="#fff" /> Create</button>
+              <button onClick={doCreate} disabled={!newName.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: newName.trim() ? 1 : 0.55 }}><Icon name="globe" size={15} color="var(--on-clay)" /> Create</button>
             </div>
           </div>
         </div>
@@ -3441,7 +3441,7 @@ function DashNetworksPanel() {
         <NetworkRow net={net} onLeave={leave} />
       ) : (
         <React.Fragment>
-          <button onClick={() => setNaming(true)} disabled={busy} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 12, fontSize: 14, marginBottom: 12, opacity: busy ? 0.6 : 1 }}><Icon name="globe" size={16} color="#fff" /> {busy ? 'Creating…' : 'Create a network'}</button>
+          <button onClick={() => setNaming(true)} disabled={busy} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 12, fontSize: 14, marginBottom: 12, opacity: busy ? 0.6 : 1 }}><Icon name="globe" size={16} color="var(--on-clay)" /> {busy ? 'Creating…' : 'Create a network'}</button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink-3)', fontSize: 12, fontWeight: 700, margin: '4px 0 12px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} />OR JOIN ONE<div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
           <div style={{ display: 'flex', gap: 9 }}>
             <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') join(); }} spellCheck={false} autoCapitalize="none"
@@ -3514,7 +3514,7 @@ function DashStewardsPanel({ church }) {
         </div>
         {confirmRemove === pk
           ? <React.Fragment>
-              <button onClick={() => remove(pk)} title="Confirm — revoke this steward immediately" style={{ border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Revoke</button>
+              <button onClick={() => remove(pk)} title="Confirm — revoke this steward immediately" style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Revoke</button>
               <button onClick={() => setConfirmRemove(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} color="currentColor" /></button>
             </React.Fragment>
           : <button onClick={() => setConfirmRemove(pk)} title="Revoke this steward" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} color="currentColor" /></button>}
@@ -3556,7 +3556,7 @@ function DashStewardsPanel({ church }) {
         ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 0 10px' }}>No delegated stewards yet.</div>
         : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>{stewards.map(row)}</div>}
       {!adding
-        ? <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="#fff" /> Add a steward</button>
+        ? <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add a steward</button>
         : scanning
           ? <div>
               <StewQRScanner onResult={(payload) => { setScanning(false); addByCode(payload); }} onCancel={() => setScanning(false)} />
@@ -3566,7 +3566,7 @@ function DashStewardsPanel({ church }) {
             {/* primary, easiest path: show an invite QR; they scan it → appear under "Requests to steward" */}
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Show this invite to the would-be steward — in their Steward app they tap <b>Become a steward → Scan an invite</b>. They’ll then appear above under <b>Requests to steward</b> for you to approve.</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={() => setInviteQR(v => !v)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="#fff" /> {inviteQR ? 'Hide invite QR' : 'Show invite QR'}</button>
+              <button onClick={() => setInviteQR(v => !v)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="var(--on-clay)" /> {inviteQR ? 'Hide invite QR' : 'Show invite QR'}</button>
               <button onClick={() => { copyText(window.Steward.stewardInvitePayload ? window.Steward.stewardInvitePayload() : ''); setCopiedInvite(true); setTimeout(() => setCopiedInvite(false), 1400); }} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name={copiedInvite ? 'check' : 'receipt'} size={14} color="currentColor" /> {copiedInvite ? 'Copied' : 'Copy invite'}</button>
             </div>
             {inviteQR ? <div style={{ textAlign: 'center', padding: 12, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', marginTop: 10 }}>
@@ -3631,7 +3631,7 @@ function DashBecomeStewardPanel() {
       {scanInvite
         ? <div><StewQRScanner onResult={onInvite} onCancel={() => setScanInvite(false)} /><button onClick={() => setScanInvite(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5, marginTop: 8 }}>Cancel scan</button></div>
         : <div>
-            <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="#fff" /> Scan a church’s invite</button>
+            <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button>
             <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '9px 0 6px' }}>No camera? Paste the invite the owner sent you:</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={inviteText} onChange={e => { setInviteText(e.target.value); setReqMsg(''); }} placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
@@ -3646,7 +3646,7 @@ function DashBecomeStewardPanel() {
       </div>
       <SkKey value={npub || '—'} label="your steward code" />
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-        <button onClick={() => { copyText(code); setCopied(true); setTimeout(() => setCopied(false), 1400); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 12px', fontSize: 13 }}><Icon name={copied ? 'check' : 'receipt'} size={14} color="#fff" /> {copied ? 'Copied' : 'Copy code'}</button>
+        <button onClick={() => { copyText(code); setCopied(true); setTimeout(() => setCopied(false), 1400); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 12px', fontSize: 13 }}><Icon name={copied ? 'check' : 'receipt'} size={14} color="var(--on-clay)" /> {copied ? 'Copied' : 'Copy code'}</button>
         <button onClick={() => setShowQR(s => !s)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }}><Icon name="qr" size={14} color="currentColor" /> {showQR ? 'Hide QR' : 'Show QR'}</button>
       </div>
       {showQR && svg ? <div style={{ width: 184, height: 184, margin: '12px auto 0', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: svg }} /> : null}
@@ -3671,7 +3671,7 @@ function DashMediaPanel({ church }) {
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Your church’s <b>YouTube</b> or <b>Rumble</b> channel — or an <b>unlisted YouTube playlist</b> (not publicly searchable — a private set only your members see). Videos appear in members’ Watch tab, auto-updated.</div>
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={vid} onChange={e => setVid(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveVid(); }} spellCheck={false} autoCapitalize="none" placeholder="youtube.com/@yourchurch · youtube.com/playlist?list=… · rumble.com/c/…" style={inp} />
-        <button onClick={saveVid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={vidSaved ? 'check' : 'send'} size={15} color="#fff" /> {vidSaved ? 'Saved' : 'Save'}</button>
+        <button onClick={saveVid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={vidSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {vidSaved ? 'Saved' : 'Save'}</button>
       </div>
       {church.channel ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.channel}</span></div> : null}
       <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
@@ -3679,7 +3679,7 @@ function DashMediaPanel({ church }) {
       <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A <b>podcast RSS feed</b> (sermons, devotionals) — episodes stream in the Listen tab. Most hosts (Buzzsprout, Podbean, Apple, Spotify for Podcasters) give an RSS link. An <b>unlisted / private feed URL works too</b> — keep the link unguessable and it stays members-only.</div>
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={aud} onChange={e => setAud(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveAud(); }} spellCheck={false} autoCapitalize="none" placeholder="https://feeds.yourhost.com/yourchurch.xml" style={inp} />
-        <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="#fff" /> {audSaved ? 'Saved' : 'Save'}</button>
+        <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {audSaved ? 'Saved' : 'Save'}</button>
       </div>
       {church.audioFeed ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.audioFeed}</span></div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 14, lineHeight: 1.5 }}>Want to host your church’s <b>own</b> audio/video (members-only, no YouTube)? That lives in <b>Resources → Sermons</b>.</div>
@@ -3719,7 +3719,7 @@ function SermonEditModal({ sermon, onSave, onClose }) {
         {err ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay)', marginBottom: 12, lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={busy || !title.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !title.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={busy || !title.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !title.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
@@ -3824,7 +3824,7 @@ function DashSermons() {
           <span><b>Notify members</b> — feature it on everyone’s Today (“New video / New audio clip”) + send a notification. It becomes the one featured item, replacing any previous. Leave off for a quiet upload.</span>
         </label>
         <input ref={fileRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={onFile} />
-        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="#fff" /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="var(--on-clay)" /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
         {upMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 8 }}>{upMsg}</div> : null}
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Big videos are slow to upload and, if encrypted, slow to play. Record or export at <b>~720p</b> and keep clips short — a few minutes is usually a few MB. <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/docs/guides/STEWARD-GUIDE.md#keeping-video-small-and-fast" target="_blank" rel="noopener" style={{ color: 'var(--clay)', textDecoration: 'none', fontWeight: 600 }}>How to shrink a video →</a></div>
       </Panel>
@@ -4106,7 +4106,7 @@ function DashGivingPanel({ church }) {
               placeholder="giving@yourchurch.org"
               style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: `1px solid ${check === 'bad' ? 'var(--clay)' : 'var(--line)'}`, background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none' }} />
             <button onClick={verify} disabled={!valid || check === 'checking'} title="Check this Lightning address really works before saving" className="sk-btn sk-btn--ghost" style={{ padding: '0 14px', fontSize: 13 }}>{check === 'checking' ? '…' : 'Check'}</button>
-            <button onClick={save} disabled={!valid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="#fff" /> {saved ? 'Saved' : 'Save'}</button>
+            <button onClick={save} disabled={!valid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={saved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {saved ? 'Saved' : 'Save'}</button>
           </div>
           {check === 'ok' ? <div style={{ fontSize: 12, color: 'var(--sage)', fontWeight: 700, marginTop: 8, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="check" size={13} stroke={3} color="var(--sage)" /> Valid Lightning address — ready to receive.</div> : null}
           {check === 'bad' ? <div style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 700, marginTop: 8 }}>That doesn’t resolve to a Lightning pay address — double-check it.</div> : null}
@@ -4136,7 +4136,7 @@ function NameEditModal({ current, isNetwork, onSave, onClose }) {
         <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder={isNetwork ? 'e.g. Regions Beyond' : 'e.g. Grace Community Church'} style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !name.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !name.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
@@ -4161,7 +4161,7 @@ function SeriesNameModal({ current, count, onSave, onClose }) {
         <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. The Weekly Word" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18 }} />
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !name.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={busy || !name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !name.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
@@ -4205,7 +4205,7 @@ function SeriesScheduleModal({ label, count, onApply, onClear, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={clear} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: 13, fontSize: 13.5 }} title="Clear schedules — publish all now">Publish all now</button>
-          <button onClick={apply} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name="clock" size={15} color="#fff" /> {busy ? 'Scheduling…' : 'Schedule'}</button>
+          <button onClick={apply} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name="clock" size={15} color="var(--on-clay)" /> {busy ? 'Scheduling…' : 'Schedule'}</button>
         </div>
       </div>
     </div>
@@ -4240,7 +4240,7 @@ function WebAddressModal({ church, onClose }) {
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
           {custom ? <button onClick={() => save('')} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Use default</button> : null}
-          <button onClick={() => save(val)} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+          <button onClick={() => save(val)} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
@@ -4301,7 +4301,7 @@ function ImageCropModal({ file, outW, outH, round, radiusPct, title, onSave, onC
       </div>
       <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
-        <button onClick={save} disabled={!img || busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: (!img || busy) ? .6 : 1 }}><Icon name="check" size={15} color="#fff" /> {busy ? 'Saving…' : 'Save'}</button>
+        <button onClick={save} disabled={!img || busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: (!img || busy) ? .6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save'}</button>
       </div>
     </CkModal>
   );
@@ -4548,7 +4548,7 @@ function DashBackup() {
           </span>
         </label>
       ) : null}
-      <button onClick={doBackup} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '11px 16px', fontSize: 14 }}><Icon name="share" size={16} color="#fff" /> {busy ? 'Backing up…' : 'Back up church data'}</button>
+      <button onClick={doBackup} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '11px 16px', fontSize: 14 }}><Icon name="share" size={16} color="var(--on-clay)" /> {busy ? 'Backing up…' : 'Back up church data'}</button>
       {msg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: msg.ok ? 'var(--sage)' : 'var(--clay)' }}>{msg.ok ? '✓ ' : '✗ '}{msg.text}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>Last backup: {last ? new Date(last * 1000).toLocaleDateString() : 'never'}</div>
       <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
@@ -4664,7 +4664,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
           <label title="Upload a church picture" style={{ position: 'relative', cursor: picBusy ? 'default' : 'pointer', flexShrink: 0, opacity: picBusy ? .6 : 1 }}>
             <SkBadge initials={(church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase()} picture={church.picture} size={44} radius={999} />
-            <span style={{ position: 'absolute', right: -4, bottom: -4, width: 20, height: 20, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--surface)' }}><Icon name={picBusy ? 'refresh' : 'pen'} size={10} color="#fff" /></span>
+            <span style={{ position: 'absolute', right: -4, bottom: -4, width: 20, height: 20, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--surface)' }}><Icon name={picBusy ? 'refresh' : 'pen'} size={10} color="var(--on-clay)" /></span>
             <input type="file" accept="image/*" disabled={picBusy} onChange={onPickPicture} style={{ display: 'none' }} />
           </label>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -4739,7 +4739,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <div style={{ padding: 14, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))' }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 14, lineHeight: 1.7, wordSpacing: 3, color: 'var(--ink)' }}>{phrase || 'No phrase available for this key.'}</div>
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              {phrase ? <button onClick={() => { copyText(phrase); setCopied(true); setTimeout(() => setCopied(false), 1400); }} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied ? 'check' : 'receipt'} size={14} color="#fff" /> {copied ? 'Copied' : 'Copy'}</button> : null}
+              {phrase ? <button onClick={() => { copyText(phrase); setCopied(true); setTimeout(() => setCopied(false), 1400); }} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name={copied ? 'check' : 'receipt'} size={14} color="var(--on-clay)" /> {copied ? 'Copied' : 'Copy'}</button> : null}
               <button onClick={() => { setRevealed(false); setPhrase(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}>Hide</button>
             </div>
           </div>
@@ -4757,7 +4757,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
               <textarea value={restorePhrase} onChange={e => setRestorePhrase(e.target.value)} rows={3} placeholder="word one  word two  word three …" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
               {restoreErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>{restoreErr}</div> : null}
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <button onClick={doRestore} disabled={!restorePhrase.trim()} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13, opacity: restorePhrase.trim() ? 1 : 0.5 }}><Icon name="refresh" size={14} color="#fff" /> Restore church</button>
+                <button onClick={doRestore} disabled={!restorePhrase.trim()} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13, opacity: restorePhrase.trim() ? 1 : 0.5 }}><Icon name="refresh" size={14} color="var(--on-clay)" /> Restore church</button>
                 <button onClick={() => { setRestoreOpen(false); setRestorePhrase(''); setRestoreErr(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
               </div>
             </div>
@@ -4770,7 +4770,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           ? 'This console is locked with a PIN — the church key is encrypted on this device and auto-locks after 10 minutes idle.'
           : 'Add a PIN to encrypt the church key on this device. Without it, anyone who opens this browser can post as the church. A longer PIN or passphrase is safer.'}</div>
         {!hasPin ? (
-          <button onClick={() => setPinAction('set')} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="lock" size={15} color="#fff" /> Lock with a PIN</button>
+          <button onClick={() => setPinAction('set')} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="lock" size={15} color="var(--on-clay)" /> Lock with a PIN</button>
         ) : (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button onClick={() => setPinAction('change')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Change PIN</button>
@@ -4793,7 +4793,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
         {/* handoff QR — the new steward scans this to adopt the church */}
         <div style={{ marginBottom: 14 }}>
           {!showQR ? (
-            <button onClick={() => setShowQR(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="#fff" /> Show handoff QR</button>
+            <button onClick={() => setShowQR(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Show handoff QR</button>
           ) : (
             <div style={{ textAlign: 'center', padding: 14, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               {handoffSvg
@@ -4823,7 +4823,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <div style={{ padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))' }}>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>This forgets the church key on <b>this</b> device only — the church keeps running wherever its phrase is held. Make sure you’ve backed up the phrase or handed it on first, or this church is gone from here.</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => { window.Steward.removeKey(); window.location.reload(); }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: '#fff' }}><Icon name="x" size={14} color="#fff" /> Remove &amp; reload</button>
+              <button onClick={() => { window.Steward.removeKey(); window.location.reload(); }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="x" size={14} color="var(--on-clay)" /> Remove &amp; reload</button>
               <button onClick={() => setConfirmRemove(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
             </div>
           </div>
@@ -4915,7 +4915,7 @@ function StewDmWindow({ peer, offset, onClose }) {
           </div>
           <div style={{ display: 'flex', gap: 8, padding: '10px 11px', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
             <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} autoFocus placeholder="Message…" style={{ flex: 1, height: 38, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 12px', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
-            <button onClick={send} disabled={!text.trim()} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 13px', opacity: text.trim() ? 1 : 0.5 }}><Icon name="send" size={15} color="#fff" /></button>
+            <button onClick={send} disabled={!text.trim()} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 13px', opacity: text.trim() ? 1 : 0.5 }}><Icon name="send" size={15} color="var(--on-clay)" /></button>
           </div>
         </React.Fragment>
       ) : null}

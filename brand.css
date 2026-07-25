@@ -12,6 +12,7 @@
   --line-2:     rgba(34,28,22,0.05);
 
   --clay:       #C25A38;
+  --on-clay:    #fff;   /* text on a clay fill (dark theme overrides to a dark ink) */
   --clay-deep:  #9C4327;
   --clay-ink:   #A8462A;
   --clay-soft:  #F3DECF;

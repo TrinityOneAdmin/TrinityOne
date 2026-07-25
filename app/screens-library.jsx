@@ -218,7 +218,7 @@ function BackupCard({ ctx }) {
           <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>Back up your data</div>
           <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.35 }}>An encrypted copy of your notes, journals, highlights & books — restore on a new phone in seconds.</div>
         </div>
-        {!picking ? <button onClick={() => setPicking(true)} style={{ border: 'none', background: 'var(--clay)', color: '#fff',
+        {!picking ? <button onClick={() => setPicking(true)} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
           fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', padding: '9px 14px', borderRadius: 11, flexShrink: 0 }}>Back up</button> : null}
       </div>
 
@@ -260,7 +260,7 @@ function BackupCard({ ctx }) {
             border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || pass.length < 4 || !secure) ? 0.55 : 1 }}>
             <Icon name={done === 'device' || done === 'downloads' ? 'check' : 'arrowUp'} size={16} color="var(--clay)" style={done === 'device' || done === 'downloads' ? null : { transform: 'rotate(180deg)' }} /> {busy === 'local' ? 'Saving…' : (done === 'device' || done === 'downloads') ? 'Saved' : 'Save to device'}</button>
           <button onClick={() => run('cloud')} disabled={!!busy || pass.length < 4 || !secure} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '12px', borderRadius: 12,
-            border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', opacity: (busy || pass.length < 4 || !secure) ? 0.55 : 1 }}>
+            border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', opacity: (busy || pass.length < 4 || !secure) ? 0.55 : 1 }}>
             <Icon name={done === 'cloud' ? 'check' : 'cloud'} size={16} color="#fff" /> {busy === 'cloud' ? 'Sealing…' : done === 'cloud' ? 'Ready' : 'Save to cloud'}</button>
         </div>
         <button onClick={() => fileRef.current && fileRef.current.click()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px', borderRadius: 12,
@@ -333,7 +333,7 @@ function JournalEditor({ entry, open, onClose, ctx }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 14px 11px' }}>
           <button onClick={onClose} style={{ border: 'none', background: 'none', color: 'var(--ink-2)', fontWeight: 600, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{editing ? 'Edit entry' : 'New entry'}</div>
-          <button onClick={save} disabled={!canSave} style={{ border: 'none', borderRadius: 11, padding: '8px 17px', background: 'var(--clay)', color: '#fff',
+          <button onClick={save} disabled={!canSave} style={{ border: 'none', borderRadius: 11, padding: '8px 17px', background: 'var(--clay)', color: 'var(--on-clay)',
             fontWeight: 700, fontSize: 14, cursor: canSave ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', opacity: canSave ? 1 : .4 }}>Save</button>
         </div>
       </div>
@@ -548,7 +548,7 @@ function CollectionView({ coll, open, onClose, ctx }) {
               width: '100%', boxSizing: 'border-box', resize: 'none', padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.5, color: 'var(--ink)' }} />
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
               <button onClick={() => { setAdding(false); setPWho(''); setPText(''); }} style={{ flex: 1, padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-              <button onClick={savePrayer} style={{ flex: 1, padding: 10, borderRadius: 11, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Add</button>
+              <button onClick={savePrayer} style={{ flex: 1, padding: 10, borderRadius: 11, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Add</button>
             </div>
           </div>
         ) : null}
@@ -657,7 +657,7 @@ function StoreRow({ item, catIcon, ctx }) {
           </button>
         ) : (
           <button onClick={onGet} style={{ display: 'flex', alignItems: 'center', gap: 5, border: 'none',
-            background: 'var(--clay)', color: '#fff', borderRadius: 11, padding: '8px 13px', cursor: 'pointer',
+            background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, padding: '8px 13px', cursor: 'pointer',
             fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, boxShadow: 'var(--shadow)' }}>
             <Icon name={isImport ? 'plus' : 'arrowUp'} size={15} stroke={2.2} style={{ transform: isImport ? 'none' : 'rotate(180deg)' }} />
             {isImport ? 'Import' : 'Get'}

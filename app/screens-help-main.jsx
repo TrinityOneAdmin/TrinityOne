@@ -130,7 +130,7 @@ function BackupWalkthrough({ onClose, onComplete, ctx, fs = 1 }) {
   );
 }
 function helpPrimaryBtn(fs) {
-  return { width: '100%', padding: 17, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 17 * fs, fontFamily: 'var(--font-ui)' };
+  return { width: '100%', padding: 17, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 17 * fs, fontFamily: 'var(--font-ui)' };
 }
 
 // ════ Help Center (index ↔ article ↔ backup) ════
@@ -184,7 +184,7 @@ function HelpIndex({ D, fs, onOpen, onBackup, ctx }) {
       <p style={{ fontFamily: 'var(--font-read)', fontSize: 17 * fs, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 20px', textWrap: 'pretty' }}>{D.intro}</p>
 
       {/* recovery hero */}
-      <div onClick={onBackup} style={{ position: 'relative', overflow: 'hidden', borderRadius: 24, cursor: 'pointer', marginBottom: 14, background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow-lg)', padding: '22px 22px 20px' }}>
+      <div onClick={onBackup} style={{ position: 'relative', overflow: 'hidden', borderRadius: 24, cursor: 'pointer', marginBottom: 14, background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow-lg)', padding: '22px 22px 20px' }}>
         <div style={{ position: 'absolute', right: -10, bottom: -16, opacity: .9 }}><HelpIllo name="paper" size={150} tone="rgba(255,255,255,.5)" soft="rgba(255,255,255,.16)" /></div>
         <div style={{ position: 'relative' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(255,255,255,.2)', padding: '5px 12px', borderRadius: 999, fontSize: 11.5, fontWeight: 800, letterSpacing: '.6px', textTransform: 'uppercase' }}>
@@ -260,7 +260,7 @@ function HelpArticleView({ a, fs, ra, onBackup, ctx }) {
       {a.blocks.map((b, i) => <HelpBlock key={i} b={b} fs={fs} />)}
 
       {isWords ? (
-        <button onClick={onBackup} style={{ width: '100%', marginTop: 8, padding: 17, borderRadius: 16, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 17 * fs, fontFamily: 'var(--font-ui)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
+        <button onClick={onBackup} style={{ width: '100%', marginTop: 8, padding: 17, borderRadius: 16, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 17 * fs, fontFamily: 'var(--font-ui)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
           <Halo size={20} color="#fff" spark="var(--gold-soft)" /> Back up my 12 words now</button>
       ) : null}
     </div>
@@ -286,7 +286,7 @@ function BackupNudge({ open, onClose, onBackup }) {
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 auto 4px', maxWidth: 320, textWrap: 'pretty' }}>
             Your account has no password. Writing down your <b style={{ color: 'var(--ink)' }}>12 words</b> is the one thing that keeps it yours. It takes two minutes.</p>
         </div>
-        <button onClick={onBackup} style={{ width: '100%', marginTop: 20, padding: 17, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 16.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
+        <button onClick={onBackup} style={{ width: '100%', marginTop: 20, padding: 17, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
           <Halo size={20} color="#fff" spark="var(--gold-soft)" /> Back up my 12 words</button>
         <button onClick={onClose} style={{ width: '100%', marginTop: 10, padding: 13, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>I’ll do this later</button>
         <p style={{ textAlign: 'center', fontSize: 12.5, color: 'var(--ink-3)', margin: '8px 0 0' }}>You can back up any time from Help.</p>

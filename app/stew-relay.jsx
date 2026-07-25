@@ -307,9 +307,9 @@ function RelaySetup({ os, setOs }) {
 
           {/* footer actions */}
           <div style={{ marginTop: 26, display: 'flex', alignItems: 'center', gap: 14 }}>
-            <button className="sk-btn sk-btn--clay" style={{ padding: '13px 22px', fontSize: 15 }}><Icon name="power" size={17} color="#fff" /> Start relay</button>
+            <button className="sk-btn sk-btn--clay" style={{ padding: '13px 22px', fontSize: 15 }}><Icon name="power" size={17} color="var(--on-clay)" /> Start relay</button>
             <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, color: 'var(--ink-2)', cursor: 'pointer' }}>
-              <span style={{ width: 20, height: 20, borderRadius: 6, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={13} stroke={3} color="#fff" /></span>
+              <span style={{ width: 20, height: 20, borderRadius: 6, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={13} stroke={3} color="var(--on-clay)" /></span>
               Launch at login &amp; keep running in the background
             </label>
           </div>

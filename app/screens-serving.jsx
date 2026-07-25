@@ -75,7 +75,7 @@ function ServDateBlock({ iso, accent = 'var(--clay)', tint = true }) {
     </div>
   );
 }
-function svPrimary() { return { width: '100%', padding: 16, borderRadius: 15, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }; }
+function svPrimary() { return { width: '100%', padding: 16, borderRadius: 15, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }; }
 function svGhost() { return { flex: 1, padding: 14, borderRadius: 14, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }; }
 
 // ── respond to a "can you serve?" request ──
@@ -135,7 +135,7 @@ function SwapSheet({ open, item, onClose, ctx }) {
                 <button key={p.pub || p.name} onClick={() => setPick(p)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', boxShadow: 'var(--shadow)' }}>
                   <ServAvatar name={p.name} size={40} accent={item.accent || 'var(--clay)'} />
                   <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>On {item.teamName}</div></div>
-                  {on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={15} stroke={2.8} color="#fff" /></div>
+                  {on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={15} stroke={2.8} color="var(--on-clay)" /></div>
                     : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)' }} />}
                 </button>
               );
@@ -203,7 +203,7 @@ function UnavailSheet({ open, onClose, ctx }) {
             <button key={d.iso} onClick={() => toggle(d.iso)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 12, borderRadius: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', boxShadow: 'var(--shadow)' }}>
               <ServDateBlock iso={d.iso} accent={on ? 'var(--clay)' : 'var(--ink-3)'} tint={false} />
               <div style={{ flex: 1, fontWeight: 700, fontSize: 15 }}>{d.dow} {d.day} {d.mon}</div>
-              <div style={{ width: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? 'var(--clay)' : 'transparent', border: on ? 'none' : '2px solid var(--line)' }}>{on ? <Icon name="check" size={16} stroke={2.8} color="#fff" /> : null}</div>
+              <div style={{ width: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? 'var(--clay)' : 'transparent', border: on ? 'none' : '2px solid var(--line)' }}>{on ? <Icon name="check" size={16} stroke={2.8} color="var(--on-clay)" /> : null}</div>
             </button>
           );
         })}
@@ -460,7 +460,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             const on = tab === k;
             return (
               <button key={k} onClick={() => setTab(k)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
-                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && pending.length ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: '#fff', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length}</span> : null}
+                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && pending.length ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length}</span> : null}
               </button>
             );
           })}

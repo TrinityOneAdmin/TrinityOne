@@ -7854,8 +7854,10 @@
           if (!d.startsWith(GROUP_D)) return;
           const id = d.slice(GROUP_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
-            emit();
+            if (_churchVoice(pubk, { _by: e.pubkey })) {
+              byId.delete(id);
+              emit();
+            }
             return;
           }
           try {
@@ -7904,8 +7906,10 @@
           if (!d.startsWith(CATEGORY_D)) return;
           const id = d.slice(CATEGORY_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
-            emit();
+            if (_churchVoice(pubk, { _by: e.pubkey })) {
+              byId.delete(id);
+              emit();
+            }
             return;
           }
           try {
@@ -7940,6 +7944,7 @@
       }
       let minors = [], approved = [], guardians = {}, nophoto = [];
       const me = window.Fellowship.myPubkey || pub;
+      const _sgTs = { minors: 0, approved: 0, guardians: 0, nophoto: 0 };
       const emit = () => {
         _noPhoto = new Set(nophoto);
         onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)), photoBlocked: !!(me && nophoto.includes(me)) });
@@ -7947,7 +7952,10 @@
       return _onChurchDocs(pubk, {
         onevent(e, d) {
           if (e.pubkey !== pubk) return;
+          const _ts = e.created_at || 0;
           if (d === "trinityone/minors:" + pubk) {
+            if (_ts < _sgTs.minors) return;
+            _sgTs.minors = _ts;
             try {
               minors = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -7955,6 +7963,8 @@
             }
             emit();
           } else if (d === "trinityone/approved:" + pubk) {
+            if (_ts < _sgTs.approved) return;
+            _sgTs.approved = _ts;
             try {
               approved = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -7962,6 +7972,8 @@
             }
             emit();
           } else if (d === "trinityone/guardians:" + pubk) {
+            if (_ts < _sgTs.guardians) return;
+            _sgTs.guardians = _ts;
             try {
               guardians = JSON.parse(e.content).links || {};
             } catch {
@@ -7969,6 +7981,8 @@
             }
             emit();
           } else if (d === "trinityone/nophoto:" + pubk) {
+            if (_ts < _sgTs.nophoto) return;
+            _sgTs.nophoto = _ts;
             try {
               nophoto = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -8134,8 +8148,10 @@
           if (!d.startsWith(PLAN_D)) return;
           const id = d.slice(PLAN_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
-            emit();
+            if (_churchVoice(pubk, { _by: e.pubkey })) {
+              byId.delete(id);
+              emit();
+            }
             return;
           }
           try {
@@ -8187,8 +8203,10 @@
           if (!d.startsWith(DEVO_D)) return;
           const id = d.slice(DEVO_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
-            emit();
+            if (_churchVoice(pubk, { _by: e.pubkey })) {
+              byId.delete(id);
+              emit();
+            }
             return;
           }
           try {
@@ -8231,8 +8249,10 @@
           if (!d.startsWith(prefix)) return;
           const id = d.slice(prefix.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
-            emit();
+            if (_churchVoice(pubk, { _by: e.pubkey })) {
+              byId.delete(id);
+              emit();
+            }
             return;
           }
           try {
@@ -8995,8 +9015,10 @@
           const gid = (e.tags.find((t) => t[0] === "t" && groups.includes(t[1])) || [])[1] || "";
           const id = d.slice("trinityone/event:".length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
-            emit();
+            if (_groupEventTrusted(cp, (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1], e.pubkey)) {
+              byId.delete(id);
+              emit();
+            }
             return;
           }
           try {
@@ -9089,8 +9111,10 @@
           if (!d.startsWith(REQUEST_D)) return;
           const id = d.slice(REQUEST_D.length);
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
-            byId.delete(id);
-            emit();
+            if (e.pubkey === (window.Fellowship.churchPub || "")) {
+              byId.delete(id);
+              emit();
+            }
             return;
           }
           try {

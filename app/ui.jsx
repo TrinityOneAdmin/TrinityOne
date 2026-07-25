@@ -344,7 +344,7 @@ function IconBtn({ name, onClick, size = 20, badge, style = {}, stroke = 1.9, ti
       <Icon name={name} size={size} stroke={stroke} />
       {badge ? <span style={{
         position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, padding: '0 4px',
-        borderRadius: 8, background: 'var(--clay)', color: '#fff', fontSize: 10, fontWeight: 700,
+        borderRadius: 8, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 10, fontWeight: 700,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>{badge}</span> : null}
     </button>

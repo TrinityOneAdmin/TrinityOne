@@ -48,7 +48,7 @@ function PhoneHome({ onInvite }) {
 
         {/* quick actions */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 16 }}>
-          <button onClick={onInvite} style={{ gridColumn: '1 / 2', textAlign: 'left', border: 'none', cursor: 'pointer', borderRadius: 18, padding: 16, background: 'linear-gradient(155deg,var(--clay),var(--clay-deep))', color: '#fff', height: 124, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <button onClick={onInvite} style={{ gridColumn: '1 / 2', textAlign: 'left', border: 'none', cursor: 'pointer', borderRadius: 18, padding: 16, background: 'linear-gradient(155deg,var(--clay),var(--clay-deep))', color: 'var(--on-clay)', height: 124, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
             <Icon name="qr" size={26} color="#fff" />
             <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>Show invite QR</div><div style={{ fontSize: 12, opacity: .85, marginTop: 2 }}>Add someone at the door</div></div>
           </button>
@@ -104,7 +104,7 @@ function PhoneInvite({ onBack }) {
         <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.5, margin: '12px 0 0', maxWidth: 240 }}>Have them open TrinityOne → <b style={{ color: 'var(--ink)' }}>Scan invite</b> and point their camera here. They’re in — anonymously.</p>
       </div>
       <div style={{ padding: '0 18px 22px', display: 'flex', gap: 10 }}>
-        <button className="sk-btn sk-btn--clay" style={{ flex: 1 }}><Icon name="link" size={16} color="#fff" /> Share link</button>
+        <button className="sk-btn sk-btn--clay" style={{ flex: 1 }}><Icon name="link" size={16} color="var(--on-clay)" /> Share link</button>
         <button className="sk-btn sk-btn--ghost" style={{ flex: 1 }}><Icon name="receipt" size={16} color="currentColor" /> Print cards</button>
       </div>
     </div>

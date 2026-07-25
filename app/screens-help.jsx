@@ -58,7 +58,7 @@ function Block({ b, fs }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
         {b.items.map((it, i) => (
           <div key={i} style={{ display: 'flex', gap: 14, alignItems: 'flex-start', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: '14px 16px', boxShadow: 'var(--shadow)' }}>
-            <div style={{ width: 32 * fs, height: 32 * fs, borderRadius: 999, background: 'var(--clay)', color: '#fff', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16 * fs }}>{i + 1}</div>
+            <div style={{ width: 32 * fs, height: 32 * fs, borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16 * fs }}>{i + 1}</div>
             <div style={{ ...body, fontSize: 17 * fs, paddingTop: 3 }}>{it}</div>
           </div>
         ))}

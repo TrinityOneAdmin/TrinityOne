@@ -193,7 +193,7 @@ function RecoverySheet({ open, onClose, ctx }) {
             {bkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{bkErr}</div> : null}
             <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
               <button onClick={() => { setBk(null); setBkErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-              <button onClick={bk === 'export' ? doExport : doRestore} disabled={!!busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: bk === 'restore' ? 'var(--clay)' : 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : (bk === 'export' ? 'Create backup' : 'Restore')}</button>
+              <button onClick={bk === 'export' ? doExport : doRestore} disabled={!!busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: bk === 'restore' ? 'var(--clay)' : 'var(--sage)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : (bk === 'export' ? 'Create backup' : 'Restore')}</button>
             </div>
           </div>
         )}
@@ -301,7 +301,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
               {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
               <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
                 <button onClick={() => { setShowOff(false); setOff(''); setErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-                <button onClick={doDisable} disabled={busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : 'Turn off'}</button>
+                <button onClick={doDisable} disabled={busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : 'Turn off'}</button>
               </div>
             </div>
           )}
@@ -372,7 +372,7 @@ function InviteSheet({ open, onClose, identity, ctx }) {
         <div style={{ padding: 16, borderRadius: 22, background: '#fff', boxShadow: 'var(--shadow-lg)', width: 196, height: 196, boxSizing: 'border-box', display: 'flex' }}
           dangerouslySetInnerHTML={{ __html: qrSvg }} />
       </div>
-      <button onClick={shareInvite} style={{ width: '100%', padding: 15, borderRadius: 15, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+      <button onClick={shareInvite} style={{ width: '100%', padding: 15, borderRadius: 15, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
         <Icon name="share" size={17} color="#fff" /> Share invite link</button>
     </BottomSheet>
   );

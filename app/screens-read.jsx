@@ -56,8 +56,8 @@ function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSetting
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px 0' }}>
         <div style={{ flex: 1, minWidth: 0 }}><ReadPlansTabs ctx={ctx} /></div>
         <IconBtn name="search" size={18} onClick={() => ctx.openSearch()} style={{ width: 36, height: 36 }} />
-        {canListen ? <IconBtn name="headphones" size={18} onClick={onListen} style={narrating ? { width: 36, height: 36, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} /> : null}
-        <IconBtn name="compare" size={18} onClick={onCompare} style={compare ? { width: 36, height: 36, background: 'var(--clay)', color: '#fff', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} />
+        {canListen ? <IconBtn name="headphones" size={18} onClick={onListen} style={narrating ? { width: 36, height: 36, background: 'var(--clay)', color: 'var(--on-clay)', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} /> : null}
+        <IconBtn name="compare" size={18} onClick={onCompare} style={compare ? { width: 36, height: 36, background: 'var(--clay)', color: 'var(--on-clay)', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} />
         <IconBtn name="sliders" size={18} onClick={onSettings} style={{ width: 36, height: 36 }} />
       </div>
       {/* row 2 — book / chapter / version selectors get the full width to breathe */}
@@ -254,7 +254,7 @@ function CommentarySheet({ loc, label, open, onClose }) {
       {seeded ? C.blocks.map((b, i) => (
         <div key={i} style={{ marginBottom: 18 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginBottom: 5 }}>
-            <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: '#fff', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8 }}>v{b.v}</span>
+            <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8 }}>v{b.v}</span>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{b.title}</span>
           </div>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.62, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>{b.text}</p>
@@ -273,7 +273,7 @@ function NoteEditor({ label, open, onClose, value, onSave }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <div><div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Note on</div>
         <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div></div>
-        <button onClick={() => onSave(text)} style={{ border: 'none', background: 'var(--clay)', color: '#fff',
+        <button onClick={() => onSave(text)} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
           padding: '10px 18px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Save</button>
       </div>
       <textarea autoFocus value={text} onChange={e => setText(e.target.value)} placeholder="What is God showing you here?" style={{
@@ -337,7 +337,7 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
                 <div style={{ fontSize: 12.5, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.abbr}{m.kind && m.kind !== 'bible' ? ' · ' + m.kind : ''}</div>
               </div>
               {on ? (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, fontSize: 11, fontWeight: 800, letterSpacing: '.3px', color: '#fff', background: 'var(--clay)', padding: '5px 11px', borderRadius: 999 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, fontSize: 11, fontWeight: 800, letterSpacing: '.3px', color: 'var(--on-clay)', background: 'var(--clay)', padding: '5px 11px', borderRadius: 999 }}>
                   <Icon name="check" size={13} stroke={2.6} color="#fff" /> READING</span>
               ) : (
                 <button onClick={(e) => remove(e, m.abbr)} aria-label={'Remove ' + m.name} style={{
@@ -365,7 +365,7 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
                   </div>
                   <button onClick={() => add(item)} disabled={busy} style={{
                     flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '8px 13px', borderRadius: 11,
-                    border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}>
+                    border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}>
                     {busy ? 'Adding…' : <React.Fragment><Icon name="plus" size={15} stroke={2.4} color="#fff" /> Add</React.Fragment>}</button>
                 </div>
               );
@@ -602,7 +602,7 @@ function CommentaryEdge({ open, onToggle }) {
   return (
     <button onClick={onToggle} aria-label="Open commentary" style={{
       position: 'absolute', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
-      background: 'var(--clay)', color: '#fff', padding: '13px 5px 13px 7px', borderRadius: '13px 0 0 13px',
+      background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px 5px 13px 7px', borderRadius: '13px 0 0 13px',
       boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
     }}>
       <Icon name="comment" size={17} color="#fff" />
@@ -659,7 +659,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
                   <textarea value={cText} onChange={e => setCText(e.target.value)} autoFocus placeholder="Your note…" rows={4} style={{ width: '100%', boxSizing: 'border-box', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '10px 12px', fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.5, color: 'var(--ink)', outline: 'none', resize: 'vertical' }} />
                   <div style={{ display: 'flex', gap: 9, marginTop: 9 }}>
                     <button onClick={() => { setComposing(false); setCText(''); }} style={{ flex: 1, padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-                    <button onClick={saveNewNote} disabled={!cText.trim()} style={{ flex: 1, padding: 10, borderRadius: 11, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: cText.trim() ? 1 : 0.55 }}>Save note</button>
+                    <button onClick={saveNewNote} disabled={!cText.trim()} style={{ flex: 1, padding: 10, borderRadius: 11, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: cText.trim() ? 1 : 0.55 }}>Save note</button>
                   </div>
                 </div>
               ) : (
@@ -686,7 +686,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
               </div>
               {srcBlk.rows.map((b, i) => (
                 <div key={i} style={{ marginBottom: 14 }}>
-                  <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: '#fff', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 6 }}>{b.v && b.vTo && b.vTo > b.v ? `v${b.v}–${b.vTo}` : (b.v ? `v${b.v}` : 'Note')}</span>
+                  <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 6 }}>{b.v && b.vTo && b.vTo > b.v ? `v${b.v}–${b.vTo}` : (b.v ? `v${b.v}` : 'Note')}</span>
                   <div className="commentary-body" style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)' }} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(b.html) }} />
                 </div>
               ))}
@@ -896,7 +896,7 @@ function ReadScreen({ ctx }) {
       {/* narration control bar — appears while the chapter is being read aloud */}
       {narrateState !== 'idle' ? (
         <div style={{ position: 'absolute', left: 0, right: 0, bottom: 64, zIndex: 30, display: 'flex', justifyContent: 'center', padding: '0 16px', pointerEvents: 'none' }}>
-          <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 999, background: 'var(--clay)', color: '#fff', boxShadow: 'var(--shadow-lg)', animation: 'trinityRise .24s ease both', maxWidth: '100%' }}>
+          <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', boxShadow: 'var(--shadow-lg)', animation: 'trinityRise .24s ease both', maxWidth: '100%' }}>
             <Icon name="headphones" size={18} color="#fff" />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 11, opacity: .85, fontWeight: 600 }}>Reading aloud</div>

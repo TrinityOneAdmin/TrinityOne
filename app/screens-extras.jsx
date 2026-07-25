@@ -195,7 +195,7 @@ function ListenScreen({ open, onClose, ctx }) {
 
         {/* now playing */}
         {cur ? (
-          <div style={{ borderRadius: 26, overflow: 'hidden', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', padding: 22, marginBottom: 24, boxShadow: 'var(--shadow-lg)' }}>
+          <div style={{ borderRadius: 26, overflow: 'hidden', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', padding: 22, marginBottom: 24, boxShadow: 'var(--shadow-lg)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>
               <Icon name="headphones" size={16} stroke={2} color="#fff" /> Now playing
             </div>

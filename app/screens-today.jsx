@@ -221,7 +221,7 @@ function CareRequestCard({ r, ctx, onApprove, onDecline, canMessage, onMessage }
       {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device isn’t on the care team’s key list.</div>
         : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap', padding: '2px 0 4px' }}>{r.note}</div> : null}
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-        {!r.sealed ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="#fff" stroke={2.6} /> Set up help</button> : null}
+        {!r.sealed ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
         {canMessage ? <button onClick={onMessage} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
         <button onClick={async () => { setBusy('d'); try { await onDecline(); } catch (e) {} setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Close — not needed'}</button>
       </div>
@@ -267,7 +267,7 @@ function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
         {err ? <div style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 12 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Setting up…' : 'Open the need'}</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Setting up…' : 'Open the need'}</button>
         </div>
       </div>
     </div>
@@ -405,7 +405,7 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
         {err ? <div style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 12 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Sending…' : 'Send to care team'}</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? 'Sending…' : 'Send to care team'}</button>
         </div>
       </div>
     </div>
@@ -801,7 +801,7 @@ function SafetyBanner({ ctx, persistent }) {
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" maxLength={240} style={{ width: '100%', boxSizing: 'border-box', height: 42, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', margin: '12px 0 0' }} />
       <div style={{ display: 'flex', gap: 10, marginTop: 11 }}>
         <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)', color: '#fff' })}>{sending ? 'Sending…' : 'I’m safe'}</button>
-        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: '#fff' })}>{sending ? 'Sending…' : 'I need help'}</button>
+        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: 'var(--on-clay)' })}>{sending ? 'Sending…' : 'I need help'}</button>
       </div>
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 9 }}>{err}</div> : null}
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only your church’s leaders can see your reply — not other members, and not the server.</div>
@@ -1005,7 +1005,7 @@ function TodayScreen({ ctx }) {
 
       {/* Verse of the day — minimisable hero (below the care + serving cards) */}
       {votdMin ? (
-        <div onClick={toggleVotd} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
+        <div onClick={toggleVotd} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
           <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Verse of the day · {votd.ref}</div>
           <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
@@ -1058,7 +1058,7 @@ function TodayScreen({ ctx }) {
         return (
         <div onClick={() => ctx.playSermon(ps)} style={{
           display: 'flex', alignItems: 'center', gap: 14, padding: 15, borderRadius: 20, cursor: 'pointer', marginBottom: 22,
-          background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow-lg)',
+          background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow-lg)',
           position: 'relative', overflow: 'hidden', animation: 'trinityFade .5s ease both',
         }}>
           <div style={{ position: 'absolute', right: -18, bottom: -22, opacity: .16 }}><Icon name={String(ps.mime || '').startsWith('video') ? 'play' : 'headphones'} size={100} color="#fff" /></div>
@@ -1149,7 +1149,7 @@ function TodayScreen({ ctx }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <span style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 700 }}>{(ctx.netAnnouncements[0] || {})._network || 'Network'}</span>
-                {ctx.netUnread > 0 ? <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: 'var(--clay)', borderRadius: 999, padding: '1px 7px' }}>{ctx.netUnread} new</span> : null}
+                {ctx.netUnread > 0 ? <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--on-clay)', background: 'var(--clay)', borderRadius: 999, padding: '1px 7px' }}>{ctx.netUnread} new</span> : null}
               </div>
               <div style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.45, color: 'var(--ink-2)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{(ctx.netAnnouncements[0] || {}).text}</div>
             </div>

@@ -336,7 +336,7 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
 
         <div style={{ padding: '12px 22px 26px', borderTop: '1px solid var(--line-2)' }}>
           <button onClick={create} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer',
-            background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>
+            background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>
             {name.trim() ? `Create ${name.trim()}` : 'Create new identity'}</button>
         </div>
       </div>
@@ -358,7 +358,7 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
       </div>
       <div style={{ padding: '12px 22px 26px', borderTop: '1px solid var(--line-2)' }}>
         <button onClick={() => { onClose(); ctx.openRecovery(); }} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', marginBottom: 9,
-          background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
+          background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
           <Icon name="key" size={18} color="#fff" /> Save my 12 words</button>
         <button onClick={onClose} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>I’ll do it later</button>
       </div>
@@ -427,7 +427,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             <button onClick={() => setEdit(false)} style={{ border: 'none', background: 'none', color: 'var(--ink-2)', fontWeight: 600, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Edit profile</span>
             <button onClick={() => { if (needFull && !twoWords(name)) return; onSave({ name: name.trim(), avatar: av }); setEdit(false); ctx.toast('Profile saved'); }} disabled={needFull && !twoWords(name)} style={{
-              border: 'none', background: 'var(--clay)', color: '#fff', padding: '9px 16px', borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (needFull && !twoWords(name)) ? 0.5 : 1 }}>Save</button>
+              border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '9px 16px', borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (needFull && !twoWords(name)) ? 0.5 : 1 }}>Save</button>
           </div>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 22px 30px' }}>
@@ -488,7 +488,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             <Icon name="shield" size={13} /> {named ? 'TrinityOne member' : 'Anonymous member'}</div>
           {!named ? (
             <div style={{ marginTop: 16 }}>
-              <button onClick={() => setEdit(true)} style={{ border: 'none', background: 'var(--clay)', color: '#fff', padding: '12px 22px',
+              <button onClick={() => setEdit(true)} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 22px',
                 borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Add a name</button>
               <p style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '12px 22px 0', lineHeight: 1.5 }}>Optional. A name helps your church recognise you — you’ll still share no personal data.</p>
             </div>
@@ -671,7 +671,7 @@ function FamilySheet({ open, onClose, ctx }) {
                 </div>
               </div>
             )) : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>No children set up yet.</div>}
-            <button onClick={() => { setStage('name'); setName(''); setErr(''); }} style={{ marginTop: 8, width: '100%', border: 'none', background: 'var(--clay)', color: '#fff', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><Icon name="plus" size={17} color="#fff" /> Add a child</button>
+            <button onClick={() => { setStage('name'); setName(''); setErr(''); }} style={{ marginTop: 8, width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><Icon name="plus" size={17} color="var(--on-clay)" /> Add a child</button>
           </React.Fragment>
         ) : stage === 'name' ? (
           <React.Fragment>
@@ -679,7 +679,7 @@ function FamilySheet({ open, onClose, ctx }) {
             <input value={name} autoFocus onChange={e => { setName(e.target.value.slice(0, 24)); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') create(); }} placeholder="e.g. Sam Carter" style={{ width: '100%', boxSizing: 'border-box', height: 52, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)' }} />
             <p style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '12px 2px 0', lineHeight: 1.5 }}>This creates a brand-new account for your child in <b>{(ctx.church && ctx.church.name) || 'your church'}</b>. You’ll get its recovery words on the next screen — keep them safe; they’re the only way to restore the account.</p>
             {err ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', marginTop: 10 }}>{err}</div> : null}
-            <button onClick={create} disabled={busy || !name.trim()} style={{ marginTop: 20, width: '100%', border: 'none', background: 'var(--clay)', color: '#fff', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || !name.trim()) ? 0.6 : 1 }}>{busy ? 'Setting up…' : 'Create the account'}</button>
+            <button onClick={create} disabled={busy || !name.trim()} style={{ marginTop: 20, width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || !name.trim()) ? 0.6 : 1 }}>{busy ? 'Setting up…' : 'Create the account'}</button>
           </React.Fragment>
         ) : (
           <React.Fragment>
@@ -701,7 +701,7 @@ function FamilySheet({ open, onClose, ctx }) {
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
               <div style={{ width: 220, height: 220, background: '#fff', borderRadius: 18, padding: 12, boxShadow: 'var(--shadow)', boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: qrSvg }} />
             </div>
-            <button onClick={() => { setStage('list'); setMade(null); setName(''); }} style={{ width: '100%', border: 'none', background: 'var(--clay)', color: '#fff', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Done</button>
+            <button onClick={() => { setStage('list'); setMade(null); setName(''); }} style={{ width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px', borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Done</button>
           </React.Fragment>
         )}
       </div>

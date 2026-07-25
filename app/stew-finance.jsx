@@ -119,7 +119,7 @@ function BooksRecord({ book, onRecord, onClose }) {
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
-          <button onClick={submit} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Record</button>
+          <button onClick={submit} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Record</button>
         </div>
       </div>
     </div>
@@ -137,7 +137,7 @@ function BooksDonate({ onGave, onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}><Icon name="gift" size={20} color="var(--clay)" /><h3 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Keep TrinityOne going</h3></div>
         <p style={{ color: 'var(--ink)', fontSize: 14, lineHeight: 1.5, margin: '0 0 14px' }}>TrinityOne is free and open — no fees, no lock-in, and your books are always yours. If your church is able, a gift helps cover the shared relays and keep the tools growing. Thank you. 🙏</p>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>{DONATE.suggest.map(a => <span key={a} style={{ border: '1px solid var(--line)', borderRadius: 999, padding: '5px 12px', fontSize: 13, fontWeight: 700, color: 'var(--ink-3)' }}>{a}</span>)}<span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>or any amount</span></div>
-        <a href={'lightning:' + DONATE.ln} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 46, borderRadius: 12, background: 'var(--clay)', color: '#fff', textDecoration: 'none', fontFamily: 'var(--font-ui)', fontWeight: 800, marginBottom: 8 }}>⚡ Give with Lightning</a>
+        <a href={'lightning:' + DONATE.ln} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 46, borderRadius: 12, background: 'var(--clay)', color: 'var(--on-clay)', textDecoration: 'none', fontFamily: 'var(--font-ui)', fontWeight: 800, marginBottom: 8 }}>⚡ Give with Lightning</a>
         <button onClick={copyLn} style={{ width: '100%', height: 38, border: '1px solid var(--line)', background: 'transparent', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink-3)', fontSize: 13, marginBottom: 8 }}>{copied ? 'Copied ✓' : DONATE.ln}</button>
         {DONATE.alt ? <a href={DONATE.alt} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13, marginBottom: 14 }}>Give another way →</a> : null}
         <div style={{ display: 'flex', gap: 10 }}>
@@ -269,7 +269,7 @@ function FinanceImport({ book, F, onPost, onClose }) {
             {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
             <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
               <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
-              <button onClick={toReview} disabled={!parsed} style={{ flex: 2, height: 44, border: 'none', background: parsed ? 'var(--clay)' : 'var(--line)', color: '#fff', borderRadius: 11, cursor: parsed ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Review transactions →</button>
+              <button onClick={toReview} disabled={!parsed} style={{ flex: 2, height: 44, border: 'none', background: parsed ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', borderRadius: 11, cursor: parsed ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Review transactions →</button>
             </div>
           </div>
         )}
@@ -299,7 +299,7 @@ function FinanceImport({ book, F, onPost, onClose }) {
             {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
             <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
               <button onClick={() => { setStep('upload'); setErr(''); }} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>← Back</button>
-              <button onClick={doPost} disabled={!nSel} style={{ flex: 2, height: 44, border: 'none', background: nSel ? 'var(--clay)' : 'var(--line)', color: '#fff', borderRadius: 11, cursor: nSel ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post {nSel} transaction{nSel === 1 ? '' : 's'}</button>
+              <button onClick={doPost} disabled={!nSel} style={{ flex: 2, height: 44, border: 'none', background: nSel ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', borderRadius: 11, cursor: nSel ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post {nSel} transaction{nSel === 1 ? '' : 's'}</button>
             </div>
           </>
         )}
@@ -489,7 +489,7 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 12 }}>Members will see it in the church’s announcements. It contains totals only — no names.</div>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setPosting(false)} style={{ flex: 1, height: 42, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
-              <button onClick={doPost} style={{ flex: 2, height: 42, border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Yes, post to members</button>
+              <button onClick={doPost} style={{ flex: 2, height: 42, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Yes, post to members</button>
             </div>
           </div>
         ) : (
@@ -497,7 +497,7 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
             <button onClick={onClose} style={{ height: 44, padding: '0 16px', border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Close</button>
             <button onClick={doCopy} disabled={!enabledKeys.length} style={{ height: 44, padding: '0 16px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Copy summary</button>
             <button onClick={doDownload} disabled={!enabledKeys.length} style={{ height: 44, padding: '0 16px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Download</button>
-            {canPost && <button onClick={() => setPosting('confirm')} disabled={!enabledKeys.length} style={{ flex: 1, minWidth: 150, height: 44, padding: '0 16px', border: 'none', background: 'var(--clay)', color: '#fff', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post to members</button>}
+            {canPost && <button onClick={() => setPosting('confirm')} disabled={!enabledKeys.length} style={{ flex: 1, minWidth: 150, height: 44, padding: '0 16px', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post to members</button>}
           </div>
         )}
       </div>
@@ -623,7 +623,7 @@ function DashFinance() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => setImporting(true)} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
-          <button onClick={() => setRecording(true)} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14 }}><Icon name="plus" size={16} color="#fff" /> Record a transaction</button>
+          <button onClick={() => setRecording(true)} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
         </div>
       </div>
 

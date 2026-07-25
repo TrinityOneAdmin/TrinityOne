@@ -160,7 +160,7 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
       ) : (
         <button onClick={() => { setErr(''); setScanning(true); }} style={{
           width: '100%', marginBottom: 16, padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer',
-          background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
+          background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, boxShadow: 'var(--shadow)' }}>
           <Icon name="qr" size={20} color="#fff" /> Scan the church’s QR
         </button>
@@ -183,7 +183,7 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
       {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8, lineHeight: 1.4 }}>{err}</div> : null}
       <button onClick={() => resolve()} disabled={!joinable || busy} style={{
         width: '100%', marginTop: 16, padding: 16, borderRadius: 15, border: 'none', cursor: (joinable && !busy) ? 'pointer' : 'default',
-        background: (joinable && !busy) ? 'var(--clay)' : 'var(--line)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
+        background: (joinable && !busy) ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
         <Icon name="check" size={18} stroke={2.4} color="#fff" /> {busy ? 'Finding church…' : 'Follow church'}</button>
 
@@ -238,9 +238,9 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
                   </div>
                   {followed ? (
                     confirmLeave === c.id
-                      ? <button onClick={() => { setConfirmLeave(null); ctx.leaveChurch(c.id); }} style={{ flexShrink: 0, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 12.5, padding: '7px 11px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Confirm leave</button>
+                      ? <button onClick={() => { setConfirmLeave(null); ctx.leaveChurch(c.id); }} style={{ flexShrink: 0, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 12.5, padding: '7px 11px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Confirm leave</button>
                       : <button onClick={() => setConfirmLeave(c.id)} title="Leave this church" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 12.5, padding: '7px 11px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Leave</button>
-                  ) : (on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="check" size={15} stroke={2.8} color="#fff" /></div>
+                  ) : (on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="check" size={15} stroke={2.8} color="var(--on-clay)" /></div>
                     : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)', flexShrink: 0 }} />)}
                 </div>
               );

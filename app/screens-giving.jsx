@@ -147,7 +147,7 @@ function TopUpSheet({ open, onClose, ctx }) {
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700 }}>Wallet topped up</div>
           <p style={{ fontSize: 14.5, color: 'var(--ink-2)', margin: '6px 0 22px', lineHeight: 1.5 }}>{fmtSats(added)} sats added — ready to give whenever you like.</p>
           <button onClick={onClose} style={{ width: '100%', padding: 15, borderRadius: 16, border: 'none', cursor: 'pointer',
-            background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15.5, fontFamily: 'var(--font-ui)' }}>Done</button>
+            background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 15.5, fontFamily: 'var(--font-ui)' }}>Done</button>
         </div>
       ) : null}
     </BottomSheet>
@@ -271,7 +271,7 @@ function GiveSheet({ fund, open, onClose, ctx, balance, onGive, onPickFund, onNe
           {enough ? (
             <button disabled={!sats} onClick={give} style={{
               width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: sats ? 'pointer' : 'default',
-              background: sats ? 'var(--clay)' : 'var(--line)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
+              background: sats ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
             }}><Icon name="bolt" size={19} color="#fff" fill /> Give {fmtSats(sats)} sats</button>
           ) : (
@@ -310,7 +310,7 @@ function GiveSheet({ fund, open, onClose, ctx, balance, onGive, onPickFund, onNe
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700 }}>Thank you</div>
           <p style={{ fontSize: 14.5, color: 'var(--ink-2)', margin: '6px 0 22px', lineHeight: 1.5 }}>{fmtSats(sats)} sats given to {fund.name}, straight from your wallet over Lightning.</p>
           <button onClick={onClose} style={{ width: '100%', padding: 15, borderRadius: 16, border: 'none', cursor: 'pointer',
-            background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15.5, fontFamily: 'var(--font-ui)' }}>Done</button>
+            background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 15.5, fontFamily: 'var(--font-ui)' }}>Done</button>
         </div>
       ) : null}
     </BottomSheet>
@@ -383,7 +383,7 @@ function FundDetailSheet({ fund, open, onClose, ctx, onGive }) {
       ) : null}
 
       <button onClick={() => onGive(fund)} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer',
-        background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
+        background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
         <Icon name="bolt" size={19} color="#fff" fill /> Give to {fund.name}</button>
 
@@ -774,7 +774,7 @@ function WithdrawSheet({ open, onClose, ctx, balance }) {
           {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, margin: '4px 0 10px', textAlign: 'center', lineHeight: 1.4 }}>{err}</div> : null}
           <button disabled={!ready} onClick={go} style={{
             width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: ready ? 'pointer' : 'default', marginTop: 8,
-            background: ready ? 'var(--clay)' : 'var(--line)', color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
+            background: ready ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
           }}><Icon name="chevU" size={19} color="#fff" /> {isInvoice ? 'Withdraw' : `Withdraw ${fmtSats(sats)} sats`}</button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, justifyContent: 'center', marginTop: 13, color: 'var(--ink-3)', fontSize: 12, textAlign: 'center' }}>
@@ -798,7 +798,7 @@ function WithdrawSheet({ open, onClose, ctx, balance }) {
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700 }}>Sent</div>
           <p style={{ fontSize: 14.5, color: 'var(--ink-2)', margin: '6px 0 22px', lineHeight: 1.5 }}>{sent ? `${fmtSats(sent)} sats are` : 'Your sats are'} on the way to your wallet.</p>
           <button onClick={onClose} style={{ width: '100%', padding: 15, borderRadius: 16, border: 'none', cursor: 'pointer',
-            background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15.5, fontFamily: 'var(--font-ui)' }}>Done</button>
+            background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 15.5, fontFamily: 'var(--font-ui)' }}>Done</button>
         </div>
       ) : null}
     </BottomSheet>

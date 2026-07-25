@@ -18,7 +18,7 @@ function ExtFrame({ children, site = 'console.trinityone.app' }) {
           <div style={{ width: 30, height: 30, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)' }}><Icon name="bookmark" size={17} color="currentColor" /></div>
           <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', border: '1.5px solid var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', boxShadow: 'var(--shadow-sm)' }}>
             <Halo size={20} color="var(--ink)" spark="var(--clay)" />
-            <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 10, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>1</span>
+            <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 10, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>1</span>
           </div>
         </div>
       </div>
@@ -90,7 +90,7 @@ function StewExtensionRequest() {
 
           <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
             <button className="sk-btn sk-btn--ghost" style={{ flex: 1 }} onClick={() => {}}>Reject</button>
-            <button className="sk-btn sk-btn--clay" style={{ flex: 1.4 }} onClick={() => setSigned(true)}><Icon name="key" size={16} color="#fff" /> Approve & sign</button>
+            <button className="sk-btn sk-btn--clay" style={{ flex: 1.4 }} onClick={() => setSigned(true)}><Icon name="key" size={16} color="var(--on-clay)" /> Approve & sign</button>
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 13, fontSize: 12, color: 'var(--ink-2)', cursor: 'pointer' }}>
             <span style={{ width: 34, height: 20, borderRadius: 999, background: 'var(--line)', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: 2, left: 2, width: 16, height: 16, borderRadius: 999, background: '#fff', boxShadow: 'var(--shadow-sm)' }} /></span>

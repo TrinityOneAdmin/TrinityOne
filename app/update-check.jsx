@@ -58,7 +58,7 @@ function UpdateBanner({ ctx }) {
         <div style={{ fontSize: 12, opacity: .8, lineHeight: 1.35 }}>A newer version of TrinityOne is ready to install.</div>
       </div>
       <button onClick={later} style={{ border: 'none', background: 'transparent', color: 'var(--paper)', opacity: .7, fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '6px 4px', fontFamily: 'var(--font-ui)' }}>Later</button>
-      <button onClick={get} disabled={busy} style={{ border: 'none', background: 'var(--clay)', color: '#fff', fontSize: 13.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', opacity: busy ? .65 : 1, padding: '8px 14px', borderRadius: 11, fontFamily: 'var(--font-ui)' }}>{busy ? 'Downloading…' : 'Update'}</button>
+      <button onClick={get} disabled={busy} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 13.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', opacity: busy ? .65 : 1, padding: '8px 14px', borderRadius: 11, fontFamily: 'var(--font-ui)' }}>{busy ? 'Downloading…' : 'Update'}</button>
     </div>
   );
 }

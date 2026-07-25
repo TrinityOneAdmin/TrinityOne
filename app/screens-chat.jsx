@@ -232,7 +232,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
 }
 function primaryBtn() {
   return { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 15,
-    borderRadius: 15, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15, fontFamily: 'var(--font-ui)' };
+    borderRadius: 15, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 15, fontFamily: 'var(--font-ui)' };
 }
 function miniBtn() {
   return { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '11px',
@@ -344,7 +344,7 @@ function ChatScreen({ ctx }) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
           <span style={{ fontSize: 13, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{live ? (activity[g.id] ? activity[g.id].text : 'No messages yet') : g.last}</span>
-          {(live ? unread[g.id] : g.unread) ? <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 11.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{live ? unread[g.id] : g.unread}</span> : null}
+          {(live ? unread[g.id] : g.unread) ? <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 11.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{live ? unread[g.id] : g.unread}</span> : null}
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
           <span style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{g.kind}</span>
@@ -432,7 +432,7 @@ function ChatScreen({ ctx }) {
           <div style={{ width: 66, height: 66, borderRadius: 20, margin: '0 auto 16px', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}><Icon name="chat" size={32} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 23, marginBottom: 8 }}>Join your church</div>
           <p style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 320, margin: '0 auto 22px' }}>Community is where your church gathers — groups, prayer requests and notices. Scan the invite your church shares, or paste its code, to join in.</p>
-          <button onClick={() => ctx.openChurchSwitcher && ctx.openChurchSwitcher('follow')} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '13px 22px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 15 }}><Icon name="qr" size={18} color="#fff" /> Join a church</button>
+          <button onClick={() => ctx.openChurchSwitcher && ctx.openChurchSwitcher('follow')} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '13px 22px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 15 }}><Icon name="qr" size={18} color="var(--on-clay)" /> Join a church</button>
         </div>
       ) : !(ctx.joinState && ctx.joinState.loaded) ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '72px 24px' }}>
@@ -613,7 +613,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
       <Row me={me} m={m} ctx={ctx} mod={mod}>
         <div onClick={() => ctx.openShare(m.verse)} style={{
           maxWidth: 270, borderRadius: 18, padding: 0, overflow: 'hidden', cursor: 'pointer',
-          background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)',
+          background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)',
         }}>
           <div style={{ padding: '14px 16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.6px', opacity: .9, marginBottom: 7 }}>
@@ -916,7 +916,7 @@ function GroupEventComposer({ group, ctx, onClose }) {
         <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical' }} />
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-          <button onClick={save} disabled={busy || !title.trim() || !date} style={{ flex: 1.4, padding: 13, borderRadius: 13, border: 'none', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || !title.trim() || !date) ? 0.55 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={16} color="#fff" /> {busy ? 'Posting…' : 'Post event'}</button>
+          <button onClick={save} disabled={busy || !title.trim() || !date} style={{ flex: 1.4, padding: 13, borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || !title.trim() || !date) ? 0.55 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {busy ? 'Posting…' : 'Post event'}</button>
         </div>
       </div>
     </div>
@@ -1186,7 +1186,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             ))}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
               {pollOpts.length < 5 ? <button onClick={() => setPollOpts(prev => [...prev, ''])} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)', padding: 0 }}>+ Add option</button> : null}
-              <button onClick={sendPoll} disabled={!pollQ.trim() || pollOpts.filter(o => o.trim()).length < 2} style={{ marginLeft: 'auto', border: 'none', borderRadius: 10, padding: '8px 14px', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', opacity: (pollQ.trim() && pollOpts.filter(o => o.trim()).length >= 2) ? 1 : 0.5 }}>Post poll</button>
+              <button onClick={sendPoll} disabled={!pollQ.trim() || pollOpts.filter(o => o.trim()).length < 2} style={{ marginLeft: 'auto', border: 'none', borderRadius: 10, padding: '8px 14px', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', opacity: (pollQ.trim() && pollOpts.filter(o => o.trim()).length >= 2) ? 1 : 0.5 }}>Post poll</button>
             </div>
           </div>
         ) : null}
@@ -1256,7 +1256,7 @@ function SharePreview({ p, type }) {
     );
   }
   return (
-    <div style={{ borderRadius: 18, padding: '16px 18px', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
+    <div style={{ borderRadius: 18, padding: '16px 18px', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
       <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.45, margin: '0 0 8px', fontWeight: 500, textWrap: 'pretty', display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>“{p.text}”</p>
       <div style={{ fontWeight: 700, fontSize: 13 }}>{p.ref}{p.version ? ' · ' + p.version : ''}</div>
     </div>
@@ -1554,7 +1554,7 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 16px 30px' }}>
         {(!FS.myProfile || !(FS.myProfile.name && FS.myProfile.name.trim())) ? (
           <div onClick={() => { onClose(); ctx.openProfile(); }} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', margin: '4px 0 12px', borderRadius: 14, cursor: 'pointer', background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)' }}>
-            <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, background: 'var(--clay)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pen" size={17} color="#fff" /></div>
+            <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pen" size={17} color="var(--on-clay)" /></div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>Add your name</div>
               <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.4 }}>You’re showing as “{me ? FS.displayFor(me).handle : 'Anonymous'}”. A name helps your church know you.</div>
