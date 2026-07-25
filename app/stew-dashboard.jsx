@@ -220,7 +220,7 @@ function WizShell({ step, title, sub, children, footer }) {
     <div style={{ position: 'absolute', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 42%, transparent)', backdropFilter: 'blur(4px)', animation: 'lumenFade .18s ease both' }}>
       <div className="no-scrollbar" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ padding: '26px 28px 0' }}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4, 5].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4, 5, 6].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '-.4px' }}>{title}</div>
           {sub ? <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 0' }}>{sub}</div> : null}
           <div style={{ marginTop: 18 }}>{children}</div>
@@ -299,6 +299,27 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const saveName = async () => { const n = name.trim(); if (n && n !== church.name) { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 })); setBusy(false); } next(); };
   const saveGroups = async () => { const chosen = STARTERS.filter(s => picks.has(s.id)); if (chosen.length) { setBusy(true); for (const g of chosen) await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub })); setBusy(false); } next(); };
   const saveTeam = async () => { const t = teamName.trim(); if (t) { setBusy(true); await Promise.resolve(window.Steward.publishGroup({ name: t, kind: 'team', sub: 'Serving team' })); setBusy(false); } next(); };
+  // Step 4 — the church's weekly rhythm. This step did not exist: the ONLY wizard that pre-filled Sunday
+  // Service / Midweek was StewWizard, which renders solely with ?setup=1 and no key, so a real new church
+  // finished setup with an EMPTY calendar and no hint that meetings were a thing. Reported by the owner
+  // 2026-07-25 ("that doesn't look like it turned up in the test calendar").
+  // WizMeetings is reused from stew-console.jsx — both files load into the same global scope, so this is the
+  // same UI the other wizard used rather than a second one to keep in sync.
+  const [meetings, setMeetings] = React.useState(() => ([
+    { id: _wizMeetingId(), title: 'Sunday Service', day: 0, time: '10:00', recur: 'weekly' },
+    { id: _wizMeetingId(), title: 'Midweek', day: 3, time: '19:30', recur: 'weekly' },
+  ]));
+  const saveMeetings = async () => {
+    const rows = meetings.filter(m => m.title.trim());
+    if (rows.length) {
+      setBusy(true);
+      // awaited, not fire-and-forget: publishEvent resolves after the relay ACKs, so a failure leaves the
+      // steward on this step with the rows still editable rather than landing on an empty calendar later.
+      for (const m of rows) await Promise.resolve(window.Steward.publishMeeting({ id: m.id, title: m.title.trim(), day: m.day, time: m.time, recur: m.recur }));
+      setBusy(false);
+    }
+    next();
+  };
 
   if (step === 0) return (
     <WizShell step={step} title="Welcome to your console" sub="Let’s get your church set up — about a minute. First, what’s it called? Members see this name when they join."
@@ -426,9 +447,20 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   );
 
   if (step === 4) return (
-    <WizShell step={step} title="Serving rota" sub="Teams are who serves on a Sunday — welcome, kids, sound, and so on. Start one now if you like, or set this up later in the Rota tab."
+    <WizShell step={step} title="Your regular meetings" sub="Set your weekly rhythm. These fill the calendar automatically, so members always see what’s on — you can edit or add more any time from the Calendar tab."
       footer={<React.Fragment>
         <button onClick={() => setStep(3)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
+        <div style={{ flex: 1 }} />
+        <button onClick={saveMeetings} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{meetings.filter(m => m.title.trim()).length ? `Add ${meetings.filter(m => m.title.trim()).length} & continue` : 'Skip for now'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
+      </React.Fragment>}>
+      <WizMeetings meetings={meetings} setMeetings={setMeetings} />
+    </WizShell>
+  );
+
+  if (step === 5) return (
+    <WizShell step={step} title="Serving rota" sub="Teams are who serves on a Sunday — welcome, kids, sound, and so on. Start one now if you like, or set this up later in the Rota tab."
+      footer={<React.Fragment>
+        <button onClick={() => setStep(4)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={saveTeam} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: busy ? .5 : 1 }}>{teamName.trim() ? 'Create team & continue' : 'I’ll do this later'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
