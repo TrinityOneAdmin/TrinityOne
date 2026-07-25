@@ -57,6 +57,16 @@ window.useStewardConn = useStewardConn;
 // active identity) so a re-mounted tab paints its last-known data INSTANTLY, then the re-subscribe refreshes it
 // silently in the background. Nothing is lost across navigation; only a genuine change re-renders.
 const _subCache = {};
+// PERF (audit 2026-07-24): this opened a fresh relay subscription per hook CALL, not per stream —
+// useStewardMembers() is called at 20 sites, useStewardGroups() at 10, and every concurrently-mounted one
+// re-streamed the church's whole document corpus (these filters carry no limit and no since-cursor). On a
+// 2G link that made the console effectively unusable for a real church. The callers all want the SAME data,
+// so hold one live subscription per (stream, identity, connection) and fan it out to every listener; close it
+// when the last one unmounts. Ref-counted rather than leaked, and unchanged in behaviour: every listener still
+// gets every delivery, and a late subscriber is handed the latest value immediately instead of waiting for the
+// next one. (The deeper fix is porting the member app's _docsHub — cursors + one socket — but this is the
+// contained 90% and does not touch the data layer.)
+const _subShared = {};
 function makeSub(getObj, method, makeInit) {
   return function () {
     const idv = useStewardIdv();
@@ -65,7 +75,19 @@ function makeSub(getObj, method, makeInit) {
     const [v, setV] = useSt(() => (key in _subCache ? _subCache[key] : makeInit()));   // paint last-known instantly
     useStE(() => {
       const o = getObj(); if (!o || !o[method]) return undefined;
-      return o[method]((val) => { _subCache[key] = val; setV(val); });   // cache every delivery, then render
+      const skey = key + '|' + conn;                                                     // a reconnect must genuinely re-subscribe
+      let entry = _subShared[skey];
+      if (!entry) {
+        entry = { listeners: new Set(), unsub: null, last: undefined };
+        _subShared[skey] = entry;
+        entry.unsub = o[method]((val) => { _subCache[key] = val; entry.last = val; for (const fn of [...entry.listeners]) { try { fn(val); } catch (e) {} } });
+      }
+      entry.listeners.add(setV);
+      if (entry.last !== undefined) setV(entry.last);                                    // joined late — don't wait for the next delivery
+      return () => {
+        entry.listeners.delete(setV);
+        if (!entry.listeners.size) { try { entry.unsub && entry.unsub(); } catch (e) {} delete _subShared[skey]; }
+      };
     }, [idv, conn]);   // re-subscribe on identity change OR reconnect
     return v;
   };

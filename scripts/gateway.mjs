@@ -1348,7 +1348,11 @@ function accept(e) {
     }
     // SAFEGUARDING (relay-enforced): a child may only post in a group their church marked child-safe. Was a
     // client-side list filter only, so a modified/old build could post into adult-only rooms.
-    if (g && MINORS.has(e.pubkey) && !GROUP_CHILDSAFE.has(g)) return false;
+    // Scoped PER CHURCH, deliberately: MINORS is a relay-wide union of every church's list, and using it here
+    // meant a child marking made by ANY of the churches sharing this relay silenced that person in EVERY other
+    // congregation's adult rooms — caught on the live box, where an adult member could not post. Whether
+    // someone is a child is a judgement only their own church makes, exactly as safeguardAllows() already does.
+    if (g && !GROUP_CHILDSAFE.has(g)) { const gcp = GROUP_CHURCH.get(g); const m = gcp && MINORS_BY.get(gcp); if (m && m.has(e.pubkey)) return false; }
     return isMember;
   }
   if (k === 4) {   // NIP-04 direct message — safeguarding gate
@@ -1487,7 +1491,8 @@ function canRead(e, authed) {
   // client authenticates and carries on transparently.
   if (g && !GROUP_CHILDSAFE.has(g)) {
     if (!authed) return false;
-    if (MINORS.has(authed)) return false;
+    const gcp = GROUP_CHURCH.get(g); const m = gcp && MINORS_BY.get(gcp);   // per-church, not the relay-wide union (see accept())
+    if (m && m.has(authed)) return false;
   }
   if (!g || GROUP_VIS.get(g) !== 'invite') return true;
   if (!authed) return false;

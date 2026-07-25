@@ -92,6 +92,23 @@ test('a child CAN post and read in a child-safe group', async () => {
   assert.ok(got.length >= 1, 'a minor must be able to read their own youth group');
 });
 
+test('a child marking by ANOTHER church does not silence someone here', async () => {
+  // MINORS is a relay-wide union of every church's list. Consulting it directly meant a marking made by any
+  // co-tenant church silenced that person in EVERY other congregation's adult rooms — which is exactly what
+  // happened on the live relay: an ordinary adult member could not post to their own church's main room.
+  // Whether someone is a child is a judgement only their OWN church makes (as safeguardAllows already does).
+  const other = K();
+  assert.equal((await publish(pub, doc(other, MEMBER_D + church.pub, { joined: now() })))[0], true, 'joins this church');
+  await sleep(120);
+  // church B (a co-tenant) marks them as a child in ITS list — must not affect church A's rooms
+  const B = K();
+  const bMinors = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + B.pub], ['t', 'trinityone']], content: JSON.stringify({ pubkeys: [other.pub] }) }, B.sk);
+  await publish(pub, bMinors);
+  await sleep(200);
+  assert.equal((await publish(pub, chat(other, ADULT_G, 'I am an adult here')))[0], true,
+    'another church’s minors list must not restrict this church’s adult group');
+});
+
 test('un-marking a group as child-safe takes effect immediately', async () => {
   assert.equal((await publish(pub, doc(church, GROUP_D + KIDS_G, { name: 'Youth' })))[0], true, 'church removes the flag');
   await sleep(200);
