@@ -65,3 +65,63 @@ labels turned out to be already done — those entries were stale.
   dangerous edges are fixed (irreversible "New identity" now confirms; the headline no longer asserts anonymity
   to a member using their real name). Deleting 500 lines of live-but-unlinked code is riskier than leaving it.
 - `window.confirm` for **key overwrite** stays deliberately ugly — see the comment at its call sites.
+
+---
+
+## Open from the 2026-07-25 adversarial audit (5 reviews of the 48h diff)
+
+The CRITICAL and HIGH findings were fixed in `ae79ddf` (deployed). These survived, unassessed — the owner
+asked for them to be noted, not fixed. Ranked.
+
+### Relay
+- **Refusal reasons reach the steward as the wrong message.** `stew-dashboard.jsx` PublishErrorBanner
+  pattern-matches `/not a member|not permitted|blocked/i`. So `invalid: a newer version of this is already
+  stored` falls to the generic *"check the connection and try again"* — which will never work — while
+  `blocked: this event was deleted by its author` now matches the **"this relay is set up for a different
+  church — restore this church's key in Settings"** branch. That is a dangerous suggestion to hand a steward.
+  Unreachable from the console today (it never publishes kind-5 and always mints new ids), but one refactor
+  away. The banner should surface the relay's own reason, not re-derive one from three substrings.
+- **Cross-tenant tombstone rows.** `MEMBERS` is a relay-wide union and kind-5 falls through `accept()` to
+  `isMember`, so any member of any tenant can write tombstone rows targeting another church's event ids. Since
+  `isDeleted()` is now author-exact those rows are inert — no censorship primitive — but they still accumulate
+  and are never pruned. Consider scoping kind-5 acceptance per church.
+
+### App links
+- **A crafted link to our OWN host still adopts a relay + church with no confirmation.** Host-pinning stops a
+  third-party app injecting an intent, but not a hostile `https://app.trinityone.church/join?follow=<attacker>
+  &relay=wss://attacker` sent to a member. That relay then receives their profile, membership, chat, DM
+  metadata and a socket on every launch — a durable pubkey<->IP binding, which for this audience is the whole
+  threat model. Needs an explicit confirm before adopting an unknown relay from a link. **UX decision.**
+- **`appUrlOpen` does a full page reload**, destroying unsaved state — a half-typed message, and (worse) a
+  newly minted child account's 12 words, which `identity.jsx` holds in React state only.
+- **minSdk is 22**; `autoVerify` needs 23+, and only 31+ falls back silently. On API 23-30 a failed
+  verification shows an "Open with..." chooser on every invite tap. The manifest comment claims otherwise.
+- **Self-hosted churches never get the in-app path** — `AndroidManifest.xml` hard-codes the host, so their
+  `/join` link always opens the browser however they serve assetlinks. Needs a per-domain intent-filter, which
+  the manifest cannot know at build time.
+
+### Member app
+- **Today's care-request and safety-check panels keep watching the PREVIOUS church after a switch.** They key
+  on `Fellowship.churchPub`, which a parent effect sets after the child effects run, and nothing re-subscribes.
+  Pre-existing (the old inline versions read the same global at the same moment), but sharing makes it visible:
+  a late joiner is now painted the old church's last value instantly.
+- **Shared streams are not re-opened by `reconnectAll()`.** Watch's 12-second "slow -> Retry" button is a no-op
+  while another screen holds the same stream.
+
+### Console
+- **The 1.8s wizard race now pollutes the calendar.** If `church.name` is still empty 1.8s after mount (slow
+  relay, 2G cold start) an ESTABLISHED church gets the first-run wizard — which now publishes two fresh
+  Sunday Service / Midweek events with new ids, so they cannot replace the existing ones. Permanent duplicates.
+- **A phrase shorter than 12 words dead-ends the wizard**: the challenge effect early-returns, `challenge`
+  stays empty, `canContinue` is false forever, and the phrase is now hidden so there is nothing to read either.
+  Latent (only reachable via the localhost-gated `?churchkey=`), but the guard belongs in `canContinue`.
+- **One-frame flash** of the quiz heading before the effect supplies its inputs; visible as a stutter on the
+  Android WebView. Deriving the draw in the `setSaved` handler removes it.
+- **The Tauri desktop app still deep-links `?setup=1`** (`relay-app/desktop/src-tauri/src/main.rs`), now inert.
+  More importantly the church-in-a-box operator LOST the relay-setup step that the deleted `WizRelays`
+  provided — the surviving wizard offers only the admin-token box. Deliberate decision needed.
+- ~10 marketing HTML links still carry `?setup=1`. Harmless dead params.
+
+### Tests
+- **Nothing asserts the three subscriptions still route through `_shared`.** Reinstating the duplicate-REQ
+  regression directly (calling `_openSermons`) leaves the whole suite green.
