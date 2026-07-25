@@ -75,7 +75,8 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   const qUnattributed    = db.prepare("SELECT id, raw FROM events WHERE church = ''");
 
   // store an event. Returns 'stored' | 'have-newer' (a newer version of a replaceable doc already held) |
-  // 'duplicate' (same id already stored). Replaceable docs replace older versions of the same key.
+  // 'duplicate' (same id already stored) | 'deleted' (its author tombstoned it — a resync must not resurrect it).
+  // Replaceable docs replace older versions of the same key.
   // `church` is the gateway-RESOLVED owning church (for per-church retention); falls back to the event's tag.
   function put(e, church) {
     if (!e || !e.id) return 'duplicate';
@@ -85,6 +86,7 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     // 15-min tolerance absorbs normal skew. Applies to every path (live + import + sync) since put() is the choke.
     if ((e.created_at || 0) > Math.floor(Date.now() / 1000) + 900) return 'future';
     if (qById.get(e.id)) return 'duplicate';   // already hold this exact event — no-op (no re-store/re-broadcast)
+    if (isDeleted(e.id, e.pubkey)) return 'deleted';   // its author deleted it; a resync must not bring it back
     const rk = replKey(e);
     const ch = (church != null) ? church : churchOf(e);   // gateway passes the RESOLVED owning church; else the tag
     if (rk) {
@@ -164,6 +166,47 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   function authorOf(id) { const r = qAuthorById.get(id); return r ? r.pubkey : null; }
   function del(id) { try { return delById.run(id).changes > 0; } catch { return false; } }
 
+  // AUDIT-2026-07-24: deleted content RESURRECTED. `del()` is a bare DELETE that leaves no trace, so the next
+  // resync with a peer that still holds the event pulled it straight back in — a member who deleted a message
+  // watched it reappear. Three separate holes, one table closes all three:
+  //   1. no record of the deletion, so nothing could refuse the re-import;
+  //   2. the caller applied deletions only when put() returned 'stored', so a relay that ALREADY held the kind-5
+  //      never re-applied it (the common case after any restart);
+  //   3. negentropy imports in ID order, so a kind-5 processed BEFORE its target simply found nothing to delete
+  //      and the target landed moments later, permanently.
+  // A tombstone is authoritative only for the pubkey that claimed it, and put() only honours one whose pubkey
+  // matches the event's own author — so recording a tombstone for an event we don't hold is safe even though we
+  // cannot yet check authorship. Tombstones are ~100 bytes and are kept forever: a deletion that expires is a
+  // deletion that undoes itself, which is the bug.
+  db.exec(`CREATE TABLE IF NOT EXISTS deletions (
+    target_id TEXT NOT NULL,
+    pubkey    TEXT NOT NULL,
+    church    TEXT NOT NULL DEFAULT '',
+    at        INTEGER NOT NULL,
+    PRIMARY KEY (target_id, pubkey)
+  );`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_deletions_church ON deletions(church);');
+  const insTomb   = db.prepare('INSERT OR IGNORE INTO deletions (target_id,pubkey,church,at) VALUES (?,?,?,?)');
+  const qTomb     = db.prepare('SELECT pubkey FROM deletions WHERE target_id = ?');
+  const qTombCh   = db.prepare('SELECT target_id FROM deletions WHERE church = ?');
+  const qRowById  = db.prepare('SELECT pubkey, church FROM events WHERE id = ?');
+
+  // Apply one NIP-09 deletion: `pubkey` asks to delete `targetId`. Deletes it if we hold it AND the requester is
+  // its author; records the tombstone either way so it can never come back. Idempotent — call it on every kind-5,
+  // every time, including duplicates and imports.
+  function applyDeletion(targetId, pubkey, at) {
+    if (!targetId || !pubkey) return false;
+    const row = qRowById.get(targetId);
+    if (row && row.pubkey !== pubkey) return false;   // not yours to delete — no tombstone, no delete
+    try { insTomb.run(targetId, pubkey, (row && row.church) || '', at || Math.floor(Date.now() / 1000)); } catch {}
+    return row ? del(targetId) : false;
+  }
+  // Is this event tombstoned by its own author? (put() refuses to store it; sync refuses to re-offer it.)
+  function isDeleted(id, pubkey) {
+    const t = qTomb.get(id);
+    return !!t && (pubkey == null || t.pubkey === pubkey);
+  }
+
   // Backup: every stored event this relay holds for one church, oldest-first, as parsed objects. `cp` is the
   // gateway-resolved owning church (the `church` column). The caller decides what to serialise (JSONL) + how to
   // gate access. Restore is just importAll() of these events back into a store.
@@ -176,7 +219,14 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // negentropy resync: just the event IDs a church holds (for bucketed set-difference), and the raw events for a
   // given ID list (to pull only the true difference). Cheap ID-only scan; the events fetch is bounded by the caller.
   const qChurchIds = db.prepare('SELECT id FROM events WHERE church = ?');
-  function churchEventIds(cp) { return qChurchIds.all(cp).map((r) => r.id); }
+  // Include TOMBSTONED ids in what we claim to hold. Without this, negentropy sees the deleted id as missing
+  // on our side every single round, re-offers it every sync forever, and we re-fetch and re-refuse it —
+  // correct, but it burns a member's data plan on an event we will never store.
+  function churchEventIds(cp) {
+    const ids = qChurchIds.all(cp).map((r) => r.id);
+    for (const r of qTombCh.all(cp)) ids.push(r.target_id);
+    return ids;
+  }
   const qEventByIdCh = db.prepare('SELECT raw FROM events WHERE church = ? AND id = ?');
   function syncEventsByIds(cp, ids) { const out = []; if (!Array.isArray(ids)) return out; for (const id of ids) { const r = qEventByIdCh.get(cp, id); if (r) { try { out.push(JSON.parse(r.raw)); } catch {} } } return out; }
 
@@ -261,5 +311,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     try { oldest = (qOldest.get() || {}).t | 0; } catch {}
     return { days: n, daily, kinds, churches, oldest };
   }
-  return { db, put, query, eachKind, count, authorOf, del, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, eachKind, count, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
 }

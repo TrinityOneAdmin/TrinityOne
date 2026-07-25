@@ -997,6 +997,14 @@ const dtag = (e) => { const t = (e.tags || []).find(t => t[0] === 'd'); return t
 const gidOf = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 // which church an event counts against for per-church retention: its explicit 'church' tag, else (for chat)
 // its group's owning church, else (a member's DMs/reactions) that member's church, else '' (shared bucket).
+// NIP-09: a kind-5 deletes the AUTHOR'S OWN referenced events only — applyDeletion() checks authorship against
+// the stored row, so a member can retract their own message but never someone else's. It also writes a TOMBSTONE,
+// which is what makes the deletion survive: without one, the next negentropy round with a peer that still held the
+// event pulled it straight back in. Safe to call on every delivery of the same kind-5 — it is idempotent.
+function applyDeletions(evt) {
+  for (const t of (evt.tags || [])) if (t[0] === 'e' && t[1]) store.applyDeletion(t[1], evt.pubkey, evt.created_at);
+}
+
 function resolveChurch(e) {
   // SECURITY-2026-07-13: honor a self-declared ['church',cp] tag ONLY when the author actually BELONGS to cp. Trusting
   // it blindly let a member of church A tag events ['church', B] and inject them into B's per-church retention bucket
@@ -1038,6 +1046,19 @@ function hydrateMaps() {
   finally { _hydrating = false; }
   rebuildBlocked(); rebuildMinors(); rebuildApproved(); rebuildGuardians(); rebuildNetworks();   // rebuildBlocked() also rebuilds MEMBERS from the full maps
 }
+// MIGRATION (AUDIT-2026-07-24): tombstones are new, so every kind-5 already on disk from an older build has no
+// deletions row — and a kind-5 the relay already holds comes back from put() as 'duplicate', which means it would
+// NEVER be recorded. Any content that resurrected before the fix would quietly stay resurrected. Replay every
+// stored kind-5 once at boot: applyDeletion is idempotent, authorship-checked, and kind-5 counts are tiny, so this
+// is cheap and safe to run on every start (it is also the self-heal for a relay that has been resyncing with an
+// unpatched peer).
+function backfillDeletions() {
+  let n = 0;
+  try { store.eachKind([5], (e) => { for (const t of (e.tags || [])) if (t[0] === 'e' && t[1]) { if (store.applyDeletion(t[1], e.pubkey, e.created_at)) n++; } }); }
+  catch (err) { console.warn('[relay] deletion backfill failed', err && err.message); return; }
+  if (n) console.log(`[relay] deletion backfill: re-applied ${n} deletion(s) that had resurrected`);
+}
+
 // persist the current church allow-list to church.json (so a clone-registered church survives a relay restart).
 function persistChurches() { try {
   // Mirror writeChurches's on-disk shape: stamp envMigrated and keep by/at provenance. Without envMigrated,
@@ -2123,7 +2144,8 @@ function serveStatic(req, res) {
           if (!ok) { invalid++; continue; }
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
-            if (r === 'stored') { imported++; if (e.kind === 5) for (const t of e.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === e.pubkey) store.del(t[1]); } }   // apply deletions so a deleted message doesn't resurrect on restore
+            if (r === 'stored') imported++;
+            if (e.kind === 5) applyDeletions(e);   // ALWAYS — a kind-5 we already hold ('duplicate') still has to be applied, or a restore silently resurrects everything it deleted
             else duplicates++;
           } catch { invalid++; }
         }
@@ -3037,6 +3059,7 @@ store.cull();
 let _putsSinceCull = 0;   // E6: cull runs every 256 stored events (or startup), not on every single one
 // rebuild member/broadcast/care state from the structured (kind-30078) docs, oldest-first as before
 hydrateMaps();
+backfillDeletions();   // re-apply every stored kind-5 — heals content that resurrected before tombstones existed
 // now that group→church / member→church maps are built, attribute any events stored without a church
 // (migrated chat, or pre-map writes) so per-church retention buckets them correctly
 if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) console.log(`[relay] attributed ${r} events to a church (per-church retention)`); }
@@ -3057,7 +3080,8 @@ async function syncChurchFromPeer(cp, peerBase) {
       let e; try { e = JSON.parse(s); } catch { return; }
       if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
       const put = store.put(e, cp);
-      if (put === 'stored') { imported++; note(e); if (e.kind === 5) for (const t of e.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === e.pubkey) store.del(t[1]); } }   // apply deletions, as the live path does
+      if (put === 'stored') { imported++; note(e); }
+      if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
       if ((e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
     });
   } catch { return { ok: false }; }
@@ -3118,7 +3142,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
     let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
-    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); if (e.kind === 5) for (const t of e.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === e.pubkey) store.del(t[1]); } } }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
 }
@@ -3282,14 +3306,17 @@ wss.on('connection', (ws, req) => {
       // durable store handles replaceable dedup + smart retention (structure kept, oldest ephemeral culled).
       // 'have-newer' / 'duplicate' → acknowledge but don't re-broadcast.
       const putRes = store.put(evt, resolveChurch(evt));
-      if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, true, 'have newer'])); return; }
+      // NIP-09 BEFORE the early returns: a re-sent kind-5 comes back as 'duplicate', and the old code returned
+      // on that without ever applying the deletion — so the second and every later delivery of a deletion was a
+      // no-op. That is the usual case after a reconnect or a resync, which is exactly when it matters.
+      if (evt.kind === 5) applyDeletions(evt);
+      // AUDIT-2026-07-24: a discarded write was ACKed as `OK … true`. A client that lost the newest-wins race
+      // was told its edit saved; the next read showed the other version and looked like data loss. Say no.
+      if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, false, 'rejected: a newer version of this is already stored — reload and edit again'])); return; }
+      if (putRes === 'deleted') { ws.send(JSON.stringify(['OK', evt.id, false, 'rejected: this event was deleted by its author'])); return; }
       if (putRes === 'duplicate') { ws.send(JSON.stringify(['OK', evt.id, true, 'duplicate'])); return; }
       if (putRes === 'future') { ws.send(JSON.stringify(['OK', evt.id, false, 'rejected: timestamp is too far in the future — check this device’s clock'])); return; }
       if (++_putsSinceCull >= 256) { _putsSinceCull = 0; store.cull(); }   // E6: throttle the GROUP BY cull off the per-event hot path (was every stored event)
-      // NIP-09: a kind-5 deletes the AUTHOR'S OWN referenced events only — authorOf() gates it to self, so a
-      // member can retract their message but never delete someone else's. The kind-5 also broadcasts below, so
-      // connected clients drop the message live; store.del makes it stay gone on reload/backfill.
-      if (evt.kind === 5) for (const t of evt.tags) { if (t[0] === 'e' && t[1] && store.authorOf(t[1]) === evt.pubkey) store.del(t[1]); }
       maybePush(evt);   // notify the targeted member if this is a serving request
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join
       maybePushMessage(evt);   // notify on a new DM (recipient) or church announcement (members)
