@@ -6984,7 +6984,7 @@
         }
       }
       if (!sk) return null;
-      let khex = null;
+      let ring = [];
       try {
         const evs = await pool.querySync(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], "#d": [MEDIAKEY_D + cp] }]);
         for (const e of evs || []) {
@@ -6992,18 +6992,41 @@
           try {
             const o = JSON.parse(e.content);
             const mine = o.keys && o.keys[pub];
-            if (mine) khex = decrypt(mine, getConversationKey(sk, cp));
+            if (mine) {
+              const plain = decrypt(mine, getConversationKey(sk, cp));
+              let r = null;
+              try {
+                const q = JSON.parse(plain);
+                if (Array.isArray(q)) r = q.filter((k) => typeof k === "string" && k);
+              } catch (e2) {
+              }
+              ring = r && r.length ? r : [plain];
+            }
           } catch {
           }
         }
       } catch {
       }
-      if (!khex) return null;
-      const key = await crypto.subtle.importKey("raw", _unhex(khex), "AES-GCM", false, ["decrypt"]);
+      if (!ring.length) return null;
+      const keys = [];
+      for (const kh of ring) {
+        try {
+          keys.push(await crypto.subtle.importKey("raw", _unhex(kh), "AES-GCM", false, ["decrypt"]));
+        } catch (e) {
+        }
+      }
+      if (!keys.length) return null;
       return async (bytes) => {
-        const iv = bytes.slice(0, 12);
-        const ct = bytes.slice(12);
-        return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct));
+        const iv = bytes.slice(0, 12), ct = bytes.slice(12);
+        let lastErr = null;
+        for (const key of keys) {
+          try {
+            return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct));
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        throw lastErr || new Error("media: no usable key");
       };
     },
     // resolve a church reference → npub. A bare npub / invite link returns as-is; a NIP-05 "nice name"

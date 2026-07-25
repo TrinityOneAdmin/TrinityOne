@@ -958,14 +958,26 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp) return null;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk) return null;
-    let khex = null;
+    // KEY RING: the church rotates its media key when a member is removed, so the envelope carries the current
+    // key followed by the superseded ones — a sermon encrypted before the rotation must still play. A wrapped
+    // value is a JSON array now; older envelopes hold a bare hex string, so accept both.
+    let ring = [];
     try {
       const evs = await pool.querySync(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], '#d': [MEDIAKEY_D + cp] }]);
-      for (const e of (evs || [])) { if (e.pubkey !== cp) continue; try { const o = JSON.parse(e.content); const mine = o.keys && o.keys[pub]; if (mine) khex = nip44d(mine, nip44ck(sk, cp)); } catch {} }
+      for (const e of (evs || [])) { if (e.pubkey !== cp) continue; try { const o = JSON.parse(e.content); const mine = o.keys && o.keys[pub]; if (mine) { const plain = nip44d(mine, nip44ck(sk, cp)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (e2) {} ring = (r && r.length) ? r : [plain]; } } catch {} }
     } catch {}
-    if (!khex) return null;
-    const key = await crypto.subtle.importKey('raw', _unhex(khex), 'AES-GCM', false, ['decrypt']);
-    return async (bytes) => { const iv = bytes.slice(0, 12); const ct = bytes.slice(12); return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct)); };
+    if (!ring.length) return null;
+    const keys = [];
+    for (const kh of ring) { try { keys.push(await crypto.subtle.importKey('raw', _unhex(kh), 'AES-GCM', false, ['decrypt'])); } catch (e) {} }
+    if (!keys.length) return null;
+    // Try each key oldest-attempt-last: AES-GCM authenticates, so the wrong key throws rather than returning
+    // garbage — which is exactly what makes "try them all" safe here.
+    return async (bytes) => {
+      const iv = bytes.slice(0, 12), ct = bytes.slice(12);
+      let lastErr = null;
+      for (const key of keys) { try { return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct)); } catch (e) { lastErr = e; } }
+      throw lastErr || new Error('media: no usable key');
+    };
   },
 
   // resolve a church reference → npub. A bare npub / invite link returns as-is; a NIP-05 "nice name"

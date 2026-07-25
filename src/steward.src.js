@@ -151,7 +151,8 @@ let _careKeyRev = 0;             // envelope revision — rotation is NOT wired 
 let _careKeyChecked = false;     // have we actually LOOKED for an envelope? mint gate — see (1) above
 let _careRoster = new Set();     // the church's current steward pubkeys — who may author the envelope
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
-let _mediaKeyHex = null;                       // this device's cached copy of the church media key
+let _mediaKeyHex = null;                       // this device's cached copy of the church media key (= ring[0])
+let _mediaKeyRing = [];                        // current key first, then superseded — rotation must never orphan an encrypted sermon
 let _mediaKeyDocKeys = null;                   // the latest media-key doc's wrapped-per-member map (to detect members not yet keyed)
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
@@ -1154,9 +1155,10 @@ window.Steward = {
     // church and every member, permanently. Refuse to mint on an untrustworthy read (fail closed: the steward
     // sees "try again in a moment"; the alternative is silent, unrecoverable loss of the church's archive).
     if (!_mediaKeyHex && !_relayAuthed) throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key. Wait a moment and try again.');
-    if (!_mediaKeyHex) _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+    if (!_mediaKeyHex) { _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32))); _mediaKeyRing = [_mediaKeyHex]; }
     const keys = {}; const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
-    for (const mp of targets) { try { keys[mp] = nip44e(_mediaKeyHex, nip44ck(sk, mp)); } catch (e) {} }
+    const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
+    for (const mp of targets) { try { keys[mp] = nip44e(_mring, nip44ck(sk, mp)); } catch (e) {} }
     await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
     return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };
@@ -1172,10 +1174,29 @@ window.Steward = {
     const have = _mediaKeyDocKeys || {};
     if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
     const keys = {};
-    for (const mp of want) { try { keys[mp] = nip44e(_mediaKeyHex, nip44ck(sk, mp)); } catch (e) {} }
+    const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
+    for (const mp of want) { try { keys[mp] = nip44e(_mring, nip44ck(sk, mp)); } catch (e) {} }
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     if (ok !== false) _mediaKeyDocKeys = keys;                    // reflect what we just published so we don't loop
     return ok;
+  },
+  // ROTATE the media key — same contract as rotateCareKey: a removed member must not hold the key to sermons
+  // uploaded after they left. The ring keeps the superseded keys so nothing already encrypted becomes
+  // unplayable, and the new envelope simply isn't wrapped to them. Protects future uploads only; anything they
+  // already downloaded is theirs, and no key change alters that.
+  async rotateMediaKey(memberPubs) {
+    if (!sk || !pub) return false;
+    if (!_relayAuthed) return false;                              // never act on an untrusted view (see the mint gate)
+    if (!_mediaKeyHex) return false;                              // no key yet — mediaEncryptor mints the first
+    const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
+    const ring = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 12);
+    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+    const keys = {}; const payload = JSON.stringify(ring);
+    for (const mp of want) { try { keys[mp] = nip44e(payload, nip44ck(sk, mp)); } catch (e) {} }
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    if (ok === false) return false;
+    _mediaKeyRing = ring; _mediaKeyHex = fresh; _mediaKeyDocKeys = keys;
+    return true;
   },
   // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
   // Watch the church's envelope. Unwraps OUR OWN entry with churchSk/churchPub — in delegated mode `pub` is
@@ -1290,7 +1311,10 @@ window.Steward = {
   subscribeMediaKey() {
     if (!pub) return () => {};
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [MEDIAKEY_D + pub] }], {
-      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; const mine = o.keys && o.keys[pub]; if (mine && sk) _mediaKeyHex = nip44d(mine, nip44ck(sk, e.pubkey)); } catch (x) {} },
+      // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
+      // first) but older envelopes hold one bare hex string. Reading only the new form would make every
+      // sermon encrypted before the upgrade undecryptable.
+      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; const mine = o.keys && o.keys[pub]; if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} _mediaKeyRing = (r && r.length) ? r : [plain]; _mediaKeyHex = _mediaKeyRing[0]; } } catch (x) {} },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };

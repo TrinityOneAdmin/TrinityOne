@@ -10640,6 +10640,7 @@ zoo`.split("\n");
   var _careRoster = /* @__PURE__ */ new Set();
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
+  var _mediaKeyRing = [];
   var _mediaKeyDocKeys = null;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
@@ -11967,12 +11968,16 @@ zoo`.split("\n");
     async mediaEncryptor(memberPubs) {
       if (!sk) throw new Error("no key");
       if (!_mediaKeyHex && !_relayAuthed) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
-      if (!_mediaKeyHex) _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      if (!_mediaKeyHex) {
+        _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+        _mediaKeyRing = [_mediaKeyHex];
+      }
       const keys = {};
       const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+      const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
       for (const mp of targets) {
         try {
-          keys[mp] = encrypt3(_mediaKeyHex, getConversationKey(sk, mp));
+          keys[mp] = encrypt3(_mring, getConversationKey(sk, mp));
         } catch (e) {
         }
       }
@@ -11998,15 +12003,42 @@ zoo`.split("\n");
       const have = _mediaKeyDocKeys || {};
       if (want.every((p) => have[p])) return false;
       const keys = {};
+      const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
       for (const mp of want) {
         try {
-          keys[mp] = encrypt3(_mediaKeyHex, getConversationKey(sk, mp));
+          keys[mp] = encrypt3(_mring, getConversationKey(sk, mp));
         } catch (e) {
         }
       }
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
       if (ok !== false) _mediaKeyDocKeys = keys;
       return ok;
+    },
+    // ROTATE the media key — same contract as rotateCareKey: a removed member must not hold the key to sermons
+    // uploaded after they left. The ring keeps the superseded keys so nothing already encrypted becomes
+    // unplayable, and the new envelope simply isn't wrapped to them. Protects future uploads only; anything they
+    // already downloaded is theirs, and no key change alters that.
+    async rotateMediaKey(memberPubs) {
+      if (!sk || !pub) return false;
+      if (!_relayAuthed) return false;
+      if (!_mediaKeyHex) return false;
+      const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      const ring = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 12);
+      const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+      const keys = {};
+      const payload = JSON.stringify(ring);
+      for (const mp of want) {
+        try {
+          keys[mp] = encrypt3(payload, getConversationKey(sk, mp));
+        } catch (e) {
+        }
+      }
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      if (ok === false) return false;
+      _mediaKeyRing = ring;
+      _mediaKeyHex = fresh;
+      _mediaKeyDocKeys = keys;
+      return true;
     },
     // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
     // Watch the church's envelope. Unwraps OUR OWN entry with churchSk/churchPub — in delegated mode `pub` is
@@ -12183,12 +12215,25 @@ zoo`.split("\n");
       if (!pub) return () => {
       };
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }], {
+        // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
+        // first) but older envelopes hold one bare hex string. Reading only the new form would make every
+        // sermon encrypted before the upgrade undecryptable.
         onevent(e) {
           try {
             const o = JSON.parse(e.content);
             _mediaKeyDocKeys = o && o.keys || null;
             const mine = o.keys && o.keys[pub];
-            if (mine && sk) _mediaKeyHex = decrypt3(mine, getConversationKey(sk, e.pubkey));
+            if (mine && sk) {
+              const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
+              let r = null;
+              try {
+                const q = JSON.parse(plain);
+                if (Array.isArray(q)) r = q.filter((k) => typeof k === "string" && k);
+              } catch (x2) {
+              }
+              _mediaKeyRing = r && r.length ? r : [plain];
+              _mediaKeyHex = _mediaKeyRing[0];
+            }
           } catch (x) {
           }
         },

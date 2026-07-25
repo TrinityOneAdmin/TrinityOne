@@ -2973,6 +2973,7 @@ function DashMembers() {
     try {
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !blockedSet.has(p));
       if (window.Steward.rotateCareKey) window.Steward.rotateCareKey(remaining, stewardRoster || []);
+      if (window.Steward.rotateMediaKey) window.Steward.rotateMediaKey(remaining);   // same for encrypted sermons
     } catch (e) {}
   };
   const unblock = (pk) => window.Steward.setBlocked(blockedList.filter(p => p !== pk));
