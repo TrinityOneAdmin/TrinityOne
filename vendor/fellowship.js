@@ -5821,6 +5821,20 @@
   var _gkeys = {};
   var _gkeyTs = {};
   var _gkKey = (cp, gid) => (cp || "") + "|" + gid;
+  function _coalesce(fn) {
+    let queued = false;
+    return function() {
+      if (queued) return;
+      queued = true;
+      setTimeout(() => {
+        queued = false;
+        try {
+          fn();
+        } catch (e) {
+        }
+      }, 0);
+    };
+  }
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
   var _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
   function _ingestGroupKey(cp, e) {
@@ -7523,7 +7537,7 @@
         };
       }
       const byPeer = /* @__PURE__ */ new Map();
-      const emit = () => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0)));
+      const emit = _coalesce(() => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))));
       const handle = async (e) => {
         const peer = e.pubkey === pub ? (e.tags.find((t) => t[0] === "p") || [])[1] : e.pubkey;
         if (!peer) return;
@@ -7765,7 +7779,7 @@
       }
       const HIDE_D = "trinityone/hidden:";
       const hidden = /* @__PURE__ */ new Map();
-      const emit = () => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id)));
+      const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id))));
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": [groupId] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -8387,11 +8401,11 @@
         }
         return false;
       };
-      const emit = () => {
+      const emit = _coalesce(() => {
         const v = [...byId.entries()].filter(([id, n]) => careTrusted(n._by) && !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
         if (!eosed && !v.length) return;
         cb(v);
-      };
+      });
       return _onChurchDocs(pubk, {
         onevent(e, d) {
           if (d === MEALS_SETTINGS_D) {
@@ -8466,11 +8480,11 @@
       }
       const byKey = /* @__PURE__ */ new Map();
       let eosed = false;
-      const emit = () => {
+      const emit = _coalesce(() => {
         const v = [...byKey.values()];
         if (!eosed && !v.length) return;
         cb(v);
-      };
+      });
       return _onChurchDocs(pubk, {
         onevent(e, d) {
           if (!d.startsWith(prefix)) return;
@@ -8756,12 +8770,12 @@
       };
       const prefix = CARECHAT_D + reqId + ":";
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => {
+      const emit = _coalesce(() => {
         try {
           cb([...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0)));
         } catch (e) {
         }
-      };
+      });
       const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], "#t": ["carechat"], "#church": [cp] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";

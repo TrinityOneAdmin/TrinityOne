@@ -84,6 +84,14 @@ function _saveChildLink(link) { const list = _loadChildren().filter(c => c && c.
 const _gkeys = {};   // "<cp>|<groupId>" -> Uint8Array(32) group key, unwrapped from that church's envelope for me
 const _gkeyTs = {};  // "<cp>|<groupId>" -> newest envelope created_at accepted (stale-drop for replayed rotations)
 const _gkKey = (cp, gid) => (cp || '') + '|' + gid;
+// Coalesce a subscription's emit. The universal pattern here is `onevent → byId.set(...) → emit()`, where
+// emit rebuilds and re-sorts the WHOLE collection and fires a React setState — so replaying a backfill of n
+// events costs O(n² log n) and n renders. Deferring to the end of the tick makes it one rebuild per batch,
+// which is what the UI actually needs. (audit 2026-07-24)
+function _coalesce(fn) {
+  let queued = false;
+  return function () { if (queued) return; queued = true; setTimeout(() => { queued = false; try { fn(); } catch (e) {} }, 0); };
+}
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
 const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
 // unwrap my entry from a key envelope and cache the group key (NIP-44, church<->me conversation key).
@@ -1303,7 +1311,7 @@ window.Fellowship = {
   subscribeDMs(onConvos) {
     if (!pub) { onConvos([]); return () => {}; }
     const byPeer = new Map();
-    const emit = () => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0)));
+    const emit = _coalesce(() => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))));
     const handle = async (e) => {
       const peer = e.pubkey === pub ? (e.tags.find(t => t[0] === 'p') || [])[1] : e.pubkey;
       if (!peer) return;
@@ -1446,7 +1454,7 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub;
     if (!cp || !groupId) { cb(new Set()); return () => {}; }
     const HIDE_D = 'trinityone/hidden:'; const hidden = new Map();   // msgId -> hidden? (latest wins)
-    const emit = () => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id)));
+    const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id))));
     const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], '#t': [groupId] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -1816,7 +1824,7 @@ window.Fellowship = {
       || (!!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by))
       || (!!need && need._by === by);
     const retracted = (id, need) => { const s = tombs.get(id); if (!s) return false; for (const by of s) { if (careDelOk(by, need)) return true; } return false; };
-    const emit = () => { const v = [...byId.entries()].filter(([id, n]) => careTrusted(n._by) && !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); if (!eosed && !v.length) return; cb(v); };
+    const emit = _coalesce(() => { const v = [...byId.entries()].filter(([id, n]) => careTrusted(n._by) && !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); if (!eosed && !v.length) return; cb(v); });
     return _onChurchDocs(pubk, {
       onevent(e, d) {
         // capture the church-signed meals config + admin-team roster so care authors can be verified
@@ -1850,7 +1858,7 @@ window.Fellowship = {
     if (!pubk) { cb([]); return () => {}; }
     const byKey = new Map();
     let eosed = false;   // sticky: same as needs — don't blank on a transient empty before EOSE
-    const emit = () => { const v = [...byKey.values()]; if (!eosed && !v.length) return; cb(v); };
+    const emit = _coalesce(() => { const v = [...byKey.values()]; if (!eosed && !v.length) return; cb(v); });
     // the shared hub's union filter is a superset of the old '#church'-only one; the d-prefix guard
     // below keeps the delivered set identical (careslot:/careskip: docs are always church-tagged)
     return _onChurchDocs(pubk, {
@@ -2012,7 +2020,7 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub; if (!cp || !reqId) return () => {};
     const prefix = CARECHAT_D + reqId + ':';
     const byId = new Map();
-    const emit = () => { try { cb([...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0))); } catch (e) {} };
+    const emit = _coalesce(() => { try { cb([...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0))); } catch (e) {} });
     const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#t': ['carechat'], '#church': [cp] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
