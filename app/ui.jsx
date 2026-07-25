@@ -238,6 +238,24 @@ if (typeof document !== 'undefined' && !window.__t1EscWired) {
 // sites passes it — so with a screen reader they all announce as a bare "dialog". Rather than hand-label 59
 // sites (and watch them drift as copy changes), derive the name from the sheet's own first line of text when
 // no explicit label is given. An explicit label always wins.
+// Load the QR decoder only when a scanner actually opens. It is ~251 KB and was parsed on every cold start of
+// every member's phone for a feature most people use once. Resolves true when window.jsQR is usable.
+let _jsqrPromise = null;
+function ensureJsQR() {
+  if (typeof window.jsQR === 'function') return Promise.resolve(true);
+  if (_jsqrPromise) return _jsqrPromise;
+  _jsqrPromise = new Promise((resolve) => {
+    try {
+      const s = document.createElement('script');
+      s.src = 'vendor/jsqr.js';
+      s.onload = () => resolve(typeof window.jsQR === 'function');
+      s.onerror = () => { _jsqrPromise = null; resolve(false); };
+      document.head.appendChild(s);
+    } catch (e) { _jsqrPromise = null; resolve(false); }
+  });
+  return _jsqrPromise;
+}
+window.ensureJsQR = ensureJsQR;
 function useAutoDialogLabel(active, panelRef, label) {
   const [auto, setAuto] = useU('');
   useUE(() => {

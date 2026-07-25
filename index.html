@@ -190,7 +190,8 @@
 <script src="vendor/fflate.js"></script>
 <script src="vendor/sqljs/sql-wasm.js"></script>
 <!-- jsQR: pure-JS QR decoder, so in-app scanning works in the Android WebView (no BarcodeDetector there) -->
-<script src="vendor/jsqr.js"></script>
+<!-- jsQR is ~251 KB and is only needed when someone opens the camera scanner (a once-per-lifetime action),
+     so it is injected on demand by ensureJsQR() rather than parsed on every cold start. -->
 <!-- TrinityOne engine: loads MySword + open.bible USFM modules, exposes window.Bible -->
 <script src="engine.js"></script>
 <!-- Self-custodial Nostr identity (BIP-39 → NIP-06), bundled; exposes window.TrinityIdentity -->

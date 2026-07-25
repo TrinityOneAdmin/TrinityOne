@@ -51,7 +51,15 @@
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <!-- Static boot state, replaced by React on mount. The console transpiles ~2 MB of JSX in-browser, which is
+       seconds of flat grey on a phone with no indication anything is happening. -->
+  <div style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#efece6;font-family:'Sora',system-ui,sans-serif">
+    <div style="width:54px;height:54px;border-radius:16px;background:linear-gradient(155deg,#C25A38,#9C4327);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:22px;box-shadow:0 8px 22px rgba(34,28,16,.18)">T1</div>
+    <div style="font-size:14px;font-weight:700;color:#221C16">Opening your console…</div>
+    <div style="font-size:12px;color:#6B6052">Getting your church ready</div>
+  </div>
+</div>
 
 <script src="vendor/react.production.min.js"></script>
 <script src="vendor/react-dom.production.min.js"></script>

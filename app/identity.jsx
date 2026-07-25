@@ -556,7 +556,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>YOUR RECOVERY KEY</div>
         <Group>
           <Row icon="shield" label="Recovery key — your 12 words" sub="Your account’s master key. Restores you on any phone — write it on paper, keep it safe." accent="var(--sage)" onClick={() => ctx.openRecovery()} />
-          <Row icon="key" label="Public key" sub={identity.npub.slice(0, 24) + '…'} accent="var(--gold)" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(identity.npub).catch(() => {}); ctx.toast('Public key (npub) copied'); }} />
+          <Row icon="key" label="Your account ID" sub={identity.npub.slice(0, 24) + '…'} accent="var(--gold)" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(identity.npub).catch(() => {}); ctx.toast('Your account ID copied'); }} />
         </Group>
 
         {/* optional community PIN — encrypts the identity so ONLY the church side needs a PIN; the Bible stays open */}
@@ -585,7 +585,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         {/* relays + danger */}
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>NETWORK</div>
         <Group>
-          <Row icon="globe" label="Relays" sub={`${(window.Fellowship && window.Fellowship.relays || D.RELAYS).length} connected · Nostr`} onClick={() => ctx.openRelays()} />
+          <Row icon="globe" label="Relays" sub={`${(window.Fellowship && window.Fellowship.relays || D.RELAYS).length} connected`} onClick={() => ctx.openRelays()} />
         </Group>
         {/* "Start a new identity" hidden for the pilot — too easy to wipe a key by accident */}
         <AppVersion />

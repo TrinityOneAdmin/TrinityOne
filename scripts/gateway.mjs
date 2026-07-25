@@ -643,10 +643,15 @@ function openExternal(url) {
     c.on('error', () => {}); c.unref(); return true;
   } catch { return false; }
 }
-function reqToken(req) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
+// HEADER-ONLY by default (audit 2026-07-24). Every admin route used to accept the relay's master secret as
+// ?token=, and these relays sit behind a Cloudflare tunnel — so the token landed in edge logs, proxy logs and
+// browser history for /config, /settings, /stats, /update, /relay-restore, /sync-now. The one place a bare URL
+// is genuinely needed is the backup DOWNLOAD (an <a download> can't set a header), and that already has
+// one-time tickets; it passes allowQuery so an API caller keeps working.
+function reqToken(req, allowQuery) { const h = req.headers['authorization'] || ''; const m = /^Bearer\s+(.+)$/i.exec(h); if (m) return m[1].trim(); if (!allowQuery) return ''; try { return new URL(req.url, 'http://x').searchParams.get('token') || ''; } catch { return ''; } }
 // Always require the admin token. Do NOT trust loopback: the relay runs behind the Tailscale Funnel /
 // cloudflared, which proxy from 127.0.0.1, so a public request is indistinguishable from a local one.
-function adminOK(req) { const t = reqToken(req); if (!t || !ADMIN_TOKEN) return false; const a = Buffer.from(t), b = Buffer.from(ADMIN_TOKEN); return a.length === b.length && timingSafeEqual(a, b); }
+function adminOK(req, allowQuery) { const t = reqToken(req, allowQuery); if (!t || !ADMIN_TOKEN) return false; const a = Buffer.from(t), b = Buffer.from(ADMIN_TOKEN); return a.length === b.length && timingSafeEqual(a, b); }
 const STARTED_AT = Date.now();
 const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined, minus blocked, minus unapproved (when a church gates joining). Rebuilt by rebuildMembers().
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
@@ -2531,7 +2536,7 @@ function serveStatic(req, res) {
   if (route === '/relay-backup' && req.method === 'GET') {
     // Accept a one-time ?ticket= (the console's normal path) OR the admin token (header/?token=, for API use).
     const ticket = (() => { try { return new URL(req.url, 'http://x').searchParams.get('ticket') || ''; } catch { return ''; } })();
-    if (!consumeBackupTicket(ticket) && !adminOK(req)) { res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"unauthorized"}'); return; }
+    if (!consumeBackupTicket(ticket) && !adminOK(req, true)) { res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"unauthorized"}'); return; }
     try { store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch {}
     const stamp = new Date().toISOString().slice(0, 10);
     const fname = 'trinityone-relay-backup-' + stamp + '.tgz';

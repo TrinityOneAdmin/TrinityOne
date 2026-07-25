@@ -1374,7 +1374,7 @@ window.Fellowship = {
 
   // live reactions in a group; onReaction({ targetId, pubkey, content, ts })
   subscribeReactions(groupId, onReaction) {
-    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [7], '#t': [groupId], limit: 1000 }], {
+    const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [7], '#t': [groupId], limit: 400 }], {
       onevent(e) {
         const targetId = (e.tags.find(t => t[0] === 'e') || [])[1];
         if (targetId) { try { onReaction({ targetId, pubkey: e.pubkey, content: e.content, ts: e.created_at }); } catch (err) { console.error(err); } }

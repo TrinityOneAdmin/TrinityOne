@@ -89,7 +89,14 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     const ch = (church != null) ? church : churchOf(e);   // gateway passes the RESOLVED owning church; else the tag
     if (rk) {
       const rows = qByRepl.all(rk);
-      for (const r of rows) if ((r.created_at || 0) > (e.created_at || 0)) return 'have-newer';
+      // NIP-01 tie-break: newer created_at wins; on a TIE the LOWEST id wins. Comparing only created_at meant
+      // two relays holding different same-second versions each thought the other's was replaceable, so they
+      // swapped forever under negentropy — and every flip hard-deletes the version it replaces.
+      for (const r of rows) {
+        const rt = r.created_at || 0, et = e.created_at || 0;
+        if (rt > et) return 'have-newer';
+        if (rt === et && String(r.id) < String(e.id)) return 'have-newer';
+      }
       // AUDIT-2026-07-24: replacing a doc was DELETE-then-INSERT with no transaction, on the one hot path that
       // destroys data (reattribute/importAll were already wrapped). A throw between the two — or a power cut,
       // since synchronous=NORMAL lets the DELETE reach disk while the INSERT doesn't — left the church's

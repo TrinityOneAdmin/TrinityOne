@@ -445,9 +445,10 @@ function StewQRScanner({ onResult, onCancel }) {
   React.useEffect(() => {
     let stream, raf, stopped = false, detector = null, canvas = null, cctx = null;
     const hasBD = ('BarcodeDetector' in window);
-    const hasJsQR = (typeof window.jsQR === 'function');
     (async () => {
       try {
+        if (window.ensureJsQR) { try { await window.ensureJsQR(); } catch (e) {} }   // fetch the ~251 KB decoder on demand, not on every cold start
+        const hasJsQR = (typeof window.jsQR === 'function');
         const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
         if (!isNative) { setStatus('unsupported'); return; }   // camera scanning is app-only; in a browser there's no good camera, so paste the code/phrase instead
         if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || (!hasBD && !hasJsQR)) { setStatus('unsupported'); return; }

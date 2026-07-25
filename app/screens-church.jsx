@@ -9,9 +9,10 @@ function QRScanner({ onResult, onCancel }) {
   useChE(() => {
     let stream, raf, stopped = false, detector = null, canvas = null, cctx = null;
     const hasBD = ('BarcodeDetector' in window);
-    const hasJsQR = (typeof window.jsQR === 'function');   // pure-JS fallback (Android WebView has no BarcodeDetector)
     (async () => {
       try {
+        if (window.ensureJsQR) { try { await window.ensureJsQR(); } catch (e) {} }   // fetch the ~251 KB decoder on demand, not on every cold start
+        const hasJsQR = (typeof window.jsQR === 'function');   // pure-JS fallback (Android WebView has no BarcodeDetector)
         if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || (!hasBD && !hasJsQR)) { setStatus('unsupported'); return; }
         if (hasBD) { try { detector = new window.BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; } }
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });

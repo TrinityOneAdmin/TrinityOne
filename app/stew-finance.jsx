@@ -521,7 +521,22 @@ function DashFinance() {
   const book = bookRef.current;
   const [, setTick] = React.useState(0);
   const bump = () => setTick(t => t + 1);
-  const pubEntry = (b, e) => { if (useRelay) { try { S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null }); } catch (x) {} } else booksSave(b); };
+  // A journal entry is the church's money record — it must not be published fire-and-forget. This wasn't
+  // awaited and the promise rejection escaped the try, so a write the relay refused (its seq rule rejects
+  // whenever this console's view of the journal was incomplete) left the entry on screen and GONE on reload,
+  // with nothing written locally either. Await it, and surface a failure instead of silently losing the entry.
+  const pubEntry = async (b, e) => {
+    if (!useRelay) { booksSave(b); return true; }
+    try {
+      const ok = await S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null });
+      if (ok === false) throw new Error('the relay refused the entry');
+      return true;
+    } catch (x) {
+      booksSave(b);   // keep it locally so the treasurer's work isn't lost while they retry
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'journal entry', message: 'That entry could not be saved to your church\'s relay — it is kept on this device. Reopen Finance to retry.' } })); } catch (e2) {}
+      return false;
+    }
+  };
   // relay-backed persistence: subscribe to the church's encrypted finance docs → rebuild the book; seed the
   // default chart on first use. Journal entries publish through the relay's single-writer seq guard.
   React.useEffect(() => {
