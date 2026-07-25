@@ -92,6 +92,33 @@ function _coalesce(fn) {
   let queued = false;
   return function () { if (queued) return; queued = true; setTimeout(() => { queued = false; try { fn(); } catch (e) {} }, 0); };
 }
+// PERF (AUDIT-2026-07-24): share ONE relay subscription between callers that want the same stream. Several
+// streams were opened twice because two screens each wanted them — sermons (Watch + Extras), the safety check
+// and care requests (two panels each on Today). Each duplicate is a second REQ on the socket and a second full
+// download of the same events, which costs a member on a metered/thin connection real money and counts against
+// the relay's 64-subscriptions-per-connection cap (the cap that blanked member names once before).
+//
+// Late joiners get the last value immediately, so a second screen paints from memory instead of re-fetching.
+// The underlying subscription closes only when the LAST caller unsubscribes, so nothing leaks.
+const _sharedSubs = new Map();   // key -> { cbs:Set, last, closer }
+function _shared(key, open) {
+  let e = _sharedSubs.get(key);
+  if (!e) {
+    e = { cbs: new Set(), last: undefined, closer: null };
+    _sharedSubs.set(key, e);
+    e.closer = open((v) => { e.last = v; for (const cb of [...e.cbs]) { try { cb(v); } catch (err) { console.error(err); } } });
+  }
+  return (cb) => {
+    e.cbs.add(cb);
+    if (e.last !== undefined) { try { cb(e.last); } catch (err) {} }   // paint immediately from the shared buffer
+    let off = false;
+    return () => {
+      if (off) return; off = true;
+      e.cbs.delete(cb);
+      if (!e.cbs.size) { _sharedSubs.delete(key); const c = e.closer; e.closer = null; if (c) { try { c(); } catch (err) {} } }
+    };
+  };
+}
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
 const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
 // unwrap my entry from a key envelope and cache the group key (NIP-44, church<->me conversation key).
@@ -945,7 +972,12 @@ window.Fellowship = {
   },
   // Phase 5 Tier 2: this church's SELF-HOSTED media items (sermons) — church-signed docs referencing a
   // content-addressed blob by sha256 + host(s). Read via the church's OWN relays (Phase 4-aware).
+  // Shared: Watch and Extras both want this list — one REQ, one download, both screens fed. See _shared().
   subscribeSermons(churchNpub, onSermons) {
+    const cp0 = toPub(churchNpub); if (!cp0) { onSermons([]); return () => {}; }
+    return _shared('sermons|' + cp0, (emit) => window.Fellowship._openSermons(cp0, emit))(onSermons);
+  },
+  _openSermons(churchNpub, onSermons) {
     const cp = toPub(churchNpub); if (!cp) { onSermons([]); return () => {}; }
     const byId = new Map();
     const emit = _coalesce(() => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))));
@@ -1948,7 +1980,13 @@ window.Fellowship = {
   // We merge the care team's resolution (carereqstatus:) so a resolved request drops out of the open queue and
   // the asker sees "approved"/"handled". cb(list) newest-first; each carries { status:'open'|'approved'|
   // 'declined'|'handled', needId, sealed, ...body }.
+  // Shared: Today opens this twice (the care-team list and the asker's own requests, filtered differently
+  // from the SAME stream) — one REQ, both fed. See _shared().
   subscribeCareRequests(cb) {
+    const cp0 = window.Fellowship.churchPub; if (!cp0) return () => {};
+    return _shared('carereq|' + cp0, (emit) => window.Fellowship._openCareRequests(emit))(cb);
+  },
+  _openCareRequests(cb) {
     const cp = window.Fellowship.churchPub; if (!cp) return () => {};
     const byId = new Map();        // id -> request
     const statusById = new Map();  // id -> { status, needId, _ts }
@@ -2088,7 +2126,12 @@ window.Fellowship = {
   // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
   // {id, message, by, at}, or cb(null) when there's none / it was closed. The relay only serves it to
   // authenticated members (roster-gated), so an outsider never learns the church declared an emergency.
+  // Shared: Today renders the safety check in two places — one REQ, both fed. See _shared().
   subscribeSafetyCheck(cb) {
+    const cp0 = window.Fellowship.churchPub; if (!cp0) return () => {};
+    return _shared('safety|' + cp0, (emit) => window.Fellowship._openSafetyCheck(emit))(cb);
+  },
+  _openSafetyCheck(cb) {
     const cp = window.Fellowship.churchPub; if (!cp) return () => {};
     let best = null;
     const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#d': [SAFETY_D + cp] }], {

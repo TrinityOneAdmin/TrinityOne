@@ -5835,6 +5835,50 @@
       }, 0);
     };
   }
+  var _sharedSubs = /* @__PURE__ */ new Map();
+  function _shared(key, open) {
+    let e = _sharedSubs.get(key);
+    if (!e) {
+      e = { cbs: /* @__PURE__ */ new Set(), last: void 0, closer: null };
+      _sharedSubs.set(key, e);
+      e.closer = open((v) => {
+        e.last = v;
+        for (const cb of [...e.cbs]) {
+          try {
+            cb(v);
+          } catch (err) {
+            console.error(err);
+          }
+        }
+      });
+    }
+    return (cb) => {
+      e.cbs.add(cb);
+      if (e.last !== void 0) {
+        try {
+          cb(e.last);
+        } catch (err) {
+        }
+      }
+      let off = false;
+      return () => {
+        if (off) return;
+        off = true;
+        e.cbs.delete(cb);
+        if (!e.cbs.size) {
+          _sharedSubs.delete(key);
+          const c = e.closer;
+          e.closer = null;
+          if (c) {
+            try {
+              c();
+            } catch (err) {
+            }
+          }
+        }
+      };
+    };
+  }
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
   var _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
   function _ingestGroupKey(cp, e) {
@@ -6897,7 +6941,17 @@
     },
     // Phase 5 Tier 2: this church's SELF-HOSTED media items (sermons) — church-signed docs referencing a
     // content-addressed blob by sha256 + host(s). Read via the church's OWN relays (Phase 4-aware).
+    // Shared: Watch and Extras both want this list — one REQ, one download, both screens fed. See _shared().
     subscribeSermons(churchNpub, onSermons) {
+      const cp0 = toPub(churchNpub);
+      if (!cp0) {
+        onSermons([]);
+        return () => {
+        };
+      }
+      return _shared("sermons|" + cp0, (emit) => window.Fellowship._openSermons(cp0, emit))(onSermons);
+    },
+    _openSermons(churchNpub, onSermons) {
       const cp = toPub(churchNpub);
       if (!cp) {
         onSermons([]);
@@ -8625,7 +8679,15 @@
     // We merge the care team's resolution (carereqstatus:) so a resolved request drops out of the open queue and
     // the asker sees "approved"/"handled". cb(list) newest-first; each carries { status:'open'|'approved'|
     // 'declined'|'handled', needId, sealed, ...body }.
+    // Shared: Today opens this twice (the care-team list and the asker's own requests, filtered differently
+    // from the SAME stream) — one REQ, both fed. See _shared().
     subscribeCareRequests(cb) {
+      const cp0 = window.Fellowship.churchPub;
+      if (!cp0) return () => {
+      };
+      return _shared("carereq|" + cp0, (emit) => window.Fellowship._openCareRequests(emit))(cb);
+    },
+    _openCareRequests(cb) {
       const cp = window.Fellowship.churchPub;
       if (!cp) return () => {
       };
@@ -8877,7 +8939,14 @@
     // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
     // {id, message, by, at}, or cb(null) when there's none / it was closed. The relay only serves it to
     // authenticated members (roster-gated), so an outsider never learns the church declared an emergency.
+    // Shared: Today renders the safety check in two places — one REQ, both fed. See _shared().
     subscribeSafetyCheck(cb) {
+      const cp0 = window.Fellowship.churchPub;
+      if (!cp0) return () => {
+      };
+      return _shared("safety|" + cp0, (emit) => window.Fellowship._openSafetyCheck(emit))(cb);
+    },
+    _openSafetyCheck(cb) {
       const cp = window.Fellowship.churchPub;
       if (!cp) return () => {
       };
