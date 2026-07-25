@@ -57,7 +57,9 @@ function MemberCard({ member, open, onClose, ctx }) {
         </div>
       ) : null}
 
-      <button onClick={() => { onClose(); ctx.toast('Direct messages coming soon'); }} style={{
+      {/* was: a primary-styled button that only toasted "coming soon" — while ctx.openDM has worked all
+          along. A live-looking control that does nothing is worse than no control. */}
+      <button onClick={() => { onClose(); if (ctx.openDM && member && member.pubkey) ctx.openDM(member.pubkey); }} style={{
         width: '100%', marginTop: 22, padding: 14, borderRadius: 15, border: '1px solid var(--line)', background: 'var(--surface)',
         color: 'var(--ink)', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
@@ -190,7 +192,7 @@ function RecoverySheet({ open, onClose, ctx }) {
               <input type="file" accept=".json,application/json" onChange={e => setFile(e.target.files && e.target.files[0])} style={{ width: '100%', fontSize: 13, marginBottom: 10, fontFamily: 'var(--font-ui)' }} />
             ) : null}
             <input type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? 'Choose a PIN or passphrase (6+)' : 'Your backup PIN or passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
-            {bkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 7 }}>{bkErr}</div> : null}
+            {bkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{bkErr}</div> : null}
             <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
               <button onClick={() => { setBk(null); setBkErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
               <button onClick={bk === 'export' ? doExport : doRestore} disabled={!!busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: bk === 'restore' ? 'var(--clay)' : 'var(--sage)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : (bk === 'export' ? 'Create backup' : 'Restore')}</button>
@@ -271,7 +273,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 16px' }}>
             Enter your PIN to open the church community on this device. Your Bible and study stay open either way.</p>
           <input type="password" autoFocus value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN" style={inp} />
-          {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
+          {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
           <button onClick={doUnlock} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Unlock'}</button>
         </React.Fragment>
       ) : !hasPin ? (
@@ -282,7 +284,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
             If you forget the PIN, restore your 12-word recovery phrase to get back in. Keep those words safe.</p>
           <input type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN or passphrase" style={inp} />
           <input type="password" value={pin2} onChange={e => setPin2(e.target.value)} placeholder="Confirm PIN" style={{ ...inp, marginTop: 10 }} />
-          {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
+          {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
           <button onClick={doEnable} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Turn on protection'}</button>
         </React.Fragment>
       ) : (
@@ -298,7 +300,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
             <div style={{ marginTop: 12, padding: 13, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <div style={{ fontSize: 13, color: 'var(--ink-2)', marginBottom: 9 }}>Enter your PIN to turn protection off. Your identity will be stored unencrypted again.</div>
               <input type="password" inputMode="numeric" value={off} onChange={e => setOff(e.target.value)} placeholder="Your PIN" style={inp} />
-              {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
+              {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
               <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
                 <button onClick={() => { setShowOff(false); setOff(''); setErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
                 <button onClick={doDisable} disabled={busy} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 }}>{busy ? '…' : 'Turn off'}</button>

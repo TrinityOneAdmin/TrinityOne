@@ -1618,7 +1618,7 @@ function EditGroupMembersModal({ group, onClose }) {
           ); })}
           {orphans.length ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>{orphans.length} other member{orphans.length === 1 ? '' : 's'} in this group aren’t on the current roster (left/quiet) — they stay unless you’ve unticked them above.</div> : null}
         </div>
-        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, padding: '8px 24px 0', lineHeight: 1.45 }}>{err}</div> : null}
+        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, padding: '8px 24px 0', lineHeight: 1.45 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '16px 24px 20px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}>Cancel</button>
           <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: busy ? .5 : 1 }}><Icon name="check" size={16} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save members'}</button>
@@ -3716,7 +3716,7 @@ function SermonEditModal({ sermon, onSave, onClose }) {
         <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} autoFocus placeholder="e.g. Sunday sermon — the Prodigal Son" aria-label="Title" style={{ width: '100%', boxSizing: 'border-box', height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Details <span style={{ textTransform: 'none', fontWeight: 500 }}>· optional</span></div>
         <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={3} placeholder="Speaker, date, passage, or a short summary…" aria-label="Details" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 18, resize: 'vertical', lineHeight: 1.45 }} />
-        {err ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay)', marginBottom: 12, lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
+        {err ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay-ink)', marginBottom: 12, lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
           <button onClick={save} disabled={busy || !title.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 13, fontSize: 14, opacity: (busy || !title.trim()) ? 0.55 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {busy ? 'Saving…' : 'Save'}</button>
@@ -4439,7 +4439,7 @@ function PinModal({ action, onClose }) {
           : 'Encrypts the church key on this device. You’ll enter it to open the console; it auto-locks after 10 minutes idle. Don’t forget it — without it (or the 12-word phrase) this device can’t open the church.'}</div>
         <input type="password" autoFocus value={pin} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && remove) save(); }} placeholder={remove ? 'Current PIN' : 'New PIN or passphrase'} inputMode="numeric" autoComplete="off" style={inp} />
         {!remove ? <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="Confirm" inputMode="numeric" autoComplete="off" style={inp} /> : null}
-        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginBottom: 8 }}>{err}</div> : null}
+        {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginBottom: 8 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 9, marginTop: 6 }}>
           <button onClick={() => onClose(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '11px' }}>Cancel</button>
           <button onClick={save} disabled={busy} className={remove ? 'sk-btn sk-btn--ghost' : 'sk-btn sk-btn--clay'} style={{ flex: 1, padding: '11px', opacity: busy ? .6 : 1, color: remove ? 'var(--clay)' : undefined }}><Icon name={remove ? 'x' : 'lock'} size={15} color={remove ? 'currentColor' : '#fff'} /> {busy ? (remove ? 'Removing…' : 'Saving…') : (remove ? 'Remove lock' : change ? 'Update PIN' : 'Set PIN')}</button>

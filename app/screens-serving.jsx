@@ -158,7 +158,7 @@ function SwapSheet({ open, item, onClose, ctx }) {
 function ManageSheet({ open, item, onClose, onSwap, ctx }) {
   if (!item) return null;
   const rows = [
-    { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => { svDownloadICS(item, ctx.church && ctx.church.name); ctx.toast('Added — you’ll be reminded the day before'); onClose(); } },
+    { ic: 'calPlus', t: 'Add to my calendar', s: 'Download an event for your phone', go: () => { svDownloadICS(item, ctx.church && ctx.church.name); ctx.toast('Downloaded — open the file to add it to your phone’s calendar'); onClose(); } },
     { ic: 'swap', t: 'Ask someone to swap', s: 'Send a friendly ask to a teammate', go: () => onSwap(item) },
     { ic: 'calendar', t: 'I’m away — take me off', s: 'Let your leader know you can’t make it', go: () => { ctx.respondServing(item, 'decline'); ctx.toast('Taken off — thanks for letting us know'); onClose(); } },
   ];
@@ -539,7 +539,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   ) : null}
 
                   <div style={{ display: 'flex', gap: 9, marginTop: 16 }}>
-                    <button onClick={() => { svDownloadICS(next, ctx.church && ctx.church.name); ctx.toast('Added — you’ll be reminded the day before'); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', cursor: 'pointer', background: '#fff', color: '#3C6E57', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={17} color="#3C6E57" /> Add to calendar</button>
+                    <button onClick={() => { svDownloadICS(next, ctx.church && ctx.church.name); ctx.toast('Downloaded — open the file to add it to your phone’s calendar'); }} style={{ flex: 1, padding: 13, borderRadius: 14, border: 'none', cursor: 'pointer', background: '#fff', color: '#3C6E57', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="calPlus" size={17} color="#3C6E57" /> Add to calendar</button>
                     <button onClick={() => setSheet({ kind: 'manage', item: next })} style={{ flexShrink: 0, padding: '13px 16px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,.2)', color: '#fff', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, backdropFilter: 'blur(4px)' }}><Icon name="swap" size={17} color="#fff" /> Change</button>
                   </div>
                   {(ctx.churchRunsheets || []).some(r => r.service === next.serviceId && (r.items || []).length) ? (

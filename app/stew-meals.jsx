@@ -665,7 +665,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         <div style={mealsLbl}>NOTES (OPTIONAL)</div>
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any context the church needs to help well — allergies, drop-off times, the address, who not to ring after 9pm…" style={{ ...mealsFld, height: 'auto', minHeight: 88, padding: '11px 13px', resize: 'vertical' }} />
 
-        {err ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
+        {err ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
 
         {zeroAudience ? (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, transparent)', fontSize: 12.5, color: 'var(--clay-ink)', lineHeight: 1.45 }}>

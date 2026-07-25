@@ -92,7 +92,11 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   const addRelay = () => { const u = relayInput.trim(); if (!/^wss?:\/\//i.test(u)) { ctx.toast('Use a ws:// or wss:// URL'); return; } const added = FS.addRelay(u); if (added) { setRelayInput(''); ctx.toast('Relay added'); } else ctx.toast('Already in your list, or not a valid address'); };
 
   const copyNpub = () => { if (ID && ID.copyNpub) ID.copyNpub(); else if (navigator.clipboard) navigator.clipboard.writeText(id.npub).catch(() => {}); ctx.toast('Public key copied'); };
-  const regen = async () => { if (ID && ID.regenerate) { await ID.regenerate(); ctx.toast('New anonymous identity created'); } };
+  // A NEW IDENTITY IS IRREVERSIBLE — regenerate() clears the stored key and writes a fresh mnemonic, so the
+  // old account (and everything signed with it) is gone. This sat beside "Copy npub" as an equally small
+  // secondary button, one tap, no confirmation. Ask first, and say plainly what is lost.
+  const [confirmNew, setConfirmNew] = React.useState(false);
+  const regen = async () => { setConfirmNew(false); if (ID && ID.regenerate) { await ID.regenerate(); ctx.toast('New identity created — your old one is gone'); } };
   const reveal = async () => { if (ID && ID.exportMnemonic) { const m = await ID.exportMnemonic(); setWords(m ? m.split(' ') : []); } };
   const doRestore = async () => {
     try { await ID.importMnemonic(restoreText); ctx.toast('Identity restored'); setPane('main'); }
@@ -124,7 +128,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="90%">
       {pane === 'main' && <React.Fragment>
-        <Header title="You’re anonymous" />
+        <Header title="Your identity" />
         <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '4px 0 16px', textWrap: 'pretty' }}>
           Chat runs on <b style={{ color: 'var(--ink)' }}>Nostr</b> — no email, no phone, no account. Just a key on your device. Your church sees a friendly handle, never you.
         </p>
@@ -139,7 +143,16 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
           </div>
           <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
             <button onClick={copyNpub} style={miniBtn()}><Icon name="copy" size={15} /> Copy npub</button>
-            <button onClick={regen} style={miniBtn()}><Icon name="refresh" size={15} /> New identity</button>
+            <button onClick={() => setConfirmNew(true)} style={miniBtn()}><Icon name="refresh" size={15} /> New identity</button>
+            {confirmNew ? (
+              <div style={{ marginTop: 10, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--clay)' }}>
+                <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.5, marginBottom: 9 }}>Start again with a new identity? Your current one — and everything you've posted with it — <b>cannot be recovered</b> unless you've saved its recovery words.</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={regen} style={{ ...miniBtn(), borderColor: 'var(--clay)', color: 'var(--clay-ink)' }}>Yes, start again</button>
+                  <button onClick={() => setConfirmNew(false)} style={miniBtn()}>Keep my identity</button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 16 }}>

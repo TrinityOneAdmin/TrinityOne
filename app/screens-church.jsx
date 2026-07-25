@@ -180,7 +180,7 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
       <input value={code} onChange={e => { setCode(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && joinable && !busy) resolve(); }} autoFocus aria-label="Church name, code, or invite link" placeholder="church name, code, or invite link" style={{
         width: '100%', height: 58, border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 18px',
         fontSize: 14, fontFamily: 'monospace', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', textAlign: 'center', textOverflow: 'ellipsis' }} />
-      {err ? <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 8, lineHeight: 1.4 }}>{err}</div> : null}
+      {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8, lineHeight: 1.4 }}>{err}</div> : null}
       <button onClick={() => resolve()} disabled={!joinable || busy} style={{
         width: '100%', marginTop: 16, padding: 16, borderRadius: 15, border: 'none', cursor: (joinable && !busy) ? 'pointer' : 'default',
         background: (joinable && !busy) ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)',
