@@ -212,3 +212,25 @@ top three are product-level, not patches.
 Clean, verified: `navigator.onLine` usage, NIP-42 re-auth after unlock, mnemonic checksum handling, the
 app-link guard, and the pending-approval UI copy. The "Skip setup discards a deferred invite" item recorded
 earlier is already fixed on main.
+
+## Member restore — built 2026-07-26, PARTLY VERIFIED
+
+Built: a "I already have an account — restore it" entry on the member wizard's first screen, opening a 12-word
+pane that mirrors the steward console's (`steward-root.jsx:357`, which has always worked and is what a STEWARD
+uses to recover a church — my earlier report wrongly implied no restore existed anywhere; the gap was the
+MEMBER side only). It validates the phrase via importMnemonic, then calls the new
+`Fellowship.recoverIdentity()` to ask the relay what this identity already is, writes the churches + name to
+localStorage and reloads.
+
+**PROVEN against a real relay:** the display name comes back from kind-0; a church the member LEFT is correctly
+not resurrected; ordering is newest-first.
+
+**NOT PROVEN — the important half:** the same run recovered ZERO churches. A member's own kind-30078 docs are
+read-gated (`canRead` grants them through `authed === e.pubkey`), so they are only served over a
+NIP-42-authenticated socket, and the test harness read anonymously. In the app the key exists before this read
+happens, so the pool should authenticate and the docs should arrive — but that is unverified. **Test this on a
+device with a real church before the pilot.** If the socket turns out not to be authenticated at that moment,
+force an auth round-trip before the read.
+
+Also still true: restore brings back the account and (probably) the church list, but NOT the member's notes,
+journal or highlights — those need the encrypted backup file. The copy now says so.

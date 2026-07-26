@@ -19,6 +19,43 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   const [pin2, setPin2] = useId('');
   const [pinErr, setPinErr] = useId('');
   const [pinBusy, setPinBusy] = useId(false);
+  // RESTORE ON A NEW PHONE. The steward console has had this since the start (steward-root.jsx:357 — a 12-word
+  // textarea and a "Restore church" button on its welcome screen); the MEMBER app never did. The pane existed
+  // in NostrSheet but only mounted from `?identity=restore`, a URL the APK's WebView can never carry, so a
+  // member who changed phones had no way in at all — while the wizard told them the 12 words were the only way
+  // back. AUDIT 2026-07-26. Same shape as the console's: paste the phrase, validate, re-derive, then ask the
+  // relay what this identity already is.
+  const [restoring, setRestoring] = useId(false);
+  const [rPhrase, setRPhrase] = useId('');
+  const [rBusy, setRBusy] = useId('');
+  const [rErr, setRErr] = useId('');
+  const doRestore = async () => {
+    const words = (rPhrase || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (words.split(' ').length < 12) { setRErr('Enter all 12 words, separated by spaces.'); return; }
+    setRBusy('Checking your words…'); setRErr('');
+    try {
+      await window.TrinityIdentity.importMnemonic(words);   // validates the checksum; throws on a bad phrase
+    } catch (e) { setRBusy(''); setRErr((e && e.message) || 'That phrase isn’t valid — check the words and their order.'); return; }
+    // Re-derived the right key. Now ask the relay what this identity already belongs to — without this the
+    // member comes back keyed-in but churchless and nameless, which is barely a restore at all.
+    setRBusy('Finding your church…');
+    let found = { churches: [], name: '' };
+    try { found = await window.Fellowship.recoverIdentity(9000); } catch (e) {}
+    try {
+      if (found.name) saveIdentity({ name: found.name });
+      if (found.churches.length) {
+        const list = found.churches.map(cp => { const np = window.Fellowship.toNpub ? window.Fellowship.toNpub(cp) : cp; return { id: np, npub: np, name: '', initials: '', sub: 'Followed' }; });
+        localStorage.setItem('trinityone.followedChurches', JSON.stringify(list));
+        localStorage.setItem('trinityone.activeChurch', JSON.stringify(list[0].id));
+      }
+      localStorage.setItem('trinityone.onboarded', 'true');
+      localStorage.setItem('trinityone.backedup.' + ((window.TrinityIdentity.current || {}).npub || ''), '1');   // they HAVE the words
+    } catch (e) {}
+    // Reload rather than thread all of this through React state: the church list, the active church and the
+    // identity are all read at mount, and a restore is a deliberate, one-off act.
+    setRBusy(found.churches.length ? 'Restored — reopening…' : 'Restored — reopening…');
+    setTimeout(() => { try { location.reload(); } catch (e) {} }, 700);
+  };
   useIdE(() => { if (open) { setStep(0); setName(''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '', '']); setCheckErr(''); setPinVal(''); setPin2(''); setPinErr(''); setPinBusy(false); } }, [open]);
   // fetch the member's own 12 words when we reach the back-up step. The secure store can answer empty for a
   // moment right after boot, so retry until we get a full phrase rather than getting stuck on "Preparing…".
@@ -43,6 +80,35 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   // written anything down. Re-reading now costs you a different three words, which is the point of the check.
   useIdE(() => { if (step === 2 && words.length >= 6) { const n = words.length; const idx = []; let g = 0; while (idx.length < 3 && g++ < 200) { const r = Math.floor(Math.random() * n); if (!idx.includes(r)) idx.push(r); } setCheckIdx(idx.sort((x, y) => x - y)); setAnswers(['', '', '']); setCheckErr(''); } }, [step, words]);
   if (!open) return null;
+  // The restore pane replaces the whole wizard while it is open: a member restoring an existing account should
+  // not also be walked through creating one. Mirrors the console's welcome-screen restore.
+  if (restoring) return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '64px 22px 18px' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="key" size={28} /></div></div>
+          <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Restore your account</h1>
+          <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
+            Type the 12 words you wrote down. They bring back the same account, so your church knows you’re you.
+          </p>
+          <textarea value={rPhrase} onChange={e => { setRPhrase(e.target.value); setRErr(''); }} rows={4} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+            placeholder="word one  word two  word three …"
+            style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface)', padding: '13px 15px', fontSize: 14.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.7 }} />
+          {rErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 10 }}>{rErr}</div> : null}
+          {rBusy ? <div style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 600, marginTop: 10 }}>{rBusy}</div> : null}
+          <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '14px 0 0' }}>
+            Your notes, journal and highlights are kept only on your old phone — restore your backup file in Settings afterwards to bring those across too.
+          </p>
+        </div>
+      </div>
+      <div style={{ flexShrink: 0, padding: '10px 22px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          <button onClick={doRestore} disabled={!!rBusy || !rPhrase.trim()} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (rBusy || !rPhrase.trim()) ? 'not-allowed' : 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700, opacity: (rBusy || !rPhrase.trim()) ? .5 : 1 }}>{rBusy || 'Restore my account'}</button>
+          <button onClick={() => { setRestoring(false); setRPhrase(''); setRErr(''); setRBusy(''); }} disabled={!!rBusy} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>Back</button>
+        </div>
+      </div>
+    </div>
+  );
   const finish = () => onSave({ name: name.trim(), avatar: av });
   const canConfirm = checkIdx.length === 3 && checkIdx.every((_, i) => (answers[i] || '').trim());
   // Record that this member really did back up their recovery phrase. Nothing wrote this flag, so the Today
@@ -154,6 +220,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
         <div style={{ maxWidth: 480, margin: '0 auto' }}>
         {step === 0 ? (<React.Fragment>
           <button onClick={() => setStep(1)} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', marginBottom: 10, background: name.trim() ? 'var(--clay)' : 'var(--surface-2)', color: name.trim() ? '#fff' : 'var(--ink-3)', boxShadow: name.trim() ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{name.trim() ? `Continue as ${name.trim()}` : 'Continue without a name'}</button>
+          <button onClick={() => { setRestoring(true); setRErr(''); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--clay)' }}>I already have an account — restore it</button>
           <button onClick={onSkip} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Skip setup for now</button>
         </React.Fragment>) : step === 1 ? (<React.Fragment>
           <button onClick={() => setStep(2)} disabled={!ack} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: ack ? 'pointer' : 'default', marginBottom: 10, background: ack ? 'var(--clay)' : 'var(--surface-2)', color: ack ? '#fff' : 'var(--ink-3)', boxShadow: ack ? 'var(--shadow)' : 'none', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>Continue</button>

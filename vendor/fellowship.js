@@ -6674,7 +6674,7 @@
   function _memHubOpen(hub) {
     if (hub.closer) return;
     const cp = hub.cp;
-    const MEMBER_D = "trinityone/member:";
+    const MEMBER_D2 = "trinityone/member:";
     const since = _hubSince(hub);
     const filters = [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }];
     if (since) filters[1].since = since;
@@ -6691,7 +6691,7 @@
         const m = hub.byPub.get(e.pubkey) || { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name: (profiles[e.pubkey] || {}).name || "", nip05: (profiles[e.pubkey] || {}).nip05 || "", picture: (profiles[e.pubkey] || {}).picture || "", hidden: !!(profiles[e.pubkey] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
         if (e.kind === 30078) {
           const d = _dtag(e);
-          if (d.indexOf(MEMBER_D) !== 0) {
+          if (d.indexOf(MEMBER_D2) !== 0) {
             _memHubSaveSoon(hub);
             return;
           }
@@ -7487,6 +7487,90 @@
     },
     removeRelay(url) {
       return window.Fellowship.setRelays(window.Fellowship.relays.filter((r) => r !== url));
+    },
+    // RESTORE: find what this identity already IS, from the relay.
+    //
+    // Until now nothing ever asked the relay for the member's OWN documents — the only authors:[pub] queries in
+    // this file are DMs and the wallet. So even after re-deriving the right key from the 12 words, a member came
+    // back with no churches and no name, because both were only ever kept in this device's localStorage. The data
+    // was always published (announceMembership writes member:<cp>, publishProfile writes kind-0); nobody read it.
+    //
+    // Returns { churches: [hexpub], name } — churches are the ones this key has announced membership of, newest
+    // first. Read-only: the caller decides what to do with them.
+    toNpub(hex) {
+      try {
+        return npubEncode(hex);
+      } catch (e) {
+        return hex;
+      }
+    },
+    // hex -> npub, for the restore flow
+    // UNVERIFIED (2026-07-26): the church half of this is NOT proven end-to-end. Driving it against a real relay
+    // recovered the NAME (kind-0 is public) but zero churches, because a member's own kind-30078 docs are
+    // read-gated — canRead grants them via `authed === e.pubkey`, i.e. only over a NIP-42-authenticated socket.
+    // The harness read anonymously. In the app the key exists by this point (importMnemonic ran first) so the
+    // pool should answer the challenge and the docs should arrive — but "should" is exactly the word that has
+    // been wrong repeatedly today. Verify on a device with a real church before relying on it. If it turns out
+    // the socket is not authenticated here, the fix is to force an auth round-trip before this read.
+    async recoverIdentity(ms) {
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch (e) {
+        }
+      }
+      const me = pub;
+      if (!me) return { churches: [], name: "" };
+      const seen = /* @__PURE__ */ new Map();
+      let name = "", nameAt = 0;
+      await new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          try {
+            sub.close();
+          } catch (e) {
+          }
+          resolve();
+        };
+        const sub = pool.subscribeMany(churchRelays(), [
+          { kinds: [30078], authors: [me] },
+          // every doc this key has written; we filter for member:<cp> below
+          { kinds: [0], authors: [me] }
+          // the display name
+        ], {
+          onevent(e) {
+            if (e.kind === 0) {
+              if ((e.created_at || 0) < nameAt) return;
+              nameAt = e.created_at || 0;
+              try {
+                name = (JSON.parse(e.content) || {}).name || name;
+              } catch (x) {
+              }
+              return;
+            }
+            const d = _dtag(e);
+            if (!d.startsWith(MEMBER_D)) return;
+            const cp = d.slice(MEMBER_D.length);
+            if (!cp) return;
+            let left = false;
+            try {
+              left = !!(JSON.parse(e.content) || {}).left;
+            } catch (x) {
+            }
+            if (left) {
+              seen.delete(cp);
+              return;
+            }
+            if ((e.created_at || 0) >= (seen.get(cp) || 0)) seen.set(cp, e.created_at || 0);
+          },
+          oneose: finish
+        });
+        setTimeout(finish, Math.max(2e3, ms || 9e3));
+      });
+      const churches = [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([cp]) => cp);
+      return { churches, name };
     },
     // publish this user's kind-0 profile (display name etc.) and cache it
     async setProfile(meta) {

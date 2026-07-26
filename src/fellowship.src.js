@@ -1330,6 +1330,60 @@ window.Fellowship = {
   addRelay(url) { return window.Fellowship.setRelays([...window.Fellowship.relays, url]); },
   removeRelay(url) { return window.Fellowship.setRelays(window.Fellowship.relays.filter(r => r !== url)); },
 
+  // RESTORE: find what this identity already IS, from the relay.
+  //
+  // Until now nothing ever asked the relay for the member's OWN documents — the only authors:[pub] queries in
+  // this file are DMs and the wallet. So even after re-deriving the right key from the 12 words, a member came
+  // back with no churches and no name, because both were only ever kept in this device's localStorage. The data
+  // was always published (announceMembership writes member:<cp>, publishProfile writes kind-0); nobody read it.
+  //
+  // Returns { churches: [hexpub], name } — churches are the ones this key has announced membership of, newest
+  // first. Read-only: the caller decides what to do with them.
+  toNpub(hex) { try { return npubEncode(hex); } catch (e) { return hex; } },   // hex -> npub, for the restore flow
+  // UNVERIFIED (2026-07-26): the church half of this is NOT proven end-to-end. Driving it against a real relay
+  // recovered the NAME (kind-0 is public) but zero churches, because a member's own kind-30078 docs are
+  // read-gated — canRead grants them via `authed === e.pubkey`, i.e. only over a NIP-42-authenticated socket.
+  // The harness read anonymously. In the app the key exists by this point (importMnemonic ran first) so the
+  // pool should answer the challenge and the docs should arrive — but "should" is exactly the word that has
+  // been wrong repeatedly today. Verify on a device with a real church before relying on it. If it turns out
+  // the socket is not authenticated here, the fix is to force an auth round-trip before this read.
+  async recoverIdentity(ms) {
+    if (!sk) { try { await window.Fellowship.ready; } catch (e) {} }
+    const me = pub;
+    if (!me) return { churches: [], name: '' };
+    const seen = new Map();   // cp -> newest created_at
+    let name = '', nameAt = 0;
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; try { sub.close(); } catch (e) {} resolve(); };
+      const sub = pool.subscribeMany(churchRelays(), [
+        { kinds: [30078], authors: [me] },   // every doc this key has written; we filter for member:<cp> below
+        { kinds: [0], authors: [me] },       // the display name
+      ], {
+        onevent(e) {
+          if (e.kind === 0) {
+            if ((e.created_at || 0) < nameAt) return;
+            nameAt = e.created_at || 0;
+            try { name = (JSON.parse(e.content) || {}).name || name; } catch (x) {}
+            return;
+          }
+          const d = _dtag(e);
+          if (!d.startsWith(MEMBER_D)) return;
+          const cp = d.slice(MEMBER_D.length);
+          if (!cp) return;
+          let left = false;
+          try { left = !!(JSON.parse(e.content) || {}).left; } catch (x) {}
+          if (left) { seen.delete(cp); return; }   // they left that church — don't resurrect it
+          if ((e.created_at || 0) >= (seen.get(cp) || 0)) seen.set(cp, e.created_at || 0);
+        },
+        oneose: finish,
+      });
+      setTimeout(finish, Math.max(2000, ms || 9000));   // a thin pipe must still finish, just with less
+    });
+    const churches = [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([cp]) => cp);
+    return { churches, name };
+  },
+
   // publish this user's kind-0 profile (display name etc.) and cache it
   async setProfile(meta) {
     if (!sk) await window.Fellowship.ready;
