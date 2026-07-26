@@ -225,12 +225,27 @@ localStorage and reloads.
 **PROVEN against a real relay:** the display name comes back from kind-0; a church the member LEFT is correctly
 not resurrected; ordering is newest-first.
 
-**NOT PROVEN — the important half:** the same run recovered ZERO churches. A member's own kind-30078 docs are
+**CONFIRMED BROKEN ON DEVICE (2026-07-26) — the important half:** the same run recovered ZERO churches. A member's own kind-30078 docs are
 read-gated (`canRead` grants them through `authed === e.pubkey`), so they are only served over a
-NIP-42-authenticated socket, and the test harness read anonymously. In the app the key exists before this read
-happens, so the pool should authenticate and the docs should arrive — but that is unverified. **Test this on a
-device with a real church before the pilot.** If the socket turns out not to be authenticated at that moment,
-force an auth round-trip before the read.
+NIP-42-authenticated socket, and the test harness read anonymously. It does not work in the app either. Tested end-to-end on the OPPO against the live relay: wiped to a true
+fresh install, restored from the phone's real 12 words —
+
+    identity  RESTORED  (same npub, so the words and importMnemonic are correct)
+    name      RESTORED  ("Sir Lloyd", from kind-0 — public, comes back in 357ms)
+    churches  0         (the member's own kind-30078 member: docs are never served)
+
+The split is the proof: the PUBLIC document arrives and the GATED ones do not, so the socket is not
+NIP-42-authenticated at the moment of this read. `canRead` grants a member their own docs only through
+`authed === e.pubkey`, and this pool connection has not answered a challenge — NIP-42 here is lazy, triggered
+by a withheld read on an already-authenticating subscription, which this one-off query is not.
+
+FIX DIRECTION: force an auth round-trip before the query — e.g. await the same path `_needAuth`/`reconnectAll`
+uses to prove the key, or open the query on a connection that has already authenticated, then retry once on an
+empty result. Needs care: a restored member has a key but no membership the relay knows about yet.
+
+UNTIL THIS IS FIXED, a restored member gets their identity and name back but must re-follow their church by
+hand (invite link or church code). That is a far better position than before — the account itself is no longer
+lost — but it is not the "same name, same groups" the help text used to promise, and the copy now says so.
 
 Also still true: restore brings back the account and (probably) the church list, but NOT the member's notes,
 journal or highlights — those need the encrypted backup file. The copy now says so.
