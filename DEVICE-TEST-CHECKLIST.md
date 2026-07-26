@@ -1,15 +1,24 @@
 # Device test checklist — account recovery work, 2026-07-26
 
-Everything below needs a **real device**. Nothing here is covered by `npm test` (340 passing), because none of
+Everything below needs a **real device**. Nothing here is covered by `npm test` (358 passing), because none of
 it can be: cameras, a second phone, a locked screen, a dead network, and a human reading the copy.
+
+**Updated 2026-07-26, later session.** The five CRITICALs in `AUDIT-2026-07-26-RECOVERY.md` are now fixed, and
+two of them changed what you should EXPECT to see, so the steps below have been rewritten to match. The biggest
+change: the transfer's check code is no longer four characters shown up front — it is **eight characters shown
+on both phones AFTER they have swapped codes**, and the new phone now asks you to confirm before it adopts
+anything. If you test against the old expectations you will report a bug that isn't one.
 
 **Before you start**
 - Wake the screen and keep it awake. A sleeping phone throttles the WebView and every reading comes back zero —
   that has been misread as an app failure more than once.
 - If a step shows nothing, first check: is the screen on, is the app PIN-locked, is there signal?
-- The OPPO **already has** a release-signed APK built at **21:51 on 2026-07-26** containing all of this work
-  (verified on device: the transfer and name-lookup APIs are present). The **Pixel does not** — it dropped to
-  `unauthorized` before it could be installed.
+- The **Pixel** has a release-signed APK built at **23:00 on 2026-07-26** with everything below, installed and
+  smoke-checked on the device (it boots, renders, `confirmTransfer` is present, `beginTransfer` no longer emits
+  the old precomputable code, and `sealTransfer` still refuses while PIN-locked). It was PIN-locked at the time,
+  so nothing further could be driven on it.
+- The **OPPO** has the OLDER 21:51 build — it was not attached this session. Reinstall it before testing, or you
+  will be testing yesterday's bugs.
 - To rebuild/install after any change:
   `source scripts/android-env.sh && npm run sync:web && (cd android && ./gradlew assembleRelease -q)`
   then `adb install -r android/app/build/outputs/apk/release/app-release.apk`. It is **release-signed with the
@@ -43,27 +52,42 @@ Legend: ⬜ untested · ✅ pass · ❌ fail (note what you saw)
 - ⬜ A church they deliberately **left** does not come back.
 - ⬜ Restore with **aeroplane mode on** → honest failure, no false success, retries on next launch.
 
-### 1c. Phone-to-phone transfer *(new — needs BOTH phones)*
-- ⬜ Old phone: Settings → **Move to a new phone** exists and opens.
-- ⬜ New phone: "I've used it before" → **"I still have my old phone"** shows a QR and a 4-character check code.
-- ⬜ Old phone scans it → shows a second QR and **the same 4 characters**. ← if these differ, stop; that is the
-  security property doing its job.
-- ⬜ New phone scans the second QR → account arrives; name and church appear.
+### 1c. Phone-to-phone transfer *(needs BOTH phones — flow CHANGED, read this first)*
+- ⬜ Old phone: tap **your picture** in the bottom bar → **Move to a new phone** exists and opens. (The screens
+  used to say "Settings →", which does not exist in this app; if you still see that wording, it's an old build.)
+- ⬜ New phone: "I've used it before" → **"I still have my old phone"** shows a QR. **There is deliberately no
+  check code on this screen** — nothing has been exchanged yet, so any code here could only be forged.
+- ⬜ Old phone scans it → shows a second QR **and an eight-character check code**.
+- ⬜ New phone scans the second QR → it does **not** log you in yet. It shows the **same eight characters** plus
+  the start of the account it is about to become, and asks whether they match.
+- ⬜ **They match** → account arrives; name and church appear.
+- ⬜ Run it once more and tap **"They're different"** instead → nothing is moved, the phone stays itself, and
+  starting over works. ← this is the security property; if tapping it still logs you in, stop and report it.
+- ⬜ If the two codes ever genuinely differ in normal use, that is a **bug**, not an attack — capture both.
 - ⬜ **Old phone stays signed in** (this is deliberate — moving is not logging out).
-- ⬜ New phone can then show its own 12 words (Settings → Recovery key). If it cannot, the transfer gave it an
-  account it can never back up — a serious failure.
-- ⬜ Camera denied / no camera → falls back gracefully, does not hang.
-- ⬜ Cancel midway, then try again → works; the old code no longer does anything.
+- ⬜ New phone can then show its own 12 words (your picture → Recovery key). If it cannot, the transfer gave it
+  an account it can never back up — a serious failure.
+- ⬜ **No camera / camera denied on either phone** → a paste box appears with "Use this code", and the matching
+  "Can't scan? Copy the code instead" button on the other phone. Do the whole transfer by copy-paste at least
+  once; before today this path dead-ended on both phones.
+- ⬜ Cancel midway (Back is now always enabled, and says "Cancel" while it is working), then try again → works.
 - ⬜ Scan an **unrelated** QR (e.g. a church invite) into the transfer → clear error, not a crash.
+- ⬜ After a transfer, the "back up your 12 words" nudge is **still showing** — the member typed nothing and has
+  never seen their phrase, so it must not have been silenced.
 
 ### 1d. Lost the 12 words → ask the church *(new)*
 - ⬜ "I've lost my 12 words" shows **this phone's own code** as a QR plus text, and a Copy button.
-- ⬜ The honest panel is visible: what comes back (name, church, groups) and what does not (old private
-  messages, sealed care records).
-- ⬜ "Done — take me to my church" opens the follow-a-church scanner.
+- ⬜ The honest panel is visible: what comes back (name, church, ordinary groups), what needs a steward's hand
+  (invite-only groups), and what does not come back at all (old private messages, sealed care records).
+- ⬜ "Done — take me to my church" opens the **follow-a-church scanner** — NOT the welcome wizard asking whether
+  you have used TrinityOne before. That loop was the bug; if you see the wizard, the fix did not ship.
 
 ### 1e. Church-name lookup *(new)*
 - ⬜ Restore that finds **no church** → the "couldn't find your church" screen appears, not a silent empty app.
+- ⬜ Same again but coming in by **transfer** rather than typed words: it must reach that same screen and not sit
+  on "Bringing your account across…". That was a permanent dead-end with a disabled Back button.
+- ⬜ While the name lookup is running, the screen **stays put** with its progress text — it must not flick back
+  to the 12-words textarea and forward again.
 - ⬜ Typing a real relay name finds it, adds the relay, and the church then appears.
 - ⬜ A nonsense name gives a clear, non-alarming error.
 - ⬜ **Security check worth doing by hand:** a directory entry resolving to a `ws://` (cleartext) URL must be
@@ -71,6 +95,9 @@ Legend: ⬜ untested · ✅ pass · ❌ fail (note what you saw)
 
 ### 1f. After a re-seat (pairs with Surface 2)
 - ⬜ Once a steward reconnects them, the member's new key sees the church, groups and roster.
+- ⬜ **Their NAME is back** — on their own phone and in everyone else's member list — not "Anonymous …". Give it
+  a few seconds: their app publishes the vouched name as its own profile the moment the document arrives.
+- ⬜ Then rename yourself on that phone → the new name sticks and is **not** reverted by the church's vouched one.
 - ⬜ The member list shows them **once**, not twice.
 - ⬜ Old private messages are **absent** — confirm this, because the UI promises it.
 
@@ -88,11 +115,23 @@ Legend: ⬜ untested · ✅ pass · ❌ fail (note what you saw)
 - ⬜ Do it as a **delegated steward**, not just the owner — that path stamps the church tag differently and is
   the one most likely to be broken.
 - ⬜ Re-seat the wrong person on purpose, then re-seat correctly → the mistake can be undone.
+- ⬜ The confirmation says their name comes with them, **and** tells you to add them back to any invite-only
+  groups by hand. Check that instruction is true: open an invite-only group and confirm the new key is absent
+  until you add it.
+- ⬜ A member with **no name set** reconnects cleanly too (nothing is published as their name).
 
 ### 2b. Regression around it
 - ⬜ Approve / block / child / clear-for-youth / link-parent all still behave.
 - ⬜ Member count on the dashboard matches the list.
 - ⬜ Revoke a steward → they can no longer reconnect anyone.
+
+---
+
+### 1g. The restore-recovery loop *(fixed — this one is about what should NOT happen)*
+- ⬜ Restore an account where the church cannot be found, then leave the app open on the Today screen for five
+  minutes with the steward console watching that member. Their profile must **not** keep updating. The bug this
+  replaces republished the member's profile roughly every four seconds, forever, to everyone in the church.
+- ⬜ Same test with the phone in **aeroplane mode**: it must sit quietly, not spin.
 
 ---
 
