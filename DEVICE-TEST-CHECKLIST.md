@@ -7,10 +7,19 @@ it can be: cameras, a second phone, a locked screen, a dead network, and a human
 - Wake the screen and keep it awake. A sleeping phone throttles the WebView and every reading comes back zero —
   that has been misread as an app failure more than once.
 - If a step shows nothing, first check: is the screen on, is the app PIN-locked, is there signal?
-- The APK currently on the OPPO is from **17:50 today** and does NOT include the transfer/reconnect work.
-  Rebuild and install first: `source scripts/android-env.sh && npm run sync:web && (cd android && ./gradlew assembleRelease -q)`
-  then `adb install -r android/app/build/outputs/apk/release/app-release.apk` (release-signed, so it upgrades
-  in place and keeps the identity).
+- The OPPO **already has** a release-signed APK built at **21:51 on 2026-07-26** containing all of this work
+  (verified on device: the transfer and name-lookup APIs are present). The **Pixel does not** — it dropped to
+  `unauthorized` before it could be installed.
+- To rebuild/install after any change:
+  `source scripts/android-env.sh && npm run sync:web && (cd android && ./gradlew assembleRelease -q)`
+  then `adb install -r android/app/build/outputs/apk/release/app-release.apk`. It is **release-signed with the
+  stable key**, so it upgrades in place and keeps the identity — you do NOT need to uninstall (and must not, if
+  you want to keep "Sir Lloyd").
+- ⚠ **Never run `npm run build:vendor` to rebuild a bundle.** It regenerates all of `vendor/` and silently
+  deleted the entire Sora font block from `vendor/fonts/fonts.css` on 2026-07-26 — no test fails, the app just
+  renders in the wrong font. Use the specific script: `build:fellowship`, `build:identity`,
+  `bash scripts/build-steward.sh`.
+- The work is on branch **`recovery/2026-07-26`**, not `main`. `git checkout recovery/2026-07-26` first.
 
 Legend: ⬜ untested · ✅ pass · ❌ fail (note what you saw)
 

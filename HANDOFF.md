@@ -39,6 +39,55 @@ A fresh release-signed APK with all of the above is installed on the **OPPO** on
 but NOT the transfer or lost-words routes until CRITICALs 1 and 2 are fixed, or they'll be debugging known bugs.
 Next agreed build: the interactive "system view" page (see the memory note).
 
+### Tooling that exists now — use it instead of reasoning about the app
+
+Three probe scripts were written on 2026-07-26 and are committed. They are the difference between guessing and
+knowing, and every one of them was written *because* reading the code had already produced a wrong answer.
+
+- **`scripts/cdp.probe.mjs`** — run any expression inside the live app on a phone. **Its header carries the full
+  adb/CDP attach recipe and both devices' serials — read that first.** This is what settled the restore bug after
+  three wrong theories.
+- **`scripts/cdp-frames.probe.mjs`** — records every WebSocket frame from a COLD boot. Use it to separate "the
+  relay never sent it" from "the relay sent it and the app threw it away". That distinction was the whole bug.
+- **`scripts/onboarding-shot.probe.mjs`** — screenshots the first-run screens in a local headless browser.
+  ⚠ Headless Chrome throttles timers on a page it thinks is hidden, so the splash never dismisses and the app
+  looks broken. The script now passes `--disable-renderer-backgrounding` etc. and clicks the splash away. I
+  nearly reported a phantom onboarding bug from this.
+
+### Environment traps that cost real time
+
+- `adb`/`java` are **not on PATH**: `source scripts/android-env.sh` before any device or gradle command.
+- **A phone with its screen off reads as zero on every probe.** `svc power stayon true` is blocked on the OPPO —
+  send `input keyevent KEYCODE_WAKEUP` first, and check `dumpsys power | grep mWakefulness` before believing any
+  measurement. Also check whether the app is PIN-locked.
+- **Never `npm run build:vendor`** to rebuild one bundle — it wiped the Sora font block out of
+  `vendor/fonts/fonts.css` with no test failure. Use `build:fellowship` / `build:identity` /
+  `bash scripts/build-steward.sh`.
+- Every relay/CDP test binds a **fixed port**. `grep -h 'const PORT' scripts/*.test.mjs | sort` before adding
+  one: a duplicate deadlocks both files and reports **false failures** (this happened — 8 phantom failures in the
+  full suite, 0 standalone).
+- A local gateway fixture with **no `CHURCH_NPUB`** refuses every publish, so a test against it proves nothing.
+  With one set, a member's own doc publishes fine — see `scripts/relay-reseat.test.mjs` for the working shape.
+- Replaceable docs are **newest-wins to the second**. Two publishes of the same `d`-tag inside one second: the
+  second is refused. This makes a security test pass for the wrong reason — it happened, and the fix is a
+  `sleep(1100)`, documented inline in `relay-reseat.test.mjs`.
+
+### Which tests were sabotage-verified (i.e. proven to actually bite)
+
+Do not trust a green tick you have not tried to break. These were each confirmed by breaking the real code:
+`bundle-free-globals` (built the pre-fix bundle, it flags `MEMBER_D`), `identity-transfer` (leaked the words into
+the payload → red; made the receiving key reusable → red), `relay-reseat` (deleted the accept rule → 4 red),
+`reseat-fold` (dropped the author check → red; dropped the directory filter → red). `restore-fold` failed loudly
+on a real mistake of mine before passing. Anything written later has NOT been through this.
+
+### What was verified ON A DEVICE vs inferred
+
+Verified on the OPPO against the **live** relay: the restore bug and its fix (churches `[]` → the real church,
+resolved to TrinityLA); that the app authenticates correctly by NIP-42 to both relays; that the church's
+membership document is on the wire at ~3.6s; and the transfer helpers' shape, freshness, no-leak and
+junk-refusal. **Everything else about the new UI is browser- or test-verified only** — no camera hand-off, no
+two-phone run, no PIN interaction, nothing over a genuinely slow link. See `DEVICE-TEST-CHECKLIST.md`.
+
 ---
 
 ## 1. Where things are
