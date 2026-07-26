@@ -267,13 +267,17 @@ window.HelpData = {
         { type: 'callout', tone: 'clay', text: 'Back up before you need to. The right day to save your 12 words is today — not the day your phone is lost, stolen, or broken. Open the Help screen and tap “Back up my 12 words”, write them on paper, and keep it somewhere safe. Those words are the one and only thing that brings your account — your name, your church and your groups — back.' },
         { type: 'steps', label: 'Move to a new phone', items: [
           'Install TrinityOne on the new phone.',
-          'On the welcome screen, choose “Restore” (or open your identity screen → Restore).',
-          'Type your 12 words in order.',
-          'You’re back — same name, same groups.',
+          'Open Settings → Your account → Restore, and pick your backup file.',
+          'Enter the passphrase you chose when you saved it.',
+          'You’re back — your account, your notes and your study.',
         ] },
-        { type: 'note', text: 'Your 12 words bring back your account, name and groups. Your private study — notes, journals and highlights — is kept separately on the phone, so back it up too: from Settings, make a “Back up my data” file every so often and keep it somewhere safe (it’s encrypted). On the new phone, import that file to bring those across.' },
+        // CORRECTED 2026-07-26: this described a flow that does not exist. There is no screen anywhere in the
+        // app for typing the 12 words — the restore that DOES work takes the encrypted backup FILE plus its
+        // passphrase. Promising otherwise was the dangerous part: a member who believes the paper is enough
+        // never makes the file backup that would actually save them.
+        { type: 'note', text: 'The backup file is what restores you today. Keep your 12 words as well — they are your account’s root secret, and a way to restore from them alone is coming — but the file plus its passphrase is what brings everything back right now.' },
         { type: 'callout', tone: 'sage', text: 'If you don’t have the 12 words and the old phone is gone, that account can’t be recovered — you’d simply start fresh. So keep that paper safe.' },
-        { type: 'tech', text: 'Restore re-derives your key from the BIP-39 words, and your identity and church follows come back off the relay. Your private study (notes, journals, highlights) lives only on the device — it isn’t on any relay — so the “Back up my data” file is a separate, encrypted export you keep yourself.' },
+        { type: 'tech', text: 'The backup file holds your BIP-39 identity plus your local study data, encrypted with your passphrase (AES-GCM via PBKDF2). Restoring re-derives the same key, so you are the same person to your church. Note that your followed churches are stored on this device, so re-following is a manual step today.' },
       ],
     },
     {

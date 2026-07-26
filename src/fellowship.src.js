@@ -945,9 +945,31 @@ let _flushing = false;
 // opens leaves Promise.any pending indefinitely — so without this the composer would sit on "sending" for
 // minutes and a flush would never finish. Verified on-device in airplane mode.
 const PUBLISH_TIMEOUT_MS = 12000;
+// nostr-tools RESOLVES rather than rejects when a relay cannot be reached — it fulfils with a STRING like
+// "connection failure: connection timed out" (measured: 3ms to a dead port, 3s to a black hole). So the app's
+// pattern, `try { await _publishAny(...); return true } catch { return false }`, reported SUCCESS
+// with the radio off, at 29 call sites. markSafe told a member they were marked safe and persisted the ack so
+// they were never asked again — its own comment calls that the worst failure this feature can have. A care
+// request said "your church family knows you asked for help". And the outbox marked the event delivered and
+// dropped it, so the one mechanism built for being offline never ran when offline. AUDIT 2026-07-26.
+//
+// This is a drop-in for `_publishAny(a, b)` that REJECTS unless at least one relay genuinely
+// accepted, so every existing try/catch keeps its meaning instead of 29 call sites needing new logic.
+const _PUB_FAILED = /^(connection failure|error|blocked|invalid|restricted|rate-limited|auth-required)/i;
+function _publishAny(relays, evt) {
+  return Promise.allSettled(pool.publish(relays, evt)).then((rs) => {
+    const good = rs.some(r => r.status === 'fulfilled' && !_PUB_FAILED.test(String(r.value == null ? '' : r.value)));
+    if (!good) {
+      const why = (rs.find(r => r.status === 'fulfilled') || {}).value
+        || ((rs.find(r => r.status === 'rejected') || {}).reason || {}).message || 'no relay accepted this';
+      throw new Error(String(why));
+    }
+    return true;
+  });
+}
 function _publishBounded(relays, evt) {
   return Promise.race([
-    Promise.any(pool.publish(relays, evt)),
+    _publishAny(relays, evt),
     new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), PUBLISH_TIMEOUT_MS)),
   ]);
 }
@@ -1223,7 +1245,7 @@ window.Fellowship = {
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]],
       content: JSON.stringify({ joined: Math.floor(Date.now() / 1000) }),
     }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] membership publish failed', e); }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] membership publish failed', e); }
     return evt;
   },
   // leave a church: tombstone the membership event (they vanish from the steward's list unless they
@@ -1235,7 +1257,7 @@ window.Fellowship = {
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '',
     }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch {}
+    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
     return evt;
   },
 
@@ -1327,7 +1349,7 @@ window.Fellowship = {
     if (handleLocal && relayHost) p.nip05 = handleLocal + '@' + relayHost;
     else if (prev.nip05) p.nip05 = prev.nip05;
     const evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify(p) }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] profile publish failed', e); }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] profile publish failed', e); }
     profiles[pub] = p; window.Fellowship.myProfile = p;
     try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch {}
     window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } }));
@@ -1440,7 +1462,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     if (!peerPub || !msgId) return null;
     const evt = finalizeEvent({ kind: 7, created_at: Math.floor(Date.now() / 1000), tags: [['e', msgId], ['p', peerPub], ['t', NET], ['k', '4']], content: emoji || '-' }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] reactDM failed', e); }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] reactDM failed', e); }
     return evt;
   },
   // inbox: every DM involving me, grouped by peer; onConvos([{ peer, lastTs, preview }]). Unsub fn.
@@ -1512,7 +1534,7 @@ window.Fellowship = {
       kind: 7, created_at: Math.floor(Date.now() / 1000),
       tags: [['e', targetId], ['p', targetPubkey || ''], ['t', NET], ['t', groupId]], content,
     }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] react failed', e); }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] react failed', e); }
     return evt;
   },
 
@@ -1551,7 +1573,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     const churchTag = window.Fellowship.churchPub ? [['p', window.Fellowship.churchPub]] : [];
     const evt = finalizeEvent({ kind: 5, created_at: Math.floor(Date.now() / 1000), tags: [['e', msgId], ['t', NET], ['t', groupId], ...churchTag], content: '' }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] deleteOwnMessage failed', e); return null; }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] deleteOwnMessage failed', e); return null; }
     return evt;
   },
 
@@ -1614,14 +1636,14 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !groupId || !msg || !msg.id) return null;
     const content = JSON.stringify({ msgId: msg.id, text: msg.text || '', by: msg.pubkey || msg.by || '', ts: msg._ts || msg.ts || Math.floor(Date.now() / 1000) });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp]], content }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] pinPost failed', e); return null; }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] pinPost failed', e); return null; }
     return evt;
   },
   async unpin(churchNpub, groupId) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !groupId) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp], ['deleted', '1']], content: '' }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] unpin failed', e); return null; }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] unpin failed', e); return null; }
     return evt;
   },
   async hideMessage(churchNpub, groupId, msgId) {
@@ -1630,7 +1652,7 @@ window.Fellowship = {
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp]];
     if (groupId) tags.push(['t', groupId]);
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ groupId: groupId || '' }) }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] hideMessage failed', e); return null; }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] hideMessage failed', e); return null; }
     return evt;
   },
   async unhideMessage(churchNpub, groupId, msgId) {
@@ -1639,7 +1661,7 @@ window.Fellowship = {
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp], ['deleted', '1']];
     if (groupId) tags.push(['t', groupId]);
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] unhideMessage failed', e); return null; }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] unhideMessage failed', e); return null; }
     return evt;
   },
 
@@ -1779,7 +1801,7 @@ window.Fellowship = {
     // the parent's guardian-link REQUEST (signed by the parent) — the steward confirms it
     const myName = (window.Fellowship.myProfile && window.Fellowship.myProfile.name) || '';
     const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub, parentName: myName, childName: name }) }, sk);
-    for (const e of [k0, join, req]) { try { await Promise.any(pool.publish(window.Fellowship.relays, e)); } catch (err) { console.warn('[fellowship] child setup publish failed', err); } }
+    for (const e of [k0, join, req]) { try { await _publishAny(window.Fellowship.relays, e); } catch (err) { console.warn('[fellowship] child setup publish failed', err); } }
     _saveChildLink({ child: childPub, name, churchPub: cp, ts });     // remember locally so the parent sees their children
     _needAuth = true;   // M3: now a guardian — must NIP-42-auth to read the church's confirmation of this link (connTick reconnects with auth)
     return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name };
@@ -2054,7 +2076,7 @@ window.Fellowship = {
     for (const p of recips) { try { keys[p] = nip44e(keyHex, nip44ck(sk, p)); } catch (e) {} }
     const id = _hex(crypto.getRandomValues(new Uint8Array(8)));
     const evt = finalizeEvent({ kind: 30078, created_at: body.at, tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp]], content: JSON.stringify({ keys, enc }) }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] care request publish failed', e); return null; }
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care request publish failed', e); return null; }
     return { id, ...body };
   },
   // Subscribe to care requests. A member receives their OWN (the relay serves the author); the care team gets
@@ -2108,7 +2130,7 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub;
     if (!sk || !cp || !id) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREREQ_D + id], ['t', NET], ['t', 'carereq'], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) {}
+    try { await _publishAny(churchRelays(), evt); } catch (e) {}
     return evt;
   },
   // ── care-team actions (careAdmin/steward): resolve a request, or approve it INTO a care need ──
@@ -2120,7 +2142,7 @@ window.Fellowship = {
     const tags = [['d', CAREREQSTATUS_D + reqId], ['t', NET], ['t', 'carereqstatus'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);   // so the asker can read their resolution
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ status: String(o.status || 'handled'), needId: String(o.needId || ''), by: pub, at: Math.floor(Date.now() / 1000) }) }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) {}
+    try { await _publishAny(churchRelays(), evt); } catch (e) {}
     return evt;
   },
   async declineCareRequest(req) {
@@ -2142,7 +2164,7 @@ window.Fellowship = {
     const id = 'care' + _hex(crypto.getRandomValues(new Uint8Array(6)));
     const body = { id, type: req.type || 'other', dates, startDate: dates[0] || '', endDate: dates[dates.length - 1] || '', meals: (req.type === 'meals' ? ['dinner'] : []), dayMeals: {}, enc };
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + id], ['t', NET], ['church', cp], ['enc', 'care1']], content: JSON.stringify(body) }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
     await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
     return { id };
   },
@@ -2156,7 +2178,7 @@ window.Fellowship = {
     if (!sk || !cp || !need || !need.id) return false;
     if ((need.recipient || '').toLowerCase() !== (pub || '').toLowerCase()) return false;   // only your own
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + need.id], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { const r = await Promise.any(pool.publish(churchRelays(), evt)); return !!r || true; } catch (e) { return false; }
+    try { const r = await _publishAny(churchRelays(), evt); return !!r || true; } catch (e) { return false; }
   },
   // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
   // (+ the church + ourselves), so any care member can join in and the asker can reply. ──
@@ -2172,7 +2194,7 @@ window.Fellowship = {
     const tags = [['d', CARECHAT_D + reqId + ':' + msgId], ['t', NET], ['t', 'carechat'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify(sealed) }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { return null; }
+    try { await _publishAny(churchRelays(), evt); } catch (e) { return null; }
     return { id: msgId };
   },
   subscribeCareChat(reqId, cb) {
@@ -2200,7 +2222,7 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || '').trim() }) }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] care slot publish failed', e); }
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care slot publish failed', e); }
     return evt;
   },
   async clearCareSlot(careId, iso) {
@@ -2208,7 +2230,7 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch {}
+    try { await _publishAny(churchRelays(), evt); } catch {}
     return evt;
   },
   // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
@@ -2249,7 +2271,7 @@ window.Fellowship = {
     // Return TRUE only on a real relay ACK. The member's "you're safe" confirmation must reflect DELIVERY —
     // a false "help is coming" when the send actually failed (offline / dead relay, the target environment) is
     // the worst failure this feature can have. Promise.any resolves iff ≥1 relay accepted the event.
-    try { await Promise.any(pool.publish(churchRelays(), evt)); return true; } catch (e) { console.warn('[fellowship] markSafe publish failed', e); return false; }
+    try { await _publishAny(churchRelays(), evt); return true; } catch (e) { console.warn('[fellowship] markSafe publish failed', e); return false; }
   },
   // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
   // H3: "I don't need help that day" is RECIPIENT-ONLY, and the relay enforces it — but it can no longer
@@ -2282,7 +2304,7 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch {}
+    try { await _publishAny(churchRelays(), evt); } catch {}
     return evt;
   },
   // ── "I'm here to help" availability — a member signals they're willing to help, so people who need
@@ -2316,7 +2338,7 @@ window.Fellowship = {
     if (!sk || !cp) return null;
     const clean = Array.isArray(tags) ? tags.map(t => String(t || '').trim()).filter(Boolean).slice(0, 8) : [];
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ available: true, tags: clean, note: String(note || '').trim().slice(0, 240) }) }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] care avail publish failed', e); }
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care avail publish failed', e); }
     return evt;
   },
   async clearCareAvail() {
@@ -2324,7 +2346,7 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch {}
+    try { await _publishAny(churchRelays(), evt); } catch {}
     return evt;
   },
   // events posted by a GROUP'S leaders (members the church empowered) — authored by the member, scoped to
@@ -2359,7 +2381,7 @@ window.Fellowship = {
     const id = ev.id || ('evt' + Date.now() + Math.random().toString(36).slice(2, 6));
     const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/event:' + id], ['t', NET], ['t', groupId], ['p', cp]], content }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch (e) { console.warn('[fellowship] publishGroupEvent failed', e); return null; }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] publishGroupEvent failed', e); return null; }
     return { id, ...JSON.parse(content) };
   },
   // the wider networks/groups-of-churches this church belongs to (it publishes network:<networkPub>)
@@ -2403,7 +2425,7 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !sk) return;
     const content = JSON.stringify({ request: requestId, v: verdict, swapTo: swapTo || '' });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/reqreply:' + requestId], ['t', NET], ['p', cp]], content }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch {}
+    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
     return evt;
   },
   // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
@@ -2423,7 +2445,7 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !sk) return;
     const content = JSON.stringify({ event: eventId, v: verdict });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch {}
+    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
     return evt;
   },
   subscribeMyRsvps(onRsvps) {
@@ -2443,7 +2465,7 @@ window.Fellowship = {
     const me = window.Fellowship.myPubkey;
     const content = JSON.stringify({ dates: dates || [] });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/unavail:' + me], ['t', NET], ['p', cp]], content }, sk);
-    try { await Promise.any(pool.publish(window.Fellowship.relays, evt)); } catch {}
+    try { await _publishAny(window.Fellowship.relays, evt); } catch {}
     return evt;
   },
 
@@ -2534,7 +2556,7 @@ window.Fellowship = {
     if (!sk || !pub) return null;
     let content; try { content = nip44e(JSON.stringify(obj), nip44ck(sk, pub)); } catch (e) { return null; }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/wallet:' + suffix], ['t', NET]], content }, sk);
-    try { await Promise.any(pool.publish(churchRelays(), evt)); } catch (e) { console.warn('[fellowship] wallet backup failed', e); }
+    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] wallet backup failed', e); }
     return evt;
   },
   subscribeWalletBackup(suffix, onDoc) {
