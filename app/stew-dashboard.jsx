@@ -136,6 +136,25 @@ function publishErrorMessage(reason) {
   return { wrongChurch: false, sticky: false, msg: 'Couldn’t save to the relay — check the connection and try again.' };
 }
 
+// Who counts as a member of this church, in one place.
+//
+// `subscribeMembers` returns every member doc the relay has ever served — including people who were BLOCKED
+// and people still QUEUING for approval. Counting those made a seven-person church read "26 members", and told
+// every group that 26 people could see it. Blocked are excluded always; pending only once the admitted/blocked
+// rosters have actually arrived, because on a hard reload those sets are briefly empty and everyone would
+// momentarily look like they were queuing at the door.
+function useRealMemberCount() {
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const admittedSet = new Set(window.useStewardAdmitted ? window.useStewardAdmitted() : []);
+  const blockedSet = new Set(window.useStewardBlocked ? window.useStewardBlocked() : []);
+  const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
+  const idvNow = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const rosterLoaded = !window.stewardStreamLoaded
+    || (window.stewardStreamLoaded('subscribeAdmitted', idvNow) && window.stewardStreamLoaded('subscribeBlocked', idvNow));
+  return members.filter(m => !blockedSet.has(m.pubkey)
+    && !(joinApproval && rosterLoaded && !admittedSet.has(m.pubkey))).length;
+}
+
 function PublishErrorBanner() {
   const [msg, setMsg] = React.useState('');
   React.useEffect(() => {
@@ -1409,6 +1428,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const rosterLoaded = !window.stewardStreamLoaded
     || (window.stewardStreamLoaded('subscribeAdmitted', idvNow) && window.stewardStreamLoaded('subscribeBlocked', idvNow));
   const pendingCount = (joinApproval && rosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)).length : 0;
+  const realCount = useRealMemberCount();   // blocked + still-pending excluded — see useRealMemberCount
   const pendingBanner = pendingCount ? (
     <button onClick={() => onTab('members')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pray" size={22} color="var(--on-clay)" /></div>
@@ -1437,7 +1457,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
 
   const stat = (
     <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr 1fr' : 'repeat(4, 1fr)', gap: narrow ? 10 : 14 }}>
-      <StatCard label="Members" value={members.length ? String(members.length) : '—'} sub={members.length ? 'invite more' : 'invite your church'} ic="pray" tint="sage" onClick={() => onTab('members')} />
+      <StatCard label="Members" value={realCount ? String(realCount) : '—'} sub={realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" onClick={() => onTab('members')} />
       <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" onClick={() => onTab('groups')} />
       <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
       <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} onClick={() => goSettings('relays')} />
@@ -1450,7 +1470,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
         {groups.map(g => (
           <button key={g.id} onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g }))} title="Open chat" style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'none', border: 'none', borderRadius: 11, padding: '6px 8px', margin: '0 -8px', cursor: 'pointer', fontFamily: 'var(--font-ui)', transition: 'background .12s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'} onMouseLeave={e => e.currentTarget.style.background = 'none'}>
             <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: 'var(--surface-2)', color: g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={g.kind === 'broadcast' ? 'send' : 'chat'} size={18} color="currentColor" /></div>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{groupLiveSub(g, members.length, rosters)}</div></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{groupLiveSub(g, realCount, rosters)}</div></div>
             {g.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             <Icon name="chat" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} />
           </button>
@@ -1968,6 +1988,7 @@ function CategoriesModal({ cats, groups, onClose }) {
 
 function DashGroups() {
   const all = window.useStewardGroups();   // groups AND teams (teams are chat channels too)
+  const realCount = useRealMemberCount();   // "who can see this" must not count blocked or pending people
   const rosters = window.useStewardRosters();
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const cats = window.useStewardCategories ? window.useStewardCategories() : [];   // named containers groups sit in
@@ -1989,7 +2010,7 @@ function DashGroups() {
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
-  const items = all.map(g => ({ ...g, sub: groupLiveSub(g, members.length, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
+  const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   // type filter for the list — only surfaces when there's more than one type to choose between
   const groupFilters = (() => {
     const f = [];
@@ -3199,7 +3220,12 @@ function DashMembers() {
         ) : null}
         {pendingJoins.length ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', marginBottom: 10, flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay)' }}><Icon name="qr" size={15} color="currentColor" /> Requests to join · {pendingJoins.length}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay)' }}><Icon name="qr" size={15} color="currentColor" /> Requests to join · {pendingJoins.length}
+              {pendingJoins.length > 4 ? <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)' }}>scroll for the rest</span> : null}</div>
+            {/* The list scrolls INSIDE the panel. It used to grow without limit, so a church with a queue of
+                requests had the whole page pushed down — the members list, the safeguarding note and everything
+                below it were shoved off-screen behind a wall of Approve buttons. ~4 rows visible, rest scroll. */}
+            <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 268, overflowY: 'auto', overscrollBehavior: 'contain' }}>
             {pendingJoins.map(m => {
               const named = !!m.name; const label = named ? m.name : 'Anonymous';
               const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
@@ -3215,11 +3241,13 @@ function DashMembers() {
                 </div>
               );
             })}
+            </div>
           </div>
         ) : null}
         {!delegated && pendingReqs.length ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', marginBottom: 10, flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: 'var(--clay)' }}><Icon name="pray" size={15} color="currentColor" /> Parent / child links to confirm · {pendingReqs.length}</div>
+            <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto', overscrollBehavior: 'contain' }}>
             {pendingReqs.map(r => (
               // SECURITY-AUDIT-2026-07-20 C1: this card used to read "<parentName> set up a child account for
               // <childName>" from content the requester supplied, with nothing verifiable on screen — so a
@@ -3238,6 +3266,7 @@ function DashMembers() {
                 <button onClick={() => approveGuardian(r)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm</button>
               </div>
             ))}
+            </div>
           </div>
         ) : null}
         <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b> — they’ll only see child-safe groups, and a private message between a child and an adult is blocked unless that adult is <b>cleared for youth</b> (or that adult is the child’s linked <b>parent</b>). Clear only adults on your church’s cleared-worker list. This works alongside — not instead of — your safeguarding policy.</DismissibleNote>
