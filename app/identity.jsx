@@ -38,9 +38,14 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
     } catch (e) { setRBusy(''); setRErr((e && e.message) || 'That phrase isn’t valid — check the words and their order.'); return; }
     // Re-derived the right key. Now ask the relay what this identity already belongs to — without this the
     // member comes back keyed-in but churchless and nameless, which is barely a restore at all.
-    setRBusy('Finding your church…');
-    let found = { churches: [], name: '' };
-    try { found = await window.Fellowship.recoverIdentity(9000); } catch (e) {}
+    // DO NOT query here. Measured twice on a real device: at this moment the app has a freshly derived key, no
+    // settled relay connection and nothing authenticated, so the member's own (gated) church docs come back
+    // empty — even a 3x retry inside this pane recovered nothing. The SAME call on a warm, connected app
+    // returned in 357ms. So the recovery is not wrong, its timing is: hand the job to the running app, which
+    // picks it up on the next boot once the connection is up and authenticated (see app.jsx, restorePending).
+    setRBusy('Restoring…');
+    const found = { churches: [], name: '' };
+    try { localStorage.setItem('trinityone.restorePending', '1'); } catch (e) {}
     try {
       if (found.name) saveIdentity({ name: found.name });
       if (found.churches.length) {

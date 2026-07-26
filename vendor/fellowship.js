@@ -7572,6 +7572,34 @@
       const churches = [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([cp]) => cp);
       return { churches, name };
     },
+    // The one above is a single pass, and on a cold connection that is not enough — CONFIRMED on device: the
+    // member's NAME came back (kind-0 is public) while their churches did not, because their own member: docs
+    // are gated and the relay only serves them over a NIP-42-authenticated socket. Auth here is LAZY: the relay
+    // challenges when a gated read is withheld, pool.automaticallyAuth signs it, and _armAuthRefetch re-runs the
+    // church-doc subscriptions — but nothing re-runs a one-off query like ours, so the first pass is answered
+    // with an empty EOSE and we conclude the member belongs to nothing.
+    //
+    // So: ask again. The second pass rides the connection the first pass just caused to authenticate. This is
+    // why a restored member could see a message notification arrive from a church the app insisted they were not
+    // in — the relay knew, the app had simply asked before it had proved who it was.
+    async recoverIdentityRetry(tries, gap) {
+      const n = Math.max(1, tries || 3);
+      let best = { churches: [], name: "" };
+      for (let i3 = 0; i3 < n; i3++) {
+        let r = { churches: [], name: "" };
+        try {
+          r = await window.Fellowship.recoverIdentity(i3 === 0 ? 7e3 : 5e3);
+        } catch (e) {
+        }
+        if (r.name && !best.name) best.name = r.name;
+        if (r.churches.length) {
+          best.churches = r.churches;
+          break;
+        }
+        if (i3 < n - 1) await new Promise((res) => setTimeout(res, gap || 2500));
+      }
+      return best;
+    },
     // publish this user's kind-0 profile (display name etc.) and cache it
     async setProfile(meta) {
       if (!sk) await window.Fellowship.ready;

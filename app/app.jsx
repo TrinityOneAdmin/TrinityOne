@@ -674,6 +674,40 @@ function App() {
     console.warn('[trinity] active church', activeChurch, 'is not in the followed list — falling back to', next);
     setActiveChurch(next); lsSet('trinityone.activeChurch', next);
   }, [activeChurch, churches]);
+  // RESTORE, SECOND HALF. The restore pane cannot look up the member's churches itself — at that moment the
+  // key is seconds old, no relay connection has settled and nothing has authenticated, so the member's own
+  // (gated) docs come back empty. It leaves `restorePending` instead and we finish the job HERE, from the
+  // running app, once there is a healthy connection — the state in which the same lookup measurably works.
+  // Symptom this fixes: a restored member whose phone received a church's message notification while the app
+  // insisted they belonged to no church. The relay knew; the app had asked before it could prove who it was.
+  useAE(() => {
+    let pending = false;
+    try { pending = localStorage.getItem('trinityone.restorePending') === '1'; } catch (e) {}
+    if (!pending) return;
+    const F = window.Fellowship;
+    if (!F || !F.recoverIdentityRetry) return;
+    let stop = false;
+    const attempt = async () => {
+      if (stop) return;
+      if (!F.myPubkey || !(F.relaysHealthy && F.relaysHealthy())) return;   // wait for a key AND a live socket
+      let found = { churches: [], name: '' };
+      try { found = await F.recoverIdentityRetry(3, 3000); } catch (e) { return; }
+      if (stop) return;
+      if (found.name) { try { saveIdentity({ name: found.name }); } catch (e) {} }
+      if (found.churches.length) {
+        const list = found.churches.map(cp => { const np = F.toNpub ? F.toNpub(cp) : cp; return { id: np, npub: np, name: '', initials: '', sub: 'Followed' }; });
+        setChurches(prev => [...prev, ...list.filter(l => !prev.find(p => p.id === l.id))]);
+        setActiveChurch(list[0].id);
+        try { lsSet('trinityone.activeChurch', list[0].id); } catch (e) {}
+      }
+      // Clear only once we actually recovered something, so a member who restored on a dead connection is
+      // retried on the next launch rather than silently left church-less forever.
+      if (found.churches.length || found.name) { try { localStorage.removeItem('trinityone.restorePending'); } catch (e) {} }
+    };
+    const t = setInterval(attempt, 4000);
+    attempt();
+    return () => { stop = true; clearInterval(t); };
+  }, [connTick]);
   // scope outgoing chat to the active church, so its steward sees who's participating (Members)
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
