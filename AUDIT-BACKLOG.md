@@ -16,6 +16,46 @@ labels turned out to be already done — those entries were stale.
 
 ---
 
+## Deferred from AUDIT-2026-07-26-RECOVERY.md (its five CRITICALs are closed; these are not)
+
+Recorded 2026-07-26 after the CRITICAL fix pass on `recovery/2026-07-26`. Ranked by what a real person loses.
+
+- **CRITICAL/HIGH 5 — a re-seated member's OLD key stays admitted, and Block disappears with the row.**
+  `src/steward.src.js` (`_superseded` filters the roster and the count, not chat) vs `app/stew-dashboard.jsx`.
+  Losing the phone is the usual reason for losing the words, so the realistic case is a phone taken at a
+  checkpoint: the steward reconnects the member believing the old entry is folded away, and the old key is
+  still in the church, still able to read groups and post, with no UI left to remove it. Shape: ask "was the
+  old phone lost or stolen?" in the Reconnect modal and block the old key in the same action; at minimum keep
+  re-seated keys reachable in the blocked-style list. **This is the next thing to do.**
+
+- **HIGH S1 — the care-team roster is trusted from ANY author**, so an "ask for help" can be sealed to an
+  attacker. `src/fellowship.src.js` `_fetchCareTeam`, duplicated inline in `publishCareRequest`, consumed by
+  `sendCareChat`. Every other church-authored doc in that file gates on
+  `e.pubkey === cp || _churchRoster.get(cp).has(e.pubkey)`; `careteam:` — the doc that decides who the
+  crown-jewel secret is encrypted to — does not. Reachable without an insider via a crafted
+  `?follow=<real church>&relay=wss://attacker/relay` link.
+
+- **HIGH S2 — child-safe groups are the only chat still readable by an ANONYMOUS connection.**
+  `scripts/gateway.mjs` (~1566). The auth gate is skipped for child-safe groups, so the one remaining
+  anonymously-readable room is the one containing children. `relay-childsafe.test.mjs` never issues an
+  unauthenticated read, which is why it passes.
+
+- **HIGH S3 — the NIP-42 relay-binding check compares against a CLIENT-SUPPLIED Host header.**
+  `scripts/gateway.mjs` (`ws._host` from `req.headers.host`, and `boundToUs`). a8 happens to be safe because
+  Cloudflare rewrites Host; every self-hosting church, LAN relay, Tailscale Funnel and the desktop relay app is
+  not. `relay-auth-binding.test.mjs` passes because its client connects with `Host: 127.0.0.1` — a tautology.
+
+- **MEDIUM S4 — a care request can be silently withdrawn by someone who is not its author.**
+  `src/fellowship.src.js` (~2289 tombstone, ~2283 status): no author check, while the same diff applied the
+  opposite rule to eight other doc types with eight identical comments. The realistic victim is someone whose
+  abuser is in the congregation.
+
+Also still open from that audit and NOT covered above: the "same groups" half of the Reconnect promise (
+invite-only groups are per-group key lists and are not rewritten — the copy on both sides now says so, which is
+honest but is not the same as making it work), plus its HIGH #7/#11 and the MEDIUM/LOW list.
+
+---
+
 ## Needs a supervised pass (deliberately not done unattended)
 
 - **Console `window.confirm` → `SkConfirm` (8 sites).** `stew-schedule.jsx:493,494,527,890`,
