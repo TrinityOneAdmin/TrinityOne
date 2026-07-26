@@ -1853,7 +1853,6 @@ window.Fellowship = {
     if (!pubk) { cb({ ...OFF }); return () => {}; }
     let best = { ts: 0, doc: { ...OFF } };
     return _onChurchDocs(pubk, {
-      emit,   // so the hub can cancel a queued emit when this handler tears down
       want: [MEALS_SETTINGS_D],   // replay only this slice of the hub (see _hubBufSet)
       onevent(e, d) {
         if (d !== MEALS_SETTINGS_D) return;   // the relay write-gates settings to the church/stewards (accept policy), so trust what it serves here — don't drop it on a not-yet-loaded roster, which hid the whole Care module from members
@@ -1873,7 +1872,6 @@ window.Fellowship = {
     if (!pubk) { cb(null); return () => {}; }
     let bestTs = 0;
     return _onChurchDocs(pubk, {
-      emit,   // so the hub can cancel a queued emit when this handler tears down
       onevent(e, d) {
         if (d !== MSGTAGS_D || (e.created_at || 0) <= bestTs) return;
         bestTs = e.created_at || 0;

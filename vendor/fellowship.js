@@ -6018,7 +6018,7 @@
     const nowS = Math.floor(Date.now() / 1e3);
     return list.filter((m) => !m.draft && (!m.publishAt || m.publishAt <= nowS));
   }
-  function scheduleNextReveal(list, timer, emit2) {
+  function scheduleNextReveal(list, timer, emit) {
     if (timer) {
       clearTimeout(timer);
       timer = null;
@@ -6030,7 +6030,7 @@
       if (t > nowMs && t < soonest) soonest = t;
     }
     if (soonest === Infinity) return null;
-    return setTimeout(emit2, Math.min(soonest - nowMs + 250, 2147483647));
+    return setTimeout(emit, Math.min(soonest - nowMs + 250, 2147483647));
   }
   var _loc = typeof location !== "undefined" ? location : null;
   var RELAY_BASE = _loc && _loc.host ? _loc.host : "127.0.0.1:8090";
@@ -6963,7 +6963,7 @@
         return () => {
         };
       }
-      return _shared("sermons|" + cp0, (emit2) => window.Fellowship._openSermons(cp0, emit2))(onSermons);
+      return _shared("sermons|" + cp0, (emit) => window.Fellowship._openSermons(cp0, emit))(onSermons);
     },
     _openSermons(churchNpub, onSermons) {
       const cp = toPub(churchNpub);
@@ -6973,7 +6973,7 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit2 = _coalesce(() => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))));
+      const emit = _coalesce(() => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))));
       const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], "#t": [NET] }], {
         onevent(e) {
           if (e.pubkey !== cp) return;
@@ -6983,17 +6983,17 @@
             const s = JSON.parse(e.content);
             if (s && s.sha256) {
               byId.set(d, { ...s, at: e.created_at });
-              emit2();
+              emit();
             }
           } catch {
           }
         },
         oneose() {
-          emit2();
+          emit();
         }
       });
       return () => {
-        emit2.cancel();
+        emit.cancel();
         try {
           sub.close();
         } catch {
@@ -7337,7 +7337,7 @@
       let profSub = null;
       const profAuthors = /* @__PURE__ */ new Set();
       let profTimer = null;
-      const emit2 = (done) => {
+      const emit = (done) => {
         const visible = [...hub.byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         if (!hub.eosed && !done && !visible.length) return;
         saveMembersCache(cp, [...hub.byPub.values()]);
@@ -7366,7 +7366,7 @@
                 hub.dirty = true;
                 _memHubSaveSoon(hub);
               }
-              emit2();
+              emit();
             } catch {
             }
           },
@@ -7382,15 +7382,15 @@
       const off = _onChurchMembers(cp, {
         onchange(pk) {
           ensureProfile(pk);
-          emit2();
+          emit();
         },
         oneose() {
-          emit2(true);
+          emit(true);
         }
         // initial load complete
       });
       for (const pk of hub.byPub.keys()) ensureProfile(pk);
-      if (hub.byPub.size) emit2(false);
+      if (hub.byPub.size) emit(false);
       return () => {
         off();
         if (profTimer) clearTimeout(profTimer);
@@ -7631,7 +7631,7 @@
         };
       }
       const byPeer = /* @__PURE__ */ new Map();
-      const emit2 = _coalesce(() => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))));
+      const emit = _coalesce(() => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))));
       const handle = async (e) => {
         const peer = e.pubkey === pub ? (e.tags.find((t) => t[0] === "p") || [])[1] : e.pubkey;
         if (!peer) return;
@@ -7644,7 +7644,7 @@
           preview = "\u{1F512}";
         }
         byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? "You: " : "") + preview });
-        emit2();
+        emit();
       };
       const sub = pool.subscribeMany(window.Fellowship.relays, [
         // PERF-AUDIT-2026-07-20 HIGH-4: these carried NO limit, so the relay shipped up to its 5000-event
@@ -7662,10 +7662,10 @@
         { kinds: [4], authors: [pub], limit: 1e3 },
         { kinds: [4], "#p": [pub], limit: 1e3 }
       ], { onevent: handle, oneose() {
-        emit2();
+        emit();
       } });
       return () => {
-        emit2.cancel();
+        emit.cancel();
         try {
           sub.close();
         } catch {
@@ -7874,7 +7874,7 @@
       }
       const HIDE_D = "trinityone/hidden:";
       const hidden = /* @__PURE__ */ new Map();
-      const emit2 = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id))));
+      const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, h]) => h).map(([id]) => id))));
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": [groupId] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -7882,14 +7882,14 @@
           const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
           if (!_groupEventTrusted(cp, gid, e.pubkey)) return;
           hidden.set(d.slice(HIDE_D.length), !(e.tags.some((t) => t[0] === "deleted") || !e.content));
-          emit2();
+          emit();
         },
         oneose() {
-          emit2();
+          emit();
         }
       });
       return () => {
-        emit2.cancel();
+        emit.cancel();
         try {
           sub.close();
         } catch {
@@ -7969,15 +7969,15 @@
         if (g && g.id) byId.set(g.id, g);
       }
       let eosed = false;
-      const emit2 = _coalesce(() => {
+      const emit = _coalesce(() => {
         const v = [...byId.values()].filter((g) => _churchVoice(pubk, g));
         if (!eosed && !v.length) return;
         saveDocCache("groups", pubk, v);
         onGroups(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
       });
-      if (byId.size) emit2();
+      if (byId.size) emit();
       return _onChurchDocs(pubk, {
-        emit: emit2,
+        emit,
         // so the hub can cancel a queued emit when this handler tears down
         want: [GROUP_D],
         // replay only this slice of the hub (see _hubBufSet)
@@ -7987,7 +7987,7 @@
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
               byId.delete(id);
-              emit2();
+              emit();
             }
             return;
           }
@@ -7996,17 +7996,17 @@
             byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey });
             _noteGroupLeaders(pubk, id, c, e.pubkey);
             if (!_needAuth && pub && c.visibility === "invite" && Array.isArray(c.members) && c.members.some((p) => toPub(p) === pub)) _needAuth = true;
-            emit2();
+            emit();
           } catch {
           }
         },
         onroster() {
-          emit2();
+          emit();
         },
         // the church-signed steward roster arrived/changed — re-filter
         oneose() {
           eosed = true;
-          if (byId.size) emit2();
+          if (byId.size) emit();
         }
         // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
@@ -8025,15 +8025,15 @@
         if (c && c.id) byId.set(c.id, c);
       }
       let eosed = false;
-      const emit2 = _coalesce(() => {
+      const emit = _coalesce(() => {
         const v = [...byId.values()].filter((c) => _churchVoice(pubk, c));
         if (!eosed && !v.length) return;
         saveDocCache("categories", pubk, v);
         onCats(v.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
       });
-      if (byId.size) emit2();
+      if (byId.size) emit();
       return _onChurchDocs(pubk, {
-        emit: emit2,
+        emit,
         // so the hub can cancel a queued emit when this handler tears down
         want: [CATEGORY_D],
         // replay only this slice of the hub (see _hubBufSet)
@@ -8043,24 +8043,24 @@
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
               byId.delete(id);
-              emit2();
+              emit();
             }
             return;
           }
           try {
             const c = JSON.parse(e.content);
             byId.set(id, { id, ...c, ts: e.created_at, _by: e.pubkey });
-            emit2();
+            emit();
           } catch {
           }
         },
         onroster() {
-          emit2();
+          emit();
         },
         // re-filter once the steward roster lands (steward-authored categories)
         oneose() {
           eosed = true;
-          if (byId.size) emit2();
+          if (byId.size) emit();
         }
         // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
@@ -8080,7 +8080,7 @@
       let minors = [], approved = [], guardians = {}, nophoto = [];
       const me = window.Fellowship.myPubkey || pub;
       const _sgTs = { minors: 0, approved: 0, guardians: 0, nophoto: 0 };
-      const emit2 = () => {
+      const emit = () => {
         _noPhoto = new Set(nophoto);
         onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)), photoBlocked: !!(me && nophoto.includes(me)) });
       };
@@ -8096,7 +8096,7 @@
             } catch {
               minors = [];
             }
-            emit2();
+            emit();
           } else if (d === "trinityone/approved:" + pubk) {
             if (_ts < _sgTs.approved) return;
             _sgTs.approved = _ts;
@@ -8105,7 +8105,7 @@
             } catch {
               approved = [];
             }
-            emit2();
+            emit();
           } else if (d === "trinityone/guardians:" + pubk) {
             if (_ts < _sgTs.guardians) return;
             _sgTs.guardians = _ts;
@@ -8114,7 +8114,7 @@
             } catch {
               guardians = {};
             }
-            emit2();
+            emit();
           } else if (d === "trinityone/nophoto:" + pubk) {
             if (_ts < _sgTs.nophoto) return;
             _sgTs.nophoto = _ts;
@@ -8123,11 +8123,11 @@
             } catch {
               nophoto = [];
             }
-            emit2();
+            emit();
           }
         },
         oneose() {
-          emit2();
+          emit();
         }
       });
     },
@@ -8221,7 +8221,7 @@
       }
       let approval = false, admitted = [];
       const me = window.Fellowship.myPubkey || pub;
-      const emit2 = () => {
+      const emit = () => {
         const isAdmitted = !!(me && admitted.includes(me));
         onState({ approval, isAdmitted, isPending: approval && !isAdmitted });
       };
@@ -8237,21 +8237,21 @@
                 approval = false;
               }
             }
-            emit2();
+            emit();
           } else if (d === "trinityone/admitted:" + pubk) {
             try {
               admitted = JSON.parse(e.content).pubkeys || [];
             } catch {
               admitted = [];
             }
-            emit2();
+            emit();
           }
         },
         onroster() {
-          emit2();
+          emit();
         },
         oneose() {
-          emit2();
+          emit();
         }
       });
     },
@@ -8270,14 +8270,14 @@
       }
       let timer = null;
       let eosed = false;
-      const emit2 = () => {
+      const emit = () => {
         const all = [...byId.values()].filter((x) => _churchVoice(pubk, x));
         if (!eosed && !all.length) return;
         saveDocCache("plans", pubk, all);
         onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
-        timer = scheduleNextReveal(all, timer, emit2);
+        timer = scheduleNextReveal(all, timer, emit);
       };
-      if (byId.size) emit2();
+      if (byId.size) emit();
       const stop = _onChurchDocs(pubk, {
         want: [PLAN_D],
         // replay only this slice of the hub (see _hubBufSet)
@@ -8287,22 +8287,22 @@
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
               byId.delete(id);
-              emit2();
+              emit();
             }
             return;
           }
           try {
             byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
-            emit2();
+            emit();
           } catch {
           }
         },
         onroster() {
-          emit2();
+          emit();
         },
         oneose() {
           eosed = true;
-          if (byId.size) emit2();
+          if (byId.size) emit();
         }
         // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
@@ -8327,14 +8327,14 @@
       const ord = (d) => typeof d.order === "number" ? d.order : Infinity;
       let timer = null;
       let eosed = false;
-      const emit2 = () => {
+      const emit = () => {
         const all = [...byId.values()].filter((x) => _churchVoice(pubk, x));
         if (!eosed && !all.length) return;
         saveDocCache("devos", pubk, all);
         onDevos(scheduleVisible(all).sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)));
-        timer = scheduleNextReveal(all, timer, emit2);
+        timer = scheduleNextReveal(all, timer, emit);
       };
-      if (byId.size) emit2();
+      if (byId.size) emit();
       const stop = _onChurchDocs(pubk, {
         want: [DEVO_D],
         // replay only this slice of the hub (see _hubBufSet)
@@ -8344,22 +8344,22 @@
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
               byId.delete(id);
-              emit2();
+              emit();
             }
             return;
           }
           try {
             byId.set(id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey });
-            emit2();
+            emit();
           } catch {
           }
         },
         onroster() {
-          emit2();
+          emit();
         },
         oneose() {
           eosed = true;
-          if (byId.size) emit2();
+          if (byId.size) emit();
         }
         // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
@@ -8378,13 +8378,13 @@
       }
       const byId = /* @__PURE__ */ new Map();
       let eosed = false;
-      const emit2 = _coalesce(() => {
+      const emit = _coalesce(() => {
         const v = [...byId.values()].filter((x) => _churchVoice(pubk, x)).sort((a, b) => (b.ts || 0) - (a.ts || 0));
         if (!eosed && !v.length) return;
         onItems(v);
       });
       return _onChurchDocs(pubk, {
-        emit: emit2,
+        emit,
         // so the hub can cancel a queued emit when this handler tears down
         want: [prefix],
         // replay only this slice of the hub (see _hubBufSet)
@@ -8394,22 +8394,22 @@
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_churchVoice(pubk, { _by: e.pubkey })) {
               byId.delete(id);
-              emit2();
+              emit();
             }
             return;
           }
           try {
             byId.set(id, { id, ...map(JSON.parse(e.content), id), ts: e.created_at, _by: e.pubkey });
-            emit2();
+            emit();
           } catch {
           }
         },
         onroster() {
-          emit2();
+          emit();
         },
         oneose() {
           eosed = true;
-          if (byId.size) emit2();
+          if (byId.size) emit();
         }
         // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
@@ -8443,8 +8443,6 @@
       }
       let best = { ts: 0, doc: { ...OFF } };
       return _onChurchDocs(pubk, {
-        emit,
-        // so the hub can cancel a queued emit when this handler tears down
         want: [MEALS_SETTINGS_D],
         // replay only this slice of the hub (see _hubBufSet)
         onevent(e, d) {
@@ -8477,8 +8475,6 @@
       }
       let bestTs = 0;
       return _onChurchDocs(pubk, {
-        emit,
-        // so the hub can cancel a queued emit when this handler tears down
         onevent(e, d) {
           if (d !== MSGTAGS_D || (e.created_at || 0) <= bestTs) return;
           bestTs = e.created_at || 0;
@@ -8519,13 +8515,13 @@
         }
         return false;
       };
-      const emit2 = _coalesce(() => {
+      const emit = _coalesce(() => {
         const v = [...byId.entries()].filter(([id, n]) => careTrusted(n._by) && !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
         if (!eosed && !v.length) return;
         cb(v);
       });
       return _onChurchDocs(pubk, {
-        emit: emit2,
+        emit,
         // so the hub can cancel a queued emit when this handler tears down
         onevent(e, d) {
           if (d === MEALS_SETTINGS_D) {
@@ -8536,7 +8532,7 @@
                 adminGroupId = String(c.adminGroupId || "");
               } catch {
               }
-              emit2();
+              emit();
             }
             return;
           }
@@ -8552,7 +8548,7 @@
               } catch {
               }
               rosterPeople.set(team, set);
-              emit2();
+              emit();
             }
             return;
           }
@@ -8562,7 +8558,7 @@
             const s = tombs.get(id) || /* @__PURE__ */ new Set();
             s.add(e.pubkey);
             tombs.set(id, s);
-            emit2();
+            emit();
             return;
           }
           try {
@@ -8574,16 +8570,16 @@
             }
             const f = s2 ? { ...c, ...s2 } : c;
             byId.set(id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at });
-            emit2();
+            emit();
           } catch {
           }
         },
         onroster() {
-          emit2();
+          emit();
         },
         oneose() {
           eosed = true;
-          if (byId.size) emit2();
+          if (byId.size) emit();
         }
         // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
       });
@@ -8600,13 +8596,13 @@
       }
       const byKey = /* @__PURE__ */ new Map();
       let eosed = false;
-      const emit2 = _coalesce(() => {
+      const emit = _coalesce(() => {
         const v = [...byKey.values()];
         if (!eosed && !v.length) return;
         cb(v);
       });
       return _onChurchDocs(pubk, {
-        emit: emit2,
+        emit,
         // so the hub can cancel a queued emit when this handler tears down
         want: [prefix],
         // replay only this slice of the hub (see _hubBufSet)
@@ -8618,18 +8614,18 @@
           const key = needId + "|" + isoDate + "|" + e.pubkey;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             byKey.delete(key);
-            emit2();
+            emit();
             return;
           }
           try {
             byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || "{}")) });
-            emit2();
+            emit();
           } catch {
           }
         },
         oneose() {
           eosed = true;
-          if (byKey.size) emit2();
+          if (byKey.size) emit();
         }
         // sticky: don't blank slots/skips on a reconnect's empty EOSE; genuine clears come via the delete path
       });
@@ -8716,7 +8712,7 @@
       const cp0 = window.Fellowship.churchPub;
       if (!cp0) return () => {
       };
-      return _shared("carereq|" + cp0, (emit2) => window.Fellowship._openCareRequests(emit2))(cb);
+      return _shared("carereq|" + cp0, (emit) => window.Fellowship._openCareRequests(emit))(cb);
     },
     _openCareRequests(cb) {
       const cp = window.Fellowship.churchPub;
@@ -8725,7 +8721,7 @@
       const byId = /* @__PURE__ */ new Map();
       const statusById = /* @__PURE__ */ new Map();
       const tomb = /* @__PURE__ */ new Map();
-      const emit2 = () => {
+      const emit = () => {
         try {
           cb([...byId.values()].map((r) => {
             const s = statusById.get(r.id) || {};
@@ -8744,7 +8740,7 @@
             try {
               const s = JSON.parse(e.content || "{}");
               statusById.set(id2, { status: String(s.status || "handled"), needId: String(s.needId || ""), _ts: e.created_at });
-              emit2();
+              emit();
             } catch (e2) {
             }
             return;
@@ -8754,7 +8750,7 @@
           if (e.tags.some((t) => t[0] === "deleted")) {
             tomb.set(id, Math.max(tomb.get(id) || 0, e.created_at));
             byId.delete(id);
-            emit2();
+            emit();
             return;
           }
           if ((tomb.get(id) || 0) >= e.created_at) return;
@@ -8771,10 +8767,10 @@
           } catch (e2) {
           }
           byId.set(id, { id, from: e.pubkey, at: body && body.at || e.created_at, _ts: e.created_at, sealed: !body, ...body || {} });
-          emit2();
+          emit();
         },
         oneose() {
-          emit2();
+          emit();
         }
       });
       return () => {
@@ -8902,7 +8898,7 @@
       };
       const prefix = CARECHAT_D + reqId + ":";
       const byId = /* @__PURE__ */ new Map();
-      const emit2 = _coalesce(() => {
+      const emit = _coalesce(() => {
         try {
           cb([...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0)));
         } catch (e) {
@@ -8921,14 +8917,14 @@
           }
           if (!body || !body.text) return;
           byId.set(id, { id, from: e.pubkey, mine: e.pubkey === pub, at: body.at || e.created_at, text: String(body.text) });
-          emit2();
+          emit();
         },
         oneose() {
-          emit2();
+          emit();
         }
       });
       return () => {
-        emit2.cancel();
+        emit.cancel();
         try {
           sub.close();
         } catch {
@@ -8976,7 +8972,7 @@
       const cp0 = window.Fellowship.churchPub;
       if (!cp0) return () => {
       };
-      return _shared("safety|" + cp0, (emit2) => window.Fellowship._openSafetyCheck(emit2))(cb);
+      return _shared("safety|" + cp0, (emit) => window.Fellowship._openSafetyCheck(emit))(cb);
     },
     _openSafetyCheck(cb) {
       const cp = window.Fellowship.churchPub;
@@ -9092,7 +9088,7 @@
       const dtag = CAREAVAIL_D + pubk;
       const byPub = /* @__PURE__ */ new Map();
       let eosed = false;
-      const emit2 = () => {
+      const emit = () => {
         const v = [...byPub.values()];
         if (!eosed && !v.length) return;
         cb(v);
@@ -9102,24 +9098,24 @@
           if (d !== dtag) return;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             byPub.delete(e.pubkey);
-            emit2();
+            emit();
             return;
           }
           try {
             const o = JSON.parse(e.content || "{}");
             if (!o.available) {
               byPub.delete(e.pubkey);
-              emit2();
+              emit();
               return;
             }
             byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), ts: e.created_at });
-            emit2();
+            emit();
           } catch {
           }
         },
         oneose() {
           eosed = true;
-          if (byPub.size) emit2();
+          if (byPub.size) emit();
         }
         // sticky: don't blank the "ready to help" list on a reconnect's empty EOSE
       });
@@ -9172,12 +9168,12 @@
       }
       const byId = /* @__PURE__ */ new Map();
       let eosed = false;
-      const emit2 = () => {
+      const emit = () => {
         const v = [...byId.values()].filter((x) => _groupEventTrusted(cp, x._gid, x._by)).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
         if (!eosed && !v.length) return;
         onEvents(v);
       };
-      const onTrust = () => emit2();
+      const onTrust = () => emit();
       window.addEventListener("trinity-church-trust", onTrust);
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": groups }], {
         onevent(e) {
@@ -9188,20 +9184,20 @@
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (_groupEventTrusted(cp, (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1], e.pubkey)) {
               byId.delete(id);
-              emit2();
+              emit();
             }
             return;
           }
           try {
             const c = JSON.parse(e.content);
             byId.set(id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "", byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid });
-            emit2();
+            emit();
           } catch {
           }
         },
         oneose() {
           eosed = true;
-          if (byId.size) emit2();
+          if (byId.size) emit();
         }
         // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
@@ -9248,14 +9244,14 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit2 = () => onPosts([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const emit = () => onPosts([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], authors: [pubk], "#t": ["net-announce"] }], {
         onevent(e) {
           byId.set(e.id, { id: e.id, text: e.content, ts: e.created_at, networkPub: pubk });
-          emit2();
+          emit();
         },
         oneose() {
-          emit2();
+          emit();
         }
       });
       return () => {
@@ -9275,7 +9271,7 @@
       }
       const REQUEST_D = "trinityone/request:";
       const byId = /* @__PURE__ */ new Map();
-      const emit2 = () => onReqs([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const emit = () => onReqs([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#p": [me], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -9284,18 +9280,18 @@
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (e.pubkey === (window.Fellowship.churchPub || "")) {
               byId.delete(id);
-              emit2();
+              emit();
             }
             return;
           }
           try {
             byId.set(id, { id, church: e.pubkey, ...JSON.parse(e.content), ts: e.created_at });
-            emit2();
+            emit();
           } catch {
           }
         },
         oneose() {
-          if (byId.size) emit2();
+          if (byId.size) emit();
         }
         // sticky: don't blank the "you're serving" card on a reconnect's empty EOSE
       });
