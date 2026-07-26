@@ -361,7 +361,8 @@ function MovePhoneSheet({ open, onClose, ctx }) {
   const [stage, setStage] = useIx('intro');   // intro | scan | show
   const [out, setOut] = useIx(null);          // { qr, code } sealed for the new phone
   const [err, setErr] = useIx('');
-  useIxE(() => { if (!open) { setStage('intro'); setOut(null); setErr(''); } }, [open]);
+  const [copied, setCopied] = useIx(false);
+  useIxE(() => { if (!open) { setStage('intro'); setOut(null); setErr(''); setCopied(false); } }, [open]);
   const onScan = async (text) => {
     setErr('');
     try { setOut(await window.TrinityIdentity.sealTransfer(text)); setStage('show'); }
@@ -378,12 +379,16 @@ function MovePhoneSheet({ open, onClose, ctx }) {
           On the new phone, open TrinityOne and choose <b>“I’ve used it before” → “I still have my old phone”</b>. It will show a code. Scan it with this phone.
         </p>
         <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 16px' }}>
+          Afterwards both phones show a check code. Compare them before you finish — they must be identical.
+        </p>
+        <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 16px' }}>
           Your 12 words are never shown or sent in the clear — they’re sealed so only that one phone can open them. You’ll stay signed in here too.
         </p>
         {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 700, marginBottom: 12 }}>{err}</div> : null}
         <button onClick={() => setStage('scan')} style={{ width: '100%', padding: 15, borderRadius: 15, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 15.5, fontWeight: 700 }}>Scan the new phone</button>
       </React.Fragment>) : stage === 'scan' ? (
-        <QRScanner onResult={onScan} onCancel={() => setStage('intro')} prompt="Point at the new phone’s code" />
+        <QRScanner onResult={onScan} onCancel={() => setStage('intro')} prompt="Point at the new phone’s code"
+          onManual={onScan} manualPrompt="Paste the code from the new phone" />
       ) : (<React.Fragment>
         <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '4px 0 14px', textWrap: 'pretty' }}>
           Now point the <b>new</b> phone at this code.
@@ -392,11 +397,20 @@ function MovePhoneSheet({ open, onClose, ctx }) {
           <div style={{ width: 250, height: 250, background: '#fff', borderRadius: 20, padding: 12, boxShadow: 'var(--shadow-lg)', boxSizing: 'border-box' }}
             dangerouslySetInnerHTML={{ __html: (out && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(out.qr) : '' }} />
         </div>
-        <div style={{ textAlign: 'center', marginBottom: 14 }}>
+        <button onClick={() => { try { if (navigator.clipboard && out) navigator.clipboard.writeText(out.qr); } catch (e) {} setCopied(true); setTimeout(() => setCopied(false), 2500); }}
+          style={{ width: '100%', padding: 11, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: copied ? 'var(--sage)' : 'var(--ink)', marginBottom: 12 }}>{copied ? 'Copied — paste it into the new phone' : 'Can’t scan? Copy the code instead'}</button>
+        {/* This code now covers the WHOLE exchange — both keys and the sealed payload — so it cannot exist
+            until the two phones have actually swapped codes, and it cannot be ground out in advance. The
+            four-character version it replaced was derived from the new phone's public key alone (2^20, and
+            public), which meant an attacker could hold up a QR that displayed the member's own code back at
+            them while the words were sealed to the attacker. AUDIT-2026-07-26 S5. */}
+        <div style={{ textAlign: 'center', marginBottom: 14, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: '14px 12px' }}>
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 700, letterSpacing: '.5px' }}>CHECK CODE</div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 24, fontWeight: 700, letterSpacing: '4px', color: 'var(--ink)' }}>{out ? out.code : ''}</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 25, fontWeight: 700, letterSpacing: '3px', color: 'var(--ink)', margin: '4px 0 2px' }}>{out ? out.code : ''}</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, marginTop: 4 }}>
-            These four characters must match the ones on the new phone. If they don’t, stop — you’re sending to someone else’s phone.
+            The new phone will show a check code once it has read this. It must be exactly the same as this one —
+            all eight characters. If it isn’t, tap <b>They’re different</b> on the new phone: your account went
+            somewhere else, and a steward should hear about it.
           </div>
         </div>
         <button onClick={onClose} style={{ width: '100%', padding: 13, borderRadius: 14, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', fontFamily: 'var(--font-ui)', fontSize: 15, fontWeight: 700, color: 'var(--ink)' }}>Done</button>

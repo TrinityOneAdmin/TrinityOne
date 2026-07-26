@@ -18,7 +18,9 @@ const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), '
 const CHURCH = 'c'.repeat(64), OLD = 'a'.repeat(64), NEW = 'b'.repeat(64), OTHER = 'd'.repeat(64), STEWARD_PUB = 'e'.repeat(64);
 
 // Pull the member app's real _noteReseat/_superseded out of the shipped bundle, with a roster we control.
-function memberSide() {
+// `me` / `myName` set up the device this code is running on: whose key it is, and whether they already have a
+// display name. Both matter to the name-adoption tests below.
+function memberSide({ me = '', myName = '' } = {}) {
   assert.match(FELLOWSHIP, /RESEAT_D = "trinityone\/reseat:"/, 'RESEAT_D missing from the shipped member bundle');
   const grab = (name) => {
     const at = FELLOWSHIP.indexOf('function ' + name + '(');
@@ -32,15 +34,23 @@ function memberSide() {
   };
   const src = `
     const RESEAT_D = "trinityone/reseat:";
-    const _reseatOld = new Map(), _reseatAt = new Map(), _churchRoster = new Map();
+    const _reseatOld = new Map(), _reseatAt = new Map(), _churchRoster = new Map(), _reseatNamed = new Set();
+    const profiles = {};
+    const published = [];
+    let pub = ${JSON.stringify(me)};
+    const window = { Fellowship: { myProfile: ${JSON.stringify(myName ? { name: myName } : null)}, setProfile(meta) { published.push(meta); return Promise.resolve(null); } } };
     ${grab('_noteReseat')}
     ${grab('_superseded')}
-    return { note: _noteReseat, superseded: _superseded, roster: _churchRoster };
+    return { note: _noteReseat, superseded: _superseded, roster: _churchRoster, published, window };
   `;
   return new Function(src)();
 }
+// _noteReseat defers the profile publish out of the relay's event handler (a throw in there is swallowed), so
+// let the microtask/timer run before asserting.
+const settle = () => new Promise(r => setTimeout(r, 5));
 
 const reseatDoc = (author, pairs, at = 1000) => ({ pubkey: author, created_at: at, content: JSON.stringify({ pairs }) });
+const ME = NEW;   // the tests below run ON the re-seated member's new phone
 
 test('the member app folds away a re-seated member’s dead key', () => {
   const m = memberSide();
@@ -106,4 +116,76 @@ test('the console publishes the re-seat with the church stamp a delegated stewar
   assert.notEqual(at, -1, 'setReseats missing from the shipped console bundle');
   const body = STEWARD.slice(at, at + 900);
   assert.match(body, /feChurch\(/, 'setReseats must publish via feChurch, or a delegated steward’s re-seat reaches nobody');
+});
+
+// ── the NAME comes back (AUDIT-2026-07-26 CRITICAL 3) ──────────────────────────────────────────────────────
+// A member re-seated by their church arrives on a key with no kind-0 at all: the "I've lost my 12 words" route
+// exists precisely for people who cannot get back in on their own, so they never pass through the name step.
+// Roster names come from each key's own kind-0 and the old key is filtered out entirely — so "Maria" became
+// "Anonymous …abc123" while three screens promised her name would come back. The fix is that her app adopts
+// the name her church vouched for and publishes it as her OWN profile, which makes the promise true rather
+// than papering over it.
+
+test('a re-seated member adopts the name their church vouched for', async () => {
+  const m = memberSide({ me: ME });
+  m.note(CHURCH, reseatDoc(CHURCH, [{ old: OLD, new: NEW, name: 'Maria', at: 900 }]));
+  await settle();
+  assert.deepEqual(m.published, [{ name: 'Maria' }],
+    'the new key published no profile — the member is back in their church as "Anonymous …" under a screen that promised them their name');
+});
+
+test('a name the member already chose is never overwritten', async () => {
+  const m = memberSide({ me: ME, myName: 'Maria K' });
+  m.note(CHURCH, reseatDoc(CHURCH, [{ old: OLD, new: NEW, name: 'Maria', at: 900 }]));
+  await settle();
+  assert.deepEqual(m.published, [], 'the vouched name is a bootstrap, not an override — the member’s own name must win');
+});
+
+test('only the pair naming THIS device is adopted', async () => {
+  const m = memberSide({ me: ME });
+  m.note(CHURCH, reseatDoc(CHURCH, [{ old: OTHER, new: OTHER.replace(/d/g, 'f'), name: 'Someone Else', at: 900 }]));
+  await settle();
+  assert.deepEqual(m.published, [], 'a phone adopted another member’s name from the church’s re-seat list');
+});
+
+test('a re-seat from a stranger cannot rename anybody', async () => {
+  const m = memberSide({ me: ME });
+  m.note(CHURCH, reseatDoc(OTHER, [{ old: OLD, new: NEW, name: 'Pastor', at: 900 }]));
+  await settle();
+  assert.deepEqual(m.published, [],
+    'anyone who can publish would otherwise be able to rename any member — including to something that impersonates a leader');
+});
+
+test('a redelivered re-seat doc does not republish the profile', async () => {
+  const m = memberSide({ me: ME });
+  const doc = reseatDoc(CHURCH, [{ old: OLD, new: NEW, name: 'Maria', at: 900 }]);
+  m.note(CHURCH, doc); m.note(CHURCH, doc); m.note(CHURCH, doc);
+  await settle();
+  assert.equal(m.published.length, 1, 'a relay re-serving the same doc must not turn into a profile broadcast');
+});
+
+test('a pair with no name changes nothing', async () => {
+  const m = memberSide({ me: ME });
+  m.note(CHURCH, reseatDoc(CHURCH, [{ old: OLD, new: NEW, at: 900 }]));
+  await settle();
+  assert.deepEqual(m.published, [], 'a church that vouched for no name must not publish an empty one');
+  assert.equal(m.superseded(CHURCH, OLD), true, 'and the fold must still work — the name is an addition, not a condition');
+});
+
+// ── console side ───────────────────────────────────────────────────────────────────────────────────────────
+// Shape assertions, and they are weaker than the behavioural tests above: subscribeMembers is a 60-line method
+// inside a bundled object literal with a live relay pool in it, so it cannot be pulled out and run the way
+// _noteReseat can. They catch a deletion, not a subtle break. The load-bearing guarantee is the member-side
+// publish above — once that lands, the roster reads the name from the key's own kind-0 like everyone else's,
+// and this fallback only covers the seconds in between.
+
+test('the console vouches the member’s name into the re-seat doc', () => {
+  const at = STEWARD.indexOf('setReseats(');
+  const body = STEWARD.slice(at, at + 1400);
+  assert.match(body, /name/, 'setReseats no longer carries the member’s name — a re-seated member goes back as Anonymous');
+  assert.match(body, /slice\(0,\s*40\)/, 'the vouched name must be length-capped before it is published');
+});
+
+test('the console roster falls back to the vouched name', () => {
+  assert.match(STEWARD, /reseatName/, 'the console roster no longer reads the vouched name, so a just-reconnected member shows as Anonymous');
 });

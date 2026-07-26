@@ -3,9 +3,16 @@ const { useState: useCh, useEffect: useChE, useRef: useChR } = React;
 
 // ════ in-app QR scanner (camera + BarcodeDetector, no native plugin) ════
 // Calls onResult(text) with the decoded QR; degrades gracefully if there's no camera/detector.
-function QRScanner({ onResult, onCancel, prompt }) {
+// `onManual` (optional) makes the no-camera state a real way through instead of a polite apology: the fallback
+// used to say "enter the code below" and offer a button wired to onCancel, while the screens that show it have
+// no field to type into — so a phone with a broken or blocked camera dead-ended on BOTH sides of a transfer.
+// AUDIT-2026-07-26 #8. Every payload we scan is a plain string, so pasting one is exactly equivalent to
+// scanning it. Callers that genuinely have nowhere to paste (the church-follow sheet has its own field) just
+// leave onManual off and keep the old button.
+function QRScanner({ onResult, onCancel, prompt, onManual, manualPrompt }) {
   const vref = useChR();
   const [status, setStatus] = useCh('starting');   // starting | scanning | unsupported | error
+  const [manual, setManual] = useCh('');
   useChE(() => {
     let stream, raf, stopped = false, detector = null, canvas = null, cctx = null;
     const hasBD = ('BarcodeDetector' in window);
@@ -47,8 +54,18 @@ function QRScanner({ onResult, onCancel, prompt }) {
     return (
       <div style={{ borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', padding: '18px 16px', textAlign: 'center', marginBottom: 16 }}>
         <Icon name="qr" size={26} color="var(--clay)" />
-        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '8px 0 12px' }}>{status === 'unsupported' ? 'This device can’t scan in-app — enter the code below instead.' : 'Couldn’t open the camera. Allow camera access, or enter the code below.'}</p>
-        <button onClick={onCancel} className="" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 12, padding: '8px 16px', cursor: 'pointer', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }}>Enter a code instead</button>
+        <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '8px 0 12px' }}>{status === 'unsupported' ? 'This device can’t scan in-app — paste the code instead.' : 'Couldn’t open the camera. Allow camera access, or paste the code instead.'}</p>
+        {onManual ? (<React.Fragment>
+          <textarea value={manual} onChange={e => setManual(e.target.value)} rows={3} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+            data-qr-manual="1" placeholder={manualPrompt || 'Paste the code here'}
+            style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--paper)', padding: '10px 12px', fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.5, marginBottom: 10 }} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => onManual(manual.trim())} disabled={!manual.trim()} style={{ flex: 1, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 12, padding: '10px 16px', cursor: manual.trim() ? 'pointer' : 'not-allowed', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)', opacity: manual.trim() ? 1 : .5 }}>Use this code</button>
+            <button onClick={onCancel} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 12, padding: '10px 16px', cursor: 'pointer', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }}>Back</button>
+          </div>
+        </React.Fragment>) : (
+          <button onClick={onCancel} className="" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 12, padding: '8px 16px', cursor: 'pointer', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }}>Enter a code instead</button>
+        )}
       </div>
     );
   }

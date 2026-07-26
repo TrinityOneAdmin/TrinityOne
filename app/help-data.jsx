@@ -265,18 +265,19 @@ window.HelpData = {
       minutes: 2,
       blocks: [
         { type: 'callout', tone: 'clay', text: 'Back up before you need to. The right day to save your 12 words is today — not the day your phone is lost, stolen, or broken. Open the Help screen and tap “Back up my 12 words”, write them on paper, and keep it somewhere safe. Those words are the one and only thing that brings your account — your name, your church and your groups — back.' },
+        // CORRECTED TWICE. It first described a 12-word screen that did not exist; it was then rewritten to say
+        // the backup FILE is the only way back — and that became wrong on 2026-07-26, when the member app got
+        // the three routes below. Copy that denies a capability is as costly as copy that invents one: it sends
+        // a member who has their words to "start fresh" as a stranger to their own church.
         { type: 'steps', label: 'Move to a new phone', items: [
-          'Install TrinityOne on the new phone.',
-          'Open Settings → Your account → Restore, and pick your backup file.',
-          'Enter the passphrase you chose when you saved it.',
-          'You’re back — your account, your notes and your study.',
+          'Install TrinityOne on the new phone and open it.',
+          'Choose “I’ve used it before”.',
+          'Still have the old phone? Pick “I still have my old phone” and hold the two together — nothing to type. Otherwise type your 12 words.',
+          'Compare the check code on both phones before you finish — all eight characters must match.',
+          'You’re back — same account, same church, same groups.',
         ] },
-        // CORRECTED 2026-07-26: this described a flow that does not exist. There is no screen anywhere in the
-        // app for typing the 12 words — the restore that DOES work takes the encrypted backup FILE plus its
-        // passphrase. Promising otherwise was the dangerous part: a member who believes the paper is enough
-        // never makes the file backup that would actually save them.
-        { type: 'note', text: 'The backup file is what restores you today. Keep your 12 words as well — they are your account’s root secret, and a way to restore from them alone is coming — but the file plus its passphrase is what brings everything back right now.' },
-        { type: 'callout', tone: 'sage', text: 'If you don’t have the 12 words and the old phone is gone, that account can’t be recovered — you’d simply start fresh. So keep that paper safe.' },
+        { type: 'note', text: 'Your notes, journal and highlights live only on the old phone. Restore your backup file afterwards to bring those across too — the 12 words bring back who you are, the file brings back what you wrote.' },
+        { type: 'callout', tone: 'sage', text: 'Lost the words AND the old phone? Ask a steward. Choose “I’ve lost my 12 words”, show them the code on your screen, and your church can put you back in your place. Your old private messages stay locked — nobody can open those, which is the point of them being private.' },
         { type: 'tech', text: 'The backup file holds your BIP-39 identity plus your local study data, encrypted with your passphrase (AES-GCM via PBKDF2). Restoring re-derives the same key, so you are the same person to your church. Note that your followed churches are stored on this device, so re-following is a manual step today.' },
       ],
     },

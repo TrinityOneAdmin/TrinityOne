@@ -2953,7 +2953,10 @@ window.DashResources = DashResources;
 // key they have now, on this church's word that they are the same person. The steward recognising them IS the
 // authorisation; there is deliberately no code or token to hand over, because such a token would be a bearer
 // credential to become that member.
-function ReseatModal({ member, memberName, isMinor, admittedList, onClose }) {
+// `realName` is the member's ACTUAL display name or '' — deliberately separate from `memberName`, which
+// falls back to "this member" for the prose. Only a real name may be vouched across with the seat; writing
+// a placeholder into the re-seat doc would publish "this member" as somebody's profile name.
+function ReseatModal({ member, memberName, realName, isMinor, admittedList, onClose }) {
   const [scan, setScan] = React.useState(false);
   const [text, setText] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -2969,7 +2972,7 @@ function ReseatModal({ member, memberName, isMinor, admittedList, onClose }) {
     try {
       // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
       // while the church still showed two of them; this order fails the safer way round.
-      const pairs = [...(reseats || []).filter(p => p && p.new !== newPub), { old: member, new: newPub, at: Math.floor(Date.now() / 1000) }];
+      const pairs = [...(reseats || []).filter(p => p && p.new !== newPub), { old: member, new: newPub, name: realName || '', at: Math.floor(Date.now() / 1000) }];
       await window.Steward.setReseats(pairs);
       await window.Steward.setAdmitted([...new Set([...(admittedList || []), newPub])]);
       setDone(true);
@@ -2982,6 +2985,15 @@ function ReseatModal({ member, memberName, isMinor, admittedList, onClose }) {
       {done ? (<React.Fragment>
         <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '4px 0 14px' }}>
           Done. {memberName} is back in their place on the new phone, and the old entry is folded into it.
+          {realName ? ' Their name goes with them — it will appear on the new phone shortly.' : ''}
+        </p>
+        {/* Say the part the product does NOT do, here, where it can still be acted on. Invite-only group
+            membership is a list of pubkeys on each group document; a re-seat does not rewrite those, so the
+            new key is not in them. Telling the steward now costs one sentence; leaving them to find out means
+            the member sits outside their own small group wondering why. AUDIT-2026-07-26 CRITICAL 3. */}
+        <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', margin: '0 0 14px' }}>
+          One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
+          again. Ordinary groups need nothing — they are already back in those.
         </p>
         <button onClick={onClose} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: '10px 14px' }}>Close</button>
       </React.Fragment>) : (<React.Fragment>
@@ -2989,7 +3001,7 @@ function ReseatModal({ member, memberName, isMinor, admittedList, onClose }) {
           For a member who has lost their 12 words. On their new phone they choose <b>“I’ve lost my 12 words”</b>, which shows a code — scan or paste it here.
         </p>
         <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', margin: '0 0 12px' }}>
-          Only do this if you know it is really them. It gives that new key {memberName}’s name and place in your church. Their old private messages and any sealed care records stay unreadable — those went with the lost key, and nothing can bring them back.
+          Only do this if you know it is really them. It gives that new key {memberName}’s name and place in your church, and their access to your ordinary groups. Invite-only groups you will need to add them to again by hand. Their old private messages and any sealed care records stay unreadable — those went with the lost key, and nothing can bring them back.
         </p>
         {isMinor ? (
           <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--clay)', fontWeight: 700, border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', borderRadius: 12, padding: '9px 11px', margin: '0 0 12px' }}>
@@ -3373,7 +3385,7 @@ function DashMembers() {
         </React.Fragment>
       )}
       {linkChild ? <GuardianLinkModal child={linkChild} childName={nameByPub[linkChild]} members={members} guardians={guardians} minorsSet={minorsSet} onLink={linkParent} onUnlink={unlinkParent} onClose={() => setLinkChild(null)} /> : null}
-      {reseatFor ? <ReseatModal member={reseatFor} memberName={nameByPub[reseatFor] || 'this member'} isMinor={minorsSet.has(reseatFor)} admittedList={admittedList} onClose={() => setReseatFor(null)} /> : null}
+      {reseatFor ? <ReseatModal member={reseatFor} memberName={nameByPub[reseatFor] || 'this member'} realName={nameByPub[reseatFor] || ''} isMinor={minorsSet.has(reseatFor)} admittedList={admittedList} onClose={() => setReseatFor(null)} /> : null}
       {bulkOpen ? <BulkInviteModal onClose={() => setBulkOpen(false)} /> : null}
     </Panel>
   );

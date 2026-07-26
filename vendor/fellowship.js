@@ -6277,6 +6277,8 @@
     });
   }
   var PROFILE_KEY = "trinityone.profile";
+  var _profilePubFor = "";
+  var _profilePubBody = "";
   var PROFILES_KEY = "trinityone.profiles";
   try {
     const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}");
@@ -6397,18 +6399,34 @@
   var RESEAT_D = "trinityone/reseat:";
   var _reseatOld = /* @__PURE__ */ new Map();
   var _reseatAt = /* @__PURE__ */ new Map();
+  var _reseatNamed = /* @__PURE__ */ new Set();
   function _noteReseat(cp, e) {
     if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
     if ((e.created_at || 0) < (_reseatAt.get(cp) || 0)) return;
     _reseatAt.set(cp, e.created_at || 0);
     const s = /* @__PURE__ */ new Set();
+    let mine = "";
     try {
       for (const p of (JSON.parse(e.content) || {}).pairs || []) {
-        if (p && p.old && p.new && p.old !== p.new) s.add(String(p.old).toLowerCase());
+        if (!p || !p.old || !p.new || p.old === p.new) continue;
+        s.add(String(p.old).toLowerCase());
+        if (pub && String(p.new).toLowerCase() === pub) mine = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
       }
     } catch (x) {
     }
     _reseatOld.set(cp, s);
+    if (!mine || !pub) return;
+    const key = cp + "|" + pub;
+    if (_reseatNamed.has(key)) return;
+    _reseatNamed.add(key);
+    setTimeout(() => {
+      const have = ((window.Fellowship.myProfile || profiles[pub] || {}).name || "").trim();
+      if (have) return;
+      try {
+        window.Fellowship.setProfile({ name: mine });
+      } catch (x) {
+      }
+    }, 0);
   }
   function _superseded(cp, pubHex) {
     const s = _reseatOld.get(cp);
@@ -7054,17 +7072,24 @@
     CANONICAL_RELAYS,
     toPub,
     // validate/normalise an npub-or-hex → 64-hex (or null on a bad bech32 checksum); used by the UI to reject a mistyped church code
-    // true if every relay we've opened is still connected. The member app's 90s reconnect tick only re-subscribes when
-    // this is FALSE — so a healthy socket never triggers the full re-REQ storm (perf #2). Mirrors the steward console.
+    // The member app's 90s reconnect tick only re-subscribes when this is FALSE — so a healthy socket never
+    // triggers the full re-REQ storm (perf #2). Mirrors the steward console.
+    // "Is there a live socket?" — and it has to MEAN that. The first version asked the opposite question ("is any
+    // relay explicitly reported as down?") and answered `true` for a relay that had never been dialled at all,
+    // because pool.listConnectionStatus() only contains relays it has opened, so `st.get(url)` was `undefined`.
+    // It also returned `true` on exception. Every caller reads it as "we're connected, go ahead", so on a phone
+    // with no connection whatsoever it green-lit the restore-recovery loop (AUDIT-2026-07-26 CRITICAL 4) and
+    // suppressed the 90s reconnect beat — the two places that exist to recover exactly that state.
+    // Now: at least one of the relays we want must actually be connected.
     relaysHealthy() {
       try {
         const st = pool.listConnectionStatus();
-        for (const url of churchRelays()) {
-          if (st.get(url) === false) return false;
-        }
-        return true;
+        const want = churchRelays();
+        if (!want.length) return true;
+        for (const url of want) if (st.get(url) === true) return true;
+        return false;
       } catch (e) {
-        return true;
+        return false;
       }
     },
     myPubkey: null,
@@ -7681,11 +7706,19 @@
       const relayHost = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
       if (handleLocal && relayHost) p.nip05 = handleLocal + "@" + relayHost;
       else if (prev.nip05) p.nip05 = prev.nip05;
-      const evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: JSON.stringify(p) }, sk);
+      const body = JSON.stringify(p);
+      if (_profilePubFor === pub && _profilePubBody === body) return null;
+      const evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
+      let sent = true;
       try {
         await _publishAny(window.Fellowship.relays, evt);
       } catch (e) {
+        sent = false;
         console.warn("[fellowship] profile publish failed", e);
+      }
+      if (sent) {
+        _profilePubFor = pub;
+        _profilePubBody = body;
       }
       profiles[pub] = p;
       window.Fellowship.myProfile = p;

@@ -37,8 +37,12 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   const [intro, setIntro] = useId(true);
   // How they are coming back: pick a route, then type words or run a phone-to-phone transfer.
   const [rMode, setRMode] = useId('choose');       // choose | words | xfer
-  const [xfer, setXfer] = useId(null);             // { qr, code } this phone is showing
-  const [xferStage, setXferStage] = useId('show'); // show (our QR) | scan (their reply) | busy
+  const [xfer, setXfer] = useId(null);             // { qr } this phone is showing (a throwaway PUBLIC key)
+  const [xferStage, setXferStage] = useId('show'); // show (our QR) | scan (their reply) | check (compare codes) | busy
+  const [xferSeen, setXferSeen] = useId(null);     // { sas, npub } decrypted from their reply, NOT yet adopted
+  // Did they get back in by TYPING their 12 words? A ref, not state: finishRestore is awaited from inside
+  // the same handler that sets it, so a state update would not be visible to it.
+  const rTypedWords = React.useRef(false);
   // This phone's own public name-tag, shown to a steward when the 12 words are gone. The secure store can
   // answer empty for a moment right after boot, so poll rather than render an empty QR.
   const [myNpub, setMyNpub] = useId('');
@@ -66,29 +70,52 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
     if (!hit) { setRBusy(''); setRErr('No church relay by that name. Check the spelling with your church — or use their invite link.'); return; }
     try { window.Fellowship.addRelay(hit.url); } catch (e) {}
     setRBusy('Found it — looking for your church…');
-    setRNoChurch(false);
+    // Do NOT clear rNoChurch here. This runs FROM the no-church screen, so clearing it mid-search dropped the
+    // member back to whichever screen they arrived from (the 12-word textarea) for the length of the lookup and
+    // then forward again — a flash that reads as the app losing their place. finishRestore reloads on success
+    // and leaves rNoChurch set on failure, so the screen simply stays put with its progress text. AUDIT #17.
     await finishRestore();   // same tail as every other way back; leaves us on the no-church screen if it still finds nothing
   };
   const startTransfer = () => {
-    setRErr('');
+    setRErr(''); rTypedWords.current = false;
     try { setXfer(window.TrinityIdentity.beginTransfer()); setXferStage('show'); setRMode('xfer'); }
     catch (e) { setRErr('This phone couldn’t start a transfer. Use your 12 words instead.'); }
   };
   const leaveTransfer = (mode) => {
     try { window.TrinityIdentity.endTransfer(); } catch (e) {}   // drop the throwaway key, don't just hide the screen
-    setXfer(null); setXferStage('show'); setRErr(''); setRMode(mode || 'choose');
+    setXfer(null); setXferStage('show'); setXferSeen(null); setRErr(''); setRMode(mode || 'choose');
   };
+  // Scanning the old phone's reply DECRYPTS but does not adopt — it hands back the check code and the account
+  // it opened, and we stop there. The previous version became that account the instant a payload decrypted, so
+  // the check code the member was told to compare arrived after the only decision it could have affected.
+  // AUDIT-2026-07-26 S5.
   const onTransferScan = async (text) => {
     setXferStage('busy'); setRErr('');
-    try { await window.TrinityIdentity.acceptTransfer(text); }
+    let seen = null;
+    try { seen = await window.TrinityIdentity.acceptTransfer(text); }
     catch (e) { setXferStage('scan'); setRErr((e && e.message) || 'That code didn’t work.'); return; }
+    setXferSeen(seen); setXferStage('check');
+  };
+  const rejectTransfer = () => {
+    try { window.TrinityIdentity.endTransfer(); } catch (e) {}   // drop the words we were holding, not just the screen
+    setXferSeen(null); setXferStage('show');
+    setRErr('Stopped — nothing was moved. Start again with your own old phone in front of you, and if the codes still differ, tell a steward.');
+  };
+  const confirmTransfer = async () => {
+    setXferStage('busy'); setRErr('');
+    try { await window.TrinityIdentity.confirmTransfer(); }
+    catch (e) { setXferStage('scan'); setXferSeen(null); setRErr((e && e.message) || 'Couldn’t finish — start the transfer again.'); return; }
     setRBusy('Bringing your account across…');
-    await finishRestore();
+    // finishRestore swallows its own failures, but if it ever threw, `busy` would be terminal and Back was the
+    // only control on the screen. Belt and braces: a transfer that got the account across but could not finish
+    // the church lookup says so, on a screen the member can leave.
+    try { await finishRestore(); }
+    catch (e) { setXferStage('scan'); setRBusy(''); setRErr('Your account came across, but we couldn’t finish looking for your church. Go back and use your church’s invite link or QR code.'); }
   };
   const doRestore = async () => {
     const words = (rPhrase || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (words.split(' ').length < 12) { setRErr('Enter all 12 words, separated by spaces.'); return; }
-    setRBusy('Checking your words…'); setRErr('');
+    setRBusy('Checking your words…'); setRErr(''); rTypedWords.current = true;
     try {
       await window.TrinityIdentity.importMnemonic(words);   // validates the checksum; throws on a bad phrase
     } catch (e) { setRBusy(''); setRErr((e && e.message) || 'That phrase isn’t valid — check the words and their order.'); return; }
@@ -122,7 +149,12 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
         localStorage.setItem('trinityone.activeChurch', JSON.stringify(list[0].id));
       }
       localStorage.setItem('trinityone.onboarded', 'true');
-      localStorage.setItem('trinityone.backedup.' + ((window.TrinityIdentity.current || {}).npub || ''), '1');   // they HAVE the words
+      // Only the TYPED-WORDS route proves the member has their recovery phrase. This used to be written for
+      // every route, including the transfer — whose whole selling point is "nothing to type" — so a member
+      // landed on a new phone with the backup nudge permanently dismissed having never seen a recovery phrase
+      // in their life. The one warning that matters, silenced for exactly the people who need it.
+      // AUDIT-2026-07-26 #6.
+      if (rTypedWords.current) localStorage.setItem('trinityone.backedup.' + ((window.TrinityIdentity.current || {}).npub || ''), '1');
     } catch (e) {}
     if (!found.churches.length) {
       // NOTHING FOUND — and this is a legitimate outcome, not only a failure. A church that runs its OWN relay
@@ -132,6 +164,13 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
       // code or invite link. Dropping them into an app with no church and no explanation is what made this
       // look broken even when the identity had come back perfectly.
       try { localStorage.setItem('trinityone.restorePending', '1'); } catch (e) {}
+      // Leave whatever route we came in on. The no-church screen is a terminal state shared by ALL of them, and
+      // it is rendered ABOVE the route branches (see below) precisely so this cannot be forgotten again: the
+      // first version left rMode === 'xfer', so the transfer screen kept winning and the member sat on
+      // "Bringing your account across…" forever with a disabled Back button and no progress text. Force-quitting
+      // was the only way out — and relaunching DID work, but nothing on screen said so. AUDIT-2026-07-26
+      // CRITICAL 1. This is exactly the case the no-church screen was built for (a church on its own relay).
+      setXferStage('show');
       setRBusy(''); setRNoChurch(found.name || true);
       return;
     }
@@ -142,11 +181,19 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
     setTimeout(() => { try { location.reload(); } catch (e) {} }, 700);
   };
   // Restored, but no church came back — offer the QR / invite-link route rather than a dead end.
+  //
+  // `onboarded` MUST be written here. It used to be set only inside finishRestore, and the "I've lost my 12
+  // words" route never calls that — so tapping "Done — take me to my church" reloaded into a device that still
+  // looked brand new: the welcome wizard rendered over everything and asked "Have you used TrinityOne before?"
+  // seconds after their steward had reconnected them. Answering "I'm new here" walked them through creating the
+  // account they already had. The openFollow one-shot was consumed underneath it too, so the scanner they asked
+  // for never appeared either. AUDIT-2026-07-26 CRITICAL 2.
   const goFollowChurch = () => {
+    try { localStorage.setItem('trinityone.onboarded', 'true'); } catch (e) {}
     try { localStorage.setItem('trinityone.openFollow', '1'); } catch (e) {}
     try { location.reload(); } catch (e) {}
   };
-  useIdE(() => { if (open) { setIntro(true); setRMode('choose'); setXfer(null); setXferStage('show'); setStep(0); setName(''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '', '']); setCheckErr(''); setPinVal(''); setPin2(''); setPinErr(''); setPinBusy(false); } }, [open]);
+  useIdE(() => { if (open) { setIntro(true); setRMode('choose'); setXfer(null); setXferStage('show'); setXferSeen(null); setStep(0); setName(''); setAv({ kind: 'symbol', color: '#5E8C6A', symbol: 'olive' }); setWords([]); setAck(false); setCheckIdx([]); setAnswers(['', '', '']); setCheckErr(''); setPinVal(''); setPin2(''); setPinErr(''); setPinBusy(false); } }, [open]);
   // fetch the member's own 12 words when we reach the back-up step. The secure store can answer empty for a
   // moment right after boot, so retry until we get a full phrase rather than getting stuck on "Preparing…".
   useIdE(() => {
@@ -203,120 +250,11 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
       </div>
     </div>
   );
-  // ── Coming back: which route? Typing 12 words is the fallback, not the default — most phone changes happen
-  // with the old phone still in hand, and a transfer needs nothing written down.
-  if (restoring && rMode === 'choose') return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
-      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', alignItems: 'center', padding: '32px 22px 18px' }}>
-        <div style={{ maxWidth: 440, margin: '0 auto', width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="key" size={28} /></div></div>
-          <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Bring your account back</h1>
-          <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 22px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
-            However you do this, you come back as the same person — your church will know you.
-          </p>
-          <button onClick={startTransfer} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I still have my old phone</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Move it across by scanning — nothing to type</div>
-          </button>
-          <button onClick={() => setRMode('words')} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I have my 12 words</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Type the phrase you wrote down</div>
-          </button>
-          {/* The common case, and the one that used to be a dead end: no old phone, no words written down.
-              A church can vouch for its own — so this is a real way back, not an apology. */}
-          <button onClick={() => setRMode('lost')} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I’ve lost my 12 words</div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Ask your church to put you back — they know you</div>
-          </button>
-          {rErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 12, textAlign: 'center' }}>{rErr}</div> : null}
-        </div>
-      </div>
-      <div style={{ flexShrink: 0, padding: '10px 22px 26px', background: 'var(--paper)' }}>
-        <div style={{ maxWidth: 440, margin: '0 auto' }}>
-          <button onClick={() => { setRestoring(false); setRPhrase(''); setRErr(''); setRBusy(''); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)' }}>Back</button>
-        </div>
-      </div>
-    </div>
-  );
-  // ── Lost the words entirely. Nothing can bring the old key back — so instead the church vouches that this
-  // NEW key is the same person, and moves their name and place onto it. Be plain about the limits: pretending
-  // old private messages will reappear would be a lie the member discovers later, at a bad moment.
-  if (restoring && rMode === 'lost') return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
-      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
-        <div style={{ maxWidth: 440, margin: '0 auto' }}>
-          <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>Ask your church</h1>
-          <p style={{ textAlign: 'center', fontSize: 14.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 16px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
-            Show this to a steward. They’ll put you back in your place — same name, same groups — on this phone.
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
-            <div style={{ width: 230, height: 230, background: '#fff', borderRadius: 18, padding: 12, boxShadow: 'var(--shadow)', boxSizing: 'border-box' }}
-              dangerouslySetInnerHTML={{ __html: (window.TrinityIdentity && window.TrinityIdentity.qrSVG && myNpub) ? window.TrinityIdentity.qrSVG('trinityone-reseat:' + myNpub) : '' }} />
-          </div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.5, color: 'var(--ink-3)', wordBreak: 'break-all', textAlign: 'center', margin: '0 0 6px' }}>{myNpub}</div>
-          <button onClick={() => { try { if (navigator.clipboard) navigator.clipboard.writeText('trinityone-reseat:' + myNpub); } catch (e) {} setRBusy('Copied — send it to your steward'); setTimeout(() => setRBusy(''), 2500); }}
-            style={{ width: '100%', padding: 11, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', marginBottom: 14 }}>Copy it instead</button>
-          <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 14, padding: '12px 14px', background: 'var(--surface)' }}>
-            <b style={{ color: 'var(--ink-2)' }}>What comes back:</b> your name, your church, your groups.<br />
-            <b style={{ color: 'var(--ink-2)' }}>What doesn’t:</b> your old private messages and anything sealed to you. Those were locked with the key you lost, and nobody — not your church, not us — can open them. That is why they were private.
-          </div>
-          {rBusy ? <div style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 600, marginTop: 10, textAlign: 'center' }}>{rBusy}</div> : null}
-        </div>
-      </div>
-      <div style={{ flexShrink: 0, padding: '10px 22px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
-        <div style={{ maxWidth: 440, margin: '0 auto' }}>
-          <button onClick={goFollowChurch} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700 }}>Done — take me to my church</button>
-          <button onClick={() => { setRErr(''); setRBusy(''); setRMode('choose'); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>Back</button>
-        </div>
-      </div>
-    </div>
-  );
-  // ── Phone to phone. THIS phone shows a throwaway public key; the old phone encrypts the words to it. The
-  // secret is never on screen, so the QR codes are safe to hold up in a room full of people.
-  if (restoring && rMode === 'xfer') return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
-      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
-        <div style={{ maxWidth: 440, margin: '0 auto' }}>
-          <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>
-            {xferStage === 'scan' ? 'Now scan your old phone' : 'Show this to your old phone'}
-          </h1>
-          {xferStage === 'show' ? (<React.Fragment>
-            <p style={{ textAlign: 'center', fontSize: 14.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 16px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
-              On your old phone open <b>Settings → Move to a new phone</b>, then point it at this code.
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
-              <div style={{ width: 240, height: 240, background: '#fff', borderRadius: 18, padding: 12, boxShadow: 'var(--shadow)', boxSizing: 'border-box' }}
-                dangerouslySetInnerHTML={{ __html: (xfer && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(xfer.qr) : '' }} />
-            </div>
-            <div style={{ textAlign: 'center', marginBottom: 6 }}>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 700, letterSpacing: '.5px' }}>CHECK CODE</div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 26, fontWeight: 700, letterSpacing: '4px', color: 'var(--ink)' }}>{xfer ? xfer.code : ''}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, marginTop: 4 }}>Your old phone should show these same four characters. If it doesn’t, stop — it’s talking to a different phone.</div>
-            </div>
-          </React.Fragment>) : xferStage === 'scan' ? (<React.Fragment>
-            <p style={{ textAlign: 'center', fontSize: 14.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 16px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
-              Your old phone is now showing a second code. Point this phone at it.
-            </p>
-            <QRScanner onResult={onTransferScan} onCancel={() => setXferStage('show')} prompt="Point at your old phone’s code" />
-          </React.Fragment>) : (
-            <p style={{ textAlign: 'center', fontSize: 15, color: 'var(--ink-2)', fontWeight: 600, margin: '20px 0' }}>Bringing your account across…</p>
-          )}
-          {rErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 10, textAlign: 'center' }}>{rErr}</div> : null}
-          {rBusy ? <div style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 600, marginTop: 10, textAlign: 'center' }}>{rBusy}</div> : null}
-        </div>
-      </div>
-      <div style={{ flexShrink: 0, padding: '10px 22px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
-        <div style={{ maxWidth: 440, margin: '0 auto' }}>
-          {xferStage === 'show' ? (
-            <button onClick={() => { setRErr(''); setXferStage('scan'); }} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700 }}>My old phone has scanned it</button>
-          ) : null}
-          <button onClick={() => leaveTransfer('choose')} disabled={xferStage === 'busy'} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>Back</button>
-        </div>
-      </div>
-    </div>
-  );
-  // The restore pane replaces the whole wizard while it is open: a member restoring an existing account should
-  // not also be walked through creating one. Mirrors the console's welcome-screen restore.
+  // TERMINAL STATE, CHECKED FIRST. "Your account is back, we couldn't find your church" is the end of
+  // EVERY route in here — typed words, a phone-to-phone transfer, a relay-name lookup — so it is tested
+  // ahead of the route branches rather than after them. It used to sit below `xfer`, which still matched
+  // because finishRestore never left transfer mode, so the transfer route could never reach this screen
+  // and dead-ended on "Bringing your account across…" instead. AUDIT-2026-07-26 CRITICAL 1.
   // Account back, church not found. A real and recoverable outcome — a church on its OWN relay is invisible to
   // a fresh install — so name what happened and give the action that always works, rather than a silent empty app.
   if (restoring && rNoChurch) return (
@@ -361,6 +299,158 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
       </div>
     </div>
   );
+  // ── Coming back: which route? Typing 12 words is the fallback, not the default — most phone changes happen
+  // with the old phone still in hand, and a transfer needs nothing written down.
+  if (restoring && rMode === 'choose') return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', alignItems: 'center', padding: '32px 22px 18px' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto', width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="key" size={28} /></div></div>
+          <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Bring your account back</h1>
+          <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 22px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
+            However you do this, you come back as the same person — your church will know you.
+          </p>
+          <button onClick={startTransfer} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I still have my old phone</div>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Move it across by scanning — nothing to type</div>
+          </button>
+          <button onClick={() => setRMode('words')} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I have my 12 words</div>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Type the phrase you wrote down</div>
+          </button>
+          {/* The common case, and the one that used to be a dead end: no old phone, no words written down.
+              A church can vouch for its own — so this is a real way back, not an apology. */}
+          <button onClick={() => setRMode('lost')} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I’ve lost my 12 words</div>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Ask your church to put you back — they know you</div>
+          </button>
+          {rErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 12, textAlign: 'center' }}>{rErr}</div> : null}
+        </div>
+      </div>
+      <div style={{ flexShrink: 0, padding: '10px 22px 26px', background: 'var(--paper)' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          <button onClick={() => { setRestoring(false); setRPhrase(''); setRErr(''); setRBusy(''); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)' }}>Back</button>
+        </div>
+      </div>
+    </div>
+  );
+  // ── Lost the words entirely. Nothing can bring the old key back — so instead the church vouches that this
+  // NEW key is the same person, and moves their name and place onto it. Be plain about the limits: pretending
+  // old private messages will reappear would be a lie the member discovers later, at a bad moment.
+  if (restoring && rMode === 'lost') return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>Ask your church</h1>
+          <p style={{ textAlign: 'center', fontSize: 14.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 16px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
+            Show this to a steward. They’ll put you back in your place on this phone, under your own name.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+            <div style={{ width: 230, height: 230, background: '#fff', borderRadius: 18, padding: 12, boxShadow: 'var(--shadow)', boxSizing: 'border-box' }}
+              dangerouslySetInnerHTML={{ __html: (window.TrinityIdentity && window.TrinityIdentity.qrSVG && myNpub) ? window.TrinityIdentity.qrSVG('trinityone-reseat:' + myNpub) : '' }} />
+          </div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.5, color: 'var(--ink-3)', wordBreak: 'break-all', textAlign: 'center', margin: '0 0 6px' }}>{myNpub}</div>
+          <button onClick={() => { try { if (navigator.clipboard) navigator.clipboard.writeText('trinityone-reseat:' + myNpub); } catch (e) {} setRBusy('Copied — send it to your steward'); setTimeout(() => setRBusy(''), 2500); }}
+            style={{ width: '100%', padding: 11, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', marginBottom: 14 }}>Copy it instead</button>
+          <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 14, padding: '12px 14px', background: 'var(--surface)' }}>
+            {/* Say exactly what comes back and no more. "your groups" used to be printed flat, and it was not
+                true of invite-only groups: those carry a list of keys on the group itself, and a re-seat does
+                not rewrite it — so a member was promised their small group and arrived without it, finding out
+                days later. The steward is told the same thing at the same moment, on their side of this.
+                AUDIT-2026-07-26 CRITICAL 3. */}
+            <b style={{ color: 'var(--ink-2)' }}>What comes back:</b> your name, your church, and your church’s
+            usual groups.<br />
+            <b style={{ color: 'var(--ink-2)' }}>What needs a hand:</b> any invite-only group — ask your steward
+            to add you back to those.<br />
+            <b style={{ color: 'var(--ink-2)' }}>What doesn’t:</b> your old private messages and anything sealed to you. Those were locked with the key you lost, and nobody — not your church, not us — can open them. That is why they were private.
+          </div>
+          {rBusy ? <div style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 600, marginTop: 10, textAlign: 'center' }}>{rBusy}</div> : null}
+        </div>
+      </div>
+      <div style={{ flexShrink: 0, padding: '10px 22px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          <button onClick={goFollowChurch} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700 }}>Done — take me to my church</button>
+          <button onClick={() => { setRErr(''); setRBusy(''); setRMode('choose'); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>Back</button>
+        </div>
+      </div>
+    </div>
+  );
+  // ── Phone to phone. THIS phone shows a throwaway public key; the old phone encrypts the words to it. The
+  // secret is never on screen, so the QR codes are safe to hold up in a room full of people.
+  if (restoring && rMode === 'xfer') return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
+      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '0 0 8px', letterSpacing: '-.4px' }}>
+            {xferStage === 'check' ? 'One last check' : xferStage === 'scan' ? 'Now scan your old phone' : 'Show this to your old phone'}
+          </h1>
+          {xferStage === 'show' ? (<React.Fragment>
+            {/* The path here has to be exactly right — it is the instruction the NEW phone gives for the OLD
+                one, so if it names a screen that doesn't exist the transfer never starts. There is no
+                "Settings" in the member app (AUDIT-2026-07-26 #9); it is the You sheet, reached from the
+                picture in the bottom bar. */}
+            <p style={{ textAlign: 'center', fontSize: 14.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 16px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
+              On your old phone, tap <b>your picture</b> at the bottom of the screen, then <b>Move to a new phone</b>. Point it at this code.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+              <div style={{ width: 240, height: 240, background: '#fff', borderRadius: 18, padding: 12, boxShadow: 'var(--shadow)', boxSizing: 'border-box' }}
+                dangerouslySetInnerHTML={{ __html: (xfer && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(xfer.qr) : '' }} />
+            </div>
+            {/* No check code here. There is nothing to check yet: nothing has been exchanged, so any code shown
+                at this point could only be a function of what is already on screen — which is what made the old
+                one forgeable (AUDIT-2026-07-26 S5). The check comes after both phones have swapped codes. */}
+            <button onClick={() => { try { if (navigator.clipboard && xfer) navigator.clipboard.writeText(xfer.qr); } catch (e) {} setRBusy('Copied — paste it into your old phone'); setTimeout(() => setRBusy(''), 2500); }}
+              disabled={!xfer}
+              style={{ width: '100%', padding: 11, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', cursor: xfer ? 'pointer' : 'not-allowed', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', opacity: xfer ? 1 : .5 }}>Can’t scan? Copy the code instead</button>
+          </React.Fragment>) : xferStage === 'scan' ? (<React.Fragment>
+            <p style={{ textAlign: 'center', fontSize: 14.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 16px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
+              Your old phone is now showing a second code. Point this phone at it.
+            </p>
+            <QRScanner onResult={onTransferScan} onCancel={() => setXferStage('show')} prompt="Point at your old phone’s code"
+              onManual={onTransferScan} manualPrompt="Paste the code from your old phone" />
+          </React.Fragment>) : xferStage === 'check' ? (<React.Fragment>
+            {/* THE moment of the whole flow. Both phones can now show a code derived from everything that
+                actually passed between them, so a matching pair means the account came from the phone in the
+                member's other hand and nowhere else. Nothing is adopted until they say so. */}
+            <p style={{ textAlign: 'center', fontSize: 14.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 14px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
+              Your old phone is showing a check code. Does it match this one?
+            </p>
+            <div style={{ textAlign: 'center', border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: '16px 14px', marginBottom: 12 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 700, letterSpacing: '.5px' }}>CHECK CODE</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 27, fontWeight: 700, letterSpacing: '3px', color: 'var(--ink)', margin: '4px 0 2px' }}>{(xferSeen || {}).sas || ''}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)', wordBreak: 'break-all', marginTop: 8 }}>{((xferSeen || {}).npub || '').slice(0, 20)}…</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 2 }}>the account you’re about to become</div>
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 14, padding: '12px 14px', background: 'var(--surface)' }}>
+              If the two codes are different, tap <b>They’re different</b>. Nothing has been moved yet, and it
+              means the code you scanned came from another phone — not yours.
+            </div>
+          </React.Fragment>) : (
+            <p style={{ textAlign: 'center', fontSize: 15, color: 'var(--ink-2)', fontWeight: 600, margin: '20px 0' }}>Bringing your account across…</p>
+          )}
+          {rErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 10, textAlign: 'center' }}>{rErr}</div> : null}
+          {rBusy ? <div style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 600, marginTop: 10, textAlign: 'center' }}>{rBusy}</div> : null}
+        </div>
+      </div>
+      <div style={{ flexShrink: 0, padding: '10px 22px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          {xferStage === 'show' ? (
+            <button onClick={() => { setRErr(''); setXferStage('scan'); }} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700 }}>My old phone has scanned it</button>
+          ) : xferStage === 'check' ? (<React.Fragment>
+            <button onClick={confirmTransfer} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700 }}>They match — bring my account across</button>
+            <button onClick={rejectTransfer} style={{ width: '100%', padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 15, fontWeight: 700, color: 'var(--ink)', marginTop: 8 }}>They’re different — stop</button>
+          </React.Fragment>) : null}
+          {/* Never disabled. This was the ONLY control on the screen and it was greyed out for the whole of
+              `busy` — so any stall in there (a slow relay, a hung secure store) was a permanent trap with no
+              text on screen to explain it. Leaving mid-transfer costs nothing: the throwaway key is dropped and
+              the member can start again. AUDIT-2026-07-26 CRITICAL 1. */}
+          <button onClick={() => leaveTransfer('choose')} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>{xferStage === 'busy' ? 'Cancel' : 'Back'}</button>
+        </div>
+      </div>
+    </div>
+  );
+  // The restore pane replaces the whole wizard while it is open: a member restoring an existing account should
+  // not also be walked through creating one. Mirrors the console's welcome-screen restore.
   if (restoring) return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '64px 22px 18px' }}>
@@ -449,7 +539,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
       <div style={{ padding: '60px 22px 12px', maxWidth: 480, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sage)' }}><Icon name="key" size={28} /></div></div>
         <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Back up your 12 words</h1>
-        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>These 12 words are your account’s root secret — no one can reset it for you. Write them on paper and keep them somewhere safe, and set up a backup file in Settings too: that file plus its passphrase is what restores you onto a new phone today. Never photograph or share the words.</p>
+        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>These 12 words are your account’s root secret — no one can reset it for you. Write them on paper and keep them somewhere safe: typing them into a new phone is what brings your account back. Never photograph or share the words.</p>
         {words.length ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
             {words.map((w, i) => <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 11, background: 'var(--surface)', border: '1px solid var(--line)' }}><span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', minWidth: 15 }}>{i + 1}</span><span style={{ fontSize: 15, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }}>{w}</span></div>)}

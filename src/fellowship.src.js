@@ -533,6 +533,9 @@ function _flushProfiles() {
   });
 }
 const PROFILE_KEY = 'trinityone.profile';   // own display name (public; ok in localStorage)
+// the last kind-0 body this session actually published, and for which key — see the idempotence guard in
+// setProfile(). Session-scoped on purpose: a reload is allowed to re-announce, a retry loop is not.
+let _profilePubFor = '', _profilePubBody = '';
 const PROFILES_KEY = 'trinityone.profiles'; // cache of OTHER people's resolved profiles
 try { const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || '{}'); if (c && typeof c === 'object') Object.assign(profiles, c); } catch {}
 let _profSaveT = null;
@@ -632,17 +635,40 @@ const _hubEosed = (hub) => { hub.eosed = true; if (hub.pendingFull) { hub.pendin
 const RESEAT_D = 'trinityone/reseat:';
 const _reseatOld = new Map();   // cp -> Set(old pubkey hex) superseded by a newer key
 const _reseatAt = new Map();    // cp -> created_at of the newest doc we accepted (newest wins)
+const _reseatNamed = new Set();   // cp|pub we have already adopted a vouched name for, this session
 function _noteReseat(cp, e) {
   if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
   if ((e.created_at || 0) < (_reseatAt.get(cp) || 0)) return;
   _reseatAt.set(cp, e.created_at || 0);
   const s = new Set();
+  let mine = '';
   try {
     for (const p of ((JSON.parse(e.content) || {}).pairs || [])) {
-      if (p && p.old && p.new && p.old !== p.new) s.add(String(p.old).toLowerCase());
+      if (!p || !p.old || !p.new || p.old === p.new) continue;
+      s.add(String(p.old).toLowerCase());
+      if (pub && String(p.new).toLowerCase() === pub) mine = String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
     }
   } catch (x) {}
   _reseatOld.set(cp, s);
+  // THE NAME COMES BACK. A member re-seated by their church arrives on a key with no kind-0 at all — they never
+  // passed through the name step, because the whole route exists for people who cannot get back in on their
+  // own. So take the name the church vouched for and publish it as our OWN profile: after this the name is
+  // genuinely ours, everywhere, exactly as if we had typed it. Three screens promised this and none of them
+  // delivered it. AUDIT-2026-07-26 CRITICAL 3.
+  //
+  // Guards, in order of how badly each would hurt: never overwrite a name the member already has (theirs wins,
+  // always — this is a bootstrap, not an override); once per key per session; and only after the transport has
+  // a signing key, or setProfile would publish as nobody. The publish itself is idempotent (see setProfile),
+  // so a redelivered doc costs nothing.
+  if (!mine || !pub) return;
+  const key = cp + '|' + pub;
+  if (_reseatNamed.has(key)) return;
+  _reseatNamed.add(key);
+  setTimeout(() => {
+    const have = ((window.Fellowship.myProfile || profiles[pub] || {}).name || '').trim();
+    if (have) return;                                  // they have named themselves — leave them alone
+    try { window.Fellowship.setProfile({ name: mine }); } catch (x) {}
+  }, 0);   // deferred: we are inside the docs hub's onevent, where a throw is logged and swallowed
 }
 function _superseded(cp, pubHex) { const s = _reseatOld.get(cp); return !!(s && s.has(pubHex)); }
 const ADMITTED_D = 'trinityone/admitted:';
@@ -1137,9 +1163,24 @@ window.Fellowship = {
   CANONICAL_RELAY,
   CANONICAL_RELAYS,
   toPub,   // validate/normalise an npub-or-hex → 64-hex (or null on a bad bech32 checksum); used by the UI to reject a mistyped church code
-  // true if every relay we've opened is still connected. The member app's 90s reconnect tick only re-subscribes when
-  // this is FALSE — so a healthy socket never triggers the full re-REQ storm (perf #2). Mirrors the steward console.
-  relaysHealthy() { try { const st = pool.listConnectionStatus(); for (const url of churchRelays()) { if (st.get(url) === false) return false; } return true; } catch (e) { return true; } },
+  // The member app's 90s reconnect tick only re-subscribes when this is FALSE — so a healthy socket never
+  // triggers the full re-REQ storm (perf #2). Mirrors the steward console.
+  // "Is there a live socket?" — and it has to MEAN that. The first version asked the opposite question ("is any
+  // relay explicitly reported as down?") and answered `true` for a relay that had never been dialled at all,
+  // because pool.listConnectionStatus() only contains relays it has opened, so `st.get(url)` was `undefined`.
+  // It also returned `true` on exception. Every caller reads it as "we're connected, go ahead", so on a phone
+  // with no connection whatsoever it green-lit the restore-recovery loop (AUDIT-2026-07-26 CRITICAL 4) and
+  // suppressed the 90s reconnect beat — the two places that exist to recover exactly that state.
+  // Now: at least one of the relays we want must actually be connected.
+  relaysHealthy() {
+    try {
+      const st = pool.listConnectionStatus();
+      const want = churchRelays();
+      if (!want.length) return true;                                  // nothing wanted → nothing to be unhealthy about
+      for (const url of want) if (st.get(url) === true) return true;   // one live socket is enough to work
+      return false;
+    } catch (e) { return false; }
+  },
 
   myPubkey: null,
   myProfile: null,
@@ -1521,8 +1562,19 @@ window.Fellowship = {
     const relayHost = (CANONICAL_RELAY || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '');
     if (handleLocal && relayHost) p.nip05 = handleLocal + '@' + relayHost;
     else if (prev.nip05) p.nip05 = prev.nip05;
-    const evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify(p) }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] profile publish failed', e); }
+    // IDEMPOTENCE. This used to build a fresh kind-0 with a new created_at and publish it on EVERY call, with no
+    // comparison against what it had already sent — so any caller that ran on a timer became a broadcast station.
+    // Measured: 12 profile republishes a minute from the restore-recovery loop, each one delivered to every
+    // member of the church on their batched {kinds:[0],authors:[…]} subscription, and to the steward console.
+    // AUDIT-2026-07-26 CRITICAL 4. Re-sending an identical profile tells nobody anything, so it is now a no-op;
+    // any real edit differs and still goes out. Scoped to this session (and only recorded after a publish that
+    // did not throw), so a relay that lost the doc is still re-served on the next launch or the next real edit.
+    const body = JSON.stringify(p);
+    if (_profilePubFor === pub && _profilePubBody === body) return null;
+    const evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
+    let sent = true;
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { sent = false; console.warn('[fellowship] profile publish failed', e); }
+    if (sent) { _profilePubFor = pub; _profilePubBody = body; }
     profiles[pub] = p; window.Fellowship.myProfile = p;
     try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch {}
     window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } }));

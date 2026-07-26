@@ -13043,7 +13043,12 @@ zoo`.split("\n");
     setReseats(pairs) {
       _requireTrustedView("re-seat map");
       if (!sk) return Promise.resolve(null);
-      const clean3 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => ({ old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1e3) }));
+      const clean3 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => {
+        const nm = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+        const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1e3) };
+        if (nm) out.name = nm;
+        return out;
+      });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean3 }) }));
     },
     setAdmitted(pubkeys) {
@@ -13772,9 +13777,9 @@ zoo`.split("\n");
       } catch {
       }
       let emitTimer = null;
-      let reseatOld = /* @__PURE__ */ new Set(), reseatAt = 0;
+      let reseatOld = /* @__PURE__ */ new Set(), reseatName = /* @__PURE__ */ new Map(), reseatAt = 0;
       const emitNow = () => {
-        const arr = [...byPub.values()].filter((m) => !reseatOld.has(m.pubkey)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+        const arr = [...byPub.values()].filter((m) => !reseatOld.has(m.pubkey)).map((m) => m.name || !reseatName.get(m.pubkey) ? m : { ...m, name: reseatName.get(m.pubkey), viaReseat: true }).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
         } catch {
@@ -13873,14 +13878,18 @@ zoo`.split("\n");
           if (_authFuture(e) || !_byChurchOrSteward(e)) return;
           if (e.created_at < reseatAt) return;
           reseatAt = e.created_at;
-          const next = /* @__PURE__ */ new Set();
+          const next = /* @__PURE__ */ new Set(), names = /* @__PURE__ */ new Map();
           try {
             for (const pr of (JSON.parse(e.content) || {}).pairs || []) {
-              if (pr && pr.old && pr.new && pr.old !== pr.new) next.add(String(pr.old).toLowerCase());
+              if (!pr || !pr.old || !pr.new || pr.old === pr.new) continue;
+              next.add(String(pr.old).toLowerCase());
+              const nm = String(pr.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+              if (nm) names.set(String(pr.new).toLowerCase(), nm);
             }
           } catch {
           }
           reseatOld = next;
+          reseatName = names;
           emit();
         },
         oneose() {

@@ -1820,12 +1820,24 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
-  setReseats(pairs) {   // replace the whole re-seat map (pass [{old,new,at}] with hex pubkeys)
+  setReseats(pairs) {   // replace the whole re-seat map (pass [{old,new,name,at}] with hex pubkeys)
     _requireTrustedView('re-seat map');
     if (!sk) return Promise.resolve(null);
+    // `name` carries the member's DISPLAY NAME across with the seat. Without it a re-seat moved a pubkey and
+    // nothing else: roster names come from each key's own kind-0, the old key is filtered out of the roster
+    // entirely, and a member arriving by the "I've lost my 12 words" route has never passed through the name
+    // step — so "Maria" vanished and was replaced by "Anonymous …abc123", while three screens promised her
+    // name would come back. AUDIT-2026-07-26 CRITICAL 3. The member's app adopts it as their OWN kind-0 the
+    // moment the doc arrives (fellowship.src.js _noteReseat), so this is a bootstrap value, not a permanent
+    // override: if they rename themselves later, their own profile wins everywhere as it always did.
     const clean = (pairs || [])
       .filter(p => p && /^[0-9a-f]{64}$/i.test(p.old || '') && /^[0-9a-f]{64}$/i.test(p.new || '') && p.old !== p.new)
-      .map(p => ({ old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1000) }));
+      .map(p => {
+        const nm = String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+        const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1000) };
+        if (nm) out.name = nm;
+        return out;
+      });
     // feChurch, NOT finalizeEvent: a DELEGATED steward signs with their own key, and only the ['church',<cp>]
     // stamp it adds makes the doc match the member app's subscription (authors:[cp] OR #church:[cp]). Without
     // it the relay would still store and gate the doc correctly, but no member would ever receive it — the
@@ -2293,8 +2305,17 @@ window.Steward = {
     // reseatOld holds the DEAD keys of members who lost their 12 words and were re-seated onto a new one.
     // Without this the church sees the same person twice — the old entry can never post again, but it still
     // sits in the roster, in the member count, and in every picker a steward uses.
-    let reseatOld = new Set(), reseatAt = 0;
-    const emitNow = () => { const arr = [...byPub.values()].filter(m => !reseatOld.has(m.pubkey)).sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0))); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr); };
+    // reseatName is the other half: the display name the church vouched across with the seat. A re-seated key
+    // has no kind-0 of its own until the member's app publishes one, so without this the steward's roster
+    // showed the person they had just reconnected as "Anonymous …". AUDIT-2026-07-26 CRITICAL 3. It is a
+    // FALLBACK only — the key's own profile always wins, so a member who renames themselves is never overridden.
+    let reseatOld = new Set(), reseatName = new Map(), reseatAt = 0;
+    const emitNow = () => {
+      const arr = [...byPub.values()].filter(m => !reseatOld.has(m.pubkey))
+        .map(m => (m.name || !reseatName.get(m.pubkey)) ? m : { ...m, name: reseatName.get(m.pubkey), viaReseat: true })
+        .sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)));
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr);
+    };
     const emit = () => { if (emitTimer) return; emitTimer = setTimeout(() => { emitTimer = null; emitNow(); }, 150); };
     const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: '', picture: '', count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
     // SECURITY-AUDIT-2026-07-18 (perf — "names blank = sub cap"): resolve profiles with ONE batched kind-0
@@ -2346,9 +2367,16 @@ window.Steward = {
         if (d !== RESEAT_D + pub) return;
         if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward only
         if (e.created_at < reseatAt) return; reseatAt = e.created_at;   // newest wins
-        const next = new Set();
-        try { for (const pr of ((JSON.parse(e.content) || {}).pairs || [])) { if (pr && pr.old && pr.new && pr.old !== pr.new) next.add(String(pr.old).toLowerCase()); } } catch {}
-        reseatOld = next; emit();
+        const next = new Set(), names = new Map();
+        try {
+          for (const pr of ((JSON.parse(e.content) || {}).pairs || [])) {
+            if (!pr || !pr.old || !pr.new || pr.old === pr.new) continue;
+            next.add(String(pr.old).toLowerCase());
+            const nm = String(pr.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+            if (nm) names.set(String(pr.new).toLowerCase(), nm);
+          }
+        } catch {}
+        reseatOld = next; reseatName = names; emit();
       },
       oneose() {},
     });
