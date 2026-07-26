@@ -523,6 +523,16 @@ function App() {
   }, []);
   const [churchSwitcher, setChurchSwitcher] = useA(churchParam === '1' || churchParam === 'follow');
   const [churchSwitcherMode, setChurchSwitcherMode] = useA(churchParam === 'follow' ? 'follow' : 'list');
+  // A 12-word restore that recovered the account but found NO church sets this flag and reloads (a church on
+  // its own relay is invisible to a fresh install). Open the scanner straight away so "scan your church's code"
+  // is the very next thing they see, rather than an app with no church and no explanation.
+  useAE(() => {
+    let want = false;
+    try { want = localStorage.getItem('trinityone.openFollow') === '1'; } catch (e) {}
+    if (!want) return;
+    try { localStorage.removeItem('trinityone.openFollow'); } catch (e) {}   // one-shot: never trap them in it
+    setChurchSwitcherMode('follow'); setChurchSwitcher(true);
+  }, []);
   // first-run prompt to follow a church — skippable (closing it lands them in the Bible). Only nudges
   // if they're not already following a real church (deep-linked joiners skip onboarding entirely).
   const promptFollowChurch = () => {
@@ -1297,6 +1307,7 @@ function App() {
     openInvite: () => setIdSheet('invite'),
     openShareApp: () => setIdSheet('shareapp'),
     openRelays: () => setIdSheet('relays'),
+    openMovePhone: () => setIdSheet('movephone'),
     openWallet: () => { if (WALLET_ENABLED) setWalletSheet(true); },
     openNewIdentity: () => setNewId(true),
     // library drill-ins
@@ -1566,6 +1577,7 @@ function App() {
             <InviteSheet open={idSheet === 'invite'} onClose={() => setIdSheet(null)} identity={identity} ctx={ctx} />
             <ShareAppSheet open={idSheet === 'shareapp'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
+            <MovePhoneSheet open={idSheet === 'movephone'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
             {WALLET_ENABLED && window.WalletSheet ? <WalletSheet open={walletSheet} onClose={() => setWalletSheet(false)} ctx={ctx} /> : null}
             <ChatRoom group={group} open={!!group && !desktop} onClose={() => setGroup(null)} ctx={ctx} />

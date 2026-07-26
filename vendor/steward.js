@@ -10648,6 +10648,7 @@ zoo`.split("\n");
   }
   var JOINPOLICY_D = "trinityone/joinpolicy:";
   var ADMITTED_D = "trinityone/admitted:";
+  var RESEAT_D = "trinityone/reseat:";
   var STEWARDS_D = "trinityone/stewards:";
   var STEWARDREQ_D = "trinityone/stewardreq:";
   var PIN_D = "trinityone/pin:";
@@ -11621,6 +11622,21 @@ zoo`.split("\n");
         }
       }
       s = s.replace(/^trinityone-steward:/i, "").trim();
+      return toPubHex(s);
+    },
+    // The key a member shows on a NEW phone after losing their 12 words: `trinityone-reseat:<npub>`. A bare
+    // npub or hex is accepted too, so a member who can't be there in person can simply send it — the steward
+    // still has to recognise them and press the button, which is where the authority actually comes from.
+    parseMemberKey(payload) {
+      let s = (payload || "").trim();
+      const q = s.match(/[?&#]reseat=([^&#\s]+)/);
+      if (q) {
+        try {
+          s = decodeURIComponent(q[1]);
+        } catch {
+        }
+      }
+      s = s.replace(/^trinityone-reseat:/i, "").trim();
       return toPubHex(s);
     },
     // ---- invite-to-steward handshake: the OWNER shows an invite QR (their church id, public); a would-be
@@ -12987,6 +13003,49 @@ zoo`.split("\n");
         }
       };
     },
+    // ── RE-SEAT: a member lost their 12 words and came back on a NEW key ───────────────────────────────
+    // Their old key is gone for good — nobody has it, not the church, not us. So this does NOT recover an
+    // account; it moves a member's SEAT (their name, their place on the roster) onto the key they have now, on
+    // the church's word that they are the same person. Old DMs and sealed care records stay unreadable, which
+    // is correct: if a steward's click could open them, the privacy was never real.
+    //
+    // The authorisation is the steward's deliberate act in their own console against a key they scanned or were
+    // given. There is NO one-time token by design — a code that re-seats a member would be a bearer credential
+    // to BECOME them, and would be worth stealing.
+    subscribeReseats(onList) {
+      let cur = [], latest = 0;
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d !== RESEAT_D + pub) return;
+          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
+          if (e.created_at < latest) return;
+          latest = e.created_at;
+          try {
+            cur = JSON.parse(e.content).pairs || [];
+          } catch {
+            cur = [];
+          }
+          if (!Array.isArray(cur)) cur = [];
+          onList(cur);
+        },
+        oneose() {
+          onList(cur);
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    setReseats(pairs) {
+      _requireTrustedView("re-seat map");
+      if (!sk) return Promise.resolve(null);
+      const clean3 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => ({ old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1e3) }));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean3 }) }));
+    },
     setAdmitted(pubkeys) {
       _requireTrustedView("approved-members list");
       if (!sk) return Promise.resolve(null);
@@ -13713,8 +13772,9 @@ zoo`.split("\n");
       } catch {
       }
       let emitTimer = null;
+      let reseatOld = /* @__PURE__ */ new Set(), reseatAt = 0;
       const emitNow = () => {
-        const arr = [...byPub.values()].sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+        const arr = [...byPub.values()].filter((m) => !reseatOld.has(m.pubkey)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
         } catch {
@@ -13806,9 +13866,33 @@ zoo`.split("\n");
           emit();
         }
       });
+      const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d !== RESEAT_D + pub) return;
+          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
+          if (e.created_at < reseatAt) return;
+          reseatAt = e.created_at;
+          const next = /* @__PURE__ */ new Set();
+          try {
+            for (const pr of (JSON.parse(e.content) || {}).pairs || []) {
+              if (pr && pr.old && pr.new && pr.old !== pr.new) next.add(String(pr.old).toLowerCase());
+            }
+          } catch {
+          }
+          reseatOld = next;
+          emit();
+        },
+        oneose() {
+        }
+      });
       return () => {
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          reseatSub.close();
         } catch {
         }
         if (emitTimer) {

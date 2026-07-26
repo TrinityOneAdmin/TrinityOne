@@ -347,6 +347,64 @@ function inviteUrlFor(mnemonic, ctx) {
   return _inviteBase() + '/?' + q + '#invite=' + encodeURIComponent(mnemonic);
 }
 
+// ── OLD PHONE: hand this account to a new one ─────────────────────────────────────────────────────────
+// The counterpart to the restore screen's "I still have my old phone". This phone scans the NEW phone's
+// throwaway public key, encrypts its 12 words to that key, and shows the result as a second QR.
+//
+// Nothing secret is ever drawn on screen: the first code is a public key, the second is a ciphertext only the
+// new phone can open. That is why this can be done in a room full of people without care — the older idea of
+// showing the 12 words (or a QR of them) put the whole account on screen for any camera in the room.
+//
+// This does NOT log this phone out. Both phones then hold the same account, which is what a member moving to
+// a new phone actually expects; wiping the old one is a separate, deliberate act.
+function MovePhoneSheet({ open, onClose, ctx }) {
+  const [stage, setStage] = useIx('intro');   // intro | scan | show
+  const [out, setOut] = useIx(null);          // { qr, code } sealed for the new phone
+  const [err, setErr] = useIx('');
+  useIxE(() => { if (!open) { setStage('intro'); setOut(null); setErr(''); } }, [open]);
+  const onScan = async (text) => {
+    setErr('');
+    try { setOut(await window.TrinityIdentity.sealTransfer(text)); setStage('show'); }
+    catch (e) { setErr((e && e.message) || 'That code wasn’t a TrinityOne transfer.'); setStage('intro'); }
+  };
+  return (
+    <BottomSheet open={open} onClose={onClose} maxHeight="88%" z={60}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>Move to a new phone</div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {stage === 'intro' ? (<React.Fragment>
+        <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '4px 0 16px', textWrap: 'pretty' }}>
+          On the new phone, open TrinityOne and choose <b>“I’ve used it before” → “I still have my old phone”</b>. It will show a code. Scan it with this phone.
+        </p>
+        <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 16px' }}>
+          Your 12 words are never shown or sent in the clear — they’re sealed so only that one phone can open them. You’ll stay signed in here too.
+        </p>
+        {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 700, marginBottom: 12 }}>{err}</div> : null}
+        <button onClick={() => setStage('scan')} style={{ width: '100%', padding: 15, borderRadius: 15, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 15.5, fontWeight: 700 }}>Scan the new phone</button>
+      </React.Fragment>) : stage === 'scan' ? (
+        <QRScanner onResult={onScan} onCancel={() => setStage('intro')} prompt="Point at the new phone’s code" />
+      ) : (<React.Fragment>
+        <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '4px 0 14px', textWrap: 'pretty' }}>
+          Now point the <b>new</b> phone at this code.
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+          <div style={{ width: 250, height: 250, background: '#fff', borderRadius: 20, padding: 12, boxShadow: 'var(--shadow-lg)', boxSizing: 'border-box' }}
+            dangerouslySetInnerHTML={{ __html: (out && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(out.qr) : '' }} />
+        </div>
+        <div style={{ textAlign: 'center', marginBottom: 14 }}>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 700, letterSpacing: '.5px' }}>CHECK CODE</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 24, fontWeight: 700, letterSpacing: '4px', color: 'var(--ink)' }}>{out ? out.code : ''}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, marginTop: 4 }}>
+            These four characters must match the ones on the new phone. If they don’t, stop — you’re sending to someone else’s phone.
+          </div>
+        </div>
+        <button onClick={onClose} style={{ width: '100%', padding: 13, borderRadius: 14, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', fontFamily: 'var(--font-ui)', fontSize: 15, fontWeight: 700, color: 'var(--ink)' }}>Done</button>
+      </React.Fragment>)}
+    </BottomSheet>
+  );
+}
+
 function InviteSheet({ open, onClose, identity, ctx }) {
   // L4: a friend invite is a JOIN LINK — no identity handed over. They open it, their app mints its own key,
   // and they follow the church (held pending until a steward admits them if approval is required).

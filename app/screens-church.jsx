@@ -3,7 +3,7 @@ const { useState: useCh, useEffect: useChE, useRef: useChR } = React;
 
 // ════ in-app QR scanner (camera + BarcodeDetector, no native plugin) ════
 // Calls onResult(text) with the decoded QR; degrades gracefully if there's no camera/detector.
-function QRScanner({ onResult, onCancel }) {
+function QRScanner({ onResult, onCancel, prompt }) {
   const vref = useChR();
   const [status, setStatus] = useCh('starting');   // starting | scanning | unsupported | error
   useChE(() => {
@@ -57,7 +57,7 @@ function QRScanner({ onResult, onCancel }) {
       <video ref={vref} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
       <div style={{ position: 'absolute', inset: '16%', border: '3px solid rgba(255,255,255,.92)', borderRadius: 20, boxShadow: '0 0 0 100vmax rgba(0,0,0,.35)' }} />
       <div style={{ position: 'absolute', top: 12, left: 0, right: 0, textAlign: 'center', color: '#fff', fontSize: 13, fontWeight: 700, textShadow: '0 1px 4px rgba(0,0,0,.6)' }}>
-        {status === 'starting' ? 'Starting camera…' : 'Point at the church’s QR'}</div>
+        {status === 'starting' ? 'Starting camera…' : (prompt || 'Point at the church’s QR')}</div>
       <button onClick={onCancel} style={{ position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)', border: 'none', background: 'rgba(0,0,0,.55)', color: '#fff', borderRadius: 999, padding: '8px 18px', cursor: 'pointer', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Cancel</button>
     </div>
   );

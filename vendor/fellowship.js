@@ -5756,6 +5756,7 @@
       return null;
     }
   }
+  var MEMBER_D = "trinityone/member:";
   var GROUP_D = "trinityone/group:";
   var CATEGORY_D = "trinityone/category:";
   var GROUPKEY_D = "trinityone/groupkey:";
@@ -6049,6 +6050,42 @@
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function churchRelays() {
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
+  }
+  function _restoreFold() {
+    const seen = /* @__PURE__ */ new Map();
+    let name = "", nameAt = 0;
+    return {
+      add(e) {
+        if (!e) return;
+        if (e.kind === 0) {
+          if ((e.created_at || 0) < nameAt) return;
+          nameAt = e.created_at || 0;
+          try {
+            name = (JSON.parse(e.content) || {}).name || name;
+          } catch (x) {
+          }
+          return;
+        }
+        if (!Array.isArray(e.tags)) return;
+        const d = _dtag(e);
+        if (!d.startsWith(MEMBER_D)) return;
+        const cp = d.slice(MEMBER_D.length);
+        if (!cp) return;
+        let leftBody = false;
+        try {
+          leftBody = !!(JSON.parse(e.content) || {}).left;
+        } catch (x) {
+        }
+        const left = (e.tags || []).some((t) => t[0] === "deleted" && t[1] === "1") || leftBody;
+        const at = e.created_at || 0;
+        const prev = seen.get(cp);
+        if (!prev || at >= prev.at) seen.set(cp, { at, left });
+      },
+      result() {
+        const churches = [...seen.entries()].filter(([, v]) => !v.left).sort((a, b) => b[1].at - a[1].at).map(([cp]) => cp);
+        return { churches, name };
+      }
+    };
   }
   var _churchRelays = /* @__PURE__ */ new Map();
   var _churchList = /* @__PURE__ */ new Map();
@@ -6357,6 +6394,26 @@
       hub.dirty = true;
     }
   };
+  var RESEAT_D = "trinityone/reseat:";
+  var _reseatOld = /* @__PURE__ */ new Map();
+  var _reseatAt = /* @__PURE__ */ new Map();
+  function _noteReseat(cp, e) {
+    if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
+    if ((e.created_at || 0) < (_reseatAt.get(cp) || 0)) return;
+    _reseatAt.set(cp, e.created_at || 0);
+    const s = /* @__PURE__ */ new Set();
+    try {
+      for (const p of (JSON.parse(e.content) || {}).pairs || []) {
+        if (p && p.old && p.new && p.old !== p.new) s.add(String(p.old).toLowerCase());
+      }
+    } catch (x) {
+    }
+    _reseatOld.set(cp, s);
+  }
+  function _superseded(cp, pubHex) {
+    const s = _reseatOld.get(cp);
+    return !!(s && s.has(pubHex));
+  }
   var ADMITTED_D = "trinityone/admitted:";
   var ADMITTED_OK_LS = "trinityone.admitted.";
   var _admittedDone = /* @__PURE__ */ new Set();
@@ -6472,6 +6529,9 @@
     for (const e of hub.buf.values()) {
       if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content);
     }
+    for (const e of hub.buf.values()) {
+      if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e);
+    }
     return hub;
   }
   function _docsHubOpen(hub) {
@@ -6507,6 +6567,7 @@
           return;
         }
         if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);
+        if (d === RESEAT_D + cp) _noteReseat(cp, e);
         if (d.startsWith(GROUPKEY_D)) {
           _ingestGroupKey(cp, e);
           return;
@@ -6674,7 +6735,6 @@
   function _memHubOpen(hub) {
     if (hub.closer) return;
     const cp = hub.cp;
-    const MEMBER_D2 = "trinityone/member:";
     const since = _hubSince(hub);
     const filters = [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }];
     if (since) filters[1].since = since;
@@ -6691,7 +6751,7 @@
         const m = hub.byPub.get(e.pubkey) || { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name: (profiles[e.pubkey] || {}).name || "", nip05: (profiles[e.pubkey] || {}).nip05 || "", picture: (profiles[e.pubkey] || {}).picture || "", hidden: !!(profiles[e.pubkey] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
         if (e.kind === 30078) {
           const d = _dtag(e);
-          if (d.indexOf(MEMBER_D2) !== 0) {
+          if (d.indexOf(MEMBER_D) !== 0) {
             _memHubSaveSoon(hub);
             return;
           }
@@ -7386,7 +7446,7 @@
       const hub = _memHub(cp);
       const tally = () => {
         let n = 0;
-        for (const v of hub.byPub.values()) if (v.msgs > 0 || v.joined) n++;
+        for (const v of hub.byPub.values()) if ((v.msgs > 0 || v.joined) && !_superseded(cp, v.pubkey)) n++;
         saveCountCache(cp, n);
         cb(n);
       };
@@ -7409,7 +7469,7 @@
       const profAuthors = /* @__PURE__ */ new Set();
       let profTimer = null;
       const emit = (done) => {
-        const visible = [...hub.byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+        const visible = [...hub.byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0) && !_superseded(cp, m.pubkey)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         if (!hub.eosed && !done && !visible.length) return;
         saveMembersCache(cp, [...hub.byPub.values()]);
         onMembers(visible, !!done);
@@ -7488,6 +7548,40 @@
     removeRelay(url) {
       return window.Fellowship.setRelays(window.Fellowship.relays.filter((r) => r !== url));
     },
+    // Resolve a church's memorable relay NAME to the relay's CURRENT wss:// url, via the shared directory.
+    //
+    // This is the way back for a member whose church runs its OWN relay: a fresh install only knows the shared
+    // relays, so their 12 words restore the identity and find no church — through no fault of the words. A name
+    // is stable across restarts where a tunnel URL is not, which is the whole reason the directory exists.
+    //
+    // L5: only ever adopt a wss:// url. A cleartext ws:// would put the whole church's fellowship traffic in the
+    // open, and this input comes from a stranger's directory entry.
+    async resolveRelayName(name) {
+      const h = String(name || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+      if (!h) return null;
+      for (const u of CANONICAL_RELAYS) {
+        const base = u.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "");
+        try {
+          const ctrl = new AbortController();
+          const to = setTimeout(() => {
+            try {
+              ctrl.abort();
+            } catch (e) {
+            }
+          }, 6e3);
+          const r = await Promise.race([
+            fetch(base + "/relay-names/resolve/" + encodeURIComponent(h), { cache: "no-store", signal: ctrl.signal }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6500))
+          ]);
+          clearTimeout(to);
+          if (!r || !r.ok) continue;
+          const j = await r.json();
+          if (j && typeof j.url === "string" && /^wss:\/\//i.test(j.url)) return { handle: h, url: j.url, pub: j.pub || "" };
+        } catch (e) {
+        }
+      }
+      return null;
+    },
     // RESTORE: find what this identity already IS, from the relay.
     //
     // Until now nothing ever asked the relay for the member's OWN documents — the only authors:[pub] queries in
@@ -7521,8 +7615,7 @@
       }
       const me = pub;
       if (!me) return { churches: [], name: "" };
-      const seen = /* @__PURE__ */ new Map();
-      let name = "", nameAt = 0;
+      const fold = _restoreFold();
       await new Promise((resolve) => {
         let done = false;
         const finish = () => {
@@ -7539,38 +7632,10 @@
           // every doc this key has written; we filter for member:<cp> below
           { kinds: [0], authors: [me] }
           // the display name
-        ], {
-          onevent(e) {
-            if (e.kind === 0) {
-              if ((e.created_at || 0) < nameAt) return;
-              nameAt = e.created_at || 0;
-              try {
-                name = (JSON.parse(e.content) || {}).name || name;
-              } catch (x) {
-              }
-              return;
-            }
-            const d = _dtag(e);
-            if (!d.startsWith(MEMBER_D)) return;
-            const cp = d.slice(MEMBER_D.length);
-            if (!cp) return;
-            let left = false;
-            try {
-              left = !!(JSON.parse(e.content) || {}).left;
-            } catch (x) {
-            }
-            if (left) {
-              seen.delete(cp);
-              return;
-            }
-            if ((e.created_at || 0) >= (seen.get(cp) || 0)) seen.set(cp, e.created_at || 0);
-          },
-          oneose: finish
-        });
+        ], { onevent: fold.add, oneose: finish });
         setTimeout(finish, Math.max(2e3, ms || 9e3));
       });
-      const churches = [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([cp]) => cp);
-      return { churches, name };
+      return fold.result();
     },
     // The one above is a single pass, and on a cold connection that is not enough — CONFIRMED on device: the
     // member's NAME came back (kind-0 is public) while their churches did not, because their own member: docs

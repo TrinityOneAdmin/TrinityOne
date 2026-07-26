@@ -4,12 +4,42 @@ Read this before touching anything. It is written by the previous session and is
 towards **what that session got wrong**, because the single most useful thing you can do is distrust its
 conclusions and re-verify them.
 
+---
+
+## READ FIRST — state at the end of 2026-07-26 (evening session)
+
+**The member 12-word restore bug in §2 below is SOLVED.** Root cause was not permissions or auth timing (all
+three theories in §2 were wrong): `MEMBER_D` was declared as a local inside `_memHubOpen` while
+`recoverIdentity` also used it, so every church document threw a **swallowed** `ReferenceError` inside
+nostr-tools' event handler. Name came back (kind-0 branch returns earlier), churches never did. Proven on the
+OPPO against the live relay. Guarded by `scripts/bundle-free-globals.test.mjs`.
+
+Built and tested since: welcome fork ("new here / used it before"), phone-to-phone account transfer (reversed
+NIP-44 handshake — no secret ever on screen), steward **Reconnect** for a member who lost their words
+(`trinityone/reseat:` doc, church/steward-only, relay-enforced), church-name lookup on the no-church screen,
+and roster folding so a re-seated member appears once. Suite: **340 pass**.
+
+**⚠ Two things to read before doing anything else:**
+- `AUDIT-2026-07-26-RECOVERY.md` — adversarial read-only audit of ALL unpushed work. **5 CRITICALs, none
+  fixed** (the owner asked for findings only). Two are in the new restore UI (a permanent dead-end, and a loop
+  back to the wizard); one is a promise the product doesn't keep (Reconnect does not restore the member's name);
+  one is **already committed and live**: `app/app.jsx:693-719` publishes a kind-0 every 4 seconds, forever,
+  broadcast to the whole church; one leaves a lost/stolen phone's key admitted with no way to block it.
+- `DEVICE-TEST-CHECKLIST.md` — ~45 checks across member app / console / relay. Nothing in it is covered by
+  `npm test`, because none of it can be.
+
+Nothing is committed or pushed. A fresh release-signed APK with all of the above is installed on the **OPPO**
+only; the **Pixel** needs "Allow USB debugging" re-tapped. Owner will device-test over the coming days.
+Next agreed build: the interactive "system view" page (see the memory note).
+
+---
+
 ## 1. Where things are
 
 - `main` HEAD is committed and clean; **~62 commits are unpushed** (local only).
 - The live relay **a8** (`app.trinityone.church`) was last updated to `51bd78f`. Anything after that is NOT live.
   Check with: `curl -s https://app.trinityone.church/status | grep versionShort`
-- Suite: `npm test` → **299 pass**. Takes ~61s when nothing else is running.
+- Suite: `npm test` → all green, zero failures (331 at time of writing, and growing — don't trust a count here, run it). Takes ~61s when nothing else is running. Every relay/CDP test binds a FIXED port: check `grep -h 'const PORT' scripts/*.test.mjs | sort` before adding one, because a duplicate deadlocks both files and reports false failures.
 - Pilot has NOT started. No APKs in the field. The owner's own church (`TrinityLA`) is real and in use.
 
 Two test devices, both on USB/wifi adb:

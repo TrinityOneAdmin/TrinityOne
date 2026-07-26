@@ -24,6 +24,13 @@ function toPub(npubOrHex) {
   if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase();
   try { const d = nip19decode(npubOrHex); return d.type === 'npub' ? d.data : null; } catch { return null; }
 }
+// A member's own "I belong to this church" doc — d=member:<churchpub>. MODULE scope on purpose: it was
+// declared only as a local inside _memHubOpen, while recoverIdentity() (the 12-word restore) also referenced
+// it — so restore threw `ReferenceError: MEMBER_D is not defined` inside the relay's event handler, which
+// nostr-tools logs and swallows. The restore returned the member's NAME (the kind-0 branch returns before
+// this line) and ZERO churches, every time, on a device that had the doc in hand. Confirmed on the OPPO
+// against the live relay, 2026-07-26.
+const MEMBER_D = 'trinityone/member:';
 const GROUP_D = 'trinityone/group:';
 const CATEGORY_D = 'trinityone/category:';   // church-signed named container that groups belong to (e.g. "Lifegroups")
 const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the group key wrapped to each member
@@ -302,6 +309,49 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 // member-joins on another) makes a screen load partial/empty. So we read church docs from the union of
 // the member's own relays + the canonical pool, fanning the query across all of them.
 function churchRelays() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
+
+// RESTORE FOLD — turns the raw event stream of "everything this key ever wrote" into { churches, name }.
+// Split out of recoverIdentity() so it can be tested against the SHIPPED bundle without a relay: the whole
+// 12-word restore hangs on this handful of lines, and the bug that broke it for good (an undeclared MEMBER_D
+// throwing inside the relay's swallowed event handler) was invisible to every test we had.
+// A member may belong to MANY churches; each one is a separate member:<churchpub> doc, so they simply
+// accumulate. Networks-of-churches need nothing here — a network is published by the CHURCH, so it comes
+// back on its own once the church is followed again.
+function _restoreFold() {
+  const seen = new Map();   // cp -> { at, left } from the NEWEST member: doc seen for that church
+  let name = '', nameAt = 0;
+  return {
+    add(e) {
+      if (!e) return;
+      if (e.kind === 0) {
+        if ((e.created_at || 0) < nameAt) return;   // an older profile must not overwrite a newer one
+        nameAt = e.created_at || 0;
+        try { name = (JSON.parse(e.content) || {}).name || name; } catch (x) {}
+        return;
+      }
+      if (!Array.isArray(e.tags)) return;   // _dtag would throw; one malformed event must not cost a church
+      const d = _dtag(e);
+      if (!d.startsWith(MEMBER_D)) return;
+      const cp = d.slice(MEMBER_D.length);
+      if (!cp) return;
+      // "I left this church" is written by leaveMembership() as a ['deleted','1'] TAG with EMPTY content —
+      // not a {left:true} body. The old check parsed the content for a `left` field that nothing has ever
+      // written, and JSON.parse('') throws on '' anyway, so a deliberately-left church came back on restore.
+      let leftBody = false;
+      try { leftBody = !!(JSON.parse(e.content) || {}).left; } catch (x) {}
+      const left = (e.tags || []).some(t => t[0] === 'deleted' && t[1] === '1') || leftBody;
+      // NEWEST WINS, decided at the end — not "a leave deletes on sight". Relays deliver in no particular
+      // order, so an OLD leave arriving after a NEWER rejoin used to erase a church the member is in today.
+      const at = e.created_at || 0;
+      const prev = seen.get(cp);
+      if (!prev || at >= prev.at) seen.set(cp, { at, left });
+    },
+    result() {
+      const churches = [...seen.entries()].filter(([, v]) => !v.left).sort((a, b) => b[1].at - a[1].at).map(([cp]) => cp);
+      return { churches, name };   // newest-joined first — the app makes churches[0] the active one
+    },
+  };
+}
 // FEDERATION Phase 4 — decentralise the default. Track the enforcing relays each church declares as its OWN
 // (from its NIP-65 list, non-canonical), so we can read a self-hosted church WITHOUT the shared a8 fallback.
 const _churchRelays = new Map();   // cp -> Map(wssUrl -> relayPub|null): the church's adopted OWN relays. keys = read union; distinct non-null values = distinct relay BOXES (R3 self-sufficiency, dedup by identity not URL).
@@ -377,8 +427,19 @@ function profile(pub) {
 
 const pool = new SimplePool();
 let sk = null, pub = null;
-// SECURITY-AUDIT-2026-07-06 M3: true once we know we belong to an invite-only group — the only reason a member
-// needs to prove their key to the relay. Set from the (public) group defs; never proactively otherwise.
+// Do we answer a relay's NIP-42 challenge? ALWAYS — this is deliberately hardcoded true.
+//
+// It began (SECURITY-AUDIT-2026-07-06 M3) as "true only once we know we belong to an invite-only group", on
+// the reasoning that proving your key to the relay is a privacy cost worth paying only for gated content.
+// AUDIT-III (2026-07-13) inverted that: the roster, care records and safeguarding lists were world-readable to
+// anonymous clients, and closing THAT meant almost everything a member reads is now gated — so a member who
+// declines the challenge simply sees an empty church. The privacy argument also barely held: a joined member
+// has already published a signed member: doc over the same socket, so the relay knows them regardless.
+//
+// DO NOT narrow this back to invite-only groups. Re-introducing the condition re-opens the roster leak.
+// (The RELAY still challenges lazily — only when a gated read is withheld — which is the perf design and is
+// unrelated to this flag. The comment that used to sit here described the old, narrowed behaviour and
+// contradicted the line below it; that is exactly how a fixed leak gets un-fixed. Corrected 2026-07-26.)
 let _needAuth = true;
 // NIP-42: when a relay challenges, prove our pubkey by signing the auth event with our key — so the relay serves
 // us our church's PRIVATE docs (the member roster, safeguarding lists, media key, Care module, invite groups).
@@ -564,6 +625,26 @@ const _hubEosed = (hub) => { hub.eosed = true; if (hub.pendingFull) { hub.pendin
 // The admitted list IS delivered to the member, so use it: the first time we see ourselves on it, re-announce
 // (so the relay definitely holds our member doc) and re-fetch. Once per church per device, via a persisted
 // flag, so a healthy launch does not churn.
+// RE-SEAT: the church's word that a member who lost their 12 words is back on a NEW key. We use it only to
+// stop showing the dead OLD key — the church would otherwise have two of the same person on its roster, and
+// count them twice. Trusted from the church key or a CURRENT roster steward only: the relay enforces the same
+// rule on write, and this is the client-side half, so a hostile relay cannot inject a re-seat either.
+const RESEAT_D = 'trinityone/reseat:';
+const _reseatOld = new Map();   // cp -> Set(old pubkey hex) superseded by a newer key
+const _reseatAt = new Map();    // cp -> created_at of the newest doc we accepted (newest wins)
+function _noteReseat(cp, e) {
+  if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
+  if ((e.created_at || 0) < (_reseatAt.get(cp) || 0)) return;
+  _reseatAt.set(cp, e.created_at || 0);
+  const s = new Set();
+  try {
+    for (const p of ((JSON.parse(e.content) || {}).pairs || [])) {
+      if (p && p.old && p.new && p.old !== p.new) s.add(String(p.old).toLowerCase());
+    }
+  } catch (x) {}
+  _reseatOld.set(cp, s);
+}
+function _superseded(cp, pubHex) { const s = _reseatOld.get(cp); return !!(s && s.has(pubHex)); }
 const ADMITTED_D = 'trinityone/admitted:';
 const ADMITTED_OK_LS = 'trinityone.admitted.';
 const _admittedDone = new Set();   // cp|pub -> recovery already run THIS SESSION (see below)
@@ -656,6 +737,7 @@ function _docsHub(cp) {
   for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);   // absorb the full roster FIRST so the group-key author check can trust roster stewards regardless of buffer order
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e); }
   for (const e of hub.buf.values()) { if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content); }   // approved while the app was closed
+  for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); }            // re-seats recorded while the app was closed
   return hub;
 }
 function _docsHubOpen(hub) {
@@ -686,6 +768,7 @@ function _docsHubOpen(hub) {
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return;
       }
       if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);   // just approved? re-announce + re-fetch once
+      if (d === RESEAT_D + cp) _noteReseat(cp, e);          // a member came back on a new key — stop showing the old one
       if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(cp, e); return; }
       // The care key can arrive AFTER the needs it unlocks. subscribeCareNeeds decodes each need AT INGEST
       // and its onroster() only re-filters those already-decoded entries — so a card rendered "details
@@ -785,7 +868,6 @@ function _memHub(cp) {
 function _memHubOpen(hub) {
   if (hub.closer) return;
   const cp = hub.cp;
-  const MEMBER_D = 'trinityone/member:';
   const since = _hubSince(hub);
   const filters = [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }];
   // The docs half takes the ordinary cursor (with its periodic full re-sync). The kind-1 half NEVER full-syncs:
@@ -1268,7 +1350,8 @@ window.Fellowship = {
     const cached = loadCountCache(cp);
     if (cached != null) cb(cached);   // show the last-known count instantly on load
     const hub = _memHub(cp);   // shared with subscribeChurchMembers — the kind-1 corpus is fetched ONCE
-    const tally = () => { let n = 0; for (const v of hub.byPub.values()) if (v.msgs > 0 || v.joined) n++; saveCountCache(cp, n); cb(n); };
+    // _superseded: a member who lost their words and was re-seated onto a new key must count ONCE, not twice
+    const tally = () => { let n = 0; for (const v of hub.byPub.values()) if ((v.msgs > 0 || v.joined) && !_superseded(cp, v.pubkey)) n++; saveCountCache(cp, n); cb(n); };
     const off = _onChurchMembers(cp, { onchange: tally, oneose: tally });
     if (hub.byPub.size) tally();   // derive instantly from the cached/buffered roster, refined live
     return off;
@@ -1286,7 +1369,9 @@ window.Fellowship = {
     let profSub = null; const profAuthors = new Set(); let profTimer = null;
     // a member who opted out (kind-0 `hidden`) is withheld from the directory the others see
     const emit = (done) => {
-      const visible = [...hub.byPub.values()].filter(m => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+      // _superseded drops the dead key of a member who was re-seated onto a new one, so the directory shows
+      // the person once. Their new key is an ordinary member and appears on its own merits.
+      const visible = [...hub.byPub.values()].filter(m => !m.hidden && (m.joined || m.msgs > 0) && !_superseded(cp, m.pubkey)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
       if (!hub.eosed && !done && !visible.length) return;   // sticky: hold last-known until EOSE
       saveMembersCache(cp, [...hub.byPub.values()]);   // keep the legacy cache warm for next launch
       onMembers(visible, !!done);
@@ -1330,6 +1415,37 @@ window.Fellowship = {
   addRelay(url) { return window.Fellowship.setRelays([...window.Fellowship.relays, url]); },
   removeRelay(url) { return window.Fellowship.setRelays(window.Fellowship.relays.filter(r => r !== url)); },
 
+  // Resolve a church's memorable relay NAME to the relay's CURRENT wss:// url, via the shared directory.
+  //
+  // This is the way back for a member whose church runs its OWN relay: a fresh install only knows the shared
+  // relays, so their 12 words restore the identity and find no church — through no fault of the words. A name
+  // is stable across restarts where a tunnel URL is not, which is the whole reason the directory exists.
+  //
+  // L5: only ever adopt a wss:// url. A cleartext ws:// would put the whole church's fellowship traffic in the
+  // open, and this input comes from a stranger's directory entry.
+  async resolveRelayName(name) {
+    const h = String(name || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (!h) return null;
+    for (const u of CANONICAL_RELAYS) {
+      const base = u.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/i, '');
+      try {
+        // Promise.race, not just an AbortController: CapacitorHttp patches fetch on native and may ignore the
+        // signal, so the race is what actually bounds a hung lookup on a phone.
+        const ctrl = new AbortController();
+        const to = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 6000);
+        const r = await Promise.race([
+          fetch(base + '/relay-names/resolve/' + encodeURIComponent(h), { cache: 'no-store', signal: ctrl.signal }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6500)),
+        ]);
+        clearTimeout(to);
+        if (!r || !r.ok) continue;
+        const j = await r.json();
+        if (j && typeof j.url === 'string' && /^wss:\/\//i.test(j.url)) return { handle: h, url: j.url, pub: j.pub || '' };
+      } catch (e) {}
+    }
+    return null;
+  },
+
   // RESTORE: find what this identity already IS, from the relay.
   //
   // Until now nothing ever asked the relay for the member's OWN documents — the only authors:[pub] queries in
@@ -1351,37 +1467,17 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch (e) {} }
     const me = pub;
     if (!me) return { churches: [], name: '' };
-    const seen = new Map();   // cp -> newest created_at
-    let name = '', nameAt = 0;
+    const fold = _restoreFold();
     await new Promise((resolve) => {
       let done = false;
       const finish = () => { if (done) return; done = true; try { sub.close(); } catch (e) {} resolve(); };
       const sub = pool.subscribeMany(churchRelays(), [
         { kinds: [30078], authors: [me] },   // every doc this key has written; we filter for member:<cp> below
         { kinds: [0], authors: [me] },       // the display name
-      ], {
-        onevent(e) {
-          if (e.kind === 0) {
-            if ((e.created_at || 0) < nameAt) return;
-            nameAt = e.created_at || 0;
-            try { name = (JSON.parse(e.content) || {}).name || name; } catch (x) {}
-            return;
-          }
-          const d = _dtag(e);
-          if (!d.startsWith(MEMBER_D)) return;
-          const cp = d.slice(MEMBER_D.length);
-          if (!cp) return;
-          let left = false;
-          try { left = !!(JSON.parse(e.content) || {}).left; } catch (x) {}
-          if (left) { seen.delete(cp); return; }   // they left that church — don't resurrect it
-          if ((e.created_at || 0) >= (seen.get(cp) || 0)) seen.set(cp, e.created_at || 0);
-        },
-        oneose: finish,
-      });
+      ], { onevent: fold.add, oneose: finish });
       setTimeout(finish, Math.max(2000, ms || 9000));   // a thin pipe must still finish, just with less
     });
-    const churches = [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([cp]) => cp);
-    return { churches, name };
+    return fold.result();
   },
 
   // The one above is a single pass, and on a cold connection that is not enough — CONFIRMED on device: the

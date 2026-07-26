@@ -2948,6 +2948,74 @@ window.DashResources = DashResources;
 // Steward-initiated parent↔child link: pick an adult member as a child's guardian (no parent request needed).
 // The child keeps their own account; this records who their guardian is (church-signed), so the relay lets
 // them always reach each other and the parent can collect them at check-in.
+// ── Reconnect a member who lost their 12 words ────────────────────────────────────────────────────────
+// Their old key cannot be recovered by anyone, so this does not "restore" it — it moves their SEAT onto the
+// key they have now, on this church's word that they are the same person. The steward recognising them IS the
+// authorisation; there is deliberately no code or token to hand over, because such a token would be a bearer
+// credential to become that member.
+function ReseatModal({ member, memberName, isMinor, admittedList, onClose }) {
+  const [scan, setScan] = React.useState(false);
+  const [text, setText] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [done, setDone] = React.useState(false);
+  const reseats = window.useStewardReseats ? window.useStewardReseats() : [];
+  const newPub = window.Steward && window.Steward.parseMemberKey ? window.Steward.parseMemberKey(text) : null;
+  const same = newPub && newPub === member;
+
+  const confirm = async () => {
+    if (!newPub || same || busy) return;
+    setBusy(true); setErr('');
+    try {
+      // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
+      // while the church still showed two of them; this order fails the safer way round.
+      const pairs = [...(reseats || []).filter(p => p && p.new !== newPub), { old: member, new: newPub, at: Math.floor(Date.now() / 1000) }];
+      await window.Steward.setReseats(pairs);
+      await window.Steward.setAdmitted([...new Set([...(admittedList || []), newPub])]);
+      setDone(true);
+    } catch (e) { setErr((e && e.message) || 'Couldn’t save that — try again.'); }
+    setBusy(false);
+  };
+
+  return (
+    <CkModal title={'Reconnect ' + memberName} onClose={onClose}>
+      {done ? (<React.Fragment>
+        <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '4px 0 14px' }}>
+          Done. {memberName} is back in their place on the new phone, and the old entry is folded into it.
+        </p>
+        <button onClick={onClose} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: '10px 14px' }}>Close</button>
+      </React.Fragment>) : (<React.Fragment>
+        <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '4px 0 10px' }}>
+          For a member who has lost their 12 words. On their new phone they choose <b>“I’ve lost my 12 words”</b>, which shows a code — scan or paste it here.
+        </p>
+        <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', margin: '0 0 12px' }}>
+          Only do this if you know it is really them. It gives that new key {memberName}’s name and place in your church. Their old private messages and any sealed care records stay unreadable — those went with the lost key, and nothing can bring them back.
+        </p>
+        {isMinor ? (
+          <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--clay)', fontWeight: 700, border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', borderRadius: 12, padding: '9px 11px', margin: '0 0 12px' }}>
+            This member is marked as a child. Confirm with their parent or guardian before you reconnect them.
+          </div>
+        ) : null}
+        {scan ? (
+          <StewQRScanner onResult={(t) => { setText(t); setScan(false); setErr(''); }} onCancel={() => setScan(false)} />
+        ) : (
+          <button onClick={() => setScan(true)} className="sk-btn" style={{ width: '100%', padding: '9px 14px', marginBottom: 8 }}>Scan their code</button>
+        )}
+        <input value={text} onChange={e => { setText(e.target.value); setErr(''); }} placeholder="…or paste their new code / npub"
+          style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', marginBottom: 8 }} />
+        {text && !newPub ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 700, marginBottom: 8 }}>That isn’t a TrinityOne member code.</div> : null}
+        {same ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 700, marginBottom: 8 }}>That’s the key they already have — nothing to reconnect.</div> : null}
+        {err ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 700, marginBottom: 8 }}>{err}</div> : null}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onClose} className="sk-btn" style={{ flex: 1, padding: '10px 14px' }}>Cancel</button>
+          <button onClick={confirm} disabled={!newPub || same || busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: '10px 14px', opacity: (!newPub || same || busy) ? .5 : 1 }}>
+            {busy ? 'Reconnecting…' : 'Yes — this is ' + memberName}</button>
+        </div>
+      </React.Fragment>)}
+    </CkModal>
+  );
+}
+
 function GuardianLinkModal({ child, childName, members, guardians, minorsSet, onLink, onUnlink, onClose }) {
   const [q, setQ] = React.useState('');
   const linked = guardians[child] || [];
@@ -3084,6 +3152,7 @@ function DashMembers() {
   };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
+  const [reseatFor, setReseatFor] = React.useState(null);   // member who lost their 12 words and is back on a new key
   const [bulkOpen, setBulkOpen] = React.useState(false);   // bulk-invite (print join slips) — bring a congregation across
   // safeguarding (child marking, youth clearance, parent links) is OWNER-ONLY at the relay — a delegated
   // steward's writes are rejected. Hide those actions when acting as someone else's steward, so the UI
@@ -3192,6 +3261,8 @@ function DashMembers() {
             <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
               <Icon name="users" size={14} color="currentColor" /> {(guardians[m.pubkey] && guardians[m.pubkey].length) ? 'Parents' : 'Link parent'}</button>
           ) : null}
+          <button onClick={() => setReseatFor(m.pubkey)} title="They lost their 12 words and are back on a new phone with a new key — put them back in their place here" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            <Icon name="swap" size={14} color="currentColor" /> Reconnect</button>
           {photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
             <button onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
               <Icon name="refresh" size={14} color="currentColor" /> {nophotoSet.has(m.pubkey) ? 'Photos off ✓' : 'Turn off photo'}</button>
@@ -3302,6 +3373,7 @@ function DashMembers() {
         </React.Fragment>
       )}
       {linkChild ? <GuardianLinkModal child={linkChild} childName={nameByPub[linkChild]} members={members} guardians={guardians} minorsSet={minorsSet} onLink={linkParent} onUnlink={unlinkParent} onClose={() => setLinkChild(null)} /> : null}
+      {reseatFor ? <ReseatModal member={reseatFor} memberName={nameByPub[reseatFor] || 'this member'} isMinor={minorsSet.has(reseatFor)} admittedList={admittedList} onClose={() => setReseatFor(null)} /> : null}
       {bulkOpen ? <BulkInviteModal onClose={() => setBulkOpen(false)} /> : null}
     </Panel>
   );

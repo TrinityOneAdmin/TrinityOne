@@ -157,6 +157,7 @@ let _mediaKeyDocKeys = null;                   // the latest media-key doc's wra
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
+const RESEAT_D = 'trinityone/reseat:';       // church-vouched "the member who was <old> is now <new>", d=reseat:<churchpub>
 const STEWARDS_D = 'trinityone/stewards:';   // delegated, revocable steward roster (owner-signed), d=stewards:<churchpub>; see STEWARD-ROSTER-DESIGN.md
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request to a church (requester-signed), d=stewardreq:<churchpub>; the owner approves it into the roster
 const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<groupId> (one per group; empty/deleted = unpinned)
@@ -916,6 +917,16 @@ window.Steward = {
     const q = s.match(/[?&#]steward=([^&#\s]+)/);   // also accept a URL form
     if (q) { try { s = decodeURIComponent(q[1]); } catch {} }
     s = s.replace(/^trinityone-steward:/i, '').trim();
+    return toPubHex(s);
+  },
+  // The key a member shows on a NEW phone after losing their 12 words: `trinityone-reseat:<npub>`. A bare
+  // npub or hex is accepted too, so a member who can't be there in person can simply send it — the steward
+  // still has to recognise them and press the button, which is where the authority actually comes from.
+  parseMemberKey(payload) {
+    let s = (payload || '').trim();
+    const q = s.match(/[?&#]reseat=([^&#\s]+)/);
+    if (q) { try { s = decodeURIComponent(q[1]); } catch {} }
+    s = s.replace(/^trinityone-reseat:/i, '').trim();
     return toPubHex(s);
   },
   // ---- invite-to-steward handshake: the OWNER shows an invite QR (their church id, public); a would-be
@@ -1784,6 +1795,43 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
+  // ── RE-SEAT: a member lost their 12 words and came back on a NEW key ───────────────────────────────
+  // Their old key is gone for good — nobody has it, not the church, not us. So this does NOT recover an
+  // account; it moves a member's SEAT (their name, their place on the roster) onto the key they have now, on
+  // the church's word that they are the same person. Old DMs and sealed care records stay unreadable, which
+  // is correct: if a steward's click could open them, the privacy was never real.
+  //
+  // The authorisation is the steward's deliberate act in their own console against a key they scanned or were
+  // given. There is NO one-time token by design — a code that re-seats a member would be a bearer credential
+  // to BECOME them, and would be worth stealing.
+  subscribeReseats(onList) {   // the church's re-seat pairs → [{ old, new, at }]
+    let cur = [], latest = 0;
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d !== RESEAT_D + pub) return;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward; the relay enforces this too
+        if (e.created_at < latest) return; latest = e.created_at;   // newest wins
+        try { cur = (JSON.parse(e.content).pairs) || []; } catch { cur = []; }
+        if (!Array.isArray(cur)) cur = [];
+        onList(cur);
+      },
+      oneose() { onList(cur); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  setReseats(pairs) {   // replace the whole re-seat map (pass [{old,new,at}] with hex pubkeys)
+    _requireTrustedView('re-seat map');
+    if (!sk) return Promise.resolve(null);
+    const clean = (pairs || [])
+      .filter(p => p && /^[0-9a-f]{64}$/i.test(p.old || '') && /^[0-9a-f]{64}$/i.test(p.new || '') && p.old !== p.new)
+      .map(p => ({ old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1000) }));
+    // feChurch, NOT finalizeEvent: a DELEGATED steward signs with their own key, and only the ['church',<cp>]
+    // stamp it adds makes the doc match the member app's subscription (authors:[cp] OR #church:[cp]). Without
+    // it the relay would still store and gate the doc correctly, but no member would ever receive it — the
+    // church would keep showing two of the same person and the reconnect would look like it did nothing.
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RESEAT_D + pub], ['t', NET]], content: JSON.stringify({ pairs: clean }) }));
+  },
   setAdmitted(pubkeys) {   // replace the whole admitted list (pass hex pubkeys)
     _requireTrustedView('approved-members list');
     if (!sk) return Promise.resolve(null);
@@ -2242,7 +2290,11 @@ window.Steward = {
     // JSON.stringify(entire roster) + localStorage write + setState on EVERY incoming event; on a large church's
     // load that was thousands of full-roster serializations. Coalesce to ~150ms (trailing fire keeps final state).
     let emitTimer = null;
-    const emitNow = () => { const arr = [...byPub.values()].sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0))); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr); };
+    // reseatOld holds the DEAD keys of members who lost their 12 words and were re-seated onto a new one.
+    // Without this the church sees the same person twice — the old entry can never post again, but it still
+    // sits in the roster, in the member count, and in every picker a steward uses.
+    let reseatOld = new Set(), reseatAt = 0;
+    const emitNow = () => { const arr = [...byPub.values()].filter(m => !reseatOld.has(m.pubkey)).sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0))); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr); };
     const emit = () => { if (emitTimer) return; emitTimer = setTimeout(() => { emitTimer = null; emitNow(); }, 150); };
     const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: '', picture: '', count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
     // SECURITY-AUDIT-2026-07-18 (perf — "names blank = sub cap"): resolve profiles with ONE batched kind-0
@@ -2286,7 +2338,21 @@ window.Steward = {
       },
       oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
+    // the church's own signed re-seat map (same doc the Reconnect button writes). Its own small subscription:
+    // the roster sub above is keyed on ['p',<church>], which a re-seat doc does not carry.
+    const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d !== RESEAT_D + pub) return;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward only
+        if (e.created_at < reseatAt) return; reseatAt = e.created_at;   // newest wins
+        const next = new Set();
+        try { for (const pr of ((JSON.parse(e.content) || {}).pairs || [])) { if (pr && pr.old && pr.new && pr.old !== pr.new) next.add(String(pr.old).toLowerCase()); } } catch {}
+        reseatOld = next; emit();
+      },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} try { reseatSub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
   },
 
   // ---- church profile (kind-0): name etc. shown to members and in the console ----

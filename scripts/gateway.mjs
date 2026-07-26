@@ -346,6 +346,14 @@ const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier-2 media key wrapped per-mem
 // (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable, falls to the default member rule)
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
 const ADMITTED_D = 'trinityone/admitted:';   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
+// RE-SEAT: a member lost their 12 words, so their old key is gone forever and they came back on a NEW one.
+// The church vouches that the two are the same person — d=reseat:<churchpub>, content {pairs:[{old,new,at}]}.
+// Nothing here recovers the old key (nobody has it); it only moves a member's SEAT — their name, their place
+// on the roster — onto the new key, so the church doesn't end up with two of the same person and the member
+// doesn't come back as a stranger. Old DMs and sealed care records stay unreadable, which is correct.
+// Church key or a CURRENT steward may write it (see accept()): an unlisted d-tag falls to the generic member
+// rule, and "any member may rewrite it" here would mean any member could seize another member's identity.
+const RESEAT_D = 'trinityone/reseat:';
 const STEWARDS_D = 'trinityone/stewards:';   // church-signed steward roster — d=stewards:<churchpub>, content {pubkeys:[…]}; delegates day-to-day church powers to those keys (revocable: owner re-signs without them). Owner-only to edit. See STEWARD-ROSTER-DESIGN.md.
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's REQUEST to a church — d=stewardreq:<churchpub>, authored by the requester (openly writable, like a join). The owner reviews + approves it into the roster (owner-only).
 // Meal trains / practical-care module (optional, per-church). care: needs are church/steward/care-team-admin authored;
@@ -739,7 +747,7 @@ const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church
 //   3. a steward authored it and named the church in ['church',<cp>] (validated to a configured church);
 //   4. a member authored a reply and p-tagged the church (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:).
 // Returns '' when ownership can't be proven — the caller MUST treat that as deny, not as public.
-const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, STEWARDS_D, STEWARDREQ_D, BLOCKED_D, MINORS_D, APPROVED_D,
+const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, RESEAT_D, STEWARDS_D, STEWARDREQ_D, BLOCKED_D, MINORS_D, APPROVED_D,
   GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
 // Doc types an ORDINARY MEMBER legitimately authors while church-tagging them. Their authority comes from
 // authorship, not from delegated church authority, so the revoked-steward roster check in canRead() must
@@ -1292,6 +1300,10 @@ function accept(e) {
     // the care-team recipient roster (d=careteam:<churchpub>) — church key or a current steward. Just pubkeys
     // (no secrets), so a member can read it to seal an ask-for-help request to exactly the care team.
     if (d.startsWith(CARETEAM_D)) { const cp = toHexPub(d.slice(CARETEAM_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    // RE-SEAT map (d=reseat:<churchpub>) — church key or a CURRENT steward of that church. This doc says
+    // "the person who was <old> is now <new>", so whoever can write it can hand any member's seat to any key.
+    // It must never fall through to the generic member rule (see the nophoto: note below for what that costs).
+    if (d.startsWith(RESEAT_D)) { const cp = toHexPub(d.slice(RESEAT_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
     // moderation: photo-suppression list — d=nophoto:<churchpub>, owner or a CURRENT steward of that church.
     // (Previously unlisted, so it fell to the generic member rule: any member could rewrite it.)
     if (d.startsWith(NOPHOTO_D)) { const cp = d.slice(NOPHOTO_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }

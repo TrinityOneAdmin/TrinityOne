@@ -126,6 +126,7 @@ window.useStewardGuardianRequests = makeSub(S, 'subscribeGuardianRequests', () =
 window.useStewardGuardians = makeSub(S, 'subscribeGuardians', () => ({}));
 window.useStewardJoinPolicy = makeSub(S, 'subscribeJoinPolicy', () => false);
 window.useStewardAdmitted = makeSub(S, 'subscribeAdmitted', () => []);
+window.useStewardReseats = makeSub(S, 'subscribeReseats', () => []);   // [{old,new,at}] — members who came back on a new key
 window.useStewardStats = makeSub(S, 'subscribeStats', () => ({ events: 0, announcements: 0 }));
 window.useStewardActivity = makeSub(S, 'subscribeActivity', () => []);
 // Manna — optional money-out / disbursement module
