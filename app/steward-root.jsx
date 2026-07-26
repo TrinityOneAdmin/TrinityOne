@@ -243,6 +243,13 @@ function initChurch() {
 function seedNewChurch() {
   window.Steward.createKey();
   if (window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
+  // Positive marker: THIS device just created THIS church, so the first-run wizard is definitely wanted.
+  // The wizard used to infer "new church" from `church.name` still being empty 1.8s after mount — a guess that
+  // is wrong on a slow relay, and since the wizard now publishes meetings, an established church that tripped
+  // it gained permanently duplicated Sunday Service / Midweek events (they carry fresh ids, so they cannot
+  // replace the real ones). Also clear `done`: creating a new church should run setup even on a device that
+  // has been through it before. AUDIT 2026-07-25.
+  try { localStorage.setItem('trinityone.steward.newchurch', '1'); localStorage.removeItem('trinityone.steward.wizard.done'); } catch (e) {}
   try {
     if (!localStorage.getItem('trinityone.steward.seeded')) {
       localStorage.setItem('trinityone.steward.seeded', '1');

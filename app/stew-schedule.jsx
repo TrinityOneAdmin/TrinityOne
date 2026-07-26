@@ -791,9 +791,14 @@ function DashCalendar() {
                   <div style={{ height: 6, borderRadius: 999, background: 'var(--surface-2)', overflow: 'hidden' }}><div style={{ width: `${c.total ? (c.filled / c.total) * 100 : 0}%`, height: '100%', background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} /></div>
                 </div>
               ); })}
+              {/* The WHOLE card opens the event — the tap target used to be just the title row, so "how do I change
+                  this?" had no obvious answer. Details, Edit and Remove all live in that one dialog now. */}
               {it.events.map(e => (
-                <div key={e.id} style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
-                  <div onClick={() => setEvDetail(e)} title="Full details & all RSVPs" style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div><Icon name="chevR" size={14} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /></div>
+                <div key={e.id} role="button" tabIndex={0} onClick={() => setEvDetail(e)}
+                  onKeyDown={ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setEvDetail(e); } }}
+                  title="Open this event — details, edit, remove"
+                  style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9, cursor: 'pointer', textAlign: 'left', width: '100%', font: 'inherit', color: 'inherit' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div>{e.recur ? <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '1px 5px' }}>{e.recur === 'fortnightly' ? '2-WEEKLY' : e.recur === 'monthly' ? 'MONTHLY' : 'WEEKLY'}</span> : null}<Icon name="chevR" size={14} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /></div>
                   <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{e.time}{e.where ? ' · ' + e.where : ''}</div>
                   {e.blurb ? <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '7px 0 0' }}>{e.blurb}</p> : null}
                   {(() => {
@@ -810,7 +815,6 @@ function DashCalendar() {
                       </div>
                     );
                   })()}
-                  <button onClick={() => window.Steward.removeEvent(e.id)} style={{ border: 'none', background: 'none', color: 'var(--ink-3)', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginTop: 6, padding: 0 }}>Remove</button>
                 </div>
               ))}
               {it.bookings.map(b => (
@@ -844,10 +848,91 @@ function DashCalendar() {
 }
 window.DashCalendar = DashCalendar;
 
+// Edit an event that already exists. Until now the console could only CREATE and REMOVE — so the Sunday
+// Service and Midweek the setup wizard publishes could never be corrected, only deleted and rebuilt by hand.
+//
+// It republishes with the SAME id, so the kind-30078 doc REPLACES the original instead of adding a second one.
+// It also carries `recur`, `day`, `groupId`, `accent` and `image` through untouched: a weekly meeting is ONE
+// event that expandEvents() paints across the calendar, and dropping either field would silently collapse the
+// whole series into a single dated entry. That is also why the compose form's "repeat" (which generates N
+// separate dated events) is deliberately NOT offered here — the two recurrence models must not be mixed.
+function SchEventEdit({ event, onClose }) {
+  const e = event || {};
+  const series = !!e.recur;
+  const [title, setTitle] = React.useState(e.title || '');
+  const [time, setTime] = React.useState(e.time || '');
+  const [where, setWhere] = React.useState(e.where || '');
+  const [blurb, setBlurb] = React.useState(e.blurb || '');
+  const [date, setDate] = React.useState(e.date || '');
+  const [day, setDay] = React.useState(typeof e.day === 'number' ? e.day : 0);
+  const [recur, setRecur] = React.useState(e.recur || 'weekly');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const save = async () => {
+    if (!title.trim()) { setErr('Give the event a name.'); return; }
+    setBusy(true); setErr('');
+    // `date` on a series is its ANCHOR (when the repeat starts), not the occurrence the steward happened to
+    // click — expandEvents derives occurrences from it, so passing the clicked date would shift the series.
+    const anchor = series ? (e.seriesDate || e.date) : date;
+    let r = null;
+    try {
+      r = await Promise.resolve(window.Steward.publishEvent({
+        id: e.id, title: title.trim(), date: anchor, time, where: where.trim(), blurb: blurb.trim(),
+        accent: e.accent || '', image: e.image || '', groupId: e.groupId || '',
+        ...(series ? { recur, day } : {}),
+      }));
+    } catch (x) { r = null; }
+    setBusy(false);
+    if (!r) { setErr('Couldn’t save — the relay didn’t accept the change. Your edits are still here.'); return; }
+    onClose();
+  };
+  return (
+    <SchModal title={series ? 'Edit meeting' : 'Edit event'} onClose={onClose} width={460}>
+      {series ? (
+        <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+          This one repeats — your changes apply to <b>every</b> occurrence, not just this date.
+        </div>
+      ) : null}
+      <div style={schLbl}>Name</div>
+      <input value={title} onChange={ev => setTitle(ev.target.value)} style={schFld} autoFocus />
+      {series ? (
+        <React.Fragment>
+          <div style={schLbl}>Day</div>
+          <select value={day} onChange={ev => setDay(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+            {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => <option key={i} value={i}>{d}</option>)}
+          </select>
+          <div style={schLbl}>Repeats</div>
+          <select value={recur} onChange={ev => setRecur(ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+            <option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option>
+          </select>
+        </React.Fragment>
+      ) : (
+        <React.Fragment>
+          <div style={schLbl}>Date</div>
+          <input type="date" value={date} onChange={ev => setDate(ev.target.value)} style={schFld} />
+        </React.Fragment>
+      )}
+      <div style={schLbl}>Time</div>
+      <input type="time" value={time} onChange={ev => setTime(ev.target.value)} style={schFld} />
+      <div style={schLbl}>Where</div>
+      <input value={where} onChange={ev => setWhere(ev.target.value)} placeholder="Optional" style={schFld} />
+      <div style={schLbl}>Details</div>
+      <textarea value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
+      {err ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600 }}>{err}</div> : null}
+      <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+        <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Cancel</button>
+        <button onClick={save} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, opacity: busy ? .5 : 1 }}>{busy ? 'Saving…' : 'Save changes'}</button>
+      </div>
+    </SchModal>
+  );
+}
+window.SchEventEdit = SchEventEdit;
+
 // Full event details, openable from anywhere an event is tapped in the console (calendar, group chat).
 // Shows the date/time/place/blurb plus the RSVP breakdown (with names) and a Remove action.
 function SchEventDetail({ event, onClose }) {
   const e = event || {};
+  const [editing, setEditing] = React.useState(false);
   const rsvps = window.useStewardRsvps ? window.useStewardRsvps() : {};
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
@@ -877,6 +962,7 @@ function SchEventDetail({ event, onClose }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5, flexWrap: 'wrap' }}>
                 {e.time ? <React.Fragment><Icon name="clock" size={13} color="var(--ink-3)" /> {e.time}</React.Fragment> : null}
                 {e.where ? <React.Fragment>{e.time ? <span style={{ opacity: .5 }}>·</span> : null}<Icon name="marker" size={13} color="var(--ink-3)" /> {e.where}</React.Fragment> : null}
+                {e.recur ? <React.Fragment><span style={{ opacity: .5 }}>·</span><Icon name="refresh" size={13} color="var(--ink-3)" /> {e.recur === 'fortnightly' ? 'Every 2 weeks' : e.recur === 'monthly' ? 'Monthly' : 'Weekly'}</React.Fragment> : null}
               </div>
             </div>
           </div>
@@ -886,9 +972,16 @@ function SchEventDetail({ event, onClose }) {
             {total ? <React.Fragment>{seg(rs.going, 'going', 'var(--sage)')}{seg(rs.maybe, 'maybe', '#8a6717')}{seg(rs.no, 'can’t make it', 'var(--ink-3)')}</React.Fragment> : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 6 }}>No RSVPs yet.</div>}
           </div>
         </div>
-        <div style={{ padding: '12px 22px 18px', borderTop: '1px solid var(--line)' }}>
-          <button onClick={() => { if (window.confirm('Remove this event for everyone?')) { window.Steward.removeEvent(e.id); onClose(); } }} className="sk-btn sk-btn--ghost" style={{ width: '100%', padding: 11, fontSize: 13.5, color: 'var(--clay-ink)' }}><Icon name="trash" size={15} color="currentColor" /> Remove event</button>
+        <div style={{ padding: '12px 22px 18px', borderTop: '1px solid var(--line)', display: 'flex', gap: 10 }}>
+          <button onClick={() => setEditing(true)} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5 }}><Icon name="pen" size={15} color="var(--on-clay)" /> Edit</button>
+          {/* The confirm has to say what actually happens: removeEvent() deletes the whole DOC, so on a repeating
+              meeting it takes every occurrence with it — "Remove this event" read as "just this date". */}
+          <button onClick={() => { if (window.confirm(e.recur
+              ? `Remove “${e.title || 'this meeting'}” and ALL its repeats, for everyone? This cannot be undone.`
+              : `Remove “${e.title || 'this event'}” for everyone? This cannot be undone.`)) { window.Steward.removeEvent(e.id); onClose(); } }}
+            className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5, color: 'var(--clay-ink)' }}><Icon name="trash" size={15} color="currentColor" /> {e.recur ? 'Remove series' : 'Remove'}</button>
         </div>
+        {editing ? <SchEventEdit event={e} onClose={() => { setEditing(false); onClose(); }} /> : null}
       </div>
     </div>
   );

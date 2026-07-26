@@ -603,19 +603,27 @@ function StewDashboard({ initial = 'overview' }) {
   React.useEffect(() => { const f = () => setVw(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
   const narrow = vw < 760;
 
-  // first-run wizard: on a fresh church (no published name) show the setup wizard once.
-  // Wait ~1.8s for the relay to answer so an existing church doesn't flash it; a localStorage
-  // flag (set on finish/skip) keeps it from returning.
+  // first-run wizard: shown only when THIS device created THIS church (`newchurch`, set by seedNewChurch) and
+  // setup hasn't been completed or skipped. It used to infer "fresh church" from the name still being empty
+  // 1.8s after mount, which is a guess about relay latency — wrong on 2G, and since this wizard now publishes
+  // the church's meetings, an established church that tripped it gained duplicate Sunday Service / Midweek
+  // events that can never replace the originals. The restore / adopt / become-steward paths all set
+  // `wizard.done`, so they were already covered; this closes the case where a real church simply loads slowly.
+  // The name check and the 1.8s wait are kept as belt-and-braces: never show it over a church that has a name.
   const [wizard, setWizard] = React.useState(false);
   const nameRef = React.useRef(church.name);
   nameRef.current = church.name;
   React.useEffect(() => {
-    let done = true; try { done = localStorage.getItem('trinityone.steward.wizard.done') === '1'; } catch {}
-    if (done || church.isNetwork) return;
+    let done = true, isNew = false;
+    try {
+      done = localStorage.getItem('trinityone.steward.wizard.done') === '1';
+      isNew = localStorage.getItem('trinityone.steward.newchurch') === '1';
+    } catch {}
+    if (done || !isNew || church.isNetwork) return;
     const t = setTimeout(() => { if (!nameRef.current) setWizard(true); }, 1800);
     return () => clearTimeout(t);
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
-  const finishWizard = () => { try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {} setWizard(false); };
+  const finishWizard = () => { try { localStorage.setItem('trinityone.steward.wizard.done', '1'); localStorage.removeItem('trinityone.steward.newchurch'); } catch {} setWizard(false); };
   // the church's brand accent (a hex) recolours the whole console too, derived from the one hex
   const ca = (typeof church.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(church.accent.trim())) ? church.accent.trim() : null;
   const accentStyle = ca ? {
