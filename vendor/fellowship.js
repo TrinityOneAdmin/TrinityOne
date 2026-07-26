@@ -5879,7 +5879,7 @@
         off = true;
         e.cbs.delete(token);
         if (!e.cbs.size) {
-          _sharedSubs.delete(key);
+          if (_sharedSubs.get(key) === e) _sharedSubs.delete(key);
           const c = e.closer;
           e.closer = null;
           if (c) {
@@ -6359,21 +6359,29 @@
   };
   var ADMITTED_D = "trinityone/admitted:";
   var ADMITTED_OK_LS = "trinityone.admitted.";
+  var _admittedDone = /* @__PURE__ */ new Set();
   function _noteAdmitted(cp, content) {
     if (!pub) return;
     let list = [];
     try {
-      list = (JSON.parse(content) || {}).pubkeys || [];
+      const c = JSON.parse(content) || {};
+      list = Array.isArray(c.pubkeys) ? c.pubkeys : [];
     } catch (e) {
       return;
     }
     if (!list.includes(pub)) return;
+    const key = cp + "|" + pub;
+    if (_admittedDone.has(key)) return;
     let already = false;
     try {
-      already = localStorage.getItem(ADMITTED_OK_LS + cp) === "1";
+      already = localStorage.getItem(ADMITTED_OK_LS + key) === "1";
     } catch (e) {
     }
-    if (already) return;
+    if (already) {
+      _admittedDone.add(key);
+      return;
+    }
+    _admittedDone.add(key);
     setTimeout(() => {
       const hub = _docsHubs.get(cp);
       if (hub) {
@@ -6389,7 +6397,7 @@
       } catch (e) {
       }
       try {
-        localStorage.setItem(ADMITTED_OK_LS + cp, "1");
+        localStorage.setItem(ADMITTED_OK_LS + key, "1");
       } catch (e) {
       }
     }, 0);

@@ -131,7 +131,9 @@ function _shared(key, open) {
     return () => {
       if (off) return; off = true;
       e.cbs.delete(token);
-      if (!e.cbs.size) { _sharedSubs.delete(key); const c = e.closer; e.closer = null; if (c) { try { c(); } catch (err) {} } }
+      // delete only if this key still maps to OUR entry: reconnectAll() clears the registry, so a stale
+      // handle running its cleanup afterwards would otherwise evict a NEW, live stream belonging to someone else.
+      if (!e.cbs.size) { if (_sharedSubs.get(key) === e) _sharedSubs.delete(key); const c = e.closer; e.closer = null; if (c) { try { c(); } catch (err) {} } }
     };
   };
 }
@@ -564,14 +566,28 @@ const _hubEosed = (hub) => { hub.eosed = true; if (hub.pendingFull) { hub.pendin
 // flag, so a healthy launch does not churn.
 const ADMITTED_D = 'trinityone/admitted:';
 const ADMITTED_OK_LS = 'trinityone.admitted.';
+const _admittedDone = new Set();   // cp|pub -> recovery already run THIS SESSION (see below)
 function _noteAdmitted(cp, content) {
   if (!pub) return;
   let list = [];
-  try { list = (JSON.parse(content) || {}).pubkeys || []; } catch (e) { return; }
+  try { const c = JSON.parse(content) || {}; list = Array.isArray(c.pubkeys) ? c.pubkeys : []; } catch (e) { return; }
   if (!list.includes(pub)) return;
+  // The one-shot must be IN MEMORY, not just persisted. With only the localStorage flag, a setItem that throws
+  // (quota — this app persists up to 3MB of docs-hub per church — or private mode) left `already` false forever,
+  // so every redelivery of the admitted doc re-fired the recovery, and the recovery's own refetch re-delivered
+  // that same doc. Self-feeding: measured 67-161 announceMembership publishes and as many hub teardowns in a
+  // few seconds, after which the hub was dead and the church stayed empty for the session, with no error and
+  // relaysHealthy() still true. AUDIT 2026-07-26.
+  //
+  // Keyed by cp|pub, not cp: a second identity on the same device (new identity, 12-word restore, an adopted
+  // steward seed) was suppressed by the FIRST member's flag and never recovered — and so was the same member
+  // after a revoke and re-admit.
+  const key = cp + '|' + pub;
+  if (_admittedDone.has(key)) return;
   let already = false;
-  try { already = localStorage.getItem(ADMITTED_OK_LS + cp) === '1'; } catch (e) {}
-  if (already) return;
+  try { already = localStorage.getItem(ADMITTED_OK_LS + key) === '1'; } catch (e) {}
+  if (already) { _admittedDone.add(key); return; }
+  _admittedDone.add(key);   // claim it BEFORE the async work, so a storage failure cannot cause a storm
   // deferred: we are inside the hub's onevent, and refetchChurchDocs tears the hub's subscription down
   setTimeout(() => {
     // A CURSORED refetch is useless here, and this is the whole bug the first version of this shipped with.
@@ -588,7 +604,7 @@ function _noteAdmitted(cp, content) {
     try { refetchChurchDocs(); } catch (e) {}
     // Mark it done only AFTER the work has been dispatched. The first version set the flag up front, so a
     // failure here (offline, hub gone) consumed the one-shot forever and no restart could heal it.
-    try { localStorage.setItem(ADMITTED_OK_LS + cp, '1'); } catch (e) {}
+    try { localStorage.setItem(ADMITTED_OK_LS + key, '1'); } catch (e) {}
   }, 0);
 }
 const _docsHubs = new Map();   // churchPubHex -> hub (kept warm for the app's lifetime; sub closes at 0 refs)
