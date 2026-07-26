@@ -70,6 +70,13 @@ labels turned out to be already done — those entries were stale.
 
 ## Open from the 2026-07-25 adversarial audit (5 reviews of the 48h diff)
 
+**Status 2026-07-26:** everything in this section has been worked through EXCEPT the four listed under
+"Still open" at the end. Fixed since: the wrong steward message, the wizard duplicate-meetings race, calendar
+event editing (plus a bare unconfirmed Remove that deleted for the whole church in one tap), the restored
+relay-address step, Today's panels watching the previous church after a switch, shared streams surviving a
+reconnect as corpses, the short-phrase wizard dead-end, and six invisible icons.
+
+
 The CRITICAL and HIGH findings were fixed in `ae79ddf` (deployed). These survived, unassessed — the owner
 asked for them to be noted, not fixed. Ranked.
 
@@ -125,3 +132,20 @@ asked for them to be noted, not fixed. Ranked.
 ### Tests
 - **Nothing asserts the three subscriptions still route through `_shared`.** Reinstating the duplicate-REQ
   regression directly (calling `_openSermons`) leaves the whole suite green.
+
+### Still open (deliberate)
+
+- **A crafted link to our own host adopts a relay + church with no confirmation.** The owner has seen the
+  evidence: the strong confirm that exists guards `?invite=` (identity replacement), not `?follow=&relay=`.
+  `followChurch` calls `addRelay` after only a `wss://` check, which enforces encryption, not trust. Fixing it
+  means a prompt in the join flow — a friction trade-off, so it is the owner's call. Narrowest option: prompt
+  only for relays outside the canonical pool (no friction for a normal invite, one prompt for a self-hosted
+  church).
+- **`appUrlOpen` does a full page reload**, destroying unsaved state — including a newly minted child account's
+  12 words, which `identity.jsx` holds in React state only.
+- **minSdk 22.** `autoVerify` needs API 23+, and only 31+ falls back silently; on 23-30 a failed verification
+  shows an "Open with…" chooser on every invite tap. The manifest comment claims otherwise.
+- **Self-hosted churches never get the in-app join path** — the manifest hard-codes the host, so their `/join`
+  link always opens the browser. Needs a per-domain intent-filter the manifest cannot know at build time.
+- **One-frame flash** of the wizard's quiz heading before the effect supplies its inputs. Cosmetic; deriving the
+  draw in the `setSaved` handler instead of an effect would remove it.
