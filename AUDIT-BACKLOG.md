@@ -149,3 +149,20 @@ asked for them to be noted, not fixed. Ranked.
   link always opens the browser. Needs a per-domain intent-filter the manifest cannot know at build time.
 - **One-frame flash** of the wizard's quiz heading before the effect supplies its inputs. Cosmetic; deriving the
   draw in the `setSaved` handler instead of an effect would remove it.
+
+### Found by the on-device hard test, 2026-07-26 (OPPO CPH2477, Android 12)
+
+- **FIXED:** re-tapping the same invite link did nothing. The dedupe guard that stops a cold-start reload loop
+  was applied to `appUrlOpen` too, but that event only fires because the member just tapped a link — it is never
+  a replay. Now only `getLaunchUrl()` is de-duplicated.
+- **OPEN:** skipping setup silently discards a pending invite. A follow arriving before onboarding is held in
+  `pendingFollowRef` (memory only) and applied when the wizard completes; "Skip setup for now" drops it with no
+  trace, and `trinityone.onboarded` stays null so the wizard returns on next launch with the church gone. The
+  member has to find the link again. Persisting the pending follow would fix it.
+- **Low-end device baseline** (Helio G-series, 3.8GB RAM): install 24s, first-ever cold start 3.9s, later cold
+  starts 2.1s, first paint 1.5s, first contentful paint 3.5s, heap 30MB, 325 DOM nodes, and — the good news —
+  **zero long tasks over 50ms**, so nothing blocks the main thread. The 3.5s FCP is CPU-bound: 42 separate
+  script files to parse on every cold start. Note the APK serves its shell from local files, so this is not a
+  bandwidth cost; the thin-pipe cost is relay traffic and module downloads only.
+- App links verify on Android 12 as well as 16. Android 12 (SDK 31) is the first version that falls back
+  silently, so this device cannot test the "Open with…" chooser on API 23-30 — that remains unverified.

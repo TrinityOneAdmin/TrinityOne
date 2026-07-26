@@ -416,7 +416,13 @@ function App() {
       }
       return out.get('follow') ? out.toString() : null;
     };
-    const apply = (url) => {
+    // `replay` = this URL came from getLaunchUrl(), which keeps returning the SAME url after we navigate, so it
+    // must be de-duplicated or the app reload-loops on a cold start. An appUrlOpen event is the opposite: it
+    // fires because the member just tapped a link THIS INSTANT, so it must always be honoured.
+    // Found by testing on hardware: tap an invite, skip setup (which discards the deferred join), tap the same
+    // invite again — and nothing happened at all, because the dedupe had already consumed it. No message, no
+    // wizard, no church. The member's only escape was to force-quit the app.
+    const apply = (url, replay) => {
       const q = safeQuery(url);
       if (!q) return;
       // getLaunchUrl keeps returning the same URL after we reload, so remember what we've handled or the app
@@ -427,8 +433,8 @@ function App() {
       const h = (() => { let x = 5381; for (let i = 0; i < url.length; i++) x = ((x << 5) + x + url.charCodeAt(i)) | 0; return String(x); })();
       try {
         const seen = (sessionStorage.getItem('trinityone.handledLinks') || '').split(',').filter(Boolean);
-        if (seen.includes(h)) return;
-        sessionStorage.setItem('trinityone.handledLinks', [...seen, h].slice(-5).join(','));
+        if (replay && seen.includes(h)) return;   // only the launch-URL replay is de-duplicated
+        if (!seen.includes(h)) sessionStorage.setItem('trinityone.handledLinks', [...seen, h].slice(-5).join(','));
       } catch (e) {}
       if (location.search.replace(/^\?/, '') === q) return;   // already showing this invite
       location.search = '?' + q;
@@ -437,8 +443,8 @@ function App() {
     try {
       const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
       if (AppP) {
-        if (AppP.getLaunchUrl) Promise.resolve(AppP.getLaunchUrl()).then(r => { if (r && r.url) apply(r.url); }).catch(() => {});
-        if (AppP.addListener) Promise.resolve(AppP.addListener('appUrlOpen', (e) => { if (e && e.url) apply(e.url); }))
+        if (AppP.getLaunchUrl) Promise.resolve(AppP.getLaunchUrl()).then(r => { if (r && r.url) apply(r.url, true); }).catch(() => {});
+        if (AppP.addListener) Promise.resolve(AppP.addListener('appUrlOpen', (e) => { if (e && e.url) apply(e.url, false); }))
           .then(h => { remove = (h && h.remove) ? () => h.remove() : null; }).catch(() => {});
       }
     } catch (e) {}
