@@ -124,12 +124,15 @@ fn main() {
                     }
                     applog(&lp, &format!("port {PORT} reachable = {up}"));
                     // Combined "church-in-a-box": open the Steward console (church management), which auto-uses
-                    // this local relay (same origin). First launch → the guided setup wizard; later launches →
-                    // the dashboard. relayapp=1 tells the console it's already running its own relay.
-                    // First launch → straight into the guided church setup. Afterwards → the launcher (home.html),
-                    // where the operator picks Full suite / Relay only / Console only.
+                    // this local relay (same origin). relayapp=1 tells the console it is already running its own
+                    // relay, so the setup wizard says so instead of asking for a relay address.
+                    // First launch → the console, which shows "Start a new church" and then its own first-run
+                    // wizard. Afterwards → the launcher (home.html), where the operator picks Full suite /
+                    // Relay only / Console only.
+                    // (?setup=1 was dropped 2026-07-26: it opened a SECOND setup wizard that has been deleted,
+                    // so the param had become inert and the comment claiming it opened the wizard was false.)
                     let url = if first_run {
-                        format!("http://127.0.0.1:{PORT}/steward.html?setup=1&relayapp=1")
+                        format!("http://127.0.0.1:{PORT}/steward.html?relayapp=1")
                     } else {
                         format!("http://127.0.0.1:{PORT}/relay-app/home.html")
                     };

@@ -278,6 +278,19 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [relayToken, setRelayToken] = React.useState('');
   const [relayMsg, setRelayMsg] = React.useState('');
   const [relayBusy, setRelayBusy] = React.useState(false);
+  const [relayAddr, setRelayAddr] = React.useState('');
+  const [addrMsg, setAddrMsg] = React.useState('');
+  // The desktop "church-in-a-box" build serves the console from its OWN relay, so there is nothing to add.
+  const isRelayApp = (() => { try { return new URLSearchParams(location.search).get('relayapp') === '1'; } catch (e) { return false; } })();
+  const addOwnRelay = () => {
+    const u = (relayAddr || '').trim(); if (!u) return;
+    // addRelay RETURNS false for a malformed address, a duplicate, or this church's own relay — it never throws.
+    // The version of this that shipped before treated every outcome as success, so a leader who typoed their
+    // address saw a green tick and walked away believing their church was reachable there.
+    const ok = window.Steward.addRelay ? window.Steward.addRelay(u) : false;
+    if (ok) { setAddrMsg('✓ Added — your church now uses this relay too.'); setRelayAddr(''); }
+    else setAddrMsg('✗ Couldn’t add that. Check it starts with wss:// and isn’t one you’ve already added.');
+  };
   const phrase = (() => { try { return window.Steward.exportMnemonic() || ''; } catch { return ''; } })();
   const npub = church.npub || window.Steward.npub || '';
   // backup check: after they tick "written down", make them re-type 3 of the 12 words before continuing
@@ -435,6 +448,25 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
               <button onClick={doRegister} disabled={relayBusy || !relayToken.trim()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: (relayBusy || !relayToken.trim()) ? .5 : 1 }}>Connect</button>
             </div>
             {relayMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: relayMsg[0] === '✓' ? 'var(--sage)' : relayMsg[0] === '✗' ? 'var(--clay)' : 'var(--ink-3)' }}>{relayMsg}</div> : null}
+            {/* Restores the capability lost when WizRelays was deleted with the second wizard: this panel took
+                only an admin TOKEN (which registers the church ON a relay), with no way to tell the church which
+                relay ADDRESS to publish to and read from. A church-in-a-box operator finished setup with their
+                own relay running and the church still pointed only at the shared pool. Different jobs — a church
+                self-hosting needs both. */}
+            {isRelayApp ? (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+                <b>This app is your relay.</b> Your church already publishes here — there’s nothing to connect.
+              </div>
+            ) : (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Have your relay’s <b>address</b>? Add it so your church publishes and reads there as well as on the shared relays.</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input value={relayAddr} onChange={e => setRelayAddr(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addOwnRelay(); }} placeholder="wss://relay.yourchurch.org" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ ...fld, height: 44, fontWeight: 400, fontFamily: 'var(--mono)', fontSize: 13 }} />
+                  <button onClick={addOwnRelay} disabled={!relayAddr.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: relayAddr.trim() ? 1 : .5 }}>Add</button>
+                </div>
+                {addrMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: addrMsg[0] === '✓' ? 'var(--sage)' : 'var(--clay)' }}>{addrMsg}</div> : null}
+              </div>
+            )}
           </div>
         )}
       </div>
