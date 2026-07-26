@@ -109,17 +109,42 @@ function relayRejectionActive() {
 }
 
 // surfaces a relay rejection (e.g. this console's church key isn't the one the relay enforces)
+// Turn the relay's refusal into something true and actionable.
+//
+// AUDIT 2026-07-25: this used to test three substrings and pick one of two sentences. Two consequences, both
+// bad. "invalid: a newer version of this is already stored" fell through to "check the connection and try
+// again" — the connection is fine and trying again will fail identically, forever. And anything containing
+// "blocked" — including "blocked: this event was deleted by its author" — was diagnosed as WRONG CHURCH, which
+// tells the steward to restore their church key: a destructive action, suggested for an unrelated cause.
+//
+// Rules: only the genuine membership refusal counts as wrong-church (it is the only one that should raise the
+// relay-rejection alarm); each known reason gets its own sentence; anything else we do not recognise is quoted
+// from the relay verbatim rather than given an invented explanation. Only a genuine connection failure — the
+// case with no reason at all — is auto-dismissed, because the others need the steward to do something.
+function publishErrorMessage(reason) {
+  const r = String(reason || '');
+  if (/not a member|not permitted/i.test(r)) return { wrongChurch: true, sticky: true,
+    msg: 'Changes weren’t saved: this relay is set up for a different church. Restore this church’s key in Settings, or point the relay at this church.' };
+  if (/newer version/i.test(r)) return { wrongChurch: false, sticky: true,
+    msg: 'Someone else saved a newer version of this while you were editing. Reload the page and make your change again — trying again as-is won’t help.' };
+  if (/deleted by its author/i.test(r)) return { wrongChurch: false, sticky: true,
+    msg: 'That item has been deleted, so it can’t be changed. Create it again if you still need it.' };
+  if (/too far in the future/i.test(r)) return { wrongChurch: false, sticky: true,
+    msg: 'Changes weren’t saved: this device’s clock is wrong, so the relay refused the date. Fix the date and time, then try again.' };
+  if (/^(invalid|blocked|restricted|rejected)\b/i.test(r)) return { wrongChurch: false, sticky: true,
+    msg: 'The relay refused this change: ' + r.replace(/^(invalid|blocked|restricted|rejected):?\s*/i, '') };
+  return { wrongChurch: false, sticky: false, msg: 'Couldn’t save to the relay — check the connection and try again.' };
+}
+
 function PublishErrorBanner() {
   const [msg, setMsg] = React.useState('');
   React.useEffect(() => {
     const f = (e) => {
-      const reason = (e.detail && e.detail.reason) || '';
-      const wrongChurch = /not a member|not permitted|blocked/i.test(reason);
+      const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '');
       if (wrongChurch) noteRelayRejection();
-      setMsg(wrongChurch
-        ? 'Changes weren’t saved: this relay is set up for a different church. Restore this church’s key in Settings, or point the relay at this church.'
-        : 'Couldn’t save to the relay — check the connection and try again.');
-      clearTimeout(f._t); f._t = setTimeout(() => setMsg(''), 9000);
+      setMsg(m);
+      clearTimeout(f._t);
+      if (!sticky) f._t = setTimeout(() => setMsg(''), 9000);   // actionable failures stay until dismissed
     };
     window.addEventListener('steward-publish-error', f);
     return () => window.removeEventListener('steward-publish-error', f);
