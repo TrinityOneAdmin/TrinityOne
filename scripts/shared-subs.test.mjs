@@ -150,3 +150,17 @@ test('a stream that fails to open does not poison the key', () => {
   assert.deepEqual(got, [['recovered']]);
   off();
 });
+
+test('the duplicated subscriptions still route through _shared', () => {
+  // The test auditor's finding: every property of _shared was covered, but nothing checked that anything CALLS
+  // it. Rewriting subscribeSermons to call _openSermons directly reinstates the duplicate-REQ regression this
+  // exists to prevent — two REQs for one stream, two slots against the 64-per-connection cap — and left the
+  // whole suite green.
+  const SRC = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8');
+  for (const fn of ['subscribeSermons', 'subscribeSafetyCheck', 'subscribeCareRequests']) {
+    const at = SRC.indexOf(`  ${fn}(`);
+    assert.notEqual(at, -1, `${fn} is gone`);
+    const block = SRC.slice(at, at + 700);
+    assert.match(block, /_shared\(/, `${fn} no longer shares its stream — it opens a second REQ per caller`);
+  }
+});

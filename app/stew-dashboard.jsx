@@ -308,7 +308,10 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   }, [saved, words.length]);
   const [vw, setVw] = React.useState(['', '', '']);
   const verified = challenge.length === 3 && challenge.every((pos, i) => vw[i].trim().toLowerCase() === (words[pos] || '').toLowerCase());
-  const canContinue = !phrase || (saved && verified);
+  // A phrase we cannot quiz (imported key, or fewer than 12 words) must not trap the steward: the challenge
+  // effect early-returns in that case, so `verified` could never become true and Continue was dead forever.
+  const canQuiz = words.length >= 12;
+  const canContinue = !phrase || !canQuiz || (saved && verified);
   // step 2 — lock the church key on this device with a PIN (optional, strongly recommended)
   const [pinA, setPinA] = React.useState('');
   const [pinB, setPinB] = React.useState('');
@@ -405,7 +408,8 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 15px', borderRadius: 12, background: 'var(--surface-2)', border: '1px dashed var(--line)' }}>
         <Icon name="lock" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} />
         <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
-          {verified ? 'Recovery phrase hidden.' : 'Phrase hidden — answer from the paper copy you just wrote.'}
+          {!canQuiz ? 'Recovery phrase hidden. (This key’s phrase is too short to check here — keep your written copy safe.)'
+            : verified ? 'Recovery phrase hidden.' : 'Phrase hidden — answer from the paper copy you just wrote.'}
         </div>
         <button onClick={() => { setSaved(false); setVw(['', '', '']); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 12.5, flexShrink: 0 }}>Show my words again</button>
       </div>

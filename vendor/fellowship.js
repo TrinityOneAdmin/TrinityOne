@@ -6794,6 +6794,17 @@
         }
       }
     }
+    for (const [k, e] of [..._sharedSubs]) {
+      const c = e.closer;
+      e.closer = null;
+      if (c) {
+        try {
+          c();
+        } catch (err) {
+        }
+      }
+      _sharedSubs.delete(k);
+    }
     const urls = /* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS]);
     for (const m of _churchRelays.values()) for (const u of m.keys()) urls.add(u);
     for (const u of urls) {
@@ -8708,14 +8719,19 @@
     // 'declined'|'handled', needId, sealed, ...body }.
     // Shared: Today opens this twice (the care-team list and the asker's own requests, filtered differently
     // from the SAME stream) — one REQ, both fed. See _shared().
-    subscribeCareRequests(cb) {
-      const cp0 = window.Fellowship.churchPub;
+    // `churchNpub` is optional and should be passed by any caller that knows which church it is rendering.
+    // AUDIT 2026-07-25: these read `Fellowship.churchPub`, which an effect in <App> sets. React runs CHILD passive
+    // effects before the parent's, so on a church switch the Today panels re-subscribed while the global still
+    // held the PREVIOUS church — and since their dep had already changed, they never re-ran. The panels then
+    // watched the old church for the rest of the session. Passing the church removes the ordering dependency.
+    subscribeCareRequests(cb, churchNpub) {
+      const cp0 = churchNpub && toPub(churchNpub) || window.Fellowship.churchPub;
       if (!cp0) return () => {
       };
-      return _shared("carereq|" + cp0, (emit) => window.Fellowship._openCareRequests(emit))(cb);
+      return _shared("carereq|" + cp0, (emit) => window.Fellowship._openCareRequests(emit, cp0))(cb);
     },
-    _openCareRequests(cb) {
-      const cp = window.Fellowship.churchPub;
+    _openCareRequests(cb, forChurch) {
+      const cp = forChurch || window.Fellowship.churchPub;
       if (!cp) return () => {
       };
       const byId = /* @__PURE__ */ new Map();
@@ -8968,14 +8984,14 @@
     // {id, message, by, at}, or cb(null) when there's none / it was closed. The relay only serves it to
     // authenticated members (roster-gated), so an outsider never learns the church declared an emergency.
     // Shared: Today renders the safety check in two places — one REQ, both fed. See _shared().
-    subscribeSafetyCheck(cb) {
-      const cp0 = window.Fellowship.churchPub;
+    subscribeSafetyCheck(cb, churchNpub) {
+      const cp0 = churchNpub && toPub(churchNpub) || window.Fellowship.churchPub;
       if (!cp0) return () => {
       };
-      return _shared("safety|" + cp0, (emit) => window.Fellowship._openSafetyCheck(emit))(cb);
+      return _shared("safety|" + cp0, (emit) => window.Fellowship._openSafetyCheck(emit, cp0))(cb);
     },
-    _openSafetyCheck(cb) {
-      const cp = window.Fellowship.churchPub;
+    _openSafetyCheck(cb, forChurch) {
+      const cp = forChurch || window.Fellowship.churchPub;
       if (!cp) return () => {
       };
       let best = null;

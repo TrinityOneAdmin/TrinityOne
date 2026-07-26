@@ -30,6 +30,10 @@ function Icon({ name, size = 22, stroke = 1.8, fill = false, style = {}, color =
     wallet: <><rect x="3.5" y="6" width="17" height="13" rx="3" {...p} /><path d="M3.5 9.5h17" {...p} /><circle cx="16.5" cy="13" r="1.3" fill={color} stroke="none" /></>,
     bank: <><path d="M4 9.5 12 4l8 5.5" {...p} /><path d="M5 9.5h14M6 10v8M10 10v8M14 10v8M18 10v8M4 19h16" {...p} /></>,
     power: <><path d="M12 4v8" {...p} /><path d="M7.6 6.5a7 7 0 1 0 8.8 0" {...p} /></>,
+    // `alert` and `info` were used in screens-chat, screens-watch and stew-dashboard (6 places) but never
+    // defined — Icon renders `paths[name] || null`, so each was a silent empty SVG next to its warning text.
+    alert: <><path d="M12 4.6 2.9 19.4h18.2L12 4.6Z" {...p} /><path d="M12 10.2v4" {...p} /><circle cx="12" cy="16.8" r="1" fill={color} stroke="none" /></>,
+    info: <><circle cx="12" cy="12" r="8.6" {...p} /><path d="M12 11.4v4.6" {...p} /><circle cx="12" cy="8.2" r="1" fill={color} stroke="none" /></>,
     bell: <><path d="M6.5 9.5a5.5 5.5 0 0 1 11 0c0 4.2 1.3 5.6 1.8 6.1.3.3.1.9-.4.9H5.1c-.5 0-.7-.6-.4-.9.5-.5 1.8-1.9 1.8-6.1Z" {...p} /><path d="M10 19.5a2 2 0 0 0 4 0" {...p} /></>,
     pause: <><rect x="6.5" y="5" width="3.6" height="14" rx="1.2" {...p} fill={color} /><rect x="13.9" y="5" width="3.6" height="14" rx="1.2" {...p} fill={color} /></>,
     rewind: <><path d="M11 6.5 5 12l6 5.5v-11Z" {...p} fill={color} /><path d="M19 6.5 13 12l6 5.5v-11Z" {...p} fill={color} /></>,

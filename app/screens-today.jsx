@@ -334,7 +334,7 @@ function CareRequests({ ctx }) {
   React.useEffect(() => {
     if (!isCareAdmin || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
     let unsub = null;
-    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {}
+    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open')), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [isCareAdmin, ctx.church && ctx.church.npub]);
   if (!isCareAdmin || !reqs.length) return null;
@@ -422,7 +422,7 @@ function AskForHelp({ ctx }) {
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeCareRequests)) return;
     let unsub = null;
-    try { unsub = window.Fellowship.subscribeCareRequests(list => setMine((list || []).filter(r => (r.from || '').toLowerCase() === myPub))); } catch (e) {}
+    try { unsub = window.Fellowship.subscribeCareRequests(list => setMine((list || []).filter(r => (r.from || '').toLowerCase() === myPub)), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [ctx.church && ctx.church.npub, myPub]);
   if (!careOn) return null;
@@ -637,7 +637,7 @@ function SafetyDock({ ctx, onOpenToday }) {
         setCheck(c); setErr('');
         setAnswered(c ? (safetyAck(c.id) || '') : '');
         try { setDismissed(!!c && localStorage.getItem('trinityone.safetydockx.' + c.id) === '1'); } catch (e) { setDismissed(false); }
-      });
+      }, ctx.church && ctx.church.npub);
     } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [ctx.church && ctx.church.npub]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -726,7 +726,7 @@ function SafetyBanner({ ctx, persistent }) {
         let seen = false;
         try { seen = !!id && localStorage.getItem('trinityone.safetyclosed.' + id) === '1'; } catch (e) {}
         setClosedHelp(id && safetyAck(id) === 'help' && !seen ? id : '');
-      });
+      }, ctx.church && ctx.church.npub);
     } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [ctx.church && ctx.church.npub]);   // eslint-disable-line react-hooks/exhaustive-deps
