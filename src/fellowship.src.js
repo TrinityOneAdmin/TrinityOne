@@ -552,6 +552,33 @@ const _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
 const _hubEosed = (hub) => { hub.eosed = true; if (hub.pendingFull) { hub.pendingFull = false; hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; } };
 
 // ── docs hub: the church's kind-30078 corpus (groups, plans, devotionals, serving, care, …) ──
+// APPROVAL RECOVERY. A church with approval on withholds its whole corpus from a member until a steward
+// admits them — the relay's read gate is `member AND (not gated OR admitted)`. Approval flips that answer on
+// the RELAY, but the member's app already has its subscriptions open and has already been told (by an empty
+// EOSE) that there is nothing there. Nothing re-ran them, so an approved member sat looking at an empty
+// church — no groups, no care, no roster — until something else happened to force a reconnect.
+// Observed on a real device 2026-07-26: after approval, subscribeChurchGroups returned 0; re-announcing
+// membership by hand took it to 1 immediately and the hub went from 14 docs to 30.
+// The admitted list IS delivered to the member, so use it: the first time we see ourselves on it, re-announce
+// (so the relay definitely holds our member doc) and re-fetch. Once per church per device, via a persisted
+// flag, so a healthy launch does not churn.
+const ADMITTED_D = 'trinityone/admitted:';
+const ADMITTED_OK_LS = 'trinityone.admitted.';
+function _noteAdmitted(cp, content) {
+  if (!pub) return;
+  let list = [];
+  try { list = (JSON.parse(content) || {}).pubkeys || []; } catch (e) { return; }
+  if (!list.includes(pub)) return;
+  let already = false;
+  try { already = localStorage.getItem(ADMITTED_OK_LS + cp) === '1'; } catch (e) {}
+  if (already) return;
+  try { localStorage.setItem(ADMITTED_OK_LS + cp, '1'); } catch (e) {}
+  // deferred: we are inside the hub's onevent, and refetchChurchDocs tears the hub's subscription down
+  setTimeout(() => {
+    try { window.Fellowship.announceMembership(cp); } catch (e) {}
+    try { refetchChurchDocs(); } catch (e) {}
+  }, 0);
+}
 const _docsHubs = new Map();   // churchPubHex -> hub (kept warm for the app's lifetime; sub closes at 0 refs)
 // PERF (AUDIT-2026-07-24): replaying the docs hub was O(handlers x corpus). Every _onChurchDocs registration
 // copied the WHOLE buffer, sorted it, and dispatched all of it to a handler that then discarded everything not
@@ -600,6 +627,7 @@ function _docsHub(cp) {
   // groups decrypt) — both are in-memory only, and the since-cursor means they won't re-arrive.
   for (const e of hub.buf.values()) _absorbRoster(cp, _dtag(e), e);   // absorb the full roster FIRST so the group-key author check can trust roster stewards regardless of buffer order
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e); }
+  for (const e of hub.buf.values()) { if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content); }   // approved while the app was closed
   return hub;
 }
 function _docsHubOpen(hub) {
@@ -629,6 +657,7 @@ function _docsHubOpen(hub) {
         for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); }
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return;
       }
+      if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);   // just approved? re-announce + re-fetch once
       if (d.startsWith(GROUPKEY_D)) { _ingestGroupKey(cp, e); return; }
       // The care key can arrive AFTER the needs it unlocks. subscribeCareNeeds decodes each need AT INGEST
       // and its onroster() only re-filters those already-decoded entries — so a card rendered "details

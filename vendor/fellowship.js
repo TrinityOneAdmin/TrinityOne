@@ -6357,6 +6357,38 @@
       hub.dirty = true;
     }
   };
+  var ADMITTED_D = "trinityone/admitted:";
+  var ADMITTED_OK_LS = "trinityone.admitted.";
+  function _noteAdmitted(cp, content) {
+    if (!pub) return;
+    let list = [];
+    try {
+      list = (JSON.parse(content) || {}).pubkeys || [];
+    } catch (e) {
+      return;
+    }
+    if (!list.includes(pub)) return;
+    let already = false;
+    try {
+      already = localStorage.getItem(ADMITTED_OK_LS + cp) === "1";
+    } catch (e) {
+    }
+    if (already) return;
+    try {
+      localStorage.setItem(ADMITTED_OK_LS + cp, "1");
+    } catch (e) {
+    }
+    setTimeout(() => {
+      try {
+        window.Fellowship.announceMembership(cp);
+      } catch (e) {
+      }
+      try {
+        refetchChurchDocs();
+      } catch (e) {
+      }
+    }, 0);
+  }
   var _docsHubs = /* @__PURE__ */ new Map();
   function _dkeyOf(d) {
     const s0 = String(d || "");
@@ -6424,6 +6456,9 @@
       if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e);
       else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e);
     }
+    for (const e of hub.buf.values()) {
+      if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content);
+    }
     return hub;
   }
   function _docsHubOpen(hub) {
@@ -6458,6 +6493,7 @@
           }
           return;
         }
+        if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);
         if (d.startsWith(GROUPKEY_D)) {
           _ingestGroupKey(cp, e);
           return;

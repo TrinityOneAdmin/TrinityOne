@@ -52,8 +52,12 @@ after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(data
 // was written for. We seed a followed+active church so the church-doc subscriptions actually run.
 async function boot(path, { ms = 15000, seed = null } = {}) {
   const prof = join(tmpdir(), 'trin-chr-' + process.pid + '-' + Math.abs(path.split('').reduce((a, c) => a + c.charCodeAt(0), 0)));
+  // Never let a test reach production. The app dials wss://app.trinityone.church and the Tailscale funnel from
+  // CANONICAL_RELAYS regardless of where the page came from; resolving them to a dead local port means a test
+  // cannot write to the live relay even by accident.
+  const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
   const chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu',
-    `--user-data-dir=${prof}`, '--window-size=1280,1200', `http://127.0.0.1:${PORT}${path}`], { stdio: 'ignore' });
+    BLOCK_PROD, `--user-data-dir=${prof}`, '--window-size=1280,1200', `http://127.0.0.1:${PORT}${path}`], { stdio: 'ignore' });
   try {
     let targets = null;
     for (let i = 0; i < 40 && !targets; i++) { await sleep(400); try { targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json(); } catch {} }
@@ -90,9 +94,15 @@ async function boot(path, { ms = 15000, seed = null } = {}) {
   } finally { try { chr.kill('SIGKILL'); } catch {} try { rmSync(prof, { recursive: true, force: true }); } catch {} }
 }
 
-// A church the app will treat as followed + active. The npub is syntactically real but nobody's, so nothing
-// resolves — which is fine: we are testing that the code PATH runs without throwing, not that data arrives.
-const CHURCH = 'npub1n7hxzgszdhsnsdyaypzfvyclfcwpvnq8deahegtdp8euj7m4gkjq0x7zhh';
+// A church the app will treat as followed + active. It MUST be freshly generated, never a real npub.
+//
+// 2026-07-26: this was hardcoded to the OWNER'S REAL CHURCH. The member app always dials CANONICAL_RELAYS
+// (a8) no matter which relay serves the page, so every headless boot minted a fresh identity, followed that
+// church and announced membership — putting an "Anonymous wants to join" request on the owner's live console.
+// Each `npm test` boots three. Fifteen of them piled up before anyone noticed.
+// Two independent guards now: a throwaway church per run, AND chromium is pointed at a black hole for the
+// production hosts (see BLOCK_PROD) so no test traffic can reach a8 even if something else regresses.
+const CHURCH = npubEncode(getPublicKey(generateSecretKey()));
 const SEEDED = {
   'trinityone.onboarded': true,
   'trinityone.activeChurch': CHURCH,
