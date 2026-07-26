@@ -21,7 +21,7 @@
         let m = new Date(from.getFullYear(), from.getMonth(), 1);
         while (m <= to) {
           const occ = new Date(m); while (occ.getDay() !== day) occ.setDate(occ.getDate() + 1);
-          if (inRange(occ) && occ >= anchor) out.push({ ...e, date: iso(occ), recurring: true });
+          if (inRange(occ) && occ >= anchor) out.push({ ...e, date: iso(occ), seriesDate: e.date, recurring: true });
           m = new Date(m.getFullYear(), m.getMonth() + 1, 1);
         }
       } else {                                          // weekly / fortnightly
@@ -29,7 +29,7 @@
         let cur = new Date(Math.max(from.getTime(), anchor.getTime())); cur.setHours(0, 0, 0, 0);
         while (cur.getDay() !== day) cur.setDate(cur.getDate() + 1);
         if (step === 14) { const weeks = Math.round((cur - anchor) / (7 * 864e5)); if (weeks % 2 !== 0) cur.setDate(cur.getDate() + 7); }   // stay in phase with the anchor
-        for (; cur <= to; cur.setDate(cur.getDate() + step)) if (cur >= anchor) out.push({ ...e, date: iso(cur), recurring: true });
+        for (; cur <= to; cur.setDate(cur.getDate() + step)) if (cur >= anchor) out.push({ ...e, date: iso(cur), seriesDate: e.date, recurring: true });
       }
     }
     return out.sort((a, b) => ((a.date || '') + (a.time || '')).localeCompare((b.date || '') + (b.time || '')));
