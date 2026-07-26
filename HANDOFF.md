@@ -28,8 +28,15 @@ and roster folding so a re-seated member appears once. Suite: **340 pass**.
 - `DEVICE-TEST-CHECKLIST.md` — ~45 checks across member app / console / relay. Nothing in it is covered by
   `npm test`, because none of it can be.
 
-Nothing is committed or pushed. A fresh release-signed APK with all of the above is installed on the **OPPO**
-only; the **Pixel** needs "Allow USB debugging" re-tapped. Owner will device-test over the coming days.
+**All of that work is on the branch `recovery/2026-07-26` (`e9a5541`), NOT on `main`, and nothing is pushed.**
+That was deliberate: the release bundle builds from `main`, so landing it there would arm the deploy button
+while those CRITICALs are open. `main` is untouched at `43fdffc` — which is also what a8 is running, so the
+kind-0 storm above is already live there and is the one thing worth fixing first.
+To work on it: `git checkout recovery/2026-07-26`. Merge to `main` only once the CRITICALs are closed.
+
+A fresh release-signed APK with all of the above is installed on the **OPPO** only; the **Pixel** needs
+"Allow USB debugging" re-tapped (it keeps dropping off wifi adb). Owner will device-test over the coming days —
+but NOT the transfer or lost-words routes until CRITICALs 1 and 2 are fixed, or they'll be debugging known bugs.
 Next agreed build: the interactive "system view" page (see the memory note).
 
 ---
