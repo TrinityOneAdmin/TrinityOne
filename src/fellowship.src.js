@@ -572,11 +572,23 @@ function _noteAdmitted(cp, content) {
   let already = false;
   try { already = localStorage.getItem(ADMITTED_OK_LS + cp) === '1'; } catch (e) {}
   if (already) return;
-  try { localStorage.setItem(ADMITTED_OK_LS + cp, '1'); } catch (e) {}
   // deferred: we are inside the hub's onevent, and refetchChurchDocs tears the hub's subscription down
   setTimeout(() => {
+    // A CURSORED refetch is useless here, and this is the whole bug the first version of this shipped with.
+    // The relay withheld the church's corpus while we were unadmitted, so the documents we are missing are as
+    // OLD as the church — groups created at setup, a member approved the following Sunday. But _hubCursor has
+    // already advanced hub.since to the admitted doc's created_at (i.e. now) before we get here, so a normal
+    // refetch asks only for the last SINCE_SLOP (3 days) and returns nothing. Proven in audit 2026-07-26:
+    // with docs aged 10 days the member stayed at 0 groups through approval AND a restart; with docs aged 0
+    // days the same code produced 3 groups. My device test happened to use a church with fresh docs, which is
+    // exactly why it looked fixed. Reset the cursor so this one refetch is a FULL sync.
+    const hub = _docsHubs.get(cp);
+    if (hub) { hub.since = 0; hub.fullAt = 0; }
     try { window.Fellowship.announceMembership(cp); } catch (e) {}
     try { refetchChurchDocs(); } catch (e) {}
+    // Mark it done only AFTER the work has been dispatched. The first version set the flag up front, so a
+    // failure here (offline, hub gone) consumed the one-shot forever and no restart could heal it.
+    try { localStorage.setItem(ADMITTED_OK_LS + cp, '1'); } catch (e) {}
   }, 0);
 }
 const _docsHubs = new Map();   // churchPubHex -> hub (kept warm for the app's lifetime; sub closes at 0 refs)

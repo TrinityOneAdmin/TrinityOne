@@ -166,3 +166,49 @@ asked for them to be noted, not fixed. Ranked.
   bandwidth cost; the thin-pipe cost is relay traffic and module downloads only.
 - App links verify on Android 12 as well as 16. Android 12 (SDK 31) is the first version that falls back
   silently, so this device cannot test the "Open with…" chooser on API 23-30 — that remains unverified.
+
+## Member-journey audit, 2026-07-26 — OPEN (ranked)
+
+Five reviews; this one walked the whole path a member takes. Findings reproduced against a real relay + real
+app in headless chromium. The approval-recovery bug it found (#4 below) is FIXED; the rest are open and the
+top three are product-level, not patches.
+
+1. **CRITICAL — the 12 words cannot be used to restore anything.** The only mnemonic input is the `restore`
+   pane of `NostrSheet` (`app/screens-chat.jsx:228`), which mounts only when the page URL carries
+   `?identity=restore` (`:263`). `setNostr(true)` is called nowhere. In the APK the WebView loads a fixed URL
+   and the member cannot type one, so on a new phone the paper is useless — while `app/identity.jsx:107` says
+   the words are "the **only** way to get your account back" and `app/help-data.jsx:269` walks through a
+   "choose Restore" flow that does not exist. Hits every member who ever changes phones.
+2. **CRITICAL — a restored member would still be churchless and nameless.** `followedChurches` is device-local
+   (`app/app.jsx:501`); the data IS on the relay (`member:<cp>` docs, kind-0) but nothing ever queries the
+   member's OWN docs — the only `authors:[pub]` reads are DMs and the wallet. `help-data.jsx:276` states the
+   opposite as fact.
+3. **CRITICAL — every publish reports success when the relay is unreachable.** nostr-tools resolves rather
+   than rejects on connection failure (measured: 11ms to a dead port, 3s to a black hole, both RESOLVED with a
+   "connection failure" STRING). So `Promise.any(pool.publish(...))` succeeds offline at ~25 call sites.
+   `markSafe` returns true and persists the ack so the member is never re-prompted — the exact outcome its own
+   comment calls the worst failure this feature can have; a care request tells them "your church family knows
+   you asked for help"; and the chat outbox is defeated because `_publishBounded` races a 12s timeout against a
+   promise that resolves at 3s, so the event is marked delivered and dropped from the queue. Needs a wrapper
+   that treats a resolved STRING as failure.
+4. **FIXED** — the approval recovery only worked on a church whose docs were <3 days old (a cursored refetch,
+   with the cursor already advanced to now). Now resets the cursor for that one full sync, and marks itself
+   done only after dispatching. My device test passed only because that church's docs were fresh.
+5. **HIGH — "No groups yet — X hasn't opened any chat rooms yet"** is also the default state on an unreachable
+   relay (`app/screens-chat.jsx:545`), with no loading state; the mitigating offline banner is gated on a 6s
+   timer that never fires for a returning member with cache.
+6. **HIGH — the BROWSER join path drops `relayname`** (`join.js:11`), the one thing that rescues a printed
+   invite whose tunnel URL has changed. The app-link path preserves it; the browser path is the primary CTA and
+   the only path on iOS/desktop.
+7. **HIGH — a PIN set at the last wizard step can trap a member.** `savePin` sets the PIN then calls `finish()`,
+   but `onboarded` is written by `onSave`; killed in between, the unlock gate is suppressed by the wizard
+   (`app/app.jsx:1575`) and `exportMnemonic()` returns null while locked — producing "type these three words"
+   with no input fields and a dead Continue. Reproduced.
+8. **MEDIUM** — "Continue without a name" overwrites the name a bulk-invite slip supplied; "Forgot your PIN?"
+   recommends reinstalling, which is irreversible destruction given #1; a locked phone still paints church
+   content and opens church-named REQs, contradicting the plausible-deniability claim; no PIN rate limit, and
+   the wizard's 6-digit floor is weaker than Settings' own rule.
+
+Clean, verified: `navigator.onLine` usage, NIP-42 re-auth after unlock, mnemonic checksum handling, the
+app-link guard, and the pending-approval UI copy. The "Skip setup discards a deferred invite" item recorded
+earlier is already fixed on main.

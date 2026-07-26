@@ -3359,10 +3359,18 @@ wss.on('connection', (ws, req) => {
       // docs, so this survives relay restarts — a boot re-announce won't re-alert the steward. Captured before note().
       const _mdD = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
       const wasMember = _mdD.startsWith(MEMBER_D) && (MEMBER_DOCS.get(_mdD.slice(MEMBER_D.length)) || new Set()).has(evt.pubkey);
-      note(evt);   // a membership/broadcast change takes effect for subsequent events
       // durable store handles replaceable dedup + smart retention (structure kept, oldest ephemeral culled).
       // 'have-newer' / 'duplicate' → acknowledge but don't re-broadcast.
       const putRes = store.put(evt, resolveChurch(evt));
+      // AUDIT 2026-07-26 (CRITICAL): note() used to run BEFORE put(), so a write the relay then REFUSED had
+      // already rewritten the live maps — MEMBER_DOCS, BLOCKED_BY, ADMITTED_BY, STEWARDS_BY, MINORS_BY,
+      // GUARDIANS_BY, GROUP_MEMBERS, GROUP_VIS, ROSTER_PEOPLE. Replay is not author-gated (any socket may send
+      // any validly signed event), so anyone holding a stale copy of a church doc could replay it and revert
+      // authorization until the next restart re-ran hydrateMaps(): a removed member re-admitting themselves, a
+      // revoked steward restoring their authority, a child's DM protections being stripped — and worst,
+      // replaying a stale group doc put the attacker back in GROUP_MEMBERS, which canRead() consults, handing
+      // them the READ history of an invite-only group. The store was always right; the running relay was not.
+      if (putRes === 'stored') note(evt);   // a membership/broadcast change takes effect for subsequent events
       // NIP-09 BEFORE the duplicate/have-newer early returns: a re-sent kind-5 comes back as 'duplicate', and
       // the old code returned on that without ever applying the deletion — so the second and every later
       // delivery of a deletion was a no-op. That is the usual case after a reconnect or a resync.
@@ -3375,7 +3383,12 @@ wss.on('connection', (ws, req) => {
       if (putRes === 'have-newer') { ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: a newer version of this is already stored — reload and edit again'])); return; }
       if (putRes === 'deleted') { ws.send(JSON.stringify(['OK', evt.id, false, 'blocked: this event was deleted by its author'])); return; }
       if (putRes === 'duplicate') { ws.send(JSON.stringify(['OK', evt.id, true, 'duplicate'])); return; }
-      if (putRes === 'future') { ws.send(JSON.stringify(['OK', evt.id, false, 'invalid: timestamp is too far in the future — check this device’s clock'])); return; }
+      // NOT `invalid:` — the client classifier treats invalid/blocked/restricted as PERMANENT and drops the event
+      // from the outbox on the first attempt. created_at is fixed at signing while the relay's clock advances, so
+      // this is the one refusal here that fixes itself: the same event succeeds on the next retry. Marking it
+      // permanent meant a cheap phone with no NTP failed to send EVERY message instead of every message landing a
+      // minute later — the first audience, exactly. `error:` is NIP-01's catch-all and reads as transient.
+      if (putRes === 'future') { ws.send(JSON.stringify(['OK', evt.id, false, 'error: timestamp is too far in the future — check this device’s clock'])); return; }
       if (++_putsSinceCull >= 256) { _putsSinceCull = 0; store.cull(); }   // E6: throttle the GROUP BY cull off the per-event hot path (was every stored event)
       maybePush(evt);   // notify the targeted member if this is a serving request
       maybePushJoin(evt, wasMember);   // notify the steward's phone if this is a fresh church join

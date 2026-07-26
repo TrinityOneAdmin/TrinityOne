@@ -6374,17 +6374,22 @@
     } catch (e) {
     }
     if (already) return;
-    try {
-      localStorage.setItem(ADMITTED_OK_LS + cp, "1");
-    } catch (e) {
-    }
     setTimeout(() => {
+      const hub = _docsHubs.get(cp);
+      if (hub) {
+        hub.since = 0;
+        hub.fullAt = 0;
+      }
       try {
         window.Fellowship.announceMembership(cp);
       } catch (e) {
       }
       try {
         refetchChurchDocs();
+      } catch (e) {
+      }
+      try {
+        localStorage.setItem(ADMITTED_OK_LS + cp, "1");
       } catch (e) {
       }
     }, 0);
