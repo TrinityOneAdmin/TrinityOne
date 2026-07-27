@@ -906,11 +906,22 @@ function App() {
     // show a neutral loading until the sub resolves — stops the community flashing before a pending join resolves.
     // reset only on an actual church change, not a mere reconnect (connTick), else the tab would blink each reconnect.
     if (joinChurchRef.current !== activeChurch) { setJoinState({ approval: false, isAdmitted: true, isPending: false, loaded: false }); joinChurchRef.current = activeChurch; }
-    const unsub = F.subscribeChurchJoin(np, (s) => setJoinState({ ...s, loaded: true }));
-    // OFFLINE FALLBACK (U1): if the relay never answers (offline / hostile network), don't spin forever. After 6s,
-    // reveal the tab with whatever's cached and flag it offline so Chat shows a quiet "can't reach" note instead of
-    // an endless spinner. A later relay answer replaces this with the real join state.
-    const offlineT = setTimeout(() => setJoinState(js => (js && js.loaded) ? js : { approval: false, isAdmitted: true, isPending: false, loaded: true, offline: true }), 6000);
+    const unsub = F.subscribeChurchJoin(np, (s) => {
+      setJoinState({ ...s, loaded: true });
+      // Cache this church's LAST-KNOWN real join state, so an offline reopen can show the TRUTH (pending stays
+      // pending, admitted stays admitted) instead of a hardcoded "you're in".
+      try { localStorage.setItem('trinityone.joinstate.' + activeChurch, JSON.stringify({ approval: !!s.approval, isAdmitted: !!s.isAdmitted, isPending: !!s.isPending })); } catch (e) {}
+    });
+    // OFFLINE FALLBACK: if the relay never answers (offline / hostile network / relay down), don't spin forever —
+    // and DON'T pretend the member is admitted (the old fallback hardcoded isAdmitted:true, so a brand-new member
+    // on a dead relay was shown the full community as if they'd joined). Restore this church's last-known state if
+    // we have one (+ offline flag); otherwise mark it `unknown` so Chat shows an honest "can't reach — still
+    // trying", not a fake community. connTick (foreground/online) re-runs this effect; ctx.retryConnection forces it.
+    const offlineT = setTimeout(() => setJoinState(js => {
+      if (js && js.loaded) return js;
+      let cached = null; try { cached = JSON.parse(localStorage.getItem('trinityone.joinstate.' + activeChurch) || 'null'); } catch (e) {}
+      return cached ? { ...cached, loaded: true, offline: true } : { approval: false, isAdmitted: false, isPending: false, loaded: true, offline: true, unknown: true };
+    }), 6000);
     return () => { clearTimeout(offlineT); if (typeof unsub === 'function') unsub(); };
   }, [activeChurch, churches, connTick]);
   // tell the member the moment they're approved (pending → admitted), within the same church session
@@ -1362,7 +1373,8 @@ function App() {
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
-    joinState,   // { approval, isAdmitted, isPending } for the active church
+    joinState,   // { approval, isAdmitted, isPending, offline, unknown } for the active church
+    retryConnection: () => bumpConn(x => x + 1),   // force a fresh relay re-subscribe (manual "Try again")
     // steward rule: this church asks members to use a real first + last name (two words)
     requireFullName: !!(((churches.find(c => c.id === activeChurch) || {}).rules) || {}).fullName,
     canDMPeer: (peer) => {   // peer is a hex pubkey
