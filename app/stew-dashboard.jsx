@@ -221,6 +221,9 @@ function KeyDistributor() {
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
   // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
   React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), []);
+  // the church NAME key — the envelope members seal their display name under, so the relay (and any mirror
+  // holding a copy of this church) stores ciphertext instead of a named roster. AUDIT-2026-07-27.
+  React.useEffect(() => (window.Steward && window.Steward.subscribeNameKey ? window.Steward.subscribeNameKey() : undefined), []);
   // keep the envelope's author check current: a revoked steward's envelope must stop being accepted
   const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];
   React.useEffect(() => { if (window.Steward && window.Steward.setCareRoster) window.Steward.setCareRoster(stewardRoster); }, [stewardRoster]);
@@ -253,6 +256,10 @@ function KeyDistributor() {
     // subscription has confirmed no envelope exists — never on a cold null, which is what orphaned
     // every sealed need in the first attempt. Stewards are included so a delegated console can re-key.
     if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster);
+    // …and the NAME key. Without this nothing ever mints one, the member app's key list stays empty, and every
+    // seal silently no-ops — the whole mechanism present and doing nothing, which is the failure mode this
+    // codebase specialises in. Same self-guard as the others: it only republishes when someone is missing.
+    if (window.Steward && window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(memberPubs);
   }, [groups, members, stewardRoster]);
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
@@ -3250,6 +3257,10 @@ function DashMembers() {
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !blockedSet.has(p));
       if (window.Steward.rotateCareKey) window.Steward.rotateCareKey(remaining, stewardRoster || []);
       if (window.Steward.rotateMediaKey) window.Steward.rotateMediaKey(remaining);   // same for encrypted sermons
+      // and the NAME key: a blocked member keeping it could still read the congregation's names, which is the
+      // one thing this encryption exists to stop. The ring carries the superseded keys, so names sealed before
+      // the rotation still open for everyone who remains.
+      if (window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(remaining, { rotate: true });
       // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
       // phone carried on decrypting every future message in every encrypted group — forever. The background
       // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,

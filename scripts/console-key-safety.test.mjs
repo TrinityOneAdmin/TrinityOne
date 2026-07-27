@@ -38,7 +38,13 @@ test('the delegated switch resets the loaded flag as well as the profile', () =>
 test('blocking a member rotates every encrypted group they could read', () => {
   // The distributor only republishes when the recipient set GREW; a block shrinks it, so nothing was published
   // and the blocked phone kept decrypting new messages forever.
-  const fn = body('const block = (pk)', DASH, 2200);
+  // End at the NEXT declaration rather than a fixed byte count. A 2200-char window silently stopped covering
+  // the group rotation the moment the name-key rotation was added above it (2026-07-27) — the code was
+  // untouched and the test went red. A fixed slice off a moving anchor is this suite's recurring own-goal.
+  const start = DASH.indexOf('const block = (pk)');
+  assert.notEqual(start, -1, 'block() moved or was renamed');
+  const stop = DASH.indexOf('const unblock', start);
+  const fn = DASH.slice(start, stop > start ? stop : start + 4000);
   assert.match(fn, /rotateCareKey/, 'care-key rotation on block is gone');
   assert.match(fn, /publishGroupKey\([^)]*\{\s*rotate:\s*true\s*\}/,
     'blocking no longer rotates encrypted GROUP keys — the blocked member keeps reading every future message');

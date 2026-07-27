@@ -178,3 +178,34 @@ test('changing your name re-seals it everywhere, and a late-arriving key seals o
   const seals = [...F.matchAll(/_ingestNameKey\(cp, e\)/g)].some(m => /syncSealedNames/.test(F.slice(m.index, m.index + 320)));
   assert.ok(seals, 'a church that publishes its key after you joined would leave you nameless there for ever');
 });
+
+// ── is it actually switched on? ─────────────────────────────────────────────────────────────────────────────
+// Everything above passed while NOTHING in the console ever minted a key — so the member app's key list stayed
+// empty, every seal silently no-opped, and names went out in the clear exactly as before. A complete, tested,
+// dormant mechanism. These are the checks that would have caught that, and they are deliberately about the
+// CALL SITES rather than the protocol, because the protocol was never the part that was missing.
+
+test('the console mints and maintains the name key', () => {
+  const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  assert.match(DASH, /subscribeNameKey/, 'the console never loads the envelope, so it cannot re-key anyone');
+  const at = DASH.indexOf('ensureCareKeyForMembers(memberPubs, stewardRoster)');
+  assert.notEqual(at, -1, 'the key-distributor loop moved — re-anchor this test');
+  assert.match(DASH.slice(at, at + 700), /ensureNameKeyForMembers\(memberPubs\)/,
+    'nothing mints a name key, so every seal in the member app silently does nothing');
+});
+
+test('blocking a member rotates the name key too', () => {
+  const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  const at = DASH.indexOf('const block = (pk)');
+  const body = DASH.slice(at, at + 3000);
+  assert.match(body, /ensureNameKeyForMembers\([^)]*\{\s*rotate:\s*true\s*\}/,
+    'a blocked member keeps the key and can still read the congregation’s names — the one thing this stops');
+});
+
+test('the console bundle really exports what the UI calls', () => {
+  // The UI calling a method the bundle does not export is the same dormancy wearing a different hat.
+  const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+  for (const fn of ['ensureNameKeyForMembers', 'subscribeNameKey', 'openMemberName']) {
+    assert.match(S, new RegExp(fn), `${fn} is missing from the shipped console bundle`);
+  }
+});
