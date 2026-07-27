@@ -554,6 +554,16 @@ let _relayAuthed = false;
 pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); _relayAuthed = true; return finalizeEvent(authEvent, sk); };
 let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
 let _profileLoaded = false;                // the relay has ANSWERED about this identity's kind-0 (event or EOSE)
+// Resolve as soon as the relay answers, or after a bounded wait. Poll rather than hook the subscription, so a
+// console that has not subscribed at all (or whose relay is down) still settles instead of hanging a save.
+function _profileSettle(ms = 6000) {
+  if (_profileLoaded) return Promise.resolve(true);
+  return new Promise((res) => {
+    const t0 = Date.now();
+    const tick = () => { if (_profileLoaded || Date.now() - t0 > ms) return res(_profileLoaded); setTimeout(tick, 150); };
+    tick();
+  });
+}
 let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
 // DELEGATED steward mode (phase 2b): when this console acts as a steward of a church it does NOT own,
 // `actingChurch` is that church's hex pubkey. We sign with OUR OWN key (churchSk) but read+publish in
@@ -1077,13 +1087,30 @@ window.Steward = {
     // member's app renamed the church and repointed giving, irreversibly (kind-0 is replaceable).
     // A delegated steward cannot legitimately publish the other church's profile anyway — they do not hold its
     // key — so the honest answer is to refuse. AUDIT-2026-07-27.
-    if (actingChurch) { console.warn('[steward] refusing to publish a church profile while acting as a delegated steward'); return Promise.resolve(null); }
+    // Both refusals below MUST reach a screen. They returned Promise.resolve(null), and every one of the 20+
+    // callers treats that as success — NameEditModal closes the dialog, the feature toggles keep their new
+    // position, the giving-address field shows "Saved ✓". Nothing happened, and nothing said so.
+    // AUDIT-2026-07-27.
+    const _refuse = (what, message) => {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message } })); } catch (e) {}
+      return Promise.resolve(null);
+    };
+    if (actingChurch) return _refuse('church profile', 'Only the church that owns this profile can change its name, logo, giving address or features. Ask the church owner to make this change on their own console.');
     // And never merge an edit into a profile we have not actually READ yet. `lastProfile` starts empty and is
     // only filled when the relay answers, so editing one field on a cold/slow start published a kind-0 with
     // every other field blank — wiping picture, banner, accent, features, rules and the giving address.
+    // WAIT, don't refuse outright. A brand-new church types its name in step 0 of the setup wizard, before the
+    // relay has answered about a profile that does not exist yet — so this guard refused the very first name a
+    // church ever sets, the wizard advanced anyway, and the church was created nameless with nothing to retry
+    // it. Give the subscription a bounded moment to answer (an EOSE arrives even when there is no profile,
+    // which is exactly the new-church case), and only refuse if it never does.
     if (!_profileLoaded && Object.keys(lastProfile).length === 0 && Object.keys(meta || {}).length < 3) {
-      console.warn('[steward] refusing a partial profile edit before the church profile has loaded');
-      return Promise.resolve(null);
+      return _profileSettle().then(() => {
+        if (!_profileLoaded && Object.keys(lastProfile).length === 0) {
+          return _refuse('church profile', 'That change hasn\u2019t been saved yet \u2014 this device is still connecting to your church\u2019s relay, and saving now would blank the settings it hasn\u2019t read. Check the relay is running and try again.');
+        }
+        return window.Steward.publishProfile(meta);
+      });
     }
     lastProfile = { ...lastProfile, ...meta };   // merge so a partial edit (e.g. name) keeps channel etc.
     const m = lastProfile;
@@ -1777,16 +1804,20 @@ window.Steward = {
     // stale copy from a lagging relay win — it would quietly reinstate a child-protection state the church
     // has already changed.
     let tMinors = 0, tApproved = 0, tNophoto = 0;
+    // `loaded` says the relay has ANSWERED, not that the lists are non-empty. The clearance backfill must
+    // not run before it: sealing every member a 'not a minor' clearance from lists that had simply not
+    // arrived yet would strip child status from every child in the church. AUDIT-2026-07-27.
+    let loaded = false;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto, loaded }); }
       },
-      oneose() { onLists({ minors, approved, nophoto }); },
+      oneose() { loaded = true; onLists({ minors, approved, nophoto, loaded }); },
     });
     return () => { try { sub.close(); } catch {} };
   },

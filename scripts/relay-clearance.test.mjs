@@ -154,3 +154,35 @@ test('a clearance built exactly like the console builds it is accepted', async (
   const [ok, msg] = await publish(w0, evt);
   assert.equal(ok, true, 'the relay refused the exact event the console publishes: ' + msg);
 });
+
+// ── the backfill ─────────────────────────────────────────────────────────────────────────────────────────────
+// Sealed clearances replaced a list the relay stopped serving to members. Nothing backfilled them: only the
+// four safeguarding toggles re-sealed, and only for the member they touched. So every child marked before this
+// shipped had no clearance doc, read an empty minors list, and concluded it was an adult — until a steward
+// happened to toggle their flag off and on. AUDIT-2026-07-27.
+test('the console seals the whole roster, not only the member a steward just toggled', () => {
+  const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  const at = D.indexOf('const _sealedAll = React.useRef');
+  assert.notEqual(at, -1, 'the clearance backfill is gone — existing children go back to being treated as adults');
+  const body = D.slice(at, at + 900);
+  assert.match(body, /_reseal\([^)]*members\.map\(m => m\.pubkey\)\)/, 'the backfill must seal every member on the roster');
+});
+
+test('the backfill cannot fire before the safeguarding lists have loaded', () => {
+  // The dangerous failure is not "no backfill" — it is a backfill from lists that have not arrived. That seals
+  // every child a 'you are not a minor' clearance signed by the church, stripping child status congregation-wide.
+  const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  const at = D.indexOf('const _sealedAll = React.useRef');
+  const body = D.slice(at, at + 900);
+  const guard = body.indexOf('if (!sg.loaded) return');
+  const call = body.indexOf('_reseal(sg.minors');
+  assert.notEqual(guard, -1, 'the backfill has no loaded-guard — it will seal every child as an adult from empty lists');
+  assert.ok(guard < call, 'the loaded-guard must come before the publish');
+
+  const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+  const sub = S.indexOf('subscribeSafeguard(onLists)');
+  const sbody = S.slice(sub, sub + 3000);
+  assert.match(sbody, /oneose\(\)\s*\{\s*loaded = true/, 'subscribeSafeguard never reports that the relay answered, so the guard above can never open');
+  const eose = sbody.indexOf('loaded = true');
+  assert.equal(sbody.slice(0, eose).includes('loaded = true'), false, 'loaded is set somewhere other than eose — the guard stops meaning "the relay answered"');
+});

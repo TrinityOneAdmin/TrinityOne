@@ -172,17 +172,33 @@ const OLD_PARSE = (envContent, me) => {
   return Uint8Array.from(String(plain).match(/.{1,2}/g).map(b => parseInt(b, 16)));   // _unhex, verbatim
 };
 
-// Build an envelope the way the FIXED console does: current key bare under `keys`, whole ring under `rings`.
-const dualEnvelope = (rev, recips, ring, at) => {
-  const keys = {}, rings = {};
-  const cur = hex(ring[0]), wrapped = JSON.stringify(ring.map(hex));
-  for (const pk of recips) {
-    const ck = nip44v2.utils.getConversationKey(church.sk, pk);
-    keys[pk] = nip44v2.encrypt(cur, ck);
-    rings[pk] = nip44v2.encrypt(wrapped, ck);
+// Build the envelope with the CONSOLE'S OWN builder, lifted out of the shipped bundle. Writing a second copy
+// of it here passed its own sabotage happily — a mirror test asserts that my idea of the envelope works, not
+// that the console emits it. publishGroupKey itself can't be lifted (live relay pool), but `build` is a
+// self-contained arrow, so this is the real thing.
+const consoleBuild = (recips) => {
+  const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+  const at = STEWARD.indexOf('const build = (r) =>');
+  assert.notEqual(at, -1, 'the console’s envelope builder is gone from the shipped bundle');
+  let depth = 0, end = -1;
+  for (let i = STEWARD.indexOf('{', at); i < STEWARD.length; i++) {
+    const c = STEWARD[i];
+    if (c === '{') depth++; else if (c === '}' && --depth === 0) { end = i + 1; break; }
   }
-  return { pubkey: church.pub, created_at: at || now(), tags: [['d', 'trinityone/groupkey:' + GID], ['t', 'trinityone']], content: JSON.stringify({ rev, keys, rings }) };
+  const src = `
+    const rev2 = 2, recips = RECIPS, churchSk = SK;
+    const _hex = HEX, getConversationKey = CK, encrypt3 = ENC;
+    ${STEWARD.slice(at, end)};
+    return build;
+  `.replace('RECIPS', JSON.stringify(recips)).replace('SK', 'SKV').replace('HEX', 'HEXV').replace('CK', 'CKV').replace('ENC', 'ENCV');
+  return new Function('SKV', 'HEXV', 'CKV', 'ENCV', src)(church.sk, hex, nip44v2.utils.getConversationKey, nip44v2.encrypt);
 };
+
+const dualEnvelope = (rev, recips, ring, at) => ({
+  pubkey: church.pub, created_at: at || now(),
+  tags: [['d', 'trinityone/groupkey:' + GID], ['t', 'trinityone']],
+  content: consoleBuild(recips)(ring),
+});
 
 test('a phone that has NOT updated still reads the group after the console updates', () => {
   const env = dualEnvelope(2, [church.pub, alice.pub], [K2, K1]);

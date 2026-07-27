@@ -165,8 +165,13 @@ function PublishErrorBanner() {
       clearTimeout(f._t);
       if (!sticky) f._t = setTimeout(() => setMsg(''), 9000);   // actionable failures stay until dismissed
     };
+    // `steward-write-blocked` had been fired for a while by _requireTrustedView and by Finance, and was
+    // listened to NOWHERE — so the refusals the code believed were "visible and retryable" reached no screen
+    // at all. Same banner, same dismiss, and these stay put: a refused write is always actionable.
+    const g = (e) => { const d = e.detail || {}; clearTimeout(f._t); setMsg(d.message || ('That change to the ' + (d.what || 'church') + ' could not be saved.')); };
     window.addEventListener('steward-publish-error', f);
-    return () => window.removeEventListener('steward-publish-error', f);
+    window.addEventListener('steward-write-blocked', g);
+    return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
   }, []);
   if (!msg) return null;
   return (
@@ -3174,6 +3179,21 @@ function DashMembers() {
   // instead of the church's list of children, which the relay no longer serves to ordinary members.
   // AUDIT-2026-07-27. Best-effort and deliberately not awaited: the list write is the authoritative one.
   const _reseal = (mins, appr, who) => { try { if (window.Steward.refreshClearances) window.Steward.refreshClearances(who, mins, appr); } catch (e) {} };
+  // BACKFILL — every child marked BEFORE sealed clearances existed had no clearance doc at all. The four
+  // toggles below only re-seal the member they touch, and the relay had already stopped serving the minors
+  // list to ordinary members, so those children's apps read an empty list and concluded they were adults.
+  // Every existing child in every church was treated as an adult until a steward happened to toggle their
+  // flag off and on again. Seal the whole roster once the lists have actually loaded. AUDIT-2026-07-27.
+  const _sealedAll = React.useRef('');
+  React.useEffect(() => {
+    if (!sg.loaded) return;                 // NEVER from empty lists that merely have not arrived yet
+    if (window.Steward.actingChurch) return;   // a delegated console signs with its own church key
+    if (!members.length) return;
+    const sig = [(sg.minors || []).join(','), (sg.approved || []).join(','), members.map(m => m.pubkey).sort().join(',')].join('|');
+    if (_sealedAll.current === sig) return;   // idempotent: the roster re-emits on every tick
+    _sealedAll.current = sig;
+    _reseal(sg.minors || [], sg.approved || [], members.map(m => m.pubkey));
+  }, [sg.loaded, sg.minors, sg.approved, members]);
   const toggleMinor = (pk) => {
     const next = minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
     const r = window.Steward.setMinors(next); _reseal(next, sg.approved || [], [pk]); return r;
