@@ -37,7 +37,12 @@ test('the member wizard keeps its phrase and quiz on separate steps', () => {
 test('the first-run wizard (the one on the real path) hides the phrase before asking', () => {
   const at = DASH.indexOf("title=\"Your church\u2019s recovery key\"");
   assert.notEqual(at, -1, 'the recovery-key wizard step is gone or retitled');
-  const step = DASH.slice(at, at + 4200);
+  // The window has to cover the whole step. It was 4200 chars, which stopped short the moment a stakes panel
+  // was added above the phrase (2026-07-27) — the ceremony was untouched, but the assertion below could no
+  // longer see it. A fixed-size slice off a moving anchor is exactly the fragility this suite keeps hitting;
+  // end at the NEXT wizard step instead, so it can't silently start testing half a screen.
+  const end = DASH.indexOf('<WizShell', at + 10);
+  const step = DASH.slice(at, end > at ? end : at + 8000);
   assert.match(step, /\{!saved \? \(<React\.Fragment>/,
     'the phrase block is not gated on !saved — the words would still be on screen during the quiz');
   assert.match(step, /Phrase hidden/, 'no hidden-state notice, so the steward just sees the phrase vanish');

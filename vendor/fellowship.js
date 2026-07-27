@@ -7712,10 +7712,7 @@
       if (meta.av || prev.av) p.av = meta.av || prev.av;
       const hidden = meta.hidden != null ? meta.hidden : prev.hidden;
       if (hidden) p.hidden = true;
-      const handleLocal = p.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "").slice(0, 30);
-      const relayHost = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
-      if (handleLocal && relayHost) p.nip05 = handleLocal + "@" + relayHost;
-      else if (prev.nip05) p.nip05 = prev.nip05;
+      if (prev.nip05) p.nip05 = prev.nip05;
       const body = JSON.stringify(p);
       if (_profilePubFor === pub && _profilePubBody === body) return null;
       const evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
@@ -8488,10 +8485,7 @@
       const childSk = privateKeyFromSeedWords(inv.mnemonic);
       const childPub = getPublicKey2(childSk);
       const ts = Math.floor(Date.now() / 1e3);
-      const handleLocal = name.toLowerCase().replace(/[^a-z0-9._-]+/g, "").slice(0, 30);
-      const relayHost = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
       const childProfile = { name };
-      if (handleLocal && relayHost) childProfile.nip05 = handleLocal + "@" + relayHost;
       const k0 = finalizeEvent2({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }, childSk);
       const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
       const myName = window.Fellowship.myProfile && window.Fellowship.myProfile.name || "";

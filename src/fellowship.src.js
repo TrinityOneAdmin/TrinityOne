@@ -1571,12 +1571,14 @@ window.Fellowship = {
     if (meta.av || prev.av) p.av = meta.av || prev.av;   // chosen symbol/monogram avatar
     const hidden = (meta.hidden != null ? meta.hidden : prev.hidden);   // opt out of the member directory
     if (hidden) p.hidden = true;
-    // auto-claim a verified NIP-05 handle on the church's relay: <name>@<relay-host>. The relay serves
-    // /.well-known/nostr.json, so the member gets a real verified name — no third-party domain needed.
-    const handleLocal = p.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
-    const relayHost = (CANONICAL_RELAY || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '');
-    if (handleLocal && relayHost) p.nip05 = handleLocal + '@' + relayHost;
-    else if (prev.nip05) p.nip05 = prev.nip05;
+    // NO AUTO-CLAIMED HANDLE FOR A MEMBER. This used to derive <name>@<relay-host> from the display name and
+    // store it IN THE PROFILE, which meant the member's name travelled in a second field — so encrypting the
+    // name would have protected one copy while publishing another, and the relay's /.well-known lookup turned
+    // that handle into a name→identity oracle for anyone who could guess it. A church still claims a handle
+    // (steward.src.js); a MEMBER does not need one, and it is the wrong thing to give a congregation whose
+    // safety depends on not being enumerable. An existing handle is carried forward rather than stripped, so
+    // nobody's verified name silently disappears — Stage 2 tombstones those deliberately. AUDIT-2026-07-27.
+    if (prev.nip05) p.nip05 = prev.nip05;
     // IDEMPOTENCE. This used to build a fresh kind-0 with a new created_at and publish it on EVERY call, with no
     // comparison against what it had already sent — so any caller that ran on a timer became a broadcast station.
     // Measured: 12 profile republishes a minute from the restore-recovery loop, each one delivered to every
@@ -2053,10 +2055,12 @@ window.Fellowship = {
     const childSk = privateKeyFromSeedWords(inv.mnemonic);
     const childPub = getPublicKey(childSk);
     const ts = Math.floor(Date.now() / 1000);
-    // the child's kind-0 profile (name + a verified handle on the church relay, mirroring publishProfile)
-    const handleLocal = name.toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 30);
-    const relayHost = (CANONICAL_RELAY || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '');
-    const childProfile = { name }; if (handleLocal && relayHost) childProfile.nip05 = handleLocal + '@' + relayHost;
+    // The child's kind-0 profile. NO auto-claimed handle — this mirrored publishProfile, and it is the most
+    // sensitive instance of that bug: it published a CHILD's name as a guessable lookup handle on the church's
+    // relay, so anyone could ask "is there a <child's name> here?" and be handed their identity. The parent
+    // path was fixed in the same pass; this is the sibling call site it would have been easy to miss.
+    // AUDIT-2026-07-27.
+    const childProfile = { name };
     const k0 = finalizeEvent({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }, childSk);
     const join = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }, childSk);
     // the parent's guardian-link REQUEST (signed by the parent) — the steward confirms it

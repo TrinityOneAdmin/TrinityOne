@@ -413,12 +413,28 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   );
 
   if (step === 1) return (
-    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words ARE your church — they sign everything you post. Write them on paper and keep them safe: without them the church can’t be recovered, and no one (not even us) can reset it for you."
+    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words ARE your church — they sign everything you post. Write them on paper, and make a second copy you keep somewhere else. There is no way to reset this: not by us, not from your relay, not from a backup file."
       footer={<React.Fragment>
         <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={() => { if (canContinue) next(); }} disabled={!canContinue} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: canContinue ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
+      {/* WHAT LOSING IT ACTUALLY COSTS. "The church can't be recovered" is true but abstract, and a steward
+          reads it as boilerplate. The realistic way a church loses this key is not theft — it is the laptop
+          dying, or the one person who set it up leaving. Say the consequence in the concrete, and ask for the
+          second copy here rather than hoping they infer it. AUDIT-2026-07-27. */}
+      <div style={{ display: 'flex', gap: 11, padding: '13px 15px', borderRadius: 12, marginBottom: 14,
+        background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
+        <Icon name="shield" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
+          <b style={{ color: 'var(--ink)' }}>If these words are lost, the church is gone — not locked, gone.</b> You
+          would start a new one, and every member would have to join it again. Your groups, your rota, your
+          records and your history stay sealed to the old key, and nobody can open them.
+          <div style={{ marginTop: 7 }}>Most churches don’t lose this to theft. They lose it because the laptop
+          died, or the person who set it up moved on. <b>Two paper copies, in two places</b> — that is the whole
+          precaution.</div>
+        </div>
+      </div>
       <div style={lbl}>RECOVERY PHRASE — 12 WORDS</div>
       {/* The phrase and the check must NEVER share a screen. With the words still visible the "quick check" is
           copying from the box above — it proves nothing about what was written on paper, and it teaches the
@@ -443,7 +459,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       {phrase && !saved ? (
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', fontSize: 13.5, fontWeight: 600 }}>
         <input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
-        I’ve written these 12 words on paper and stored them safely
+        I’ve written these 12 words on paper and stored them safely — and I’ll make a second copy
       </label>
       ) : null}
       {phrase && saved ? (

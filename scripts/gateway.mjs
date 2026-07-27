@@ -3093,6 +3093,12 @@ function serveStatic(req, res) {
       const map = new Map();
       for (const e of k0) {
         if (BLOCKED.has(e.pubkey)) continue;
+        // CHURCHES ONLY. Resolving a MEMBER's name turned this into a guess-a-name oracle: ask for "maria" and
+        // get her identity back, from anywhere, unauthenticated. The bulk dump was closed in 2026-06-24 (L7);
+        // the scoped form is the same leak one name at a time, and it is exactly what a congregation that must
+        // not be enumerable cannot afford. A church WANTS a public handle — that is the point of a church —
+        // so churches still resolve. AUDIT-2026-07-27.
+        if (!CHURCH_PUBS.has(e.pubkey)) continue;
         let meta = {}; try { meta = JSON.parse(e.content); } catch {}
         const local = (meta.nip05 && String(meta.nip05).includes('@')) ? slug(String(meta.nip05).split('@')[0]) : slug(meta.name);
         if (local && !map.has(local)) map.set(local, e.pubkey);
