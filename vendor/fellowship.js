@@ -6412,6 +6412,7 @@
   var _nameKeys = /* @__PURE__ */ new Map();
   var _nameKeyTs = /* @__PURE__ */ new Map();
   var _sealedNames = /* @__PURE__ */ new Map();
+  var _sealedMine = /* @__PURE__ */ new Map();
   function _ingestNameKey(cp, e) {
     if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
     if ((e.created_at || 0) < (_nameKeyTs.get(cp) || 0)) return;
@@ -6624,6 +6625,12 @@
         _docsHubSaveSoon(hub);
         if (d === "trinityone/namekey:" + cp) {
           _ingestNameKey(cp, e);
+          setTimeout(() => {
+            try {
+              window.Fellowship.syncSealedNames([cp]);
+            } catch (x) {
+            }
+          }, 0);
           for (const e2 of hub.buf.values()) {
             if (_dtag(e2) === "trinityone/name:" + cp) _openSealedName(cp, e2.pubkey, e2.content);
           }
@@ -7796,6 +7803,31 @@
       _sealedNames.set(cp + "|" + pub, nm);
       return evt;
     },
+    // ONE NAME, FANNED OUT. A member belongs to one or more churches, and their name is theirs — not a different
+    // name per church they have to remember to keep in step. The wire still carries a SEPARATE sealed copy per
+    // church, deliberately: church A cannot read church B's copy, so two churches (or two mirror operators)
+    // cannot match the same person up by comparing name ciphertext. One shared blob would hand them exactly that.
+    // So the split stays on the wire and disappears in the app — set your name once, and it is re-sealed
+    // everywhere you belong, including churches you join later and churches whose key arrives later.
+    async syncSealedNames(churchNpubs) {
+      const nm = ((window.Fellowship.myProfile || {}).name || "").trim();
+      if (!nm) return 0;
+      const list = churchNpubs && churchNpubs.length ? churchNpubs : [..._nameKeys.keys()];
+      let n = 0;
+      for (const c of list) {
+        const cp = toPub(c) || c;
+        if (!cp || !(_nameKeys.get(cp) || []).length) continue;
+        if (_sealedMine.get(cp) === nm) continue;
+        try {
+          if (await window.Fellowship.publishSealedName(cp, nm)) {
+            _sealedMine.set(cp, nm);
+            n++;
+          }
+        } catch (e) {
+        }
+      }
+      return n;
+    },
     // has this church published a name key we hold a copy of? (the UI uses it to explain why a name is public)
     sealedNamesReady(churchNpub) {
       const cp = toPub(churchNpub);
@@ -7830,6 +7862,12 @@
       }
       profiles[pub] = p;
       window.Fellowship.myProfile = p;
+      if (p.name) setTimeout(() => {
+        try {
+          window.Fellowship.syncSealedNames();
+        } catch (x) {
+        }
+      }, 0);
       try {
         localStorage.setItem(PROFILE_KEY, JSON.stringify(p));
       } catch {

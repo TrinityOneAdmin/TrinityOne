@@ -135,3 +135,46 @@ test('both apps ship the ring, not a single key', () => {
   assert.match(S, /\[_hex\(crypto\.getRandomValues\(new Uint8Array\(32\)\)\), \.\.\.ring\]/,
     'rotation must prepend to the ring, never replace it');
 });
+
+// ── one name, many churches ─────────────────────────────────────────────────────────────────────────────────
+// A member belongs to one or more churches. The name is THEIRS, so it must not become a different name per
+// church that they have to keep in step by hand. The wire still carries a separate sealed copy per church —
+// deliberately, so two churches or two mirror operators cannot match the same person up by comparing name
+// ciphertext — but the app keeps them identical.
+
+test('the same name seals separately for two churches, and the two copies are not comparable', async () => {
+  const churchB = K(), same = 'Maria Alvarez';
+  const kB = hex(crypto.getRandomValues(new Uint8Array(32)));
+  const a = nip44.encrypt(JSON.stringify({ name: same }), unhex(K1));
+  const b = nip44.encrypt(JSON.stringify({ name: same }), unhex(kB));
+  assert.notEqual(a, b, 'the same name under two church keys must not produce the same ciphertext');
+  assert.equal(JSON.parse(nip44.decrypt(a, unhex(K1))).name, same);
+  assert.equal(JSON.parse(nip44.decrypt(b, unhex(kB))).name, same, 'and each church opens its own copy to the same name');
+  // and one church's key must not open the other's copy
+  let leaked = false;
+  try { JSON.parse(nip44.decrypt(b, unhex(K1))); leaked = true; } catch (e) {}
+  assert.equal(leaked, false, 'church A opened church B’s copy — the two churches could then match the member up');
+  assert.ok(churchB.pub);
+});
+
+test('the member app fans one name out rather than making the caller remember every church', () => {
+  const F = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
+  assert.match(F, /syncSealedNames/, 'there is no fan-out — a member joining a second church would drift into two names');
+  const at = F.indexOf('async syncSealedNames');
+  const body = F.slice(at, at + 900);
+  assert.match(body, /myProfile \|\| \{\}\)\.name/, 'the fan-out must use the member’s ONE name, not a per-church one');
+  assert.match(body, /_sealedMine\.get\(cp\) === nm/, 'it must be idempotent, or every reconnect republishes to every church');
+});
+
+test('changing your name re-seals it everywhere, and a late-arriving key seals on arrival', () => {
+  const F = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
+  // `myProfile = p` appears at more than one site in the bundle, so anchoring on the FIRST one tested the
+  // wrong function and failed while the code was correct. Require that SOME assignment is followed by the
+  // re-seal, rather than guessing which.
+  const reseals = [...F.matchAll(/myProfile = p;/g)].some(m => /syncSealedNames/.test(F.slice(m.index, m.index + 220)));
+  assert.ok(reseals, 'renaming yourself would update the public profile and leave every sealed copy stale');
+  // Anchor on the CALL, not on a string literal — esbuild re-quotes literals, so `'trinityone/namekey:'`
+  // simply is not in the bundle and indexOf returned -1, which then sliced from the end of the file.
+  const seals = [...F.matchAll(/_ingestNameKey\(cp, e\)/g)].some(m => /syncSealedNames/.test(F.slice(m.index, m.index + 320)));
+  assert.ok(seals, 'a church that publishes its key after you joined would leave you nameless there for ever');
+});

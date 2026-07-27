@@ -656,6 +656,7 @@ const _reseatAt = new Map();    // cp -> created_at of the newest doc we accepte
 const _nameKeys = new Map();    // cp -> [Uint8Array(32)], current first
 const _nameKeyTs = new Map();   // cp -> created_at of the newest envelope accepted
 const _sealedNames = new Map(); // "<cp>|<pubkey>" -> plaintext name, once opened
+const _sealedMine = new Map();  // cp -> the name WE last sealed there, so a resync is idempotent
 function _ingestNameKey(cp, e) {
   if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
   if ((e.created_at || 0) < (_nameKeyTs.get(cp) || 0)) return;
@@ -836,6 +837,10 @@ function _docsHubOpen(hub) {
       _docsHubSaveSoon(hub);
       if (d === 'trinityone/namekey:' + cp) {
         _ingestNameKey(cp, e);
+        // A church may publish its key long after we joined, or rotate it. Seal our name here the moment we
+        // can, so a member never has to notice that a key arrived — deferred out of the relay's event handler,
+        // where a throw is swallowed and would leave us silently nameless in that church.
+        setTimeout(() => { try { window.Fellowship.syncSealedNames([cp]); } catch (x) {} }, 0);
         // the key may arrive AFTER names we could not open — retry them, or the roster stays anonymous
         for (const e2 of hub.buf.values()) { if (_dtag(e2) === 'trinityone/name:' + cp) _openSealedName(cp, e2.pubkey, e2.content); }
         try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: null } })); } catch (x) {}
@@ -1618,6 +1623,25 @@ window.Fellowship = {
     _sealedNames.set(cp + '|' + pub, nm);
     return evt;
   },
+  // ONE NAME, FANNED OUT. A member belongs to one or more churches, and their name is theirs — not a different
+  // name per church they have to remember to keep in step. The wire still carries a SEPARATE sealed copy per
+  // church, deliberately: church A cannot read church B's copy, so two churches (or two mirror operators)
+  // cannot match the same person up by comparing name ciphertext. One shared blob would hand them exactly that.
+  // So the split stays on the wire and disappears in the app — set your name once, and it is re-sealed
+  // everywhere you belong, including churches you join later and churches whose key arrives later.
+  async syncSealedNames(churchNpubs) {
+    const nm = ((window.Fellowship.myProfile || {}).name || '').trim();
+    if (!nm) return 0;
+    const list = (churchNpubs && churchNpubs.length) ? churchNpubs : [...(_nameKeys.keys())];
+    let n = 0;
+    for (const c of list) {
+      const cp = toPub(c) || c;
+      if (!cp || !(_nameKeys.get(cp) || []).length) continue;   // no key yet — sealed on arrival instead
+      if (_sealedMine.get(cp) === nm) continue;                 // already sealed this exact name there
+      try { if (await window.Fellowship.publishSealedName(cp, nm)) { _sealedMine.set(cp, nm); n++; } } catch (e) {}
+    }
+    return n;
+  },
   // has this church published a name key we hold a copy of? (the UI uses it to explain why a name is public)
   sealedNamesReady(churchNpub) { const cp = toPub(churchNpub); return !!(cp && (_nameKeys.get(cp) || []).length); },
   // publish this user's kind-0 profile (display name etc.) and cache it
@@ -1654,6 +1678,8 @@ window.Fellowship = {
     try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { sent = false; console.warn('[fellowship] profile publish failed', e); }
     if (sent) { _profilePubFor = pub; _profilePubBody = body; }
     profiles[pub] = p; window.Fellowship.myProfile = p;
+    // the name changed → re-seal it in every church we belong to, so the copies can never drift apart
+    if (p.name) setTimeout(() => { try { window.Fellowship.syncSealedNames(); } catch (x) {} }, 0);
     try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch {}
     window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } }));
     return evt;
