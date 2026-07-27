@@ -691,7 +691,18 @@ let _cursorsDirty = false;   // written once per sync pass, atomically (tmp+rena
 function saveCursors() { if (!_cursorsDirty) return; _cursorsDirty = false; try { const tmp = SYNC_CURSOR_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(SYNC_CURSORS)); renameSync(tmp, SYNC_CURSOR_FILE); } catch {} }
 const SYNC_OVERLAP = 600;   // re-pull a 10-min window before the cursor each time, so an event that arrived out-of-order isn't missed
 const GROUP_CHURCH = new Map();  // groupId -> owning church/network pubkey — per-church retention attribution for chat
-const MEMBER_CHURCH = new Map(); // member pubkey -> a church they belong to — attributes their DMs/reactions to a church
+// A member pubkey -> the SET of churches they belong to. This was a single-valued map, last write wins, and
+// a member of two churches is ordinary — someone who moves, or serves at a plant, or has family in another
+// congregation. With one slot, whichever member: doc the store rehydrated last won, and the kind-0 read gate
+// then denied that person's NAME to everyone in the other church: their messages rendered as "Anonymous
+// …a1b2c3" forever, in chat and in the directory, and each phone re-requested the missing profile in every
+// 250 ms batch window for the life of the session. Leaving one church also deleted the mapping for the other.
+// AUDIT-2026-07-27.
+const MEMBER_CHURCHES = new Map();
+const memberIn = (m, cp) => !!cp && !!(MEMBER_CHURCHES.get(m) || EMPTY_SET).has(cp);
+const churchesOf = (m) => [...(MEMBER_CHURCHES.get(m) || EMPTY_SET)];
+const anyChurchOf = (m) => churchesOf(m)[0] || '';
+const EMPTY_SET = new Set();
 const REQUIRE_APPROVAL = new Set(); // churchpubs whose joins need steward approval (default: open join)
 const ADMITTED_BY = new Map();      // churchpub -> Set(approved member pubkeys) (only used when that church requires approval)
 const JOIN_NOTIFIED = new Set();    // "pubkey:churchpub" we've already alerted the steward about (join or request) — dedupe push spam
@@ -962,7 +973,7 @@ function maybePushMessage(evt) {
       // shared relay, so an unscoped fan-out pushes one church's announcement to unrelated churches (cross-tenant
       // metadata leak + spam). Mirror maybePushSermon's church filter.
       const gcp = GROUP_CHURCH.get(gid);
-      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])] : [...MEMBERS].filter(m => !gcp || MEMBER_CHURCH.get(m) === gcp);
+      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])] : [...MEMBERS].filter(m => !gcp || memberIn(m, gcp));
       for (const r of recips) {
         if (!r || r === evt.pubkey) continue;
         pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid }, 'announce');
@@ -990,7 +1001,7 @@ function maybePushSermon(evt) {
     const cname = CHURCH_NAMES.get(cp) || displayName(cp) || 'Your church';
     const body = (isVideo ? 'New video' : 'New audio clip') + (s.title ? ': ' + s.title : '');
     for (const m of MEMBERS) {
-      if (m === cp || MEMBER_CHURCH.get(m) !== cp) continue;
+      if (m === cp || !memberIn(m, cp)) continue;
       pushTo(m, { title: cname, body, url: '/', tag: 'sermon-' + String(s.id || s.sha256).slice(0, 10) }, 'announce');   // '/' → Today, where the New card is
     }
   } catch {}
@@ -1009,7 +1020,7 @@ function maybePushSafety(evt) {
       if (!open) return;                                                     // a check being CLOSED → no alert
       SAFETY_PUSHED.add(evt.id);
       const cname = CHURCH_NAMES.get(cp) || displayName(cp) || 'Your church';
-      for (const m of MEMBERS) { if (m === evt.pubkey || MEMBER_CHURCH.get(m) !== cp) continue;
+      for (const m of MEMBERS) { if (m === evt.pubkey || !memberIn(m, cp)) continue;
         pushTo(m, { title: cname, body: 'Are you safe? Tap to let your church know.', url: '/?safety=1', tag: 'safety-' + cp }, 'announce'); }
     } else if (d.startsWith(SAFE_D)) {
       const cp = d.slice(SAFE_D.length); if (!CHURCH_PUBS.has(cp)) return;
@@ -1061,7 +1072,7 @@ function resolveChurch(e) {
   }
   if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
   const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
-  return MEMBER_CHURCH.get(e.pubkey) || '';
+  return anyChurchOf(e.pubkey);
 }
 // (re)build all in-memory church/member/group/care maps from the stored kind-30078 structure docs, oldest-first.
 // Run at startup and after a restore/clone import so the imported church's membership + groups take effect at once.
@@ -1073,7 +1084,7 @@ let _hydrating = false;
 // safe. Deliberately NOT cleared: CHURCH_PUBS/CHURCH_NAMES/MEDIA_HOSTS (owned by loadChurches) and anything
 // read from disk rather than derived.
 function clearDerivedMaps() {
-  for (const m of [MEMBER_DOCS, MEMBER_CHURCH, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
+  for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP,
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS]) { try { m.clear(); } catch {} }
@@ -1137,7 +1148,8 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   let cp;   // the church a <cp>-keyed admin doc is for — author is the church itself OR one of its rostered stewards
   if (d.startsWith(MEMBER_D) && CHURCH_PUBS.has(d.slice(MEMBER_D.length))) {   // asked to join / joined one of our churches
     const cp = d.slice(MEMBER_D.length); let s = MEMBER_DOCS.get(cp); if (!s) { s = new Set(); MEMBER_DOCS.set(cp, s); }
-    if (removed) { s.delete(e.pubkey); if (MEMBER_CHURCH.get(e.pubkey) === cp) MEMBER_CHURCH.delete(e.pubkey); } else { s.add(e.pubkey); MEMBER_CHURCH.set(e.pubkey, cp); }
+    let cs = MEMBER_CHURCHES.get(e.pubkey); if (!cs) { cs = new Set(); MEMBER_CHURCHES.set(e.pubkey, cs); }
+    if (removed) { s.delete(e.pubkey); cs.delete(cp); if (!cs.size) MEMBER_CHURCHES.delete(e.pubkey); } else { s.add(e.pubkey); cs.add(cp); }
     if (!_hydrating) rebuildMembers();   // effective membership respects the join policy + admitted list + blocklist
   }
   else if (d.startsWith(NETWORK_D) && CHURCH_PUBS.has(e.pubkey)) {   // a church joined/left a network
@@ -1648,15 +1660,20 @@ function canRead(e, authed) {
     // able to see the church's name and picture BEFORE they are a member of anything, and the invite/QR/follow
     // flow reads exactly this. Gating it would break joining.
     if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return true;
-    const cp = MEMBER_CHURCH.get(e.pubkey) || '';
-    if (!cp) return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || MEMBER_CHURCH.has(authed));
-    return churchReader(authed, cp);
+    // ANY church we share is enough. A member of two churches must be readable by both.
+    const mine = churchesOf(e.pubkey);
+    if (!mine.length) return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || MEMBER_CHURCHES.has(authed));
+    return mine.some(cp => churchReader(authed, cp));
   }
   if (e.kind === 5 || e.kind === 7) {
     const g5 = gidOf(e);
-    const cp = (g5 && GROUP_CHURCH.get(g5)) || MEMBER_CHURCH.get(e.pubkey) || '';
-    if (!cp) return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || MEMBER_CHURCH.has(authed));
-    return churchReader(authed, cp);
+    const gcp = g5 && GROUP_CHURCH.get(g5);
+    if (gcp) return churchReader(authed, gcp);
+    // No group tag — a DM reaction, say. Attribute it to any church the author belongs to, not to one slot:
+    // with a single slot a cross-church reaction was denied to the very peer it was aimed at.
+    const mine = churchesOf(e.pubkey);
+    if (!mine.length) return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || MEMBER_CHURCHES.has(authed));
+    return mine.some(cp => churchReader(authed, cp));
   }
   if (e.kind !== 1) return true;
   const g = gidOf(e);
@@ -1683,7 +1700,7 @@ function canRead(e, authed) {
       if (!churchReader(authed, gcp)) return false;
       // safeguarding, unchanged in intent: an adults-only group is withheld from a minor OF THAT CHURCH.
       if (!GROUP_CHILDSAFE.has(g) && (MINORS_BY.get(gcp) || new Set()).has(authed)) return false;
-    } else if (!MEMBER_CHURCH.has(authed) && !CHURCH_PUBS.has(authed) && !NETWORKS.has(authed)) {
+    } else if (!MEMBER_CHURCHES.has(authed) && !CHURCH_PUBS.has(authed) && !NETWORKS.has(authed)) {
       return false;   // a group we hold no definition for: still never serve it to a total stranger
     }
   }

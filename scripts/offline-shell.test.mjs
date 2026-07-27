@@ -59,3 +59,38 @@ test('the default Bible ships in the APK', () => {
   assert.ok(gate === -1 || between.includes('\n#') || !between.includes('if ['),
     'the default Bible must NOT be behind the opt-in flag — that is how it went missing');
 });
+
+// ── the last-resort fallback ─────────────────────────────────────────────────────────────────────────────────
+// The navigation fallback chain was `c || caches.match('./index.html') || caches.match('./')`. A promise is
+// always truthy, so the final term was unreachable — and if index.html happened not to be cached (the install
+// loop caches each URL independently and swallows individual failures) the handler resolved `undefined` into
+// respondWith, which the browser renders as "site can't be reached": exactly the page this branch exists to
+// prevent. AUDIT-2026-07-27.
+test('every offline fallback is awaited, so none of them is dead code', () => {
+  const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+  const at = sw.indexOf('if (isShell)');
+  assert.notEqual(at, -1, 'the shell branch is gone from the service worker');
+  // Strip comments first: the note explaining this fix quotes the broken chain verbatim, and matching it in
+  // prose rather than in code is how a test starts failing against a correct fix.
+  const branch = sw.slice(at, at + 1400).split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+  assert.doesNotMatch(branch, /c \|\| caches\.match\('\.\/index\.html'\) \|\| caches\.match/,
+    'the fallback chain ors together promises — every term after the first is unreachable');
+  const awaits = (branch.match(/await caches\.match\(/g) || []).length;
+  assert.ok(awaits >= 3, 'expected the request, index.html and ./ each to be awaited; found ' + awaits);
+});
+
+test('a shell miss still renders something rather than a browser error page', () => {
+  const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+  const at = sw.indexOf('if (isShell)');
+  const branch = sw.slice(at, at + 1400);
+  assert.match(branch, /new Response\(/,
+    'with nothing cached the handler resolves undefined, and the browser shows "site can’t be reached"');
+  assert.match(branch, /offline/i, 'the last-resort page should say what happened in plain words');
+});
+
+test('the cache version was bumped, or installed apps keep the old shell', () => {
+  const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+  const m = sw.match(/trinity-shell-v(\d+)/);
+  assert.ok(m, 'the cache name no longer carries a version');
+  assert.ok(Number(m[1]) >= 229, 'sw.js changed but the cache version is still v' + m[1] + ' — installed PWAs will not pick up the fix');
+});

@@ -12,7 +12,21 @@ import { readFileSync } from 'node:fs';
 
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
-const body = (name, src, n = 1800) => { const i = src.indexOf(name); assert.notEqual(i, -1, name + ' missing'); return src.slice(i, i + n); };
+// Brace-match to the REAL end of the function. This was a fixed 1800-character window, and a fixed window is
+// a slow-acting trap: adding eight lines to publishProfile pushed its signing call out of view and turned a
+// correct fix into a red test with a misleading message ("the guard must come BEFORE the signature" — the
+// guard did; the signature had simply fallen off the end). This file has been bitten by the same thing twice.
+const body = (name, src) => {
+  const i = src.indexOf(name);
+  assert.notEqual(i, -1, name + ' missing');
+  let depth = 0;
+  for (let j = src.indexOf('{', i); j < src.length; j++) {
+    const c = src[j];
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return src.slice(i, j + 1);
+  }
+  assert.fail(name + ': could not find the end of the function');
+};
 
 test('a delegated steward cannot publish a church profile', () => {
   // The bug: setActiveIdentity's delegated branch sets sk = churchSk (THIS device's church key) with pub = the

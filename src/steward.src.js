@@ -167,7 +167,9 @@ const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<
 const HIDE_D = 'trinityone/hidden:';        // a removed/hidden message, d=hidden:<msgId> (one per message; deleted = restored)
 const GROUPKEY_D = 'trinityone/groupkey:'; // church-signed key envelope for an encrypted group
 const _skeys = {};   // groupId -> KEY RING [current, ...superseded], each Uint8Array(32) (church-side cache)
-const GROUP_RING_MAX = 32;   // bound the envelope: 32 rotations of one group is far beyond any real church
+const GROUP_RING_MAX = 12;   // bound the envelope, and match the care key's ring exactly (see _careKeyRing).
+// 32 was too many now that every envelope carries the ring sealed PER RECIPIENT: a large church multiplied
+// that by its member count and pushed the event past the relay's 1 MB maxPayload. AUDIT-2026-07-27.
 const _srev = {};    // groupId -> envelope revision (bumped on rotate)
 const _senvTs = {};  // groupId -> latest envelope created_at (ignore stale/out-of-order)
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -555,6 +557,16 @@ pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('
 let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
 let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
 let _profileLoaded = false;                // the relay has ANSWERED about this identity's kind-0 (event or EOSE)
+// Resolve as soon as the relay answers, or after a bounded wait. Poll rather than hook the subscription, so a
+// console that has not subscribed at all (or whose relay is down) still settles instead of hanging a save.
+function _profileSettle(ms = 6000) {
+  if (_profileLoaded) return Promise.resolve(true);
+  return new Promise((res) => {
+    const t0 = Date.now();
+    const tick = () => { if (_profileLoaded || Date.now() - t0 > ms) return res(_profileLoaded); setTimeout(tick, 150); };
+    tick();
+  });
+}
 let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
 // DELEGATED steward mode (phase 2b): when this console acts as a steward of a church it does NOT own,
 // `actingChurch` is that church's hex pubkey. We sign with OUR OWN key (churchSk) but read+publish in
@@ -1078,13 +1090,30 @@ window.Steward = {
     // member's app renamed the church and repointed giving, irreversibly (kind-0 is replaceable).
     // A delegated steward cannot legitimately publish the other church's profile anyway — they do not hold its
     // key — so the honest answer is to refuse. AUDIT-2026-07-27.
-    if (actingChurch) { console.warn('[steward] refusing to publish a church profile while acting as a delegated steward'); return Promise.resolve(null); }
+    // Both refusals below MUST reach a screen. They returned Promise.resolve(null), and every one of the 20+
+    // callers treats that as success — NameEditModal closes the dialog, the feature toggles keep their new
+    // position, the giving-address field shows "Saved ✓". Nothing happened, and nothing said so.
+    // AUDIT-2026-07-27.
+    const _refuse = (what, message) => {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message } })); } catch (e) {}
+      return Promise.resolve(null);
+    };
+    if (actingChurch) return _refuse('church profile', 'Only the church that owns this profile can change its name, logo, giving address or features. Ask the church owner to make this change on their own console.');
     // And never merge an edit into a profile we have not actually READ yet. `lastProfile` starts empty and is
     // only filled when the relay answers, so editing one field on a cold/slow start published a kind-0 with
     // every other field blank — wiping picture, banner, accent, features, rules and the giving address.
+    // WAIT, don't refuse outright. A brand-new church types its name in step 0 of the setup wizard, before the
+    // relay has answered about a profile that does not exist yet — so this guard refused the very first name a
+    // church ever sets, the wizard advanced anyway, and the church was created nameless with nothing to retry
+    // it. Give the subscription a bounded moment to answer (an EOSE arrives even when there is no profile,
+    // which is exactly the new-church case), and only refuse if it never does.
     if (!_profileLoaded && Object.keys(lastProfile).length === 0 && Object.keys(meta || {}).length < 3) {
-      console.warn('[steward] refusing a partial profile edit before the church profile has loaded');
-      return Promise.resolve(null);
+      return _profileSettle().then(() => {
+        if (!_profileLoaded && Object.keys(lastProfile).length === 0) {
+          return _refuse('church profile', 'That change hasn\u2019t been saved yet \u2014 this device is still connecting to your church\u2019s relay, and saving now would blank the settings it hasn\u2019t read. Check the relay is running and try again.');
+        }
+        return window.Steward.publishProfile(meta);
+      });
     }
     lastProfile = { ...lastProfile, ...meta };   // merge so a partial edit (e.g. name) keeps channel etc.
     const m = lastProfile;
@@ -1711,11 +1740,31 @@ window.Steward = {
     } else if (!ring.length) ring = [key];
     _skeys[groupId] = ring;
     const rev = _srev[groupId] || 1; _srev[groupId] = rev;
-    const keys = {};
-    const wrapped = JSON.stringify(ring.map(_hex));   // current key first, then the superseded ones
-    for (const pk of recips) { try { keys[pk] = nip44e(wrapped, nip44ck(churchSk, pk)); } catch (e) {} }
+    // TWO SHAPES, DELIBERATELY. `keys` holds ONLY the current key as bare hex — exactly what every already-
+    // installed app expects. `rings` holds the whole ring as a JSON array for apps that understand it.
+    // Writing only the ring shape was a silent field break in the direction that actually happens: the console
+    // and relay update first and phones follow over days, so the next roster tick would have re-keyed every
+    // group with a payload old apps parse into garbage. _decEvt DROPS what it cannot open, so every member on
+    // an un-updated phone would have opened Prayer or their life group to an EMPTY ROOM — no error, no spinner,
+    // nothing to diagnose. The compat comment on the member side reasoned about the opposite direction only.
+    // AUDIT-2026-07-27.
     _senvTs[groupId] = now();
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content: JSON.stringify({ rev, keys }) }, churchSk));
+    const build = (r) => {
+      const keys = {}, rings = {};
+      const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
+      for (const pk of recips) {
+        try { const ck = nip44ck(churchSk, pk); keys[pk] = nip44e(cur, ck); rings[pk] = nip44e(wrapped, ck); } catch (e) {}
+      }
+      return JSON.stringify({ rev, keys, rings });
+    };
+    // A church large enough to push the sealed ring past the relay's 1 MB cap sheds history rather than
+    // failing to publish: a shorter ring costs old messages, a refused envelope costs the group entirely.
+    let content = build(ring);
+    for (let r = ring.length; content.length > 900000 && r > 1; ) {
+      r = Math.max(1, r >> 1);
+      content = build(ring.slice(0, r));
+    }
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk));
   },
   // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
   // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
@@ -1758,16 +1807,20 @@ window.Steward = {
     // stale copy from a lagging relay win — it would quietly reinstate a child-protection state the church
     // has already changed.
     let tMinors = 0, tApproved = 0, tNophoto = 0;
+    // `loaded` says the relay has ANSWERED, not that the lists are non-empty. The clearance backfill must
+    // not run before it: sealing every member a 'not a minor' clearance from lists that had simply not
+    // arrived yet would strip child status from every child in the church. AUDIT-2026-07-27.
+    let loaded = false;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto, loaded }); }
       },
-      oneose() { onLists({ minors, approved, nophoto }); },
+      oneose() { loaded = true; onLists({ minors, approved, nophoto, loaded }); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -1788,7 +1841,14 @@ window.Steward = {
     if (!/^[0-9a-f]{64}$/i.test(mp || '')) return Promise.resolve(null);
     const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
     let ct = ''; try { ct = nip44e(body, nip44ck(sk, mp)); } catch (e) { return Promise.resolve(null); }
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp]], content: ct }));
+    // The ['church'] tag is EXPLICIT, not left to feChurch. feChurch only adds it when acting as a DELEGATED
+    // steward, so a church OWNER — the ordinary case — published this with no church tag, the relay's accept
+    // rule requires one, and every clearance was refused. Silently: the member's app then fell back to the
+    // minors list, which the same day's work stopped serving to members, so isMinor was false for every child
+    // in every church. A safeguarding regression created by the change meant to protect them. The test missed
+    // it by hand-building the event WITH the tag instead of calling this function. AUDIT-2026-07-27.
+    const cp = actingChurch || pub;
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }));
   },
   // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
   // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.

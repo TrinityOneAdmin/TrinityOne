@@ -10657,7 +10657,7 @@ zoo`.split("\n");
   var HIDE_D = "trinityone/hidden:";
   var GROUPKEY_D = "trinityone/groupkey:";
   var _skeys = {};
-  var GROUP_RING_MAX = 32;
+  var GROUP_RING_MAX = 12;
   var _srev = {};
   var _senvTs = {};
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -11192,6 +11192,17 @@ zoo`.split("\n");
   var churchSk = null;
   var churchPub = null;
   var _profileLoaded = false;
+  function _profileSettle(ms = 6e3) {
+    if (_profileLoaded) return Promise.resolve(true);
+    return new Promise((res) => {
+      const t0 = Date.now();
+      const tick = () => {
+        if (_profileLoaded || Date.now() - t0 > ms) return res(_profileLoaded);
+        setTimeout(tick, 150);
+      };
+      tick();
+    });
+  }
   var lastProfile = {};
   var actingChurch = "";
   var stewardedChurches = /* @__PURE__ */ new Map();
@@ -11845,13 +11856,21 @@ zoo`.split("\n");
     // ---- publish (signed by the church) ----
     publishProfile(meta) {
       if (!sk) return Promise.resolve(null);
-      if (actingChurch) {
-        console.warn("[steward] refusing to publish a church profile while acting as a delegated steward");
+      const _refuse = (what, message) => {
+        try {
+          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what, message } }));
+        } catch (e) {
+        }
         return Promise.resolve(null);
-      }
+      };
+      if (actingChurch) return _refuse("church profile", "Only the church that owns this profile can change its name, logo, giving address or features. Ask the church owner to make this change on their own console.");
       if (!_profileLoaded && Object.keys(lastProfile).length === 0 && Object.keys(meta || {}).length < 3) {
-        console.warn("[steward] refusing a partial profile edit before the church profile has loaded");
-        return Promise.resolve(null);
+        return _profileSettle().then(() => {
+          if (!_profileLoaded && Object.keys(lastProfile).length === 0) {
+            return _refuse("church profile", "That change hasn\u2019t been saved yet \u2014 this device is still connecting to your church\u2019s relay, and saving now would blank the settings it hasn\u2019t read. Check the relay is running and try again.");
+          }
+          return window.Steward.publishProfile(meta);
+        });
       }
       lastProfile = { ...lastProfile, ...meta };
       const m = lastProfile;
@@ -12840,16 +12859,26 @@ zoo`.split("\n");
       _skeys[groupId] = ring;
       const rev2 = _srev[groupId] || 1;
       _srev[groupId] = rev2;
-      const keys = {};
-      const wrapped = JSON.stringify(ring.map(_hex));
-      for (const pk of recips) {
-        try {
-          keys[pk] = encrypt3(wrapped, getConversationKey(churchSk, pk));
-        } catch (e) {
-        }
-      }
       _senvTs[groupId] = now();
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content: JSON.stringify({ rev: rev2, keys }) }, churchSk));
+      const build = (r) => {
+        const keys = {}, rings = {};
+        const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
+        for (const pk of recips) {
+          try {
+            const ck = getConversationKey(churchSk, pk);
+            keys[pk] = encrypt3(cur, ck);
+            rings[pk] = encrypt3(wrapped, ck);
+          } catch (e) {
+          }
+        }
+        return JSON.stringify({ rev: rev2, keys, rings });
+      };
+      let content = build(ring);
+      for (let r = ring.length; content.length > 9e5 && r > 1; ) {
+        r = Math.max(1, r >> 1);
+        content = build(ring.slice(0, r));
+      }
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk));
     },
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
@@ -12895,6 +12924,7 @@ zoo`.split("\n");
     subscribeSafeguard(onLists) {
       let minors = [], approved = [], nophoto = [];
       let tMinors = 0, tApproved = 0, tNophoto = 0;
+      let loaded = false;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -12908,7 +12938,7 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, nophoto });
+            onLists({ minors, approved, nophoto, loaded });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
@@ -12918,7 +12948,7 @@ zoo`.split("\n");
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, nophoto });
+            onLists({ minors, approved, nophoto, loaded });
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -12928,11 +12958,12 @@ zoo`.split("\n");
             } catch {
               nophoto = [];
             }
-            onLists({ minors, approved, nophoto });
+            onLists({ minors, approved, nophoto, loaded });
           }
         },
         oneose() {
-          onLists({ minors, approved, nophoto });
+          loaded = true;
+          onLists({ minors, approved, nophoto, loaded });
         }
       });
       return () => {
@@ -12964,7 +12995,8 @@ zoo`.split("\n");
       } catch (e) {
         return Promise.resolve(null);
       }
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp]], content: ct }));
+      const cp = actingChurch || pub;
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }));
     },
     // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
     // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.

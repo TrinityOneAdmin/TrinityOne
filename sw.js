@@ -1,7 +1,7 @@
 // TrinityOne service worker — makes the app boot offline.
 // The app SHELL (html/jsx/libs/fonts) is cached here; Bible MODULES live in IndexedDB (engine.js)
 // and chat goes over the relay WebSocket — neither is touched by this worker.
-const CACHE = 'trinity-shell-v228';   // bump on each app deploy so installed PWAs refresh the shell
+const CACHE = 'trinity-shell-v229';   // bump on each app deploy so installed PWAs refresh the shell
 // SECURITY-AUDIT-2026-06-25 Critical-1: query-string params that MUST NOT enter the SW cache key.
 // The classic case is `?invite=<full 12-word BIP-39 seed>` — even after the React app strips the URL
 // via history.replaceState (app.jsx ~L466), the SW fetch handler has already cached the response
@@ -94,8 +94,15 @@ self.addEventListener('fetch', (e) => {
   if (isShell) {
     // Network-first so a new deploy is picked up, cache second, and for a NAVIGATION always fall back to the
     // cached shell — never let the browser's "site can't be reached" page win when we hold a working copy.
-    e.respondWith(fresh(e.request)
-      .catch(() => caches.match(e.request).then((c) => c || caches.match('./index.html') || caches.match('./'))));
+    // Each fallback must be AWAITED. `caches.match(...)` returns a promise, and a promise is always truthy, so
+    // `c || caches.match('./index.html') || caches.match('./')` never reached the last term — and when
+    // index.html happened not to be cached (the install loop caches each URL independently and swallows
+    // individual failures) the handler resolved `undefined` into respondWith, which the browser renders as
+    // "site can't be reached". Precisely the page this branch exists to prevent. AUDIT-2026-07-27.
+    e.respondWith(fresh(e.request).catch(async () => (
+      (await caches.match(e.request)) || (await caches.match('./index.html')) || (await caches.match('./')) ||
+      new Response('<!doctype html><meta charset=utf-8><title>TrinityOne</title><p style="font:16px system-ui;padding:2rem">TrinityOne is offline and this page was never saved to this device. Reconnect once and it will work offline afterwards.', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+    )));
     return;
   }
   // everything else (big immutable libs, fonts, wasm): cache-first, refresh in the background
