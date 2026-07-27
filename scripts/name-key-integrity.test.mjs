@@ -262,3 +262,40 @@ test('a child’s name is not published in the clear either', () => {
   assert.doesNotMatch(fn, /childName: name/, 'the guardian request still carries the child’s name in the clear');
   assert.match(fn, /trinityone\/name:/, 'nothing publishes the child’s sealed name, so the steward sees a nameless npub');
 });
+
+// ── every kind-0 READER, not just the one I happened to look at ─────────────────────────────────────────────
+// Scoping Stage 2 I grepped for `kind: 0` — which finds the two places that PUBLISH a profile — and reasoned
+// about the readers I already knew. There were five readers, reachable by `e.kind === 0` / `kinds: [0]`, and
+// two of them had their own private copy of the profile-cache logic. The member hub's copy was the worst: it
+// is the roster the member app actually renders, and it overwrote a decrypted name with an empty string.
+// AUDIT-2026-07-27.
+test('no kind-0 reader overwrites a name that has already been decrypted', () => {
+  const SRC = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8');
+  const sites = [...SRC.matchAll(/profiles\[e\.pubkey\] = \{/g)];
+  assert.ok(sites.length >= 2, 'expected at least two profile-cache writers; found ' + sites.length);
+  for (const m of sites) {
+    // the WHOLE line: the member hub computes `nm` (with the had.name fallback) before the assignment, so
+    // slicing forward from the match alone reported a correct fix as broken.
+    const line = SRC.slice(SRC.lastIndexOf('\n', m.index) + 1, SRC.indexOf('\n', m.index));
+    assert.match(line, /\.\.\.had/, 'a kind-0 reader replaces the whole cached profile instead of merging — it will wipe a decrypted name');
+    assert.match(line, /had\.name/, 'a kind-0 reader lets an empty kind-0 name win over one already decrypted');
+  }
+});
+
+test('no kind-0 reader refetches every member for ever', () => {
+  const SRC = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8');
+  // "have we asked", never "did we get a name" — since Stage 2 no member's kind-0 has one, so a name-based
+  // test matches every member of the church in every batch window, permanently.
+  assert.doesNotMatch(SRC, /filter\(pk => !\(profiles\[pk\] && profiles\[pk\]\.name\)\)/,
+    'a profile fetcher still refetches anything without a name — that is now every member, for ever');
+  assert.doesNotMatch(SRC, /profAuthors\.has\(pk\) \|\| \(profiles\[pk\] && profiles\[pk\]\.name\)/,
+    'the member hub still re-queues every member on every roster tick');
+});
+
+test('the roster row is not blanked by a nameless profile', () => {
+  const SRC = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8');
+  const at = SRC.indexOf('const m = hub.byPub.get(e.pubkey); if (m) {');
+  assert.notEqual(at, -1, 'the member hub no longer updates roster rows from kind-0 — re-anchor this test');
+  assert.match(SRC.slice(at, at + 220), /if \(nm\) m\.name = nm/,
+    'the member hub writes the kind-0 name onto the roster row unconditionally, so a nameless profile blanks a decrypted name');
+});

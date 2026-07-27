@@ -1570,16 +1570,24 @@ window.Fellowship = {
     // window.Fellowship.relays, which is empty on a native install. Kept open so a slow relay isn't cut off.
     const refreshProfiles = () => {
       profTimer = null;
-      const authors = [...profAuthors].filter(pk => !(profiles[pk] && profiles[pk].name));
+      // "resolved" means we have ASKED, not "we got a name". Since Stage 2 no member's kind-0 carries a name,
+      // so filtering on the name meant every member of the church qualified on every pass, for ever. The same
+      // defect as requestProfiles/_flushProfiles — this is the member hub's own copy of that logic, and it is
+      // the path the roster actually uses. AUDIT-2026-07-27.
+      const authors = [...profAuthors].filter(pk => !(pk in profiles));
       if (!authors.length) return;
       try { profSub && profSub.close(); } catch {}   // replace the old one — never accumulate subscriptions
       profSub = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
-        onevent(e) { try { const meta = JSON.parse(e.content); profiles[e.pubkey] = { name: meta.name || meta.display_name || '', picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { m.name = profiles[e.pubkey].name; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
+        // MERGE, and never let an empty name win. A kind-0 carries no name since Stage 2, and this overwrote
+        // the whole cached entry AND the roster row — so a profile arriving after _openSealedName had resolved
+        // someone flipped them straight back to Anonymous. Worse than the sibling in _flushProfiles, because
+        // this is the roster the member app actually renders.
+        onevent(e) { try { const meta = JSON.parse(e.content); const had = profiles[e.pubkey] || {}; const nm = meta.name || meta.display_name || had.name || ''; profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { if (nm) m.name = nm; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
         oneose() {},
       });
     };
     const ensureProfile = (pk) => {
-      if (profAuthors.has(pk) || (profiles[pk] && profiles[pk].name)) return;
+      if (profAuthors.has(pk) || (pk in profiles)) return;
       profAuthors.add(pk);
       if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);   // debounce the burst of arriving members
     };

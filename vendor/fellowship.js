@@ -7669,21 +7669,27 @@
       };
       const refreshProfiles = () => {
         profTimer = null;
-        const authors = [...profAuthors].filter((pk) => !(profiles[pk] && profiles[pk].name));
+        const authors = [...profAuthors].filter((pk) => !(pk in profiles));
         if (!authors.length) return;
         try {
           profSub && profSub.close();
         } catch {
         }
         profSub = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
+          // MERGE, and never let an empty name win. A kind-0 carries no name since Stage 2, and this overwrote
+          // the whole cached entry AND the roster row — so a profile arriving after _openSealedName had resolved
+          // someone flipped them straight back to Anonymous. Worse than the sibling in _flushProfiles, because
+          // this is the roster the member app actually renders.
           onevent(e) {
             try {
               const meta = JSON.parse(e.content);
-              profiles[e.pubkey] = { name: meta.name || meta.display_name || "", picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
+              const had = profiles[e.pubkey] || {};
+              const nm = meta.name || meta.display_name || had.name || "";
+              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
               saveProfiles();
               const m = hub.byPub.get(e.pubkey);
               if (m) {
-                m.name = profiles[e.pubkey].name;
+                if (nm) m.name = nm;
                 m.picture = profiles[e.pubkey].picture;
                 m.nip05 = profiles[e.pubkey].nip05;
                 m.hidden = !!meta.hidden;
@@ -7699,7 +7705,7 @@
         });
       };
       const ensureProfile = (pk) => {
-        if (profAuthors.has(pk) || profiles[pk] && profiles[pk].name) return;
+        if (profAuthors.has(pk) || pk in profiles) return;
         profAuthors.add(pk);
         if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);
       };
