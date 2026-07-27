@@ -50,9 +50,15 @@ rm -f "$WWW"/vendor/steward*.js "$WWW"/vendor/jspdf.umd.min.js
 if grep -q 'const WALLET_ENABLED = false' "$ROOT/app/app.jsx" 2>/dev/null; then rm -f "$WWW"/vendor/wallet.js; fi
 rm -f "$WWW"/vendor/fonts/f00[123].woff2 "$WWW"/vendor/fonts/f01[0123].woff2   # unused Bricolage Grotesque + Plus Jakarta Sans faces (only Sora + Newsreader are referenced)
 
-# Bible/lexicon modules are NOT embedded in the app — they download on demand (BSB auto-installs on
-# first launch). The web build still serves them same-origin from the deploy, so they live in www/
-# for the PWA; the native APK ships none and pulls them from the gateway (engine.js ASSET_BASE).
+# THE DEFAULT BIBLE SHIPS. engine.js auto-installs BSB on first launch by DOWNLOADING it, so until now a
+# phone that had never had a working connection had no scripture at all — while "Share the app" promises a
+# recipient can read offline with no internet on their phone, and hand-to-hand sharing over Quick Share /
+# Bluetooth is the distribution route for exactly the places where that connection does not exist.
+# 2.9 MB on a ~7 MB APK is the right trade for making that promise true. AUDIT-2026-07-27.
+cp modules/engbsb.zip "$WWW/modules/" 2>/dev/null || echo "  (warning: modules/engbsb.zip missing — the APK will ship with no Bible)"
+
+# The REST of the library still downloads on demand — the full set below is 25 MB and would quadruple the
+# APK. Set BUNDLE_MODULES=1 for an everything-offline build (a church with no connection at all).
 if [ "${BUNDLE_MODULES:-}" = "1" ]; then
   cp modules/engbsb.zip modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
      modules/ahirani-usfm.zip modules/eng-akjv.bbl.mybible modules/strongs-dict.json \

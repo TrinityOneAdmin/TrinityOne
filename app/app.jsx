@@ -1535,7 +1535,11 @@ function App() {
 
   const screens = {
     today: <TodayScreen ctx={ctx} />,
-    read: readView === 'plans' ? <PlansScreen ctx={ctx} /> : <ReadScreen ctx={ctx} />,
+    // A missing Bible now costs you the READER, not the whole app. Until 2026-07-27 the entire product was
+    // wrapped in `Bible.loaded ? … : <EmptyState/>`, so a module download that failed or had not finished took
+    // Today, Community, groups, Care and the emergency safety check with it. The empty state belongs here.
+    read: !Bible.loaded ? <EmptyState loading={Bible.loading} error={Bible._error} onBrowse={() => setStore(true)} />
+      : readView === 'plans' ? <PlansScreen ctx={ctx} /> : <ReadScreen ctx={ctx} />,
     chat: <ChatScreen ctx={ctx} />,
     library: <LibraryScreen ctx={ctx} />,
   };
@@ -1553,7 +1557,13 @@ function App() {
   return (
     <div ref={wrapRef} className={cx('trinity', t.dark && 'dark')} style={{ ...rootStyle, ...(fullscreen ? { position: 'fixed', inset: 0 } : { transformOrigin: 'center center' }) }}>
       <PhoneFrame bare={fullscreen}>
-        {Bible.loaded ? (
+        {/* The app no longer waits for a Bible to exist. This was `Bible.loaded ? <the entire app> :
+            <EmptyState/>`, so a failed or not-yet-finished module download cost the member Today, Community,
+            their groups, Care AND the emergency safety check — everything — and left a reader empty state as
+            the whole product. For a congregation that uses this to ask for help, losing the app because a
+            3 MB download failed is disproportionate. The Read tab still shows EmptyState on its own (see
+            screens-read), which is where a missing Bible actually belongs. AUDIT-2026-07-27. */}
+        {(
           <React.Fragment>
             <UpdateBanner ctx={ctx} />
             {desktop ? (
@@ -1649,9 +1659,6 @@ function App() {
 
             <Toast msg={toastMsg} />
           </React.Fragment>
-        ) : (
-
-          <EmptyState loading={Bible.loading} error={Bible._error} onBrowse={() => setStore(true)} />
         )}
 
         {/* module store — available in both the loaded and first-run states */}
