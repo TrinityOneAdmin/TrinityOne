@@ -163,7 +163,8 @@ const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request t
 const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<groupId> (one per group; empty/deleted = unpinned)
 const HIDE_D = 'trinityone/hidden:';        // a removed/hidden message, d=hidden:<msgId> (one per message; deleted = restored)
 const GROUPKEY_D = 'trinityone/groupkey:'; // church-signed key envelope for an encrypted group
-const _skeys = {};   // groupId -> Uint8Array(32) group key (church-side cache)
+const _skeys = {};   // groupId -> KEY RING [current, ...superseded], each Uint8Array(32) (church-side cache)
+const GROUP_RING_MAX = 32;   // bound the envelope: 32 rotations of one group is far beyond any real church
 const _srev = {};    // groupId -> envelope revision (bumped on rotate)
 const _senvTs = {};  // groupId -> latest envelope created_at (ignore stale/out-of-order)
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -176,7 +177,16 @@ function stewIngestKey(e) {
   const gid = d.slice(GROUPKEY_D.length);
   if ((_senvTs[gid] || 0) > (e.created_at || 0)) return;   // ignore an older envelope arriving late
   _senvTs[gid] = e.created_at || 0;
-  try { const env = JSON.parse(e.content || '{}'); _srev[gid] = env.rev || 1; const mine = env.keys && churchPub && env.keys[churchPub]; if (mine && churchSk) _skeys[gid] = _unhex(nip44d(mine, nip44ck(churchSk, e.pubkey))); } catch {}
+  try {
+    const env = JSON.parse(e.content || '{}'); _srev[gid] = env.rev || 1;
+    const mine = env.keys && churchPub && env.keys[churchPub];
+    if (mine && churchSk) {
+      const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
+      let ring = null;
+      try { const p = JSON.parse(plain); if (Array.isArray(p)) ring = p.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)); } catch (x) {}
+      _skeys[gid] = (ring && ring.length ? ring : [plain]).map(_unhex);   // legacy envelopes hold a bare hex string
+    }
+  } catch {}
 }
 const now = () => Math.floor(Date.now() / 1000);
 // Author discipline for the church's replaceable AUTHORITY docs (blocklist, admitted, stewards, guardians,
@@ -1371,7 +1381,7 @@ window.Steward = {
   publishPost(content, group) {
     if (!sk) return Promise.resolve(null);
     let body = content || '', encTag = [];
-    const gkey = group && _skeys[group];   // encrypted group → seal the post
+    const gkey = group && (_skeys[group] || [])[0];   // encrypted group → seal the post under the CURRENT key (ring[0])
     if (gkey) { try { body = nip44e(content || '', gkey); encTag = [['enc', '1']]; } catch (e) {} }
     return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag], content: body }));
   },
@@ -1463,7 +1473,12 @@ window.Steward = {
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
         if (!e.tags.some(t => t[0] === 'p' && t[1] === pub)) return;   // this church's scope
         let text = e.content;
-        if (e.tags.some(t => t[0] === 'enc')) { const k = _skeys[groupId]; if (!k) return; try { text = nip44d(e.content, k); } catch { return; } }
+        if (e.tags.some(t => t[0] === 'enc')) {
+          const ring = _skeys[groupId]; if (!ring || !ring.length) return;
+          let ok = false;
+          for (const k of ring) { try { text = nip44d(e.content, k); ok = true; break; } catch (x) {} }   // current key, then superseded
+          if (!ok) return;
+        }
         byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '' });
         resolveName(e.pubkey);
         emit();
@@ -1619,20 +1634,30 @@ window.Steward = {
   // the original opaque key material from disk). ----
   publishGroupKey(groupId, memberPubs, opts = {}) {
     if (!churchSk || !churchPub) return Promise.resolve(null);
-    if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
+    const haveRing = (_skeys[groupId] || []).length > 0;
+    if (opts.reuseOnly && !haveRing) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
     const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])];
-    let key = _skeys[groupId];
+    let ring = _skeys[groupId] || [];
+    let key = ring[0];
     // AUDIT-2026-07-24: the contract above ("must NOT mint a new key — would orphan history") was enforced only
     // for the background reuseOnly path. The INTERACTIVE path — a steward adding one member to an existing
     // encrypted group — minted whenever `key` was missing, and `_skeys` is populated only when the envelope has
     // arrived. Adding a member before it landed re-keyed the group and orphaned every prior message in it,
     // permanently. A missing key is only safe to interpret as "new group" once we've had an authenticated read.
     if (!opts.rotate && !key && !_relayAuthed) return Promise.resolve(null);
-    if (opts.rotate || !key) { key = crypto.getRandomValues(new Uint8Array(32)); _srev[groupId] = (_srev[groupId] || 0) + 1; }
-    _skeys[groupId] = key;
+    // ROTATION KEEPS THE OLD KEYS. Replacing the ring with one fresh key is what made a block erase the group's
+    // whole readable history on every phone — _decEvt drops what it cannot open, so the messages simply vanish.
+    // Carry the superseded keys along, newest first, exactly as the care key does. AUDIT-2026-07-27.
+    if (opts.rotate || !key) {
+      key = crypto.getRandomValues(new Uint8Array(32));
+      _srev[groupId] = (_srev[groupId] || 0) + 1;
+      ring = [key, ...ring].slice(0, GROUP_RING_MAX);
+    } else if (!ring.length) ring = [key];
+    _skeys[groupId] = ring;
     const rev = _srev[groupId] || 1; _srev[groupId] = rev;
     const keys = {};
-    for (const pk of recips) { try { keys[pk] = nip44e(_hex(key), nip44ck(churchSk, pk)); } catch (e) {} }
+    const wrapped = JSON.stringify(ring.map(_hex));   // current key first, then the superseded ones
+    for (const pk of recips) { try { keys[pk] = nip44e(wrapped, nip44ck(churchSk, pk)); } catch (e) {} }
     _senvTs[groupId] = now();
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content: JSON.stringify({ rev, keys }) }, churchSk));
   },

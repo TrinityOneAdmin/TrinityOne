@@ -10655,6 +10655,7 @@ zoo`.split("\n");
   var HIDE_D = "trinityone/hidden:";
   var GROUPKEY_D = "trinityone/groupkey:";
   var _skeys = {};
+  var GROUP_RING_MAX = 32;
   var _srev = {};
   var _senvTs = {};
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -10676,7 +10677,16 @@ zoo`.split("\n");
       const env = JSON.parse(e.content || "{}");
       _srev[gid] = env.rev || 1;
       const mine = env.keys && churchPub && env.keys[churchPub];
-      if (mine && churchSk) _skeys[gid] = _unhex(decrypt3(mine, getConversationKey(churchSk, e.pubkey)));
+      if (mine && churchSk) {
+        const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+        let ring = null;
+        try {
+          const p = JSON.parse(plain);
+          if (Array.isArray(p)) ring = p.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+        } catch (x) {
+        }
+        _skeys[gid] = (ring && ring.length ? ring : [plain]).map(_unhex);
+      }
     } catch {
     }
   }
@@ -12328,7 +12338,7 @@ zoo`.split("\n");
     publishPost(content, group) {
       if (!sk) return Promise.resolve(null);
       let body = content || "", encTag = [];
-      const gkey = group && _skeys[group];
+      const gkey = group && (_skeys[group] || [])[0];
       if (gkey) {
         try {
           body = encrypt3(content || "", gkey);
@@ -12479,13 +12489,18 @@ zoo`.split("\n");
           if (!e.tags.some((t) => t[0] === "p" && t[1] === pub)) return;
           let text = e.content;
           if (e.tags.some((t) => t[0] === "enc")) {
-            const k = _skeys[groupId];
-            if (!k) return;
-            try {
-              text = decrypt3(e.content, k);
-            } catch {
-              return;
+            const ring = _skeys[groupId];
+            if (!ring || !ring.length) return;
+            let ok = false;
+            for (const k of ring) {
+              try {
+                text = decrypt3(e.content, k);
+                ok = true;
+                break;
+              } catch (x) {
+              }
             }
+            if (!ok) return;
           }
           byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find((t) => t[0] === "k") || [])[1] || "" });
           resolveName(e.pubkey);
@@ -12730,21 +12745,25 @@ zoo`.split("\n");
     // the original opaque key material from disk). ----
     publishGroupKey(groupId, memberPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
-      if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);
+      const haveRing = (_skeys[groupId] || []).length > 0;
+      if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
       const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])];
-      let key = _skeys[groupId];
+      let ring = _skeys[groupId] || [];
+      let key = ring[0];
       if (!opts.rotate && !key && !_relayAuthed) return Promise.resolve(null);
       if (opts.rotate || !key) {
         key = crypto.getRandomValues(new Uint8Array(32));
         _srev[groupId] = (_srev[groupId] || 0) + 1;
-      }
-      _skeys[groupId] = key;
+        ring = [key, ...ring].slice(0, GROUP_RING_MAX);
+      } else if (!ring.length) ring = [key];
+      _skeys[groupId] = ring;
       const rev2 = _srev[groupId] || 1;
       _srev[groupId] = rev2;
       const keys = {};
+      const wrapped = JSON.stringify(ring.map(_hex));
       for (const pk of recips) {
         try {
-          keys[pk] = encrypt3(_hex(key), getConversationKey(churchSk, pk));
+          keys[pk] = encrypt3(wrapped, getConversationKey(churchSk, pk));
         } catch (e) {
         }
       }

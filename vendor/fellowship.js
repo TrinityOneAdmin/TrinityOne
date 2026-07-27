@@ -5908,8 +5908,16 @@
     try {
       const env = JSON.parse(e.content || "{}");
       const mine = env.keys && pub && env.keys[pub];
-      if (mine && sk) _gkeys[k] = _unhex(decrypt(mine, getConversationKey(sk, e.pubkey)));
-      else if (!mine) delete _gkeys[k];
+      if (mine && sk) {
+        const plain = decrypt(mine, getConversationKey(sk, e.pubkey));
+        let ring = null;
+        try {
+          const p = JSON.parse(plain);
+          if (Array.isArray(p)) ring = p.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+        } catch (x) {
+        }
+        _gkeys[k] = (ring && ring.length ? ring : [plain]).map(_unhex);
+      } else if (!mine) delete _gkeys[k];
     } catch {
     }
   }
@@ -6006,13 +6014,15 @@
   function _decEvt(cp, e) {
     if (!e.tags || !e.tags.some((t) => t[0] === "enc")) return e;
     const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
-    const key = gid && _gkeys[_gkKey(cp, gid)];
-    if (!key) return null;
-    try {
-      return { ...e, content: decrypt(e.content, key) };
-    } catch {
-      return null;
+    const ring = gid && _gkeys[_gkKey(cp, gid)];
+    if (!ring || !ring.length) return null;
+    for (const key of ring) {
+      try {
+        return { ...e, content: decrypt(e.content, key) };
+      } catch (x) {
+      }
     }
+    return null;
   }
   var NET = "trinityone";
   function scheduleVisible(list) {
@@ -7744,7 +7754,7 @@
       if (!sk) await window.Fellowship.ready;
       const churchTag = window.Fellowship.churchPub ? [["p", window.Fellowship.churchPub]] : [];
       let body = content, encTag = [];
-      const gkey = _gkeys[_gkKey(window.Fellowship.churchPub, groupId)];
+      const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];
       if (gkey) {
         try {
           body = encrypt(content, gkey);

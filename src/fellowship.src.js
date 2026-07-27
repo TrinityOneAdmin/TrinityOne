@@ -88,7 +88,9 @@ function _saveChildLink(link) { const list = _loadChildren().filter(c => c && c.
 // otherwise publish a church-signed `groupkey:<victimGroupId>` that clobbers the real church's cached key
 // for the same id (→ DoS the encrypted group, or seal the victim's next post under the attacker's key and
 // read the plaintext). Keying by `<churchPub>|<gid>` isolates each church's key space so ids can't collide.
-const _gkeys = {};   // "<cp>|<groupId>" -> Uint8Array(32) group key, unwrapped from that church's envelope for me
+// "<cp>|<groupId>" -> KEY RING [current, ...superseded], each Uint8Array(32), unwrapped from that church's
+// envelope for me. A ring, not one key — rotation must never orphan history (see _ingestGroupKey).
+const _gkeys = {};
 const _gkeyTs = {};  // "<cp>|<groupId>" -> newest envelope created_at accepted (stale-drop for replayed rotations)
 const _gkKey = (cp, gid) => (cp || '') + '|' + gid;
 // Coalesce a subscription's emit. The universal pattern here is `onevent → byId.set(...) → emit()`, where
@@ -163,8 +165,18 @@ function _ingestGroupKey(cp, e) {
   try {
     const env = JSON.parse(e.content || '{}');
     const mine = env.keys && pub && env.keys[pub];
-    if (mine && sk) _gkeys[k] = _unhex(nip44d(mine, nip44ck(sk, e.pubkey)));
-    else if (!mine) delete _gkeys[k];   // dropped from the group (rotation) → lose the key
+    // KEY RING. Rotation used to REPLACE the single key, and _decEvt drops any message it cannot open — so the
+    // moment a steward blocked someone, every earlier message in that group became unreadable on every phone,
+    // permanently and silently. The care key already carried a ring for exactly this reason; the group key did
+    // not, and I shipped a block()-rotates-every-group change on top of that gap. AUDIT-2026-07-27.
+    // The envelope now wraps a JSON array, current key first. An older console wraps a bare hex string — accept
+    // both, or updating the member app before the console would blank every encrypted group in the church.
+    if (mine && sk) {
+      const plain = nip44d(mine, nip44ck(sk, e.pubkey));
+      let ring = null;
+      try { const p = JSON.parse(plain); if (Array.isArray(p)) ring = p.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)); } catch (x) {}
+      _gkeys[k] = (ring && ring.length ? ring : [plain]).map(_unhex);
+    } else if (!mine) delete _gkeys[k];   // dropped from the group entirely → lose every key, current and old
   } catch {}
 }
 // ── care key (SECURITY-AUDIT-2026-07-20 H3) ───────────────────────────────────────────────────────
@@ -245,9 +257,12 @@ async function _fetchCareTeam(cp) {
 function _decEvt(cp, e) {
   if (!e.tags || !e.tags.some(t => t[0] === 'enc')) return e;
   const gid = (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1];
-  const key = gid && _gkeys[_gkKey(cp, gid)];   // SECURITY-AUDIT-2026-07-06 H5: this church's key for this gid, not a collided one
-  if (!key) return null;
-  try { return { ...e, content: nip44d(e.content, key) }; } catch { return null; }
+  const ring = gid && _gkeys[_gkKey(cp, gid)];   // SECURITY-AUDIT-2026-07-06 H5: this church's keys for this gid, not a collided one
+  if (!ring || !ring.length) return null;
+  // Current key first, then each superseded one: a message sealed before the last rotation must still open.
+  // Returning null DROPS the message at both call sites, so a missing key reads as "this was never said".
+  for (const key of ring) { try { return { ...e, content: nip44d(e.content, key) }; } catch (x) {} }
+  return null;
 }
 
 const NET = 'trinityone';                       // network-wide tag
@@ -1596,7 +1611,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     const churchTag = window.Fellowship.churchPub ? [['p', window.Fellowship.churchPub]] : [];
     let body = content, encTag = [];
-    const gkey = _gkeys[_gkKey(window.Fellowship.churchPub, groupId)];   // encrypted group → seal under THIS church's key (H5)
+    const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];   // encrypted group → seal under THIS church's CURRENT key, i.e. ring[0] (H5)
     if (gkey) { try { body = nip44e(content, gkey); encTag = [['enc', '1']]; } catch (e) {} }
     const evt = finalizeEvent({
       kind: 1, created_at: Math.floor(Date.now() / 1000),

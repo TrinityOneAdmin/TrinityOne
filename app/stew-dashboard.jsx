@@ -224,11 +224,18 @@ function KeyDistributor() {
   // keep the envelope's author check current: a revoked steward's envelope must stop being accepted
   const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];
   React.useEffect(() => { if (window.Steward && window.Steward.setCareRoster) window.Steward.setCareRoster(stewardRoster); }, [stewardRoster]);
+  // BLOCKED MEMBERS MUST NEVER BE RE-KEYED. useStewardMembers() does not filter the blocklist (DashMembers does
+  // that itself), so every recipient set built here silently included people the steward had removed: the next
+  // time anyone joined, `grew` fired and the freshly-rotated key was wrapped straight back to them. The care and
+  // media re-key paths had the same hole via `want`. AUDIT-2026-07-27.
+  const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
+  const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
   React.useEffect(() => {
-    const memberPubs = members.map(m => m.pubkey);
+    const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
     for (const g of groups) {
       if (!g.encrypted) continue;
-      const recips = g.visibility === 'invite' ? (g.members || []) : memberPubs;
+      const recips = (g.visibility === 'invite' ? (g.members || []) : memberPubs).filter(notBlocked);
       const key = [...new Set(recips)].sort().join(',');
       const prev = last.current[g.id];
       if (prev === undefined) { last.current[g.id] = key; continue; }   // first sighting — already keyed by create/edit
@@ -3223,12 +3230,16 @@ function DashMembers() {
       // so a removal published nothing at all. The only {rotate:true} call site was the invite-only members
       // editor, which does not exist for an OPEN encrypted group. The contract in steward.src.js says removal
       // MUST rotate; this is the path that was missing it. AUDIT-2026-07-27.
-      const grps = Array.isArray(groups) ? groups : [];
+      // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeds the recipient set
+      // with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys THEIR
+      // group under OUR key and leaves the owning church out of the recipients, locking them out of their own
+      // room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
+      const grps = (!delegated && Array.isArray(groups)) ? groups : [];
       for (const g of grps) {
         if (!g || !g.encrypted) continue;
         const wasIn = g.visibility === 'invite' ? (g.members || []).includes(pk) : true;   // an open group includes everyone
         if (!wasIn) continue;
-        const recips = g.visibility === 'invite' ? (g.members || []).filter(p => p !== pk) : remaining;
+        const recips = (g.visibility === 'invite' ? (g.members || []).filter(p => p !== pk && !blockedSet.has(String(p || '').toLowerCase())) : remaining);
         if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { rotate: true });
         if (g.visibility === 'invite' && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
       }
