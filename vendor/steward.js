@@ -10621,6 +10621,7 @@ zoo`.split("\n");
   var APPROVED_D = "trinityone/approved:";
   var NOPHOTO_D = "trinityone/nophoto:";
   var GUARDREQ_D = "trinityone/guardreq:";
+  var NAMEKEY_D = "trinityone/namekey:";
   var CLEARANCE_D = "trinityone/clearance:";
   var GUARDIANS_D = "trinityone/guardians:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
@@ -11187,6 +11188,7 @@ zoo`.split("\n");
     _relayAuthed = true;
     return finalizeEvent2(authEvent, sk);
   };
+  var _nameKeyRing = [];
   var churchSk = null;
   var churchPub = null;
   var _profileLoaded = false;
@@ -12975,6 +12977,71 @@ zoo`.split("\n");
         out.push(window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }));
       }
       return Promise.allSettled(out);
+    },
+    // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
+    // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —
+    // and any mirror holding a copy of this church — a named roster. The church mints a key, wraps a copy for
+    // every member, and members seal their own name under it. Same shape as the care and media keys, including
+    // the RING: rotating on removal must not orphan the names already published. AUDIT-2026-07-27.
+    ensureNameKeyForMembers(memberPubs, opts = {}) {
+      if (!churchSk || !churchPub) return Promise.resolve(null);
+      const cp = actingChurch || pub;
+      let ring = _nameKeyRing.slice();
+      if (opts.rotate || !ring.length) {
+        if (!opts.rotate && !_relayAuthed) return Promise.resolve(null);
+        ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, 32);
+      }
+      _nameKeyRing = ring;
+      const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])];
+      const keys = {};
+      const wrapped = JSON.stringify(ring);
+      for (const pk of recips) {
+        try {
+          keys[pk] = encrypt3(wrapped, getConversationKey(churchSk, pk));
+        } catch (e) {
+        }
+      }
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+    },
+    // read the envelope back (the church's own copy) so the console can decrypt members' names
+    subscribeNameKey() {
+      const cp = actingChurch || pub;
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }], {
+        onevent(e) {
+          if (!_byChurchOrSteward(e)) return;
+          try {
+            const env = JSON.parse(e.content || "{}");
+            const mine = env.keys && churchPub && env.keys[churchPub];
+            if (!mine || !churchSk) return;
+            const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+            const r = JSON.parse(plain);
+            if (Array.isArray(r)) _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+          } catch (x) {
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
+    openMemberName(content) {
+      for (const k of _nameKeyRing) {
+        try {
+          const o = JSON.parse(decrypt3(content, _unhex(k)));
+          if (o && typeof o.name === "string") return o.name;
+        } catch (x) {
+        }
+      }
+      return "";
+    },
+    nameKeyReady() {
+      return _nameKeyRing.length > 0;
     },
     setMinors(pubkeys) {
       _requireTrustedView("list of children");

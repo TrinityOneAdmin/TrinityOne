@@ -650,6 +650,38 @@ const _hubEosed = (hub) => { hub.eosed = true; if (hub.pendingFull) { hub.pendin
 const RESEAT_D = 'trinityone/reseat:';
 const _reseatOld = new Map();   // cp -> Set(old pubkey hex) superseded by a newer key
 const _reseatAt = new Map();    // cp -> created_at of the newest doc we accepted (newest wins)
+// CONGREGATION NAME KEY. The church wraps a copy for each member; a member's display name for that church is
+// sealed under it, so the relay and any mirror hold ciphertext instead of a named roster. A RING, like the
+// group and care keys, so rotating on removal never hides the names already published. AUDIT-2026-07-27.
+const _nameKeys = new Map();    // cp -> [Uint8Array(32)], current first
+const _nameKeyTs = new Map();   // cp -> created_at of the newest envelope accepted
+const _sealedNames = new Map(); // "<cp>|<pubkey>" -> plaintext name, once opened
+function _ingestNameKey(cp, e) {
+  if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
+  if ((e.created_at || 0) < (_nameKeyTs.get(cp) || 0)) return;
+  _nameKeyTs.set(cp, e.created_at || 0);
+  try {
+    const env = JSON.parse(e.content || '{}');
+    const mine = env.keys && pub && env.keys[pub];
+    if (!mine || !sk) { if (!mine) _nameKeys.delete(cp); return; }   // dropped from the envelope → lose the keys
+    const r = JSON.parse(nip44d(mine, nip44ck(sk, e.pubkey)));
+    if (Array.isArray(r)) _nameKeys.set(cp, r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)).map(_unhexF));
+  } catch (x) {}
+}
+const _unhexF = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
+// open a member's sealed name; tries every key so a rotation never hides an older one
+function _openSealedName(cp, author, content) {
+  for (const k of (_nameKeys.get(cp) || [])) {
+    try { const o = JSON.parse(nip44d(content, k)); if (o && typeof o.name === 'string') {
+      const nm = o.name.slice(0, 40);
+      _sealedNames.set(cp + '|' + author, nm);
+      if (!profiles[author]) profiles[author] = {};
+      profiles[author].name = nm;                       // so every existing screen resolves it unchanged
+      return nm;
+    } } catch (x) {}
+  }
+  return '';
+}
 const _reseatNamed = new Set();   // cp|pub we have already adopted a vouched name for, this session
 function _noteReseat(cp, e) {
   if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
@@ -779,6 +811,8 @@ function _docsHub(cp) {
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e); else if (d0 === CAREKEY_D + cp) _ingestCareKey(cp, e); }
   for (const e of hub.buf.values()) { if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content); }   // approved while the app was closed
   for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); }            // re-seats recorded while the app was closed
+  for (const e of hub.buf.values()) { if (_dtag(e) === 'trinityone/namekey:' + cp) _ingestNameKey(cp, e); }   // the key FIRST
+  for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0 === 'trinityone/name:' + cp) _openSealedName(cp, e.pubkey, e.content); }
   return hub;
 }
 function _docsHubOpen(hub) {
@@ -800,6 +834,14 @@ function _docsHubOpen(hub) {
       _hubBufSet(hub, key, _slimEvt(e)); hub.dirty = true;
       _hubCursor(hub, e);
       _docsHubSaveSoon(hub);
+      if (d === 'trinityone/namekey:' + cp) {
+        _ingestNameKey(cp, e);
+        // the key may arrive AFTER names we could not open — retry them, or the roster stays anonymous
+        for (const e2 of hub.buf.values()) { if (_dtag(e2) === 'trinityone/name:' + cp) _openSealedName(cp, e2.pubkey, e2.content); }
+        try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: null } })); } catch (x) {}
+      } else if (d === 'trinityone/name:' + cp) {
+        if (_openSealedName(cp, e.pubkey, e.content)) { try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } })); } catch (x) {} }
+      }
       if (_absorbRoster(cp, d, e)) {
         // SECURITY-AUDIT-2026-07-06 L7 (availability): a steward-authored group-key envelope that arrived on the
         // LIVE path BEFORE this roster was rejected by _ingestGroupKey (author not yet trusted) and — unlike the
@@ -1559,6 +1601,25 @@ window.Fellowship = {
     return best;
   },
 
+  // Seal MY display name for one church under its congregation key. This is what replaces putting the name in
+  // a public profile: the relay stores ciphertext, and only people the church wrapped a key for can read it.
+  // Silently does nothing when the church has not published a key yet (an older church, or before setup
+  // finishes) — the caller still writes kind-0, so the name is never simply lost. AUDIT-2026-07-27.
+  async publishSealedName(churchNpub, name) {
+    const cp = toPub(churchNpub); if (!cp) return null;
+    if (!sk) { try { await window.Fellowship.ready; } catch (e) {} }
+    const ring = _nameKeys.get(cp) || [];
+    if (!ring.length || !sk) return null;
+    const nm = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    let ct = ''; try { ct = nip44e(JSON.stringify({ name: nm }), ring[0]); } catch (e) { return null; }
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: ct }, sk);
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
+    _sealedNames.set(cp + '|' + pub, nm);
+    return evt;
+  },
+  // has this church published a name key we hold a copy of? (the UI uses it to explain why a name is public)
+  sealedNamesReady(churchNpub) { const cp = toPub(churchNpub); return !!(cp && (_nameKeys.get(cp) || []).length); },
   // publish this user's kind-0 profile (display name etc.) and cache it
   async setProfile(meta) {
     if (!sk) await window.Fellowship.ready;

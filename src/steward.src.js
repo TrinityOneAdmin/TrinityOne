@@ -116,6 +116,8 @@ const MINORS_D = 'trinityone/minors:';      // safeguarding: this church's minor
 const APPROVED_D = 'trinityone/approved:';  // safeguarding: adults cleared to contact youth, d=approved:<churchpub>
 const NOPHOTO_D = 'trinityone/nophoto:';    // moderation: members whose uploaded photo is suppressed, d=nophoto:<churchpub>
 const GUARDREQ_D = 'trinityone/guardreq:';  // safeguarding v2: a parent's guardian-link request (parent-authored), d=guardreq:<childpub>
+const NAMEKEY_D = 'trinityone/namekey:';   // per-church name key, wrapped per member (ring: current first)
+const NAME_D = 'trinityone/name:';         // a member's own display name for this church, sealed under it
 const CLEARANCE_D = 'trinityone/clearance:';   // a member's OWN safeguarding status, NIP-44 sealed to them
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-confirmed parent↔child map, d=guardians:<churchpub>
 const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent NOTICE that they were linked to a child, d=guardnotice:<parentpub>, p-tagged + content NIP-44-encrypted to the parent (the child link never appears in cleartext)
@@ -550,6 +552,7 @@ let sk = null, pub = null;                 // the ACTIVE signing identity (churc
 // and permanently orphans everything sealed with the first. See the mint gate in ensureCareKeyForMembers.
 let _relayAuthed = false;
 pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); _relayAuthed = true; return finalizeEvent(authEvent, sk); };
+let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
 let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
 let _profileLoaded = false;                // the relay has ANSWERED about this identity's kind-0 (event or EOSE)
 let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
@@ -1799,6 +1802,53 @@ window.Steward = {
     }
     return Promise.allSettled(out);
   },
+  // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
+  // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —
+  // and any mirror holding a copy of this church — a named roster. The church mints a key, wraps a copy for
+  // every member, and members seal their own name under it. Same shape as the care and media keys, including
+  // the RING: rotating on removal must not orphan the names already published. AUDIT-2026-07-27.
+  ensureNameKeyForMembers(memberPubs, opts = {}) {
+    if (!churchSk || !churchPub) return Promise.resolve(null);
+    const cp = actingChurch || pub;
+    let ring = _nameKeyRing.slice();
+    if (opts.rotate || !ring.length) {
+      if (!opts.rotate && !_relayAuthed) return Promise.resolve(null);   // never mint from an unread view — that orphans every existing name
+      ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, 32);
+    }
+    _nameKeyRing = ring;
+    const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])];
+    const keys = {};
+    const wrapped = JSON.stringify(ring);
+    for (const pk of recips) { try { keys[pk] = nip44e(wrapped, nip44ck(churchSk, pk)); } catch (e) {} }
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+  },
+  // read the envelope back (the church's own copy) so the console can decrypt members' names
+  subscribeNameKey() {
+    const cp = actingChurch || pub;
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [NAMEKEY_D + cp] }], {
+      onevent(e) {
+        if (!_byChurchOrSteward(e)) return;   // church key or a CURRENT roster steward, same rule as every other envelope
+        try {
+          const env = JSON.parse(e.content || '{}');
+          const mine = env.keys && churchPub && env.keys[churchPub];
+          if (!mine || !churchSk) return;
+          const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
+          const r = JSON.parse(plain);
+          if (Array.isArray(r)) _nameKeyRing = r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x));
+        } catch (x) {}
+      },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
+  openMemberName(content) {
+    for (const k of _nameKeyRing) {
+      try { const o = JSON.parse(nip44d(content, _unhex(k))); if (o && typeof o.name === 'string') return o.name; } catch (x) {}
+    }
+    return '';
+  },
+  nameKeyReady() { return _nameKeyRing.length > 0; },
   setMinors(pubkeys) {   // replace the whole minors list (pass hex pubkeys)
     _requireTrustedView('list of children');
     if (!sk) return Promise.resolve(null);

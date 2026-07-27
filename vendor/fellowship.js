@@ -6409,6 +6409,42 @@
   var RESEAT_D = "trinityone/reseat:";
   var _reseatOld = /* @__PURE__ */ new Map();
   var _reseatAt = /* @__PURE__ */ new Map();
+  var _nameKeys = /* @__PURE__ */ new Map();
+  var _nameKeyTs = /* @__PURE__ */ new Map();
+  var _sealedNames = /* @__PURE__ */ new Map();
+  function _ingestNameKey(cp, e) {
+    if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
+    if ((e.created_at || 0) < (_nameKeyTs.get(cp) || 0)) return;
+    _nameKeyTs.set(cp, e.created_at || 0);
+    try {
+      const env = JSON.parse(e.content || "{}");
+      const mine = env.keys && pub && env.keys[pub];
+      if (!mine || !sk) {
+        if (!mine) _nameKeys.delete(cp);
+        return;
+      }
+      const r = JSON.parse(decrypt(mine, getConversationKey(sk, e.pubkey)));
+      if (Array.isArray(r)) _nameKeys.set(cp, r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x)).map(_unhexF));
+    } catch (x) {
+    }
+  }
+  var _unhexF = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
+  function _openSealedName(cp, author, content) {
+    for (const k of _nameKeys.get(cp) || []) {
+      try {
+        const o = JSON.parse(decrypt(content, k));
+        if (o && typeof o.name === "string") {
+          const nm = o.name.slice(0, 40);
+          _sealedNames.set(cp + "|" + author, nm);
+          if (!profiles[author]) profiles[author] = {};
+          profiles[author].name = nm;
+          return nm;
+        }
+      } catch (x) {
+      }
+    }
+    return "";
+  }
   var _reseatNamed = /* @__PURE__ */ new Set();
   function _noteReseat(cp, e) {
     if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
@@ -6560,6 +6596,13 @@
     for (const e of hub.buf.values()) {
       if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e);
     }
+    for (const e of hub.buf.values()) {
+      if (_dtag(e) === "trinityone/namekey:" + cp) _ingestNameKey(cp, e);
+    }
+    for (const e of hub.buf.values()) {
+      const d0 = _dtag(e);
+      if (d0 === "trinityone/name:" + cp) _openSealedName(cp, e.pubkey, e.content);
+    }
     return hub;
   }
   function _docsHubOpen(hub) {
@@ -6579,6 +6622,23 @@
         hub.dirty = true;
         _hubCursor(hub, e);
         _docsHubSaveSoon(hub);
+        if (d === "trinityone/namekey:" + cp) {
+          _ingestNameKey(cp, e);
+          for (const e2 of hub.buf.values()) {
+            if (_dtag(e2) === "trinityone/name:" + cp) _openSealedName(cp, e2.pubkey, e2.content);
+          }
+          try {
+            window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: null } }));
+          } catch (x) {
+          }
+        } else if (d === "trinityone/name:" + cp) {
+          if (_openSealedName(cp, e.pubkey, e.content)) {
+            try {
+              window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
+            } catch (x) {
+            }
+          }
+        }
         if (_absorbRoster(cp, d, e)) {
           for (const e2 of hub.buf.values()) {
             const d2 = _dtag(e2);
@@ -7699,6 +7759,47 @@
         if (i3 < n - 1) await new Promise((res) => setTimeout(res, gap || 2500));
       }
       return best;
+    },
+    // Seal MY display name for one church under its congregation key. This is what replaces putting the name in
+    // a public profile: the relay stores ciphertext, and only people the church wrapped a key for can read it.
+    // Silently does nothing when the church has not published a key yet (an older church, or before setup
+    // finishes) — the caller still writes kind-0, so the name is never simply lost. AUDIT-2026-07-27.
+    async publishSealedName(churchNpub, name) {
+      const cp = toPub(churchNpub);
+      if (!cp) return null;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch (e) {
+        }
+      }
+      const ring = _nameKeys.get(cp) || [];
+      if (!ring.length || !sk) return null;
+      const nm = String(name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+      let ct = "";
+      try {
+        ct = encrypt(JSON.stringify({ name: nm }), ring[0]);
+      } catch (e) {
+        return null;
+      }
+      const evt = finalizeEvent2({
+        kind: 30078,
+        created_at: Math.floor(Date.now() / 1e3),
+        tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]],
+        content: ct
+      }, sk);
+      try {
+        await _publishAny(window.Fellowship.relays, evt);
+      } catch (e) {
+        return null;
+      }
+      _sealedNames.set(cp + "|" + pub, nm);
+      return evt;
+    },
+    // has this church published a name key we hold a copy of? (the UI uses it to explain why a name is public)
+    sealedNamesReady(churchNpub) {
+      const cp = toPub(churchNpub);
+      return !!(cp && (_nameKeys.get(cp) || []).length);
     },
     // publish this user's kind-0 profile (display name etc.) and cache it
     async setProfile(meta) {

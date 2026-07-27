@@ -349,6 +349,12 @@ const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->par
 const RSVP_D = 'trinityone/rsvp:';           // a member's RSVP to an event — d=rsvp:<eventId>
 const REQREPLY_D = 'trinityone/reqreply:';   // a member's accept/decline/swap on a serving request — d=reqreply:<requestId>
 const UNAVAIL_D = 'trinityone/unavail:';     // a member's unavailable dates for the rota — d=unavail:<memberpub>
+// CONGREGATION NAME KEY (2026-07-27). A member's display name is the thing that turns a pubkey into a person,
+// and it was published in the clear — so a mirror operator, and the relay itself, held a named roster. The
+// church now mints a key, wraps a copy for each member (exactly like carekey:/mediakey:), and members publish
+// their name for that church encrypted under it. The relay stores ciphertext it cannot read.
+const NAMEKEY_D = 'trinityone/namekey:';     // per-church name key envelope, wrapped per member — church/steward-signed
+const NAME_D = 'trinityone/name:';           // a MEMBER's own display name for one church, sealed under that key
 const CAREKEY_D = 'trinityone/carekey:';     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
 const GUARDREQ_D = 'trinityone/guardreq:';   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = 'trinityone/nophoto:';     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
@@ -758,11 +764,11 @@ const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church
 //   4. a member authored a reply and p-tagged the church (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:).
 // Returns '' when ownership can't be proven — the caller MUST treat that as deny, not as public.
 const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, RESEAT_D, STEWARDS_D, STEWARDREQ_D, BLOCKED_D, MINORS_D, APPROVED_D,
-  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
+  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, NAMEKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
 // Doc types an ORDINARY MEMBER legitimately authors while church-tagging them. Their authority comes from
 // authorship, not from delegated church authority, so the revoked-steward roster check in canRead() must
 // not be applied to them (REVIEW-2026-07-20 B1 — it silently hid every care sign-up from the church).
-const MEMBER_WRITABLE_D = [SLOT_D, SKIP_D, AVAIL_D, SAFE_D, RSVP_D, REQREPLY_D, UNAVAIL_D, GUARDREQ_D, STEWARDREQ_D, MEMBER_D, CAREREQ_D];
+const MEMBER_WRITABLE_D = [SLOT_D, SKIP_D, AVAIL_D, SAFE_D, RSVP_D, REQREPLY_D, UNAVAIL_D, GUARDREQ_D, STEWARDREQ_D, MEMBER_D, CAREREQ_D, NAME_D];
 function owningChurch(e, d) {
   const suf = CP_SUFFIXED_D.find(p => d.startsWith(p));
   if (suf) { const h = toHexPub(d.slice(suf.length)) || ''; if (h && CHURCH_PUBS.has(h)) return h; }
@@ -906,7 +912,7 @@ function maybePushJoin(evt, wasMember) {
     const key = evt.pubkey + ':' + churchPub;
     if (JOIN_NOTIFIED.has(key)) return;   // secondary in-session dedupe
     JOIN_NOTIFIED.add(key);
-    const name = displayName(evt.pubkey);   // best-effort: the joiner's latest kind-0 display name
+    const name = '';   // sealed to the congregation — the relay cannot read a member's name (and a push service must not)
     // a church that requires approval gets a "wants to join" request; otherwise it's a fresh join
     const pending = REQUIRE_APPROVAL.has(churchPub) && !((ADMITTED_BY.get(churchPub) || new Set()).has(evt.pubkey));
     if (pending) pushTo(churchPub, { title: 'Join request', body: (name || 'Someone') + ' is asking to join your church', url: '/steward', tag: 'joinreq-' + evt.pubkey.slice(0, 8) });
@@ -938,7 +944,10 @@ function maybePushMessage(evt) {
     if (evt.kind === 4) {                                          // NIP-04 direct message (content encrypted)
       const target = (evt.tags.find(t => t[0] === 'p') || [])[1];
       if (!target || target === evt.pubkey) return;               // needs a distinct recipient
-      const who = displayName(evt.pubkey);
+      // NAMES ARE SEALED TO THE CONGREGATION NOW, so the relay cannot read them — and should not. This used to
+      // put the sender's name into a payload handed to an outside push service in the clear, which is a worse
+      // leak than the one the encryption is for. "Someone" is the honest word. AUDIT-2026-07-27.
+      const who = '';
       pushTo(target, {
         title: 'New message',
         body: who ? who + ' sent you a message' : 'You have a new direct message',
@@ -1307,6 +1316,16 @@ function accept(e) {
     // rework before it is safe to ship). The namespace is reserved and gated NOW so no member can squat the
     // d-tag in the meantime, and CP_SUFFIXED_D already read-gates it to effective members.
     if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    // the per-church NAME key envelope — same authority as the care key.
+    if (d.startsWith(NAMEKEY_D)) { const cp = toHexPub(d.slice(NAMEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    // a member's OWN sealed name for one church. Only that member may write it — nobody else gets to decide
+    // what a person is called, and a forged one would be indistinguishable from theirs once decrypted.
+    if (d.startsWith(NAME_D)) {
+      const cp = toHexPub(d.slice(NAME_D.length)) || '';
+      // Membership, not EFFECTIVE membership: a member awaiting approval must still be able to say what they
+      // are called, or a gated church can't show the steward a name to approve. It is their own name, sealed.
+      return !!cp && CHURCH_PUBS.has(cp) && !BLOCKED.has(e.pubkey) && !!(MEMBER_DOCS.get(cp) || new Set()).has(e.pubkey);
+    }
     // the care-team recipient roster (d=careteam:<churchpub>) — church key or a current steward. Just pubkeys
     // (no secrets), so a member can read it to seal an ask-for-help request to exactly the care team.
     if (d.startsWith(CARETEAM_D)) { const cp = toHexPub(d.slice(CARETEAM_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
@@ -1565,6 +1584,14 @@ function canRead(e, authed) {
     // never hit this because those prefixes returned earlier from the private-doc block; the rewrite removed
     // that early return. The revoked-steward concern doesn't apply to them anyway: they are members' own
     // events, authorised by authorship, not by delegated church authority.
+    // NAME KEY + SEALED NAMES. Both are church-scoped and readable by that church's own people: the envelope
+    // carries a copy of the key wrapped to each member, and the names are ciphertext to anyone without it.
+    // Serving these to an outsider would defeat the point; withholding them from a member breaks every screen
+    // that shows who said something.
+    {
+      const nkey = d.startsWith(NAMEKEY_D) ? d.slice(NAMEKEY_D.length) : d.startsWith(NAME_D) ? d.slice(NAME_D.length) : '';
+      if (nkey) return churchReader(authed, toHexPub(nkey) || nkey) || (!!authed && authed === e.pubkey);
+    }
     // SAFEGUARDING READS (AUDIT-2026-07-27). `minors:` is a cleartext list of which members are CHILDREN and
     // `guardians:` maps each child to their parents. Both were readable by any effective member — and joining is
     // a single self-signed publish on an open-join church, so a stranger could have the congregation's children
