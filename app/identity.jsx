@@ -1006,7 +1006,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         {/* optional community PIN — encrypts the identity so ONLY the church side needs a PIN; the Bible stays open */}
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>PRIVACY</div>
         <Group>
-          <Row icon="lock" label={ctx.hasCommunityPin ? 'Identity lock — on' : 'Lock identity with a PIN'} sub={ctx.hasCommunityPin ? 'A PIN protects the church side of the app on this phone. Your Bible always stays open.' : 'PIN-lock your identity so the church side needs the PIN — without it, the app is a plain Bible reader.'} accent="var(--sage)" onClick={() => { onClose && onClose(); ctx.openCommunitySecurity(); }} />
+          <Row icon="lock" label={ctx.hasCommunityPin ? 'Identity lock — on' : 'Lock identity with a PIN'} sub={ctx.hasCommunityPin ? 'A PIN protects the church side of the app on this phone. Your Bible always stays open.' : 'PIN-lock your identity so the church side needs the PIN — without it nobody can open your church or read your messages, and the screen shows only the Bible.'} accent="var(--sage)" onClick={() => { onClose && onClose(); ctx.openCommunitySecurity(); }} />
         </Group>
 
         {/* steward-only tools — hidden for ordinary members */}

@@ -1785,7 +1785,14 @@ window.Steward = {
     if (!/^[0-9a-f]{64}$/i.test(mp || '')) return Promise.resolve(null);
     const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
     let ct = ''; try { ct = nip44e(body, nip44ck(sk, mp)); } catch (e) { return Promise.resolve(null); }
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp]], content: ct }));
+    // The ['church'] tag is EXPLICIT, not left to feChurch. feChurch only adds it when acting as a DELEGATED
+    // steward, so a church OWNER — the ordinary case — published this with no church tag, the relay's accept
+    // rule requires one, and every clearance was refused. Silently: the member's app then fell back to the
+    // minors list, which the same day's work stopped serving to members, so isMinor was false for every child
+    // in every church. A safeguarding regression created by the change meant to protect them. The test missed
+    // it by hand-building the event WITH the tag instead of calling this function. AUDIT-2026-07-27.
+    const cp = actingChurch || pub;
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }));
   },
   // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
   // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.

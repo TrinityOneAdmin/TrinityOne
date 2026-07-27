@@ -37,3 +37,22 @@ test('the honest limit is written down next to the fix', () => {
   assert.match(around, /still STORES|encrypt-at-rest|examining the device/i,
     'the at-rest limitation must stay documented beside the change, or this reads as more than it is');
 });
+
+test('no surface promises more than the lock delivers', () => {
+  // The claim that started this — "locked, the app is a plain Bible reader" — was in ARCHITECTURE.md and in two
+  // places a member reads while deciding whether to rely on it. The screen part is now true. The part that
+  // isn't, and cannot be until the church cache is encrypted at rest, is that examining the phone reveals
+  // nothing. Copy that implies otherwise is the most dangerous thing in this repo, because the people it
+  // misleads are the ones the product exists for.
+  const ARCH = readFileSync(new URL('../ARCHITECTURE.md', import.meta.url), 'utf8');
+  const EXTRAS = readFileSync(new URL('../app/identity-extras.jsx', import.meta.url), 'utf8');
+  const IDENT = readFileSync(new URL('../app/identity.jsx', import.meta.url), 'utf8');
+  assert.match(ARCH, /not plausible deniability/i, 'the architecture doc states the limit');
+  assert.match(ARCH, /still stores the church list/i, 'and says concretely what leaks');
+  assert.match(EXTRAS, /which church you belong to/i,
+    'the in-app explainer must tell a member what the PIN does NOT hide — they may be deciding on it under real risk');
+  for (const [name, src] of [['identity-extras.jsx', EXTRAS], ['identity.jsx', IDENT]]) {
+    assert.doesNotMatch(src, /the app looks like a plain Bible reader|the app is a plain Bible reader/,
+      name + ' still tells a member the app merely "looks like" a Bible reader, which claims deniability it does not have');
+  }
+});

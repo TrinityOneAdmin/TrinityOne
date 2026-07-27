@@ -12,7 +12,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
@@ -125,4 +125,32 @@ test('a member cannot forge their own clearance', async () => {
   }, stranger.sk);
   const [ok] = await publish(w0, forged);
   assert.equal(ok, false, 'a member declaring their own clearance could clear themselves to contact children');
+});
+
+// ── the event the CONSOLE actually builds ────────────────────────────────────────────────────────────────────
+// Everything above hand-built the clearance event WITH a ['church'] tag, and passed while the shipped
+// publishClearance emitted one WITHOUT it — because feChurch only adds that tag when acting as a delegated
+// steward, and a church owner is not. Every clearance was refused; the member's app fell back to the minors
+// list, which the same day's work stopped serving to members; so isMinor was false for every child in every
+// church. A safeguarding regression created by the change meant to protect them, invisible because the test
+// asserted against its own idea of the event rather than the one the console sends. AUDIT-2026-07-27.
+test('the tag shape the console really publishes is accepted by the relay', () => {
+  const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+  const at = S.indexOf('publishClearance(memberPub, status)');
+  assert.notEqual(at, -1, 'publishClearance is gone from the shipped console bundle');
+  const body = S.slice(at, at + 1200);
+  assert.match(body, /\[\s*["']church["']\s*,\s*cp\s*\]/,
+    'publishClearance does not put a church tag on the event itself — feChurch will omit it for a church owner and the relay refuses every clearance');
+});
+
+test('a clearance built exactly like the console builds it is accepted', async () => {
+  // Mirror publishClearance's tag list precisely, including the explicit church tag, and prove the relay's
+  // accept rule takes it. If someone changes either side, these two tests disagree and one of them fails.
+  const evt = finalizeEvent({
+    kind: 30078, created_at: now(),
+    tags: [['d', CLEAR_D + adult.pub], ['t', 'trinityone'], ['p', adult.pub], ['church', church.pub]],
+    content: nip44v2.encrypt(JSON.stringify({ minor: false, cleared: true, at: now() }), nip44v2.utils.getConversationKey(church.sk, adult.pub)),
+  }, church.sk);
+  const [ok, msg] = await publish(w0, evt);
+  assert.equal(ok, true, 'the relay refused the exact event the console publishes: ' + msg);
 });

@@ -279,7 +279,8 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
       ) : !hasPin ? (
         <React.Fragment>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 8px' }}>
-            Lock your identity with a PIN. It’s encrypted on this device, so without the PIN the church community can’t be opened and messages can’t be read — the app looks like a plain Bible reader.</p>
+            Lock your identity with a PIN. Your key is encrypted on this device, so without the PIN nobody can open your church, read your messages, or post as you — and the screen shows only the Bible.</p>
+          <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55, margin: '8px 0 0' }}>Be aware of what it does <b>not</b> do: someone who inspects this phone properly can still tell that you use TrinityOne and which church you belong to. The PIN protects what is <i>inside</i> your church, not the fact that you are in one.</p>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 0 16px' }}>
             If you forget the PIN, restore your 12-word recovery phrase to get back in. Keep those words safe.</p>
           <input type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN or passphrase" style={inp} />
