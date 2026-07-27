@@ -3133,6 +3133,8 @@ function BulkInviteModal({ onClose }) {
 window.BulkInviteModal = BulkInviteModal;
 
 function DashMembers() {
+  // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
+  const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
   const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];   // care-key rotation must keep stewards keyed
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
@@ -3215,6 +3217,21 @@ function DashMembers() {
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !blockedSet.has(p));
       if (window.Steward.rotateCareKey) window.Steward.rotateCareKey(remaining, stewardRoster || []);
       if (window.Steward.rotateMediaKey) window.Steward.rotateMediaKey(remaining);   // same for encrypted sermons
+      // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
+      // phone carried on decrypting every future message in every encrypted group — forever. The background
+      // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
+      // so a removal published nothing at all. The only {rotate:true} call site was the invite-only members
+      // editor, which does not exist for an OPEN encrypted group. The contract in steward.src.js says removal
+      // MUST rotate; this is the path that was missing it. AUDIT-2026-07-27.
+      const grps = Array.isArray(groups) ? groups : [];
+      for (const g of grps) {
+        if (!g || !g.encrypted) continue;
+        const wasIn = g.visibility === 'invite' ? (g.members || []).includes(pk) : true;   // an open group includes everyone
+        if (!wasIn) continue;
+        const recips = g.visibility === 'invite' ? (g.members || []).filter(p => p !== pk) : remaining;
+        if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { rotate: true });
+        if (g.visibility === 'invite' && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
+      }
     } catch (e) {}
   };
   const unblock = (pk) => window.Steward.setBlocked(blockedList.filter(p => p !== pk));

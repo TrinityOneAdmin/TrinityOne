@@ -488,6 +488,7 @@ let sk = null, pub = null;                 // the ACTIVE signing identity (churc
 let _relayAuthed = false;
 pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); _relayAuthed = true; return finalizeEvent(authEvent, sk); };
 let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
+let _profileLoaded = false;                // the relay has ANSWERED about this identity's kind-0 (event or EOSE)
 let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
 // DELEGATED steward mode (phase 2b): when this console acts as a steward of a church it does NOT own,
 // `actingChurch` is that church's hex pubkey. We sign with OUR OWN key (churchSk) but read+publish in
@@ -1004,6 +1005,21 @@ window.Steward = {
   // ---- publish (signed by the church) ----
   publishProfile(meta) {
     if (!sk) return Promise.resolve(null);
+    // NEVER while acting as a DELEGATED steward. setActiveIdentity's delegated branch sets `sk = churchSk`
+    // (this device's OWN church key) with `pub` = the church we steward, and subscribeProfile fills
+    // `lastProfile` from `authors:[pub]` — the OTHER church's profile. So one toggle in Settings republished
+    // THIS church's kind-0 carrying the other church's name, logo, banner, feature flags and `lud16`: every
+    // member's app renamed the church and repointed giving, irreversibly (kind-0 is replaceable).
+    // A delegated steward cannot legitimately publish the other church's profile anyway — they do not hold its
+    // key — so the honest answer is to refuse. AUDIT-2026-07-27.
+    if (actingChurch) { console.warn('[steward] refusing to publish a church profile while acting as a delegated steward'); return Promise.resolve(null); }
+    // And never merge an edit into a profile we have not actually READ yet. `lastProfile` starts empty and is
+    // only filled when the relay answers, so editing one field on a cold/slow start published a kind-0 with
+    // every other field blank — wiping picture, banner, accent, features, rules and the giving address.
+    if (!_profileLoaded && Object.keys(lastProfile).length === 0 && Object.keys(meta || {}).length < 3) {
+      console.warn('[steward] refusing a partial profile edit before the church profile has loaded');
+      return Promise.resolve(null);
+    }
     lastProfile = { ...lastProfile, ...meta };   // merge so a partial edit (e.g. name) keeps channel etc.
     const m = lastProfile;
     // clean any steward-typed address (strip http/www/path); auto-claim a relay handle if none is set
@@ -2390,8 +2406,8 @@ window.Steward = {
     // with the others (avatar/picture shows everywhere at once, not only where it was just edited)
     try { if (lastProfile && Object.keys(lastProfile).length) onProfile(lastProfile); } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pub] }], {
-      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; onProfile(p); try { window.dispatchEvent(new CustomEvent('steward-profile', { detail: lastProfile })); } catch (x) {} } catch {} },
-      oneose() {},
+      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; _profileLoaded = true; onProfile(p); try { window.dispatchEvent(new CustomEvent('steward-profile', { detail: lastProfile })); } catch (x) {} } catch {} },
+      oneose() { _profileLoaded = true; },   // the relay answered; a church with no profile yet can still publish its first
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -2471,7 +2487,7 @@ window.Steward = {
       if (!rec) return false;
       try { sk = privateKeyFromSeedWords(rec.mnemonic); pub = getPublicKey(sk); actingChurch = ''; } catch { return false; }
     }
-    lastProfile = {};   // don't carry one identity's profile fields into the other's edits
+    lastProfile = {}; _profileLoaded = false;   // don't carry one identity's profile fields — or its loaded-ness — into the other's edits
     window.Steward.pubkey = pub; window.Steward.npub = npubEncode(pub); window.Steward.activePub = pub;
     window.Steward.actingChurch = actingChurch;   // UI reads this to show "acting as steward" + hide owner-only controls
     window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch } }));

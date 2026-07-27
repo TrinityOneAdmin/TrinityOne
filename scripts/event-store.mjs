@@ -23,13 +23,19 @@ export function replKey(e) {
 // The relay's read predicate — the single source of truth for whether an event matches a filter.
 export function matchFilter(evt, f) {
   if (!f || typeof f !== 'object' || Array.isArray(f)) return false;
-  if (f.ids && !f.ids.includes(evt.id)) return false;
-  if (f.authors && !f.authors.includes(evt.pubkey)) return false;
-  if (f.kinds && !f.kinds.includes(evt.kind)) return false;
+  // The list fields MUST be arrays. This guarded the filter object but not its contents, so `{"ids":1}` reached
+  // `(1).includes(...)` and threw a TypeError — inside the PUBLISHER's message handler, from a filter a stranger
+  // had registered. The broadcast loop had no try/catch and uncaughtException only logs, so the relay stayed up
+  // with live delivery dead for every client registered after the poisoned socket. One frame, no auth, no error
+  // to anyone. AUDIT-2026-07-27. A malformed filter now simply matches nothing (and REQ rejects it outright).
+  if (f.ids !== undefined && (!Array.isArray(f.ids) || !f.ids.includes(evt.id))) return false;
+  if (f.authors !== undefined && (!Array.isArray(f.authors) || !f.authors.includes(evt.pubkey))) return false;
+  if (f.kinds !== undefined && (!Array.isArray(f.kinds) || !f.kinds.includes(evt.kind))) return false;
   if (f.since && evt.created_at < f.since) return false;
   if (f.until && evt.created_at > f.until) return false;
   for (const k in f) if (k[0] === '#') {
     const tag = k.slice(1), vals = f[k];
+    if (!Array.isArray(vals)) return false;   // same hazard as the list fields above
     if (!evt.tags.some(t => t[0] === tag && vals.includes(t[1]))) return false;
   }
   return true;

@@ -96,15 +96,22 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
     catch (e) { setXferStage('scan'); setRErr((e && e.message) || 'That code didn’t work.'); return; }
     setXferSeen(seen); setXferStage('check');
   };
+  // Saying "they're different" must leave a WORKING screen. My first version called endTransfer() — which nulls
+  // the throwaway private key — and then re-showed `xfer`, the QR for that now-dead key. The member did exactly
+  // what the screen told them, and acceptTransfer threw "Start the transfer on this phone first." on every
+  // retry, forever. That is the one path that has to work, because it is the path someone takes when they think
+  // they are being attacked. Mint a fresh key instead of re-displaying a spent one. AUDIT-2026-07-27.
   const rejectTransfer = () => {
-    try { window.TrinityIdentity.endTransfer(); } catch (e) {}   // drop the words we were holding, not just the screen
-    setXferSeen(null); setXferStage('show');
-    setRErr('Stopped — nothing was moved. Start again with your own old phone in front of you, and if the codes still differ, tell a steward.');
+    setXferSeen(null);
+    startTransfer();   // endTransfer() + a brand-new throwaway key, and back to the 'show' stage
+    setRErr('Stopped — nothing was moved. This is a fresh code: try again with your own old phone in front of you, and if the codes still differ, tell a steward.');
   };
   const confirmTransfer = async () => {
     setXferStage('busy'); setRErr('');
     try { await window.TrinityIdentity.confirmTransfer(); }
-    catch (e) { setXferStage('scan'); setXferSeen(null); setRErr((e && e.message) || 'Couldn’t finish — start the transfer again.'); return; }
+    // Same trap on the failure path: confirmTransfer nulls both the held words and the throwaway key, so
+    // dropping back to 'scan' left the camera live over a key that could no longer decrypt anything.
+    catch (e) { setXferSeen(null); startTransfer(); setRErr((e && e.message) || 'Couldn’t finish — here is a fresh code, please try again.'); return; }
     setRBusy('Bringing your account across…');
     // finishRestore swallows its own failures, but if it ever threw, `busy` would be terminal and Back was the
     // only control on the screen. Belt and braces: a transfer that got the account across but could not finish

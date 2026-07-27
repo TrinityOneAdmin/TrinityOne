@@ -1563,10 +1563,30 @@ function canRead(e, authed) {
   // So a non-child-safe group now requires AUTH to read at all, which also stops a passer-by harvesting a
   // congregation's chat. Child-safe groups are unaffected, and the REQ handler challenges for these so a real
   // client authenticates and carries on transparently.
-  if (g && !GROUP_CHILDSAFE.has(g)) {
+  // MEMBERSHIP — not merely "signed something". AUDIT-2026-07-27, reproduced against a real relay: this used to
+  // require only that the reader was `authed`, and AUTH accepts any key that can sign (`verifyEvent(evt) &&
+  // !BLOCKED.has(evt.pubkey)`, no membership test). So a keypair generated one second ago read every open group
+  // of every church on the box, and a minor closed the safeguarding loophole by simply signing with a second
+  // key. The comment this replaces claimed it "stops a passer-by harvesting a congregation's chat" — it did
+  // not; it only stopped clients unwilling to sign. The child-safe carve-out made it worse, leaving the rooms
+  // containing children as the ONLY anonymously readable chat.
+  // Now: a group's messages are served to that group's own church, its network, its stewards, or an EFFECTIVE
+  // member of it (joined, not blocked, and admitted where the church gates joins) — the same rule the
+  // kind-30078 branch above already applied.
+  if (g) {
     if (!authed) return false;
-    const gcp = GROUP_CHURCH.get(g); const m = gcp && MINORS_BY.get(gcp);   // per-church, not the relay-wide union (see accept())
-    if (m && m.has(authed)) return false;
+    const gcp = GROUP_CHURCH.get(g);
+    if (gcp) {
+      if (!(authed === gcp || networkOf(authed, gcp) || stewardOf(authed, gcp))) {
+        const md = MEMBER_DOCS.get(gcp);
+        const gated = REQUIRE_APPROVAL.has(gcp), admitted = ADMITTED_BY.get(gcp);
+        if (!(!!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed))))) return false;
+      }
+      // safeguarding, unchanged in intent: an adults-only group is withheld from a minor OF THAT CHURCH.
+      if (!GROUP_CHILDSAFE.has(g) && (MINORS_BY.get(gcp) || new Set()).has(authed)) return false;
+    } else if (!MEMBER_CHURCH.has(authed) && !CHURCH_PUBS.has(authed) && !NETWORKS.has(authed)) {
+      return false;   // a group we hold no definition for: still never serve it to a total stranger
+    }
   }
   if (!g || GROUP_VIS.get(g) !== 'invite') return true;
   if (!authed) return false;
@@ -3409,8 +3429,14 @@ wss.on('connection', (ws, req) => {
       maybePushSafety(evt);    // safety check: alert members on open, nudge the creator on responses
       ws.send(JSON.stringify(['OK', evt.id, true, '']));
       let _evtJson = null;   // E6: serialize the event ONCE (lazily, on first match) and reuse for every matching subscriber — was N JSON.stringify(evt) for N subs
+      // Per-client try/catch: a throw while matching ONE subscriber's filters used to abort the whole loop, so
+      // every client after it in insertion order silently stopped receiving live messages while the relay
+      // stayed up. Isolate each client — no single subscription may ever cost another member their delivery.
       for (const [client, m] of subs) { if (client.readyState !== 1) continue;
-        for (const [subId, filters] of m) if (matchAny(evt, filters) && canRead(evt, client._auth)) { if (_evtJson === null) _evtJson = JSON.stringify(evt); client.send('["EVENT",' + JSON.stringify(subId) + ',' + _evtJson + ']'); } }
+        try {
+          for (const [subId, filters] of m) if (matchAny(evt, filters) && canRead(evt, client._auth)) { if (_evtJson === null) _evtJson = JSON.stringify(evt); client.send('["EVENT",' + JSON.stringify(subId) + ',' + _evtJson + ']'); }
+        } catch (err) { try { console.warn('[relay] broadcast to one client failed', (err && err.message) || err); } catch {} }
+      }
     } else if (type === 'REQ') {
       const subId = rest[0];
       let filters = rest.slice(1);
@@ -3418,6 +3444,12 @@ wss.on('connection', (ws, req) => {
       if (filters.length > MAX_FILTERS_PER_REQ) { ws.send(JSON.stringify(['CLOSED', subId, 'invalid: too many filters'])); return; }
       const mysubs = subs.get(ws);
       if (!mysubs.has(subId) && mysubs.size >= MAX_SUBS_PER_CONN) { ws.send(JSON.stringify(['CLOSED', subId, 'rate-limited: too many subscriptions'])); return; }
+      // Refuse a malformed filter at the door. matchFilter now treats one as matching nothing, but a client
+      // that sent rubbish deserves to hear so, and an unstorable filter should never be retained at all.
+      const badFilter = filters.find(f => !f || typeof f !== 'object' || Array.isArray(f)
+        || ['ids', 'authors', 'kinds'].some(k => f[k] !== undefined && !Array.isArray(f[k]))
+        || Object.keys(f).some(k => k[0] === '#' && !Array.isArray(f[k])));
+      if (badFilter) { ws.send(JSON.stringify(['CLOSED', subId, 'invalid: malformed filter'])); return; }
       mysubs.set(subId, filters);
       // serve everything this connection may read now (blocked members withheld; invite-only group
       // messages withheld from non-members per NIP-42)
@@ -3440,7 +3472,10 @@ wss.on('connection', (ws, req) => {
       // invite-only group, or (safeguarding) any group not marked child-safe. Without this the client would
       // just receive an empty room. Still filter-driven, so a broad query that merely happens to match such a
       // message is not challenged — the lazy-auth decision stands for ordinary browsing.
-      const wantsInvite = !ws._auth && filters.some(f => (f['#t'] || []).some(t => (GROUP_VIS.get(t) === 'invite') || (GROUP_CHURCH.has(t) && !GROUP_CHILDSAFE.has(t))));
+      // Challenge for ANY group we know, child-safe included. Child-safe rooms used to be excluded here because
+      // they were served anonymously; now that they require membership like every other room, a member whose
+      // client was never challenged would simply render an empty room forever. AUDIT-2026-07-27.
+      const wantsInvite = !ws._auth && filters.some(f => Array.isArray(f['#t']) && f['#t'].some(t => (GROUP_VIS.get(t) === 'invite') || GROUP_CHURCH.has(t)));
       // Emergency-timing oracle: challenge from the FILTER (not only a found event) so an anon REQ for a safety d-tag
       // gets an identical AUTH whether or not a check is live — no "is this church under attack right now?" distinguisher.
       const wantsSafetyD = !ws._auth && filters.some(f => (f['#d'] || []).some(d => typeof d === 'string' && (d.startsWith(SAFETY_D) || d.startsWith(SAFE_D))));

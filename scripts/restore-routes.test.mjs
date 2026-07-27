@@ -180,6 +180,7 @@ test('declining the check code leaves the member as themselves', { skip: !CHROME
     await d.click('I’ve used it before');
     await d.click('I still have my old phone');
     await d.click('My old phone has scanned it');
+    const payloadKey = await d.js(`(window.__xfer || {}).qr || ''`);
     const payload = await d.js(`(async () => (await window.TrinityIdentity.sealTransfer(window.__xfer.qr)).qr)()`);
     await d.js(`(() => { const t = document.querySelector('[data-qr-manual]'); const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; set.call(t, ${JSON.stringify(payload)}); t.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
     await sleep(400);
@@ -197,5 +198,21 @@ test('declining the check code leaves the member as themselves', { skip: !CHROME
     const left = await d.js(`window.TrinityIdentity.confirmTransfer().then(() => 'ADOPTED').catch(e => e.message)`);
     assert.match(String(left), /Nothing to confirm/i,
       'the 12 words were still sitting in memory after the member said the codes did not match');
+
+    // AND THEY MUST BE ABLE TO TRY AGAIN. The first version of this screen called endTransfer() — nulling the
+    // throwaway private key — and then re-displayed the QR for that dead key, so every retry threw "Start the
+    // transfer on this phone first." forever. The member is on this screen because they think they are being
+    // attacked; a dead end here is the worst place in the app to have one. AUDIT-2026-07-27.
+    const fresh = await d.js(`(window.__xfer || {}).qr || ''`);
+    assert.match(fresh, /^trinityone:xfer:[0-9a-f]{64}$/, 'rejecting did not mint a fresh transfer key');
+    assert.notEqual(fresh, payloadKey, 'the screen re-showed the SPENT key — every retry from here will fail');
+    await d.click('My old phone has scanned it');
+    const again = await d.js(`(async () => (await window.TrinityIdentity.sealTransfer(window.__xfer.qr)).qr)()`);
+    await d.js(`(() => { const t = document.querySelector('[data-qr-manual]'); const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; set.call(t, ${'${JSON.stringify(again)}'}); t.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`.replace('${JSON.stringify(again)}', JSON.stringify(again)));
+    await sleep(400);
+    await d.click('Use this code');
+    await sleep(1500);
+    assert.match(await d.text(), /check code/i,
+      'a second attempt after saying "they are different" did not reach the check screen — the member is trapped');
   } finally { d.close(); }
 });

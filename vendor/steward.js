@@ -11100,6 +11100,7 @@ zoo`.split("\n");
   };
   var churchSk = null;
   var churchPub = null;
+  var _profileLoaded = false;
   var lastProfile = {};
   var actingChurch = "";
   var stewardedChurches = /* @__PURE__ */ new Map();
@@ -11753,6 +11754,14 @@ zoo`.split("\n");
     // ---- publish (signed by the church) ----
     publishProfile(meta) {
       if (!sk) return Promise.resolve(null);
+      if (actingChurch) {
+        console.warn("[steward] refusing to publish a church profile while acting as a delegated steward");
+        return Promise.resolve(null);
+      }
+      if (!_profileLoaded && Object.keys(lastProfile).length === 0 && Object.keys(meta || {}).length < 3) {
+        console.warn("[steward] refusing a partial profile edit before the church profile has loaded");
+        return Promise.resolve(null);
+      }
       lastProfile = { ...lastProfile, ...meta };
       const m = lastProfile;
       let nip05 = cleanNip05(m.nip05, m.name);
@@ -13938,6 +13947,7 @@ zoo`.split("\n");
           try {
             const p = JSON.parse(e.content);
             lastProfile = { ...lastProfile, ...p };
+            _profileLoaded = true;
             onProfile(p);
             try {
               window.dispatchEvent(new CustomEvent("steward-profile", { detail: lastProfile }));
@@ -13947,7 +13957,9 @@ zoo`.split("\n");
           }
         },
         oneose() {
+          _profileLoaded = true;
         }
+        // the relay answered; a church with no profile yet can still publish its first
       });
       return () => {
         try {
@@ -14060,6 +14072,7 @@ zoo`.split("\n");
         }
       }
       lastProfile = {};
+      _profileLoaded = false;
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;
