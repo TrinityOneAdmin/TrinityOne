@@ -224,3 +224,16 @@ test('the console writes BOTH shapes, and bounds the envelope', () => {
   assert.match(body, /rings\[pk\]\s*=\s*\w+\(wrapped,/, 'the ring must be sealed under `rings`');
   assert.match(STEWARD, /content\.length\s*>\s*(?:900000|9e5)/, 'nothing stops a large church sealing the ring past the relay’s 1 MB cap');
 });
+
+test('unblocking someone gives their keys back', () => {
+  // `unblock` only rewrites the blocklist. The key distributor's effect closes over blockedSet through
+  // notBlocked but did not list it as a dependency, so nothing re-ran: the person returned to the roster and
+  // never received the group, care, media or name keys again. They saw empty rooms indefinitely, and weeks
+  // after a reconciliation nobody would think to suspect keys. AUDIT-2026-07-27.
+  const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  const at = D.indexOf('const memberPubs = members.map');
+  assert.notEqual(at, -1, 'the key distributor effect is gone');
+  const deps = D.slice(at, D.indexOf('React.useEffect', at + 10));
+  assert.match(deps, /\}, \[groups, members, stewardRoster, blockedList\]\)/,
+    'blockedList is not a dependency of the key distributor — unblocking a member never restores their keys');
+});

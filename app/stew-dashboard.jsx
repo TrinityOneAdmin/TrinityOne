@@ -258,7 +258,11 @@ function KeyDistributor() {
     // subscription has confirmed no envelope exists — never on a cold null, which is what orphaned
     // every sealed need in the first attempt. Stewards are included so a delegated console can re-key.
     if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster);
-  }, [groups, members, stewardRoster]);
+    // `blockedList` IS a dependency — notBlocked closes over it. Without it, unblocking someone re-ran
+    // nothing: `unblock` only rewrites the blocklist, so the person came back to the roster but never got the
+    // group, care, media or name keys back. They saw empty rooms indefinitely, and no one would think to
+    // suspect keys weeks after a reconciliation. AUDIT-2026-07-27.
+  }, [groups, members, stewardRoster, blockedList]);
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
