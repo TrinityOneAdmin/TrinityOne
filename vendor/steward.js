@@ -11049,6 +11049,73 @@ zoo`.split("\n");
     return p;
   }
   var _discoverySeed = [];
+  function _probeRelayEnforces(wssUrl, timeoutMs) {
+    return new Promise((resolve) => {
+      let ws = null, done = false;
+      const results = [];
+      const finish = (ok, why) => {
+        if (done) return;
+        done = true;
+        try {
+          ws && ws.close();
+        } catch (e) {
+        }
+        resolve({ ok, why });
+      };
+      const to = setTimeout(() => finish(false, "no answer"), timeoutMs || 8e3);
+      try {
+        ws = new WebSocket(wssUrl);
+      } catch (e) {
+        clearTimeout(to);
+        return finish(false, "unreachable");
+      }
+      const sk2 = generateSecretKey2();
+      const ghost = getPublicKey2(generateSecretKey2());
+      const probes = [
+        { d: "trinityone/minors:" + ghost, what: "a stranger\u2019s list of children" },
+        { d: "trinityone/stewards:" + ghost, what: "a stranger\u2019s steward roster" }
+      ];
+      const ids = /* @__PURE__ */ new Map();
+      ws.onopen = () => {
+        for (const pr of probes) {
+          const evt = finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", pr.d], ["t", NET]], content: JSON.stringify({ pubkeys: [] }) }, sk2);
+          ids.set(evt.id, pr);
+          try {
+            ws.send(JSON.stringify(["EVENT", evt]));
+          } catch (e) {
+          }
+        }
+      };
+      ws.onerror = () => {
+        clearTimeout(to);
+        finish(false, "unreachable");
+      };
+      ws.onclose = () => {
+        clearTimeout(to);
+        if (!done) finish(false, "closed early");
+      };
+      ws.onmessage = (m) => {
+        let msg = null;
+        try {
+          msg = JSON.parse(m.data);
+        } catch (e) {
+          return;
+        }
+        if (!Array.isArray(msg) || msg[0] !== "OK" || !ids.has(msg[1])) return;
+        const pr = ids.get(msg[1]);
+        ids.delete(msg[1]);
+        if (msg[2] === true) {
+          clearTimeout(to);
+          return finish(false, "it accepted " + pr.what);
+        }
+        results.push(pr.d);
+        if (!ids.size) {
+          clearTimeout(to);
+          finish(true, "refused both probes");
+        }
+      };
+    });
+  }
   async function discoverRelayOffers(seedExtra, region) {
     let dirUrls = [];
     for (const base of _dirBases()) {
@@ -11064,8 +11131,19 @@ zoo`.split("\n");
     const seed = [.../* @__PURE__ */ new Set([...seedExtra || [], ...dirUrls, ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
     const probed = await Promise.all(seed.map(async (url) => {
       const t = await _relayInfo(url);
-      if (t && t.enforces === true && t.open === true && !t.full) return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "" };
-      return null;
+      if (!(t && t.enforces === true && t.open === true && !t.full)) return null;
+      const canonical = (CANONICAL_RELAYS || []).includes(url);
+      if (!canonical) {
+        const v = await _probeRelayEnforces(url);
+        if (!v.ok) {
+          try {
+            console.warn("[relay-offers] rejected", url, "\u2014", v.why);
+          } catch (e) {
+          }
+          return null;
+        }
+      }
+      return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "" };
     }));
     const offers = probed.filter(Boolean);
     offers.sort((a, b) => {

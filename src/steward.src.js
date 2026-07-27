@@ -454,6 +454,54 @@ function _relayInfo(wssUrl) {
 // extensible (setDiscoverySeed) and discovery-only — it never carries church content, so it's not a central
 // point (FEDERATION-PLAN guardrail). Empty on the pilot (a8 isn't offering), so auto-pick is a safe no-op.
 let _discoverySeed = [];
+// DOES THIS RELAY ACTUALLY ENFORCE THE RULES? Ask it to break them and see whether it does.
+//
+// Auto-find used to keep a candidate if its own NIP-11 said `enforces: true`. That field is simply
+// `CHURCH_PUBS.size > 0` — a relay reporting on itself — so anyone could stand up a relay, register one dummy
+// church, advertise an offer and be picked. A picked relay then receives EVERYTHING the console publishes,
+// because publish() fans out to relays(). The comment claiming the NIP-11 probe made a dishonest entry
+// impossible was true only of a stale DIRECTORY entry, never of a relay lying about itself. AUDIT-2026-07-27.
+//
+// So: test the behaviour. A throwaway key tries to write two church-authority documents for a church that does
+// not exist on that relay. A relay that enforces the write policy refuses both; a permissive or hostile one
+// accepts them — and a relay that will accept a stranger's safeguarding list is not one to hand a roster to.
+// Both probes are refused by a compliant relay, so this leaves nothing behind on an honest box.
+//
+// What this cannot prove: that the operator is not simply reading their own database. Nothing remote can. It
+// raises the floor from "says the right thing" to "does the right thing".
+function _probeRelayEnforces(wssUrl, timeoutMs) {
+  return new Promise((resolve) => {
+    let ws = null, done = false;
+    const results = [];
+    const finish = (ok, why) => { if (done) return; done = true; try { ws && ws.close(); } catch (e) {} resolve({ ok, why }); };
+    const to = setTimeout(() => finish(false, 'no answer'), timeoutMs || 8000);
+    try { ws = new WebSocket(wssUrl); } catch (e) { clearTimeout(to); return finish(false, 'unreachable'); }
+    const sk = generateSecretKey();
+    const ghost = getPublicKey(generateSecretKey());   // a church pubkey this relay has never heard of
+    const probes = [
+      { d: 'trinityone/minors:' + ghost, what: 'a stranger’s list of children' },
+      { d: 'trinityone/stewards:' + ghost, what: 'a stranger’s steward roster' },
+    ];
+    const ids = new Map();
+    ws.onopen = () => {
+      for (const pr of probes) {
+        const evt = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', pr.d], ['t', NET]], content: JSON.stringify({ pubkeys: [] }) }, sk);
+        ids.set(evt.id, pr);
+        try { ws.send(JSON.stringify(['EVENT', evt])); } catch (e) {}
+      }
+    };
+    ws.onerror = () => { clearTimeout(to); finish(false, 'unreachable'); };
+    ws.onclose = () => { clearTimeout(to); if (!done) finish(false, 'closed early'); };
+    ws.onmessage = (m) => {
+      let msg = null; try { msg = JSON.parse(m.data); } catch (e) { return; }
+      if (!Array.isArray(msg) || msg[0] !== 'OK' || !ids.has(msg[1])) return;
+      const pr = ids.get(msg[1]); ids.delete(msg[1]);
+      if (msg[2] === true) { clearTimeout(to); return finish(false, 'it accepted ' + pr.what); }   // decisive
+      results.push(pr.d);
+      if (!ids.size) { clearTimeout(to); finish(true, 'refused both probes'); }
+    };
+  });
+}
 async function discoverRelayOffers(seedExtra, region) {
   // Global discovery: ask the shared directory which relays have advertised they're open to host, so we can
   // surface relays this church has NEVER added. Merge with the local seed; each candidate is still NIP-11
@@ -465,8 +513,12 @@ async function discoverRelayOffers(seedExtra, region) {
   const seed = [...new Set([...(seedExtra || []), ...dirUrls, ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
   const probed = await Promise.all(seed.map(async (url) => {
     const t = await _relayInfo(url);
-    if (t && t.enforces === true && t.open === true && !t.full) return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '' };
-    return null;
+    if (!(t && t.enforces === true && t.open === true && !t.full)) return null;   // its own claim: necessary, not sufficient
+    // …and now make it prove it. `enforces` is self-reported; a relay that will accept a stranger's
+    // safeguarding list must never be offered as a place to put a congregation's roster.
+    const canonical = (CANONICAL_RELAYS || []).includes(url);
+    if (!canonical) { const v = await _probeRelayEnforces(url); if (!v.ok) { try { console.warn('[relay-offers] rejected', url, '—', v.why); } catch (e) {} return null; } }
+    return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '' };
   }));
   const offers = probed.filter(Boolean);
   offers.sort((a, b) => { if (region) { const ra = a.region === region ? 0 : 1, rb = b.region === region ? 0 : 1; if (ra !== rb) return ra - rb; } return (a.churches || 0) - (b.churches || 0); });
