@@ -10,7 +10,8 @@
 // and bundled as a Tauri resource. The Node runtime is shipped as the sidecar `binaries/trinityone-relay-<triple>`
 // (a renamed official node binary, placed by scripts/fetch-node-sidecar.sh in CI).
 //
-// The relay is told to bind LOOPBACK (RELAY_HOST=127.0.0.1): the window + a local browser reach it there, and
+// The relay is told to bind LOOPBACK (RELAY_HOST=127.0.0.1) unless the operator opts into LAN access in the
+// control panel (the `lan-access` marker in the data dir): the window + a local browser reach it there, and
 // Windows never shows a firewall prompt (loopback needs no network permission). Everything the app does with the
 // relay is logged to <app-data>/relay-launch.log so a stuck launch is diagnosable without a console.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
@@ -83,10 +84,18 @@ fn main() {
                 .env("TRINITY_DATA_DIR", data_dir.to_string_lossy().to_string())
                 // the bundled cloudflared, so the relay can start a Cloudflare quick tunnel ("go public") itself
                 .env("CLOUDFLARED_BIN", std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join(if cfg!(windows) { "trinityone-cloudflared.exe" } else { "trinityone-cloudflared" }))).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "cloudflared".into()))
-                // Bind all interfaces so LAN devices (a phone on the same wifi) can reach the relay directly.
-                // Windows shows a one-time "allow network access?" prompt for this, but the bind + loopback work
-                // regardless of the answer — the app window reaches the relay via 127.0.0.1 either way, so a
-                // missed/denied prompt never stalls the app; it just gates OTHER devices until allowed.
+                // BIND ADDRESS. Loopback by default: the app window reaches the relay via 127.0.0.1, and nothing
+                // else on the network can. A church that wants phones on its own wifi to connect directly turns
+                // that on in the control panel, which writes the `lan-access` marker read here at start-up.
+                //
+                // AUDIT-2026-07-27: this used to set no RELAY_HOST at all, so the gateway took its server default
+                // of 0.0.0.0 and the desktop relay was reachable by anyone on the same network — a church hall's
+                // guest wifi, a coffee shop — while the comment here AND the one on BIND_HOST in gateway.mjs both
+                // stated it bound loopback. Two comments asserting a protection that was not implemented.
+                //
+                // Windows shows a one-time "allow network access?" prompt when this is on; the loopback path works
+                // regardless of the answer, so a missed prompt never stalls the app — it just gates OTHER devices.
+                .env("RELAY_HOST", if data_dir.join("lan-access").exists() { "0.0.0.0" } else { "127.0.0.1" })
                 .env("RELAY_NO_OPEN", "1"); // the Tauri window IS the control UI; don't also open a browser
             match cmd.spawn() {
                 Ok((mut rx, child)) => {

@@ -88,7 +88,7 @@ const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs
 const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // mediaCap/churchCap: operator storage limits in BYTES (0 = unlimited), settable from the control panel — for a
 // public relay hosting several churches. The effective cap is the setting if non-zero, else the env fallback.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false };
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -99,6 +99,11 @@ function loadSettings() {
       SETTINGS.inviteOnly = s.inviteOnly === true;
       SETTINGS.offerHosting = s.offerHosting === true;
       SETTINGS.mediaRequiresHost = s.mediaRequiresHost === true;
+      // Desktop app only: may devices on this wifi reach the relay directly? OFF by default. The desktop
+      // launcher reads the `lan-access` marker below at start-up to decide RELAY_HOST, so a change needs a
+      // restart — the control panel says so. AUDIT-2026-07-27: the launcher used to leave RELAY_HOST unset,
+      // so it silently took the server default of 0.0.0.0 while two comments claimed it bound loopback.
+      SETTINGS.lanAccess = s.lanAccess === true;
     }
   } catch {}
 }
@@ -1448,6 +1453,19 @@ function accept(e) {
 }
 // read-gate (NIP-42): an invite-only group's messages are served only to a connection that has proven
 // (via AUTH) it belongs to that group's member list (or is the church/network). Everything else is public.
+// Is `who` an EFFECTIVE member of church cp — joined, not blocked, and admitted where the church gates joins?
+// The same rule the kind-30078 branch applies; hoisted so the kind-0/1/5/7 gates cannot drift from it.
+function effMemberOf(who, cp) {
+  if (!who || !cp) return false;
+  const md = MEMBER_DOCS.get(cp);
+  const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
+  return !!(md && md.has(who)) && !BLOCKED.has(who) && (!gated || !!(admitted && admitted.has(who)));
+}
+// May `authed` read content belonging to church cp at all? The church itself, a network it belongs to, one of
+// its current stewards, or an effective member.
+function churchReader(authed, cp) {
+  return !!authed && !!cp && (authed === cp || networkOf(authed, cp) || stewardOf(authed, cp) || effMemberOf(authed, cp));
+}
 function canRead(e, authed) {
   if (e.kind === 4) {
     const target = (e.tags.find(t => t[0] === 'p') || [])[1];
@@ -1555,6 +1573,34 @@ function canRead(e, authed) {
     const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
     return !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));
   }
+  // ── DEFAULT-ALLOW TAIL, CLOSED. AUDIT-2026-07-27 ──────────────────────────────────────────────────────────
+  // This function gated kind-4 and kind-30078 with real care and then ended `if (e.kind !== 1) return true;`,
+  // so every other kind fell off the end into default-allow. An anonymous `{"kinds":[0]}` returned every
+  // member's display name and verified handle — and on a church's own relay every kind-0 on the box IS a
+  // member, i.e. the arrest list. `{"kinds":[7]}` returned reactions, which carry ['p', peer] and ['k','4'] in
+  // cleartext, partially reconstructing the exact private conversation graph the kind-4 branch above exists to
+  // withhold; kind-0 then puts names to the pubkeys. The kind-30078 branch was rewritten to default-DENY for
+  // precisely this reason and the other kinds were never brought along.
+  if (e.kind === 0 || e.kind === 5 || e.kind === 7) {
+    // Your own event is always yours to read. A member restoring from their 12 words belongs to no church yet,
+    // so without this they could not fetch their OWN profile and the restore could never bring their name back.
+    if (authed && authed === e.pubkey) return true;
+  }
+  if (e.kind === 0) {
+    // A CHURCH's or a NETWORK's own profile stays public on purpose: someone deciding whether to join has to be
+    // able to see the church's name and picture BEFORE they are a member of anything, and the invite/QR/follow
+    // flow reads exactly this. Gating it would break joining.
+    if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return true;
+    const cp = MEMBER_CHURCH.get(e.pubkey) || '';
+    if (!cp) return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || MEMBER_CHURCH.has(authed));
+    return churchReader(authed, cp);
+  }
+  if (e.kind === 5 || e.kind === 7) {
+    const g5 = gidOf(e);
+    const cp = (g5 && GROUP_CHURCH.get(g5)) || MEMBER_CHURCH.get(e.pubkey) || '';
+    if (!cp) return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || MEMBER_CHURCH.has(authed));
+    return churchReader(authed, cp);
+  }
   if (e.kind !== 1) return true;
   const g = gidOf(e);
   // SAFEGUARDING: an adults-only group (one the church has NOT marked child-safe) is served only to a reader
@@ -1577,11 +1623,7 @@ function canRead(e, authed) {
     if (!authed) return false;
     const gcp = GROUP_CHURCH.get(g);
     if (gcp) {
-      if (!(authed === gcp || networkOf(authed, gcp) || stewardOf(authed, gcp))) {
-        const md = MEMBER_DOCS.get(gcp);
-        const gated = REQUIRE_APPROVAL.has(gcp), admitted = ADMITTED_BY.get(gcp);
-        if (!(!!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed))))) return false;
-      }
+      if (!churchReader(authed, gcp)) return false;
       // safeguarding, unchanged in intent: an adults-only group is withheld from a minor OF THAT CHURCH.
       if (!GROUP_CHILDSAFE.has(g) && (MINORS_BY.get(gcp) || new Set()).has(authed)) return false;
     } else if (!MEMBER_CHURCH.has(authed) && !CHURCH_PUBS.has(authed) && !NETWORKS.has(authed)) {
@@ -2559,6 +2601,11 @@ function serveStatic(req, res) {
       req.on('end', () => {
         try {
           const s = JSON.parse(body || '{}');
+          if ('lanAccess' in s) {
+            SETTINGS.lanAccess = !!s.lanAccess;
+            // a marker file, because the Tauri launcher decides the bind address before the gateway exists
+            try { const mk = join(DATA_DIR, 'lan-access'); if (SETTINGS.lanAccess) writeFileSync(mk, '1\n'); else rmSync(mk, { force: true }); } catch {}
+          }
           if ('serveApp' in s) SETTINGS.serveApp = !!s.serveApp;
           if ('serveModules' in s) SETTINGS.serveModules = !!s.serveModules;
           if ('serveAudio' in s) SETTINGS.serveAudio = !!s.serveAudio;
@@ -3463,7 +3510,10 @@ wss.on('connection', (ws, req) => {
       // unauthenticated connection, challenge it so the legitimate owner can AUTH and have it replayed. Kind-1
       // is deliberately excluded — a broad query that merely happens to match an invite-only group message is
       // still NOT challenged, so ordinary reads pay no auth round-trip (the lazy-auth perf decision stands).
-      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth && (e.kind === 30078 || e.kind === 4)) wantsSafeguard = true; continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32×10k events
+      // AUDIT-2026-07-27: challenge whenever we withhold ANYTHING from an unauthenticated reader, not only
+      // kind-30078/4. Once kind-0/5/7 became member-gated, a member's own {kinds:[0]} REQ was withheld and
+      // never challenged, so their app rendered a church with no names — a gate has to come with its prompt.
+      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth) wantsSafeguard = true; continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32x10k events
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
@@ -3561,7 +3611,7 @@ const wsHeartbeat = setInterval(() => {
   }
 }, 25000);
 wss.on('close', () => clearInterval(wsHeartbeat));
-const BIND_HOST = process.env.RELAY_HOST || '0.0.0.0';   // desktop app sets 127.0.0.1 (loopback → no Windows firewall prompt); servers keep 0.0.0.0
+const BIND_HOST = process.env.RELAY_HOST || '0.0.0.0';   // servers keep 0.0.0.0; the desktop app sets this explicitly (loopback unless the operator opts into LAN access — see relay-app/desktop/src-tauri/src/main.rs)
 server.listen(PORT, BIND_HOST, () =>
   console.log(`TrinityOne gateway on http://${BIND_HOST}:${PORT}  (app + relay at /relay, ${store.count()} events loaded)` +
     (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  write policy OFF (open relay — set up a church in the control dashboard)`) +

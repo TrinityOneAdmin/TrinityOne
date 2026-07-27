@@ -159,3 +159,54 @@ test('one malformed filter cannot silence live delivery for everyone else', asyn
     'a member stopped receiving live messages after a stranger sent one malformed filter — and the relay stayed up, so nothing looked wrong');
   assert.ok((await fetch(`http://127.0.0.1:${PORT}/status`)).ok, 'the relay must survive a malformed filter');
 });
+
+// ── kind-0 / 5 / 7 (AUDIT-2026-07-27) ──────────────────────────────────────────────────────────────────────
+// canRead ended `if (e.kind !== 1) return true;`. kind-1 and kind-4 were carefully gated and everything else
+// fell off the end into default-allow. So an anonymous socket could ask for {kinds:[0]} and receive every
+// member's display name and verified handle — on a single-church relay, that IS the congregation, i.e. the
+// arrest list. Worse, a reaction is a kind-7 carrying ['p', peer] and ['k','4'] in cleartext, so {kinds:[7]}
+// partly reconstructs the very DM graph the kind-4 gate exists to withhold, and kind-0 puts names to it.
+// A CHURCH's own kind-0 must stay public — someone deciding whether to join has to see its name first.
+
+const profile = (who, name) => finalizeEvent({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name }) }, who.sk);
+const reaction = (who, targetId, peerPub) => finalizeEvent({ kind: 7, created_at: now(), tags: [['e', targetId], ['p', peerPub], ['t', 'trinityone'], ['k', '4']], content: '+' }, who.sk);
+
+test('an anonymous stranger cannot harvest the congregation’s names', async () => {
+  const w = await conn();
+  assert.equal(await publish(w, profile(member, 'Maria Alvarez')), true);
+  assert.equal(await publish(w, profile(church, 'St Mary’s')), true);
+  await sleep(250);
+  const got = await reqCollect(w, 'p1', { kinds: [0] }, null);
+  const names = got.map(e => { try { return JSON.parse(e.content).name; } catch { return ''; } });
+  w.close();
+  assert.ok(!names.includes('Maria Alvarez'),
+    'an unauthenticated socket read a member’s real name — on a church’s own relay that is the whole roster');
+});
+
+test('a church’s OWN profile stays public, so joining still works', async () => {
+  const w = await conn();
+  const got = await reqCollect(w, 'p2', { kinds: [0], authors: [church.pub] }, null);
+  w.close();
+  const names = got.map(e => { try { return JSON.parse(e.content).name; } catch { return ''; } });
+  assert.ok(names.includes('St Mary’s'),
+    'the church’s own profile must stay readable or nobody can see who they are about to join');
+});
+
+test('a member of the church can still read another member’s name', async () => {
+  const w = await conn();
+  const got = await reqCollect(w, 'p3', { kinds: [0], authors: [member.pub] }, member.sk);
+  w.close();
+  const names = got.map(e => { try { return JSON.parse(e.content).name; } catch { return ''; } });
+  assert.ok(names.includes('Maria Alvarez'), 'members must still see each other’s names — this is the control');
+});
+
+test('an anonymous stranger cannot reconstruct the DM graph from reactions', async () => {
+  const w = await conn();
+  const target = 'a'.repeat(64);
+  assert.equal(await publish(w, reaction(member, target, other.pub)), true);
+  await sleep(250);
+  const got = await reqCollect(w, 'r1', { kinds: [7] }, null);
+  w.close();
+  assert.deepEqual(got.map(e => e.pubkey), [],
+    'reactions carry ["p",peer] and ["k","4"] in cleartext — serving them anonymously undoes the kind-4 gate');
+});

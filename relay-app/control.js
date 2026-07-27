@@ -235,6 +235,7 @@
       document.getElementById('t-mediacap').value = gb(s.mediaCap);
       document.getElementById('t-churchcap').value = gb(s.churchCap);
       const io = document.getElementById('t-inviteonly'); if (io) io.checked = s.inviteOnly === true;   // access mode lives with the church list card
+      const lan = document.getElementById('t-lan'); if (lan) lan.checked = s.lanAccess === true;   // desktop app only; read at launch from the lan-access marker
       const of = document.getElementById('t-offer'); if (of) of.checked = s.offerHosting === true;
       // backup/restore card (unlocked with the admin token, same as this settings fetch). The download streams a
       // big file, so it's a plain <a download> with the token in the query rather than a fetch-into-memory blob.
@@ -283,7 +284,8 @@
   async function saveServes() {
     const msg = document.getElementById('servesMsg'); msg.style.color = 'var(--ink-3)'; msg.textContent = '· saving…';
     const capBytes = (id) => Math.round((parseFloat(document.getElementById(id).value) || 0) * 1e9);
-    const body = { serveApp: document.getElementById('t-app').checked, serveModules: document.getElementById('t-modules').checked, serveAudio: document.getElementById('t-audio').checked, appUrl: document.getElementById('t-appurl').value.trim(), mediaCap: capBytes('t-mediacap'), churchCap: capBytes('t-churchcap') };
+    const _lan = document.getElementById('t-lan');
+    const body = { serveApp: document.getElementById('t-app').checked, serveModules: document.getElementById('t-modules').checked, serveAudio: document.getElementById('t-audio').checked, ...(_lan ? { lanAccess: _lan.checked } : {}), appUrl: document.getElementById('t-appurl').value.trim(), mediaCap: capBytes('t-mediacap'), churchCap: capBytes('t-churchcap') };
     try {
       const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
       const s = await r.json();
