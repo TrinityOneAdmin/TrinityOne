@@ -6099,6 +6099,20 @@
         }
         if (!Array.isArray(e.tags)) return;
         const d = _dtag(e);
+        if (d.startsWith(NAME_D)) {
+          if ((e.created_at || 0) < nameAt || !sk) return;
+          const ct = _nameCipher(e.content, "m");
+          if (!ct) return;
+          try {
+            const o = JSON.parse(decrypt(ct, getConversationKey(sk, pub)));
+            if (o && typeof o.name === "string" && o.name) {
+              name = o.name.slice(0, 40);
+              nameAt = e.created_at || 0;
+            }
+          } catch (x) {
+          }
+          return;
+        }
         if (!d.startsWith(MEMBER_D)) return;
         const cp = d.slice(MEMBER_D.length);
         if (!cp) return;
@@ -6292,7 +6306,8 @@
       onevent(e) {
         try {
           const m = JSON.parse(e.content);
-          profiles[e.pubkey] = { name: m.name || m.display_name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
+          const had = profiles[e.pubkey] || {};
+          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
           saveProfiles();
           window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
         } catch {
@@ -6467,15 +6482,46 @@
       }
     }
   }
+  function _sealNameDoc(cp, nm, congKey) {
+    if (!sk || !cp) return "";
+    const body = JSON.stringify({ name: nm });
+    let c = "", m = "";
+    try {
+      c = congKey ? encrypt(body, congKey) : encrypt(body, getConversationKey(sk, cp));
+    } catch (e) {
+      return "";
+    }
+    try {
+      m = encrypt(body, getConversationKey(sk, pub));
+    } catch (e) {
+    }
+    return JSON.stringify({ c, m });
+  }
+  function _nameCipher(content, which) {
+    const raw = String(content || "");
+    if (!raw.startsWith("{")) return which === "c" ? raw : "";
+    try {
+      const o = JSON.parse(raw);
+      return o && typeof o[which] === "string" ? o[which] : "";
+    } catch (x) {
+      return "";
+    }
+  }
   function _openSealedName(cp, author, content) {
+    const ct = _nameCipher(content, "c");
+    if (!ct) return "";
     for (const k of _nameKeys.get(cp) || []) {
       try {
-        const o = JSON.parse(decrypt(content, k));
+        const o = JSON.parse(decrypt(ct, k));
         if (o && typeof o.name === "string") {
           const nm = o.name.slice(0, 40);
           _sealedNames.set(cp + "|" + author, nm);
           if (!profiles[author]) profiles[author] = {};
           profiles[author].name = nm;
+          try {
+            saveProfiles();
+          } catch (x) {
+          }
           return nm;
         }
       } catch (x) {
@@ -7828,17 +7874,13 @@
       const ring = _nameKeys.get(cp) || [];
       if (!sk) return null;
       const nm = String(name || "").replace(/\s+/g, " ").trim().slice(0, 40);
-      let ct = "";
-      try {
-        ct = ring.length ? encrypt(JSON.stringify({ name: nm }), ring[0]) : encrypt(JSON.stringify({ name: nm }), getConversationKey(sk, cp));
-      } catch (e) {
-        return null;
-      }
+      const payload = _sealNameDoc(cp, nm, ring[0]);
+      if (!payload) return null;
       const evt = finalizeEvent2({
         kind: 30078,
         created_at: Math.floor(Date.now() / 1e3),
         tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]],
-        content: ct
+        content: payload
       }, sk);
       try {
         await _publishAny(window.Fellowship.relays, evt);
@@ -7895,8 +7937,10 @@
       if (meta.av || prev.av) p.av = meta.av || prev.av;
       const hidden = meta.hidden != null ? meta.hidden : prev.hidden;
       if (hidden) p.hidden = true;
-      if (prev.nip05) p.nip05 = prev.nip05;
-      const body = JSON.stringify(p);
+      const wire = { about: p.about, picture: p.picture };
+      if (p.av) wire.av = p.av;
+      if (p.hidden) wire.hidden = true;
+      const body = JSON.stringify(wire);
       if (_profilePubFor === pub && _profilePubBody === body) return null;
       const evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
       let sent = true;
@@ -7927,7 +7971,7 @@
     },
     // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
     requestProfiles(pubkeys) {
-      const need = [...new Set(pubkeys)].filter((pk) => pk && !pendingProfiles.has(pk) && (!(pk in profiles) || !(profiles[pk] && profiles[pk].name)));
+      const need = [...new Set(pubkeys)].filter((pk) => pk && !pendingProfiles.has(pk) && !(pk in profiles));
       if (!need.length) return;
       need.forEach((pk) => {
         pendingProfiles.add(pk);
@@ -8674,12 +8718,20 @@
       const childSk = privateKeyFromSeedWords(inv.mnemonic);
       const childPub = getPublicKey2(childSk);
       const ts = Math.floor(Date.now() / 1e3);
-      const childProfile = { name };
+      const childProfile = {};
       const k0 = finalizeEvent2({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }, childSk);
+      let childNameDoc = null;
+      try {
+        const body = JSON.stringify({ name });
+        const ct = encrypt(body, getConversationKey(childSk, cp));
+        const own = encrypt(body, getConversationKey(childSk, childPub));
+        childNameDoc = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c: ct, m: own }) }, childSk);
+      } catch (e) {
+      }
       const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
-      const myName = window.Fellowship.myProfile && window.Fellowship.myProfile.name || "";
-      const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub, parentName: myName, childName: name }) }, sk);
-      for (const e of [k0, join2, req]) {
+      const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
+      for (const e of [k0, join2, childNameDoc, req]) {
+        if (!e) continue;
         try {
           await _publishAny(window.Fellowship.relays, e);
         } catch (err) {

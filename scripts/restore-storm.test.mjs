@@ -19,6 +19,7 @@
 // Skips itself (rather than failing) when chromium is unavailable, like app-boots.test.mjs.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -112,9 +113,28 @@ test('a restore that finds no church does not republish the profile on a loop', 
     const n = await countProfilePublishes(pubkey, WATCH_MS);
     // One is forgivable (a restored member adopting a recovered name they did not have). A loop is not.
     assert.ok(n <= 1, `the app published ${n} kind-0 profile events in ${WATCH_MS / 1000}s with restorePending set — that is a broadcast storm to every member of the church`);
-    // And the pending flag must not still be armed after a successful recovery, or the next launch re-arms it.
-    const stillPending = await evalJs(`localStorage.getItem('trinityone.restorePending')`);
-    assert.equal(stillPending, null, 'restorePending is still set after the name came back — the loop will restart on every launch');
+    // The flag's convergence is asserted in the source test below rather than here: since Stage 2 the name is
+    // no longer in kind-0, so this church-less member has genuinely nothing to recover, and the chain has to
+    // run its full four minutes before it can say so — longer than this test's budget. What this test exists
+    // for is the STORM bound above, and that is unchanged.
     ws.close();
   } finally { try { chr.kill('SIGKILL'); } catch {} try { rmSync(prof, { recursive: true, force: true }); } catch {} }
+});
+
+test('the recovery chain gives up once it has actually asked', () => {
+  // The flag used to be left armed whenever nothing came back, so the whole four-minute chain re-ran on every
+  // launch for ever. Survivable while the name lived in kind-0 — almost every restore found something — but
+  // Stage 2 removed it, and a member who belongs to no church has nothing to recover by definition.
+  // AUDIT-2026-07-27.
+  const SRC = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
+  const at = SRC.indexOf('const next = () => {');
+  assert.notEqual(at, -1, 'the recovery chain scheduler is gone');
+  const body = SRC.slice(at, at + 400);
+  assert.match(body, /tries >= DELAYS\.length[\s\S]{0,160}removeItem\('trinityone\.restorePending'\)/,
+    'exhausting the retries leaves the flag armed, so the whole chain re-runs on every launch for ever');
+  // …but a connection that never came up must still be retried next launch.
+  const runAt = SRC.indexOf('if (waits++ < 30)');
+  assert.notEqual(runAt, -1, 'the not-connected-yet branch is gone');
+  assert.doesNotMatch(SRC.slice(runAt - 300, runAt + 120), /removeItem\('trinityone\.restorePending'\)/,
+    'a member who restored with no connection would be left church-less for ever');
 });

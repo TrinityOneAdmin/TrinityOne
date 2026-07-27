@@ -1933,14 +1933,20 @@ window.Steward = {
   },
   // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
   openMemberName(content, authorPub) {
+    // { c, m }: `c` is the congregation's (or, before admission, the church's) copy; `m` is the member's own
+    // recovery copy, which is sealed to them alone and is none of the console's business. A bare string is the
+    // pre-Stage-2 shape.
+    let ct = String(content || '');
+    if (ct.startsWith('{')) { try { const o = JSON.parse(ct); ct = (o && typeof o.c === 'string') ? o.c : ''; } catch (x) { ct = ''; } }
+    if (!ct) return '';
     for (const k of _nameKeyRing) {
-      try { const o = JSON.parse(nip44d(content, _unhex(k))); if (o && typeof o.name === 'string') return o.name.slice(0, 40); } catch (x) {}
+      try { const o = JSON.parse(nip44d(ct, _unhex(k))); if (o && typeof o.name === 'string') return o.name.slice(0, 40); } catch (x) {}
     }
     // A member awaiting approval has no congregation key yet, so their copy is sealed to the church key alone.
     // Without this fallback a gated church would see every join request as a nameless npub — and the relay
     // deliberately lets those members write the doc precisely so the steward has a name to approve.
     if (authorPub && churchSk) {
-      try { const o = JSON.parse(nip44d(content, nip44ck(churchSk, toPubHex(authorPub) || authorPub))); if (o && typeof o.name === 'string') return o.name.slice(0, 40); } catch (x) {}
+      try { const o = JSON.parse(nip44d(ct, nip44ck(churchSk, toPubHex(authorPub) || authorPub))); if (o && typeof o.name === 'string') return o.name.slice(0, 40); } catch (x) {}
     }
     return '';
   },
@@ -1961,7 +1967,7 @@ window.Steward = {
   // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
   // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
   // which the relay reads so a parent may always DM their own child. ----
-  subscribeGuardianRequests(onReqs) {   // pending parent requests → [{ child, parent, parentName, childName, ts }]
+  subscribeGuardianRequests(onReqs) {   // pending parent requests → [{ child, parent, ts }] — names come from the roster
     const byChild = new Map();
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#p': [pub] }], {
       onevent(e) {
@@ -1976,7 +1982,10 @@ window.Steward = {
         // that adult a minor. The parent is now ALWAYS the signer, which is the one field a forger can't lie
         // about. The claimed names stay untrusted display strings — the UI labels them "claims to be" and
         // shows both npubs, exactly as the steward-approval card already does.
-        else { try { const c = JSON.parse(e.content); if (c.child && c.child !== child) return; byChild.set(child, { child, parent: e.pubkey, claimedParentName: c.parentName || '', claimedChildName: c.childName || '', ts: e.created_at }); } catch {} }
+        // No claimed names any more — Stage 2 removed them from the request entirely. They were never rendered
+        // (C1: a requester-supplied name is forgeable, so the card shows the name WE resolved from the roster),
+        // and carrying a child's name plus their parent's in a member-readable document was the larger leak.
+        else { try { const c = JSON.parse(e.content); if (c.child && c.child !== child) return; byChild.set(child, { child, parent: e.pubkey, ts: e.created_at }); } catch {} }
         onReqs([...byChild.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       },
       oneose() { onReqs([...byChild.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))); },

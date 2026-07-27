@@ -13080,16 +13080,26 @@ zoo`.split("\n");
     },
     // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
     openMemberName(content, authorPub) {
+      let ct = String(content || "");
+      if (ct.startsWith("{")) {
+        try {
+          const o = JSON.parse(ct);
+          ct = o && typeof o.c === "string" ? o.c : "";
+        } catch (x) {
+          ct = "";
+        }
+      }
+      if (!ct) return "";
       for (const k of _nameKeyRing) {
         try {
-          const o = JSON.parse(decrypt3(content, _unhex(k)));
+          const o = JSON.parse(decrypt3(ct, _unhex(k)));
           if (o && typeof o.name === "string") return o.name.slice(0, 40);
         } catch (x) {
         }
       }
       if (authorPub && churchSk) {
         try {
-          const o = JSON.parse(decrypt3(content, getConversationKey(churchSk, toPubHex(authorPub) || authorPub)));
+          const o = JSON.parse(decrypt3(ct, getConversationKey(churchSk, toPubHex(authorPub) || authorPub)));
           if (o && typeof o.name === "string") return o.name.slice(0, 40);
         } catch (x) {
         }
@@ -13127,7 +13137,7 @@ zoo`.split("\n");
             try {
               const c = JSON.parse(e.content);
               if (c.child && c.child !== child) return;
-              byChild.set(child, { child, parent: e.pubkey, claimedParentName: c.parentName || "", claimedChildName: c.childName || "", ts: e.created_at });
+              byChild.set(child, { child, parent: e.pubkey, ts: e.created_at });
             } catch {
             }
           }

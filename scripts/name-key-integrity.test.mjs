@@ -19,12 +19,17 @@ const church = K(), alice = K(), bob = K();
 const now = () => Math.floor(Date.now() / 1000);
 
 // Lift the real member-side functions and run them against a scope we control.
+// Brace-matched, and aware of quotes: _nameCipher contains startsWith('{'), and a matcher that counts braces
+// inside string literals cut the function in half and produced a syntax error that looked like a code fault.
 function grab(src, name) {
   const at = src.indexOf('function ' + name + '(');
   assert.notEqual(at, -1, name + ' missing from the shipped bundle');
-  let depth = 0;
+  let depth = 0, q = '';
   for (let i = src.indexOf('{', at); i < src.length; i++) {
-    const c = src[i];
+    const c = src[i], prev = src[i - 1];
+    if (q) { if (c === q && prev !== '\\') q = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if (c === '/' && src[i + 1] === '/') { i = src.indexOf('\n', i); if (i === -1) break; continue; }
     if (c === '{') depth++; else if (c === '}' && --depth === 0) return src.slice(at, i + 1);
   }
   assert.fail('could not find the end of ' + name);
@@ -39,6 +44,7 @@ function memberSide(me, withKey = true) {
     const nip44d = decrypt, nip44ck = getConversationKey;
     const pub = ${JSON.stringify(me.pub)};
     let sk = ${withKey ? '_SK' : 'null'};
+    ${grab(FELLOWSHIP, '_nameCipher')}
     ${grab(FELLOWSHIP, '_ingestNameKey')}
     ${grab(FELLOWSHIP, '_openSealedName')}
     ${grab(FELLOWSHIP, '_ringId')}
@@ -155,14 +161,19 @@ test('a member awaiting approval can still say what they are called', () => {
   // The relay deliberately lets a pending member write their sealed name so a gated church has a name to
   // approve — but the name KEY is served only to admitted members, and rightly so. Sealed to the church key
   // instead, so the steward sees it and nobody else does.
-  assert.match(FELLOWSHIP, /ring\.length \? \w+\(JSON\.stringify\(\{ name: nm \}\), ring\[0\]\) : \w+\(/,
-    'a pending member with no congregation key publishes nothing, so a gated church sees a nameless npub');
   const at = STEWARD.indexOf('openMemberName(content, authorPub)');
   assert.notEqual(at, -1, 'openMemberName no longer accepts the author, so the pending copy cannot be opened');
-  // round trip: seal to the church exactly as a pending member does, open it exactly as the console does
-  const ct = nip44v2.encrypt(JSON.stringify({ name: 'Grace' }), nip44v2.utils.getConversationKey(alice.sk, church.pub));
-  const got = JSON.parse(nip44v2.decrypt(ct, nip44v2.utils.getConversationKey(church.sk, alice.pub)));
+  // Seal with NO congregation key, exactly as a pending member does, using the shipped builder — then open it
+  // as the console does. If the fallback is dropped, `c` becomes unreadable to the church and this goes red.
+  const payload = sealDoc(alice)(church.pub, 'Grace', undefined);
+  const c = JSON.parse(payload).c;
+  assert.ok(c, 'a pending member with no congregation key publishes nothing, so a gated church sees a nameless npub');
+  const got = JSON.parse(nip44v2.decrypt(c, nip44v2.utils.getConversationKey(church.sk, alice.pub)));
   assert.equal(got.name, 'Grace', 'the pending seal is not openable by the church key');
+  // and it is NOT readable by a fellow member
+  let leaked = false;
+  try { JSON.parse(nip44v2.decrypt(c, nip44v2.utils.getConversationKey(bob.sk, alice.pub))); leaked = true; } catch (e) {}
+  assert.equal(leaked, false, 'a pending member’s name is readable by other members');
 });
 
 test('the console actually reads sealed names', () => {
@@ -171,4 +182,83 @@ test('the console actually reads sealed names', () => {
   // and doing nothing.
   assert.match(STEWARD, /window\.Steward\.openMemberName\(c, pk\)/, 'the roster does not use the sealed name');
   assert.match(STEWARD, /d === NAME_D \+ pub/, 'the console never subscribes to members’ sealed name documents');
+});
+
+// ── Stage 2: the name leaves kind-0 entirely ─────────────────────────────────────────────────────────────────
+// Stage 1 sealed a member's name to their congregation and left the cleartext copy in kind-0 beside it, so the
+// relay still held a named roster and the gate was only about who was allowed to read it. Stage 2 removes the
+// copy. The thing that quietly depended on it was RESTORE: a member coming back from their 12 words on a new
+// phone got their name from that kind-0, and nothing else on the network knew it. So the name document now
+// carries a second copy sealed to the member's own key. AUDIT-2026-07-27.
+function restoreSide(me) {
+  const body = `
+    const MEMBER_D = 'trinityone/member:', NAME_D = 'trinityone/name:';
+    const decrypt = nip44v2.decrypt, getConversationKey = nip44v2.utils.getConversationKey;
+    const nip44d = decrypt, nip44ck = getConversationKey;
+    const pub = ${JSON.stringify(me.pub)};
+    const sk = _SK;
+    const _dtag = (e) => ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+    ${grab(FELLOWSHIP, '_nameCipher')}
+    ${grab(FELLOWSHIP, '_restoreFold')}
+    return _restoreFold();
+  `;
+  return new Function('nip44v2', '_SK', body)(nip44v2, me.sk);
+}
+// The payload built by the SHIPPED _sealNameDoc, not by a copy of it here. Writing a second copy passed
+// happily with the self-recovery half deleted from the real code.
+function sealDoc(who) {
+  const body = `
+    const encrypt = nip44v2.encrypt, getConversationKey = nip44v2.utils.getConversationKey;
+    const nip44e = encrypt, nip44ck = getConversationKey;
+    const sk = _SK, pub = ${JSON.stringify(who.pub)};
+    ${grab(FELLOWSHIP, '_sealNameDoc')}
+    return _sealNameDoc;
+  `;
+  return new Function('nip44v2', '_SK', body)(nip44v2, who.sk);
+}
+const nameDoc = (who, cp, name, ring, at) => ({
+  kind: 30078, pubkey: who.pub, created_at: at || now(),
+  tags: [['d', 'trinityone/name:' + cp], ['t', 'trinityone'], ['church', cp]],
+  content: sealDoc(who)(cp, name, ring),
+});
+
+test('a restored member gets their name back with no kind-0 anywhere', () => {
+  const fold = restoreSide(alice);
+  fold.add({ kind: 30078, pubkey: alice.pub, created_at: now(), tags: [['d', 'trinityone/member:' + church.pub]], content: JSON.stringify({ joined: now() }) });
+  fold.add(nameDoc(alice, church.pub, 'Maria', K1));
+  const r = fold.result();
+  assert.deepEqual(r.churches, [church.pub], 'the church did not come back');
+  assert.equal(r.name, 'Maria', 'restore brought the churches back and left the member nameless — nothing on the network can tell them who they are');
+});
+
+test('nobody else can read the recovery copy', () => {
+  const doc = nameDoc(alice, church.pub, 'Maria', K1);
+  const m = JSON.parse(doc.content).m;
+  let leaked = false;
+  // the church key, a fellow member, and the congregation key all in turn
+  for (const trial of [() => nip44v2.decrypt(m, nip44v2.utils.getConversationKey(church.sk, alice.pub)),
+                       () => nip44v2.decrypt(m, nip44v2.utils.getConversationKey(bob.sk, alice.pub)),
+                       () => nip44v2.decrypt(m, K1)]) {
+    try { JSON.parse(trial()); leaked = true; } catch (e) {}
+  }
+  assert.equal(leaked, false, 'the member’s own recovery copy is readable by someone else');
+});
+
+test('the congregation copy still opens for the congregation', () => {
+  const m = memberSide(bob);
+  m.ingest(church.pub, envelope([church.pub, bob.pub], [K1]));
+  assert.equal(m.open(church.pub, alice.pub, nameDoc(alice, church.pub, 'Maria', K1).content), 'Maria',
+    'the two-copy document broke the ordinary path — every name in the church goes blank');
+});
+
+test('a child’s name is not published in the clear either', () => {
+  // The most sensitive instance: a child's name in a world-shaped cleartext profile, published by the parent's
+  // own app at setup. And the guardian request beside it carried the child's name AND the parent's, in a
+  // document any member of the church could read.
+  const at = FELLOWSHIP.indexOf('createChildAccount');
+  const fn = FELLOWSHIP.slice(at, at + 3000);
+  assert.match(fn, /childProfile = \{\}/, 'a child’s kind-0 still carries their name');
+  assert.doesNotMatch(fn, /parentName:/, 'the guardian request still carries the parent’s name in the clear');
+  assert.doesNotMatch(fn, /childName: name/, 'the guardian request still carries the child’s name in the clear');
+  assert.match(fn, /trinityone\/name:/, 'nothing publishes the child’s sealed name, so the steward sees a nameless npub');
 });

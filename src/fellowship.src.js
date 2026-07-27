@@ -356,6 +356,14 @@ function _restoreFold() {
       }
       if (!Array.isArray(e.tags)) return;   // _dtag would throw; one malformed event must not cost a church
       const d = _dtag(e);
+      // the member's OWN sealed name — the only place their name still exists on the network after Stage 2
+      if (d.startsWith(NAME_D)) {
+        if ((e.created_at || 0) < nameAt || !sk) return;
+        const ct = _nameCipher(e.content, 'm');
+        if (!ct) return;
+        try { const o = JSON.parse(nip44d(ct, nip44ck(sk, pub))); if (o && typeof o.name === 'string' && o.name) { name = o.name.slice(0, 40); nameAt = e.created_at || 0; } } catch (x) {}
+        return;
+      }
       if (!d.startsWith(MEMBER_D)) return;
       const cp = d.slice(MEMBER_D.length);
       if (!cp) return;
@@ -549,7 +557,12 @@ function _flushProfiles() {
     onevent(e) {
       try {
         const m = JSON.parse(e.content);
-        profiles[e.pubkey] = { name: m.name || m.display_name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
+        // MERGE, don't replace. Since Stage 2 a member's kind-0 carries no name, and this assignment used to
+        // overwrite the whole entry — so a profile arriving after _openSealedName had resolved someone would
+        // wipe the name back out and they would flip to "Anonymous" mid-session. Keep any name we have already
+        // opened unless this event actually carries one (a church's own kind-0 still does, deliberately).
+        const had = profiles[e.pubkey] || {};
+        profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
         saveProfiles();
         window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } }));
       } catch {}
@@ -711,13 +724,40 @@ function _replaySealedNames(cp, hub) {
   if (n) { try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: null } })); } catch (x) {} }
 }
 // open a member's sealed name; tries every key so a rotation never hides an older one
+// Build the { c, m } name document. Extracted so a test can drive the REAL thing: written inline, the test had
+// to build its own copy of the payload, and it then passed happily with the self-recovery copy deleted from the
+// shipped code — the exact mirror-test failure this repo keeps repeating. AUDIT-2026-07-27.
+//   c — for the congregation, sealed under the church's name key. Before admission there is no such key (and a
+//       pending member must not be handed one: it would open the whole roster), so it is sealed to the CHURCH,
+//       which is the only party that needs to read it in order to approve them.
+//   m — for the member themselves. Stage 2 took the name out of kind-0, and kind-0 was where a member restoring
+//       from their 12 words on a new phone got their name back. Reading the congregation copy cannot work at
+//       restore time: it needs the name key, which needs membership, which is the thing still in flight.
+function _sealNameDoc(cp, nm, congKey) {
+  if (!sk || !cp) return '';
+  const body = JSON.stringify({ name: nm });
+  let c = '', m = '';
+  try { c = congKey ? nip44e(body, congKey) : nip44e(body, nip44ck(sk, cp)); } catch (e) { return ''; }
+  try { m = nip44e(body, nip44ck(sk, pub)); } catch (e) {}
+  return JSON.stringify({ c, m });
+}
+// The document holds { c, m }: `c` is the copy for the congregation (or, before admission, for the church),
+// `m` is the author's own recovery copy. A bare string is the pre-Stage-2 shape and is treated as `c`.
+function _nameCipher(content, which) {
+  const raw = String(content || '');
+  if (!raw.startsWith('{')) return which === 'c' ? raw : '';
+  try { const o = JSON.parse(raw); return (o && typeof o[which] === 'string') ? o[which] : ''; } catch (x) { return ''; }
+}
 function _openSealedName(cp, author, content) {
+  const ct = _nameCipher(content, 'c');
+  if (!ct) return '';
   for (const k of (_nameKeys.get(cp) || [])) {
-    try { const o = JSON.parse(nip44d(content, k)); if (o && typeof o.name === 'string') {
+    try { const o = JSON.parse(nip44d(ct, k)); if (o && typeof o.name === 'string') {
       const nm = o.name.slice(0, 40);
       _sealedNames.set(cp + '|' + author, nm);
       if (!profiles[author]) profiles[author] = {};
       profiles[author].name = nm;                       // so every existing screen resolves it unchanged
+      try { saveProfiles(); } catch (x) {}               // and survives a reload, like every other resolved name
       return nm;
     } } catch (x) {}
   }
@@ -1663,17 +1703,10 @@ window.Fellowship = {
     const ring = _nameKeys.get(cp) || [];
     if (!sk) return null;
     const nm = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-    let ct = '';
-    // NO KEY YET? Seal to the CHURCH instead. A member awaiting approval at a gated church can write this doc
-    // (the relay allows it on purpose, so a steward has a name to approve) but is not served the congregation's
-    // name key — and rightly so: handing it over before admission would let anyone who taps Join read the whole
-    // roster, which is the exact thing this encryption exists to prevent. So the pending copy is sealed to the
-    // church key alone. The console tries the ring first and falls back to its own conversation key, so the
-    // steward sees the name and nobody else does. It is re-sealed to the congregation key on admission, when
-    // the key arrives and syncSealedNames runs. AUDIT-2026-07-27.
-    try { ct = ring.length ? nip44e(JSON.stringify({ name: nm }), ring[0]) : nip44e(JSON.stringify({ name: nm }), nip44ck(sk, cp)); } catch (e) { return null; }
+    const payload = _sealNameDoc(cp, nm, ring[0]);
+    if (!payload) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
-      tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: ct }, sk);
+      tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: payload }, sk);
     try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
     _sealedNames.set(cp + '|' + pub, nm);
     _sealedMine.set(cp, nm + '|' + _ringId(cp));
@@ -1723,7 +1756,14 @@ window.Fellowship = {
     // (steward.src.js); a MEMBER does not need one, and it is the wrong thing to give a congregation whose
     // safety depends on not being enumerable. An existing handle is carried forward rather than stripped, so
     // nobody's verified name silently disappears — Stage 2 tombstones those deliberately. AUDIT-2026-07-27.
-    if (prev.nip05) p.nip05 = prev.nip05;
+    // STAGE 2. A member's NAME no longer travels in kind-0. Stage 1 sealed it to the congregation and left the
+    // cleartext copy sitting next to it, so the relay still held a named roster and the gate was only about who
+    // was allowed to read it — one misconfigured relay, one mirror, one seized disk and the congregation is a
+    // list of names again. The name now lives ONLY in the per-church sealed `name:` document and in this
+    // device's own storage. Everything on screen still resolves it, because _openSealedName writes the opened
+    // name into the same profiles map every screen already reads.
+    // The carried-forward nip05 goes with it: a handle is <name>@<host>, so keeping it would publish the name
+    // in a second field and make the whole exercise pointless. AUDIT-2026-07-27.
     // IDEMPOTENCE. This used to build a fresh kind-0 with a new created_at and publish it on EVERY call, with no
     // comparison against what it had already sent — so any caller that ran on a timer became a broadcast station.
     // Measured: 12 profile republishes a minute from the restore-recovery loop, each one delivered to every
@@ -1731,7 +1771,12 @@ window.Fellowship = {
     // AUDIT-2026-07-26 CRITICAL 4. Re-sending an identical profile tells nobody anything, so it is now a no-op;
     // any real edit differs and still goes out. Scoped to this session (and only recorded after a publish that
     // did not throw), so a relay that lost the doc is still re-served on the next launch or the next real edit.
-    const body = JSON.stringify(p);
+    // What we PUBLISH is deliberately narrower than what we keep. `p` stays whole for this device (and for the
+    // seal); the wire copy carries no name and no handle.
+    const wire = { about: p.about, picture: p.picture };
+    if (p.av) wire.av = p.av;
+    if (p.hidden) wire.hidden = true;
+    const body = JSON.stringify(wire);
     if (_profilePubFor === pub && _profilePubBody === body) return null;
     const evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
     let sent = true;
@@ -1747,9 +1792,12 @@ window.Fellowship = {
 
   // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
   requestProfiles(pubkeys) {
-    // refetch when unknown, or cached-without-a-name (so a member who later picks a name updates). Queue the
-    // needed pubkeys and flush them as ONE kind-0 sub after a short window — a backfill burst becomes one sub.
-    const need = [...new Set(pubkeys)].filter(pk => pk && !pendingProfiles.has(pk) && (!(pk in profiles) || !(profiles[pk] && profiles[pk].name)));
+    // Refetch only what we have NEVER resolved. This used to refetch anything cached without a name, which was
+    // reasonable while names lived in kind-0 — but since Stage 2 no member's kind-0 has one, so every member of
+    // the church qualified in every 250 ms batch window, for ever: a permanent re-subscribe churn that would
+    // look like a network problem and never be traced back to here. A member who later picks a name republishes
+    // their sealed `name:` doc, which arrives on the docs hub, so nothing depends on re-asking. AUDIT-2026-07-27.
+    const need = [...new Set(pubkeys)].filter(pk => pk && !pendingProfiles.has(pk) && !(pk in profiles));
     if (!need.length) return;
     need.forEach(pk => { pendingProfiles.add(pk); _profQueue.add(pk); });
     if (!_profTimer) _profTimer = setTimeout(_flushProfiles, 250);   // fixed window (don't reset) so a steady stream still flushes promptly
@@ -2207,13 +2255,30 @@ window.Fellowship = {
     // relay, so anyone could ask "is there a <child's name> here?" and be handed their identity. The parent
     // path was fixed in the same pass; this is the sibling call site it would have been easy to miss.
     // AUDIT-2026-07-27.
-    const childProfile = { name };
+    // STAGE 2, and this is the instance that matters most: a CHILD's name in a world-shaped cleartext profile.
+    // It is sealed like any other member's now. The child has no congregation key yet (the church wraps one for
+    // them once the roster picks them up), so this first copy is sealed to the CHURCH key — the same path a
+    // member awaiting approval uses — and is re-sealed to the congregation key when one arrives.
+    const childProfile = {};
     const k0 = finalizeEvent({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }, childSk);
+    let childNameDoc = null;
+    try {
+      const body = JSON.stringify({ name });
+      const ct = nip44e(body, nip44ck(childSk, cp));            // the church's copy, so a steward sees who this is
+      const own = nip44e(body, nip44ck(childSk, childPub));     // the child's own recovery copy, same shape as everyone's
+      childNameDoc = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c: ct, m: own }) }, childSk);
+    } catch (e) {}
     const join = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }, childSk);
     // the parent's guardian-link REQUEST (signed by the parent) — the steward confirms it
-    const myName = (window.Fellowship.myProfile && window.Fellowship.myProfile.name) || '';
-    const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub, parentName: myName, childName: name }) }, sk);
-    for (const e of [k0, join, req]) { try { await _publishAny(window.Fellowship.relays, e); } catch (err) { console.warn('[fellowship] child setup publish failed', err); } }
+    // NO NAMES IN THE REQUEST. This carried the child's name AND the parent's, in cleartext, in a document any
+    // effective member of the church could read — a worse leak than the kind-0 it sat beside, and it survived
+    // Stage 1 untouched. Nothing needed them: the console records them as `claimed…` and the card deliberately
+    // renders the name IT resolved from the roster instead, precisely because a requester-supplied name is
+    // forgeable (SECURITY-AUDIT-2026-07-20 C1). So they are simply gone. AUDIT-2026-07-27.
+    const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
+    // join BEFORE the sealed name: the relay only accepts a name document from someone it already knows is a
+    // member of that church, so the reverse order would have the name silently refused.
+    for (const e of [k0, join, childNameDoc, req]) { if (!e) continue; try { await _publishAny(window.Fellowship.relays, e); } catch (err) { console.warn('[fellowship] child setup publish failed', err); } }
     _saveChildLink({ child: childPub, name, churchPub: cp, ts });     // remember locally so the parent sees their children
     _needAuth = true;   // M3: now a guardian — must NIP-42-auth to read the church's confirmation of this link (connTick reconnects with auth)
     return { childPub, mnemonic: inv.mnemonic, npub: npubEncode(childPub), name };

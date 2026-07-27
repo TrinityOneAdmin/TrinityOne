@@ -32,9 +32,26 @@ function realFold() {
     else if (c === '}' && --depth === 0) { end = i + 1; break; }
   }
   assert.notEqual(end, -1);
-  const factory = new Function(
-    `const MEMBER_D = ${cm[1]};\nconst _dtag = ${dm[1]};\n` + BUNDLE.slice(fnAt, end) + '\nreturn _restoreFold;'
-  )();
+  // Stage 2 gave the fold a second job: a member's name no longer exists in kind-0, so it is read from the
+  // recovery copy inside their own sealed name document. That pulled NAME_D, _nameCipher and the signing key
+  // into scope, and a harness that predates it fails with "NAME_D is not defined" — which is this test
+  // reporting its own gap, not a fault in the fold. Import them from the bundle on the same terms as the rest.
+  const nm = BUNDLE.match(/\bNAME_D = ("trinityone\/name:")/);
+  assert.ok(nm, 'NAME_D is not declared at module scope in the shipped bundle — the restore fold will throw');
+  const ncAt = BUNDLE.indexOf('function _nameCipher(');
+  assert.notEqual(ncAt, -1, '_nameCipher missing from the shipped bundle');
+  let d2 = 0, ncEnd = -1, q = '';
+  for (let i = BUNDLE.indexOf('{', ncAt); i < BUNDLE.length; i++) {
+    const c = BUNDLE[i], prev = BUNDLE[i - 1];
+    if (q) { if (c === q && prev !== '\\') q = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if (c === '{') d2++; else if (c === '}' && --d2 === 0) { ncEnd = i + 1; break; }
+  }
+  assert.notEqual(ncEnd, -1, 'could not extract _nameCipher');
+  const factory = new Function('nip44d', 'nip44ck', 'sk', 'pub',
+    `const MEMBER_D = ${cm[1]};\nconst NAME_D = ${nm[1]};\nconst _dtag = ${dm[1]};\n`
+    + BUNDLE.slice(ncAt, ncEnd) + '\n' + BUNDLE.slice(fnAt, end) + '\nreturn _restoreFold;'
+  )(() => { throw new Error('no key in this harness'); }, () => new Uint8Array(32), null, 'f'.repeat(64));
   return factory();   // a FRESH fold per call, so tests cannot leak state into each other
 }
 

@@ -719,7 +719,16 @@ function App() {
     const clear = () => { if (t) { clearTimeout(t); t = null; } };
     const halt = () => { stop = true; clear(); };
     const schedule = (ms) => { if (stop) return; clear(); t = setTimeout(run, ms); };
-    const next = () => { if (tries >= DELAYS.length) { halt(); return; } schedule(DELAYS[tries++]); };
+    // EXHAUSTED, ON A CONNECTION THAT WORKED, IS AN ANSWER. The flag used to be left armed whenever nothing
+    // came back, so the whole four-minute chain re-ran on every launch for ever. That was survivable while the
+    // name lived in kind-0 (almost every restore found something), but Stage 2 removed it: a member who
+    // belonged to no church has nothing to recover, by definition, and would have re-run this for the life of
+    // the install. The dead-connection case that the flag exists for is handled separately below — we only get
+    // here after relaysHealthy() said yes and we asked seven times over four minutes. AUDIT-2026-07-27.
+    const next = () => {
+      if (tries >= DELAYS.length) { try { localStorage.removeItem('trinityone.restorePending'); } catch (e) {} halt(); return; }
+      schedule(DELAYS[tries++]);
+    };
     const run = async () => {
       if (stop) return;
       if (!readPending()) return halt();      // another route (the restore pane, an earlier pass) already finished

@@ -60,12 +60,29 @@ test('an unknown name returns nothing rather than an error', async () => {
   assert.deepEqual(await lookup('nobodyhere'), {});
 });
 
-test('the member app no longer derives a handle from the display name', () => {
+test('the member app publishes neither a name nor a handle in kind-0', () => {
+  // Stage 1 sealed the name to the congregation and left the cleartext copy beside it, so the relay still held
+  // a named roster and the gate was only about who could read it. Stage 2 removes the copy. The carried-forward
+  // handle goes with it — a handle is <name>@<host>, so keeping one would publish the name in a second field
+  // and make the whole exercise pointless. AUDIT-2026-07-27.
   const SRC = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8');
   const at = SRC.indexOf('async setProfile(meta)');
-  const body = SRC.slice(at, at + 2400);
+  let depth = 0, end = -1;
+  for (let i = SRC.indexOf('{', at); i < SRC.length; i++) { const c = SRC[i]; if (c === '{') depth++; else if (c === '}' && --depth === 0) { end = i + 1; break; } }
+  const body = SRC.slice(at, end);
   assert.doesNotMatch(body, /p\.nip05 = handleLocal/, 'the name is being published a second time as a handle');
-  assert.match(body, /if \(prev\.nip05\) p\.nip05 = prev\.nip05/, 'an existing handle must be carried, not silently stripped');
+  assert.doesNotMatch(body, /if \(prev\.nip05\) p\.nip05 = prev\.nip05/, 'the handle is still carried forward, and a handle contains the name');
+  assert.match(body, /const wire = \{ about: p\.about, picture: p\.picture \}/, 'the published profile is not built separately from the one we keep — the name will go out with it');
+  const wireAt = body.indexOf('const wire =');
+  assert.doesNotMatch(body.slice(wireAt, body.indexOf('finalizeEvent', wireAt)), /wire\.name/, 'the name is being put back on the wire copy');
+});
+
+test('the shipped app really publishes a nameless profile', () => {
+  const V = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
+  const at = V.indexOf('const wire = { about:');
+  assert.notEqual(at, -1, 'the built app no longer separates the published profile from the stored one');
+  const near = V.slice(at, at + 400);
+  assert.doesNotMatch(near, /name:/, 'the built app still puts a name in the kind-0 it publishes');
 });
 
 test('the shipped bundle agrees with the source', () => {
