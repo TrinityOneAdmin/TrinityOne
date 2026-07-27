@@ -165,7 +165,9 @@ const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<
 const HIDE_D = 'trinityone/hidden:';        // a removed/hidden message, d=hidden:<msgId> (one per message; deleted = restored)
 const GROUPKEY_D = 'trinityone/groupkey:'; // church-signed key envelope for an encrypted group
 const _skeys = {};   // groupId -> KEY RING [current, ...superseded], each Uint8Array(32) (church-side cache)
-const GROUP_RING_MAX = 32;   // bound the envelope: 32 rotations of one group is far beyond any real church
+const GROUP_RING_MAX = 12;   // bound the envelope, and match the care key's ring exactly (see _careKeyRing).
+// 32 was too many now that every envelope carries the ring sealed PER RECIPIENT: a large church multiplied
+// that by its member count and pushed the event past the relay's 1 MB maxPayload. AUDIT-2026-07-27.
 const _srev = {};    // groupId -> envelope revision (bumped on rotate)
 const _senvTs = {};  // groupId -> latest envelope created_at (ignore stale/out-of-order)
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -1708,11 +1710,31 @@ window.Steward = {
     } else if (!ring.length) ring = [key];
     _skeys[groupId] = ring;
     const rev = _srev[groupId] || 1; _srev[groupId] = rev;
-    const keys = {};
-    const wrapped = JSON.stringify(ring.map(_hex));   // current key first, then the superseded ones
-    for (const pk of recips) { try { keys[pk] = nip44e(wrapped, nip44ck(churchSk, pk)); } catch (e) {} }
+    // TWO SHAPES, DELIBERATELY. `keys` holds ONLY the current key as bare hex — exactly what every already-
+    // installed app expects. `rings` holds the whole ring as a JSON array for apps that understand it.
+    // Writing only the ring shape was a silent field break in the direction that actually happens: the console
+    // and relay update first and phones follow over days, so the next roster tick would have re-keyed every
+    // group with a payload old apps parse into garbage. _decEvt DROPS what it cannot open, so every member on
+    // an un-updated phone would have opened Prayer or their life group to an EMPTY ROOM — no error, no spinner,
+    // nothing to diagnose. The compat comment on the member side reasoned about the opposite direction only.
+    // AUDIT-2026-07-27.
     _senvTs[groupId] = now();
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content: JSON.stringify({ rev, keys }) }, churchSk));
+    const build = (r) => {
+      const keys = {}, rings = {};
+      const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
+      for (const pk of recips) {
+        try { const ck = nip44ck(churchSk, pk); keys[pk] = nip44e(cur, ck); rings[pk] = nip44e(wrapped, ck); } catch (e) {}
+      }
+      return JSON.stringify({ rev, keys, rings });
+    };
+    // A church large enough to push the sealed ring past the relay's 1 MB cap sheds history rather than
+    // failing to publish: a shorter ring costs old messages, a refused envelope costs the group entirely.
+    let content = build(ring);
+    for (let r = ring.length; content.length > 900000 && r > 1; ) {
+      r = Math.max(1, r >> 1);
+      content = build(ring.slice(0, r));
+    }
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk));
   },
   // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
   // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----

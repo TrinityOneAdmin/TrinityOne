@@ -10656,7 +10656,7 @@ zoo`.split("\n");
   var HIDE_D = "trinityone/hidden:";
   var GROUPKEY_D = "trinityone/groupkey:";
   var _skeys = {};
-  var GROUP_RING_MAX = 32;
+  var GROUP_RING_MAX = 12;
   var _srev = {};
   var _senvTs = {};
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -12838,16 +12838,26 @@ zoo`.split("\n");
       _skeys[groupId] = ring;
       const rev2 = _srev[groupId] || 1;
       _srev[groupId] = rev2;
-      const keys = {};
-      const wrapped = JSON.stringify(ring.map(_hex));
-      for (const pk of recips) {
-        try {
-          keys[pk] = encrypt3(wrapped, getConversationKey(churchSk, pk));
-        } catch (e) {
-        }
-      }
       _senvTs[groupId] = now();
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content: JSON.stringify({ rev: rev2, keys }) }, churchSk));
+      const build = (r) => {
+        const keys = {}, rings = {};
+        const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
+        for (const pk of recips) {
+          try {
+            const ck = getConversationKey(churchSk, pk);
+            keys[pk] = encrypt3(cur, ck);
+            rings[pk] = encrypt3(wrapped, ck);
+          } catch (e) {
+          }
+        }
+        return JSON.stringify({ rev: rev2, keys, rings });
+      };
+      let content = build(ring);
+      for (let r = ring.length; content.length > 9e5 && r > 1; ) {
+        r = Math.max(1, r >> 1);
+        content = build(ring.slice(0, r));
+      }
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk));
     },
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----

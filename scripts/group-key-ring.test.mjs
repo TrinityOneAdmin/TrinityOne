@@ -134,7 +134,7 @@ test('the console publishes a RING, not a single key', () => {
   assert.notEqual(at, -1, 'publishGroupKey missing from the shipped console bundle');
   const body = STEWARD.slice(at, at + 2000);
   assert.match(body, /ring\s*=\s*\[\s*key,\s*\.\.\.ring\s*\]/, 'rotation no longer carries the superseded keys — a block will erase the group’s history again');
-  assert.match(body, /JSON\.stringify\(ring\.map\(/, 'the envelope must wrap the whole ring');
+  assert.match(body, /JSON\.stringify\(r\.map\(/, 'the envelope must wrap the whole ring');
   assert.doesNotMatch(body, /nip44e\(_hex\(key\)/, 'the envelope is still wrapping one bare key');
 });
 
@@ -152,4 +152,59 @@ test('blocking is refused while acting as a delegated steward, and never re-keys
   const dist = DASH.slice(DASH.indexOf('const memberPubs = members.map'), DASH.indexOf('const memberPubs = members.map') + 600);
   assert.match(dist, /filter\(notBlocked\)/,
     'the key distributor hands the freshly-rotated key straight back to the blocked member on the next roster tick');
+});
+
+// ── the phones that have NOT updated ─────────────────────────────────────────────────────────────────────────
+// The ring shipped as a straight payload change: the envelope stopped carrying a bare hex key and started
+// carrying a JSON array. The compat note above reasoned about updating the member app before the console. The
+// direction that actually happens is the reverse — the console and relay update first and phones follow over
+// days — and in THAT direction an installed app parses `["ab..","cd.."]` through _unhex into garbage, fails to
+// decrypt, and _decEvt drops the message at both call sites. Every member on an un-updated phone would have
+// opened their group to an EMPTY ROOM, with no error and nothing to diagnose. AUDIT-2026-07-27.
+//
+// OLD_PARSE below is a frozen copy of the ingest that shipped. It is deliberately NOT read from the repo: it
+// stands in for APKs already installed on people's phones, which no future commit can change.
+const OLD_PARSE = (envContent, me) => {
+  const env = JSON.parse(envContent || '{}');
+  const mine = env.keys && env.keys[me.pub];
+  if (!mine) return null;
+  const plain = nip44v2.decrypt(mine, nip44v2.utils.getConversationKey(me.sk, church.pub));
+  return Uint8Array.from(String(plain).match(/.{1,2}/g).map(b => parseInt(b, 16)));   // _unhex, verbatim
+};
+
+// Build an envelope the way the FIXED console does: current key bare under `keys`, whole ring under `rings`.
+const dualEnvelope = (rev, recips, ring, at) => {
+  const keys = {}, rings = {};
+  const cur = hex(ring[0]), wrapped = JSON.stringify(ring.map(hex));
+  for (const pk of recips) {
+    const ck = nip44v2.utils.getConversationKey(church.sk, pk);
+    keys[pk] = nip44v2.encrypt(cur, ck);
+    rings[pk] = nip44v2.encrypt(wrapped, ck);
+  }
+  return { pubkey: church.pub, created_at: at || now(), tags: [['d', 'trinityone/groupkey:' + GID], ['t', 'trinityone']], content: JSON.stringify({ rev, keys, rings }) };
+};
+
+test('a phone that has NOT updated still reads the group after the console updates', () => {
+  const env = dualEnvelope(2, [church.pub, alice.pub], [K2, K1]);
+  const got = OLD_PARSE(env.content, alice);
+  assert.ok(got, 'an un-updated phone got nothing from the new envelope');
+  assert.equal(got.length, 32, 'an un-updated phone parsed the envelope into a ' + got.length + '-byte key — every encrypted group goes silently empty');
+  assert.equal(hex(got), hex(K2), 'the un-updated phone must end up with the CURRENT group key');
+});
+
+test('an updated phone still gets the whole ring from the same envelope', () => {
+  const m = memberSide(alice);
+  m.ingest(church.pub, dualEnvelope(2, [church.pub, alice.pub], [K2, K1]));
+  assert.equal(m.dec(church.pub, encMsg(K2, 'after')).content, 'after', 'the current key must open new messages');
+  assert.equal(m.dec(church.pub, encMsg(K1, 'before')).content, 'before', 'the superseded key must still open history');
+});
+
+test('the console writes BOTH shapes, and bounds the envelope', () => {
+  const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+  const at = STEWARD.indexOf('const build = (r)');
+  assert.notEqual(at, -1, 'the dual-shape envelope builder is gone — un-updated phones will go blind');
+  const body = STEWARD.slice(at, at + 700);
+  assert.match(body, /keys\[pk\]\s*=\s*\w+\(cur,/, 'the current key must still be sealed bare under `keys` for un-updated phones');
+  assert.match(body, /rings\[pk\]\s*=\s*\w+\(wrapped,/, 'the ring must be sealed under `rings`');
+  assert.match(STEWARD, /content\.length\s*>\s*(?:900000|9e5)/, 'nothing stops a large church sealing the ring past the relay’s 1 MB cap');
 });

@@ -171,12 +171,20 @@ function _ingestGroupKey(cp, e) {
     // not, and I shipped a block()-rotates-every-group change on top of that gap. AUDIT-2026-07-27.
     // The envelope now wraps a JSON array, current key first. An older console wraps a bare hex string — accept
     // both, or updating the member app before the console would blank every encrypted group in the church.
-    if (mine && sk) {
-      const plain = nip44d(mine, nip44ck(sk, e.pubkey));
+    // The console seals the ring under `rings` and the CURRENT key alone under `keys`, so an app that predates
+    // the ring still finds the bare hex it expects. Prefer the ring; fall back to whatever `keys` holds.
+    const mineRing = env.rings && pub && env.rings[pub];
+    if ((mineRing || mine) && sk) {
+      const open = (ct) => nip44d(ct, nip44ck(sk, e.pubkey));
+      const asRing = (plain) => {
+        try { const p = JSON.parse(plain); if (Array.isArray(p)) { const r = p.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)); if (r.length) return r; } } catch (x) {}
+        return /^[0-9a-f]+$/i.test(plain || '') ? [plain] : null;
+      };
       let ring = null;
-      try { const p = JSON.parse(plain); if (Array.isArray(p)) ring = p.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)); } catch (x) {}
-      _gkeys[k] = (ring && ring.length ? ring : [plain]).map(_unhex);
-    } else if (!mine) delete _gkeys[k];   // dropped from the group entirely → lose every key, current and old
+      if (mineRing) { try { ring = asRing(open(mineRing)); } catch (x) {} }
+      if (!ring && mine) { try { ring = asRing(open(mine)); } catch (x) {} }
+      if (ring && ring.length) _gkeys[k] = ring.map(_unhex);
+    } else if (!mine && !mineRing) delete _gkeys[k];   // dropped from the group entirely → lose every key, current and old
   } catch {}
 }
 // ── care key (SECURITY-AUDIT-2026-07-20 H3) ───────────────────────────────────────────────────────

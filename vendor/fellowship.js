@@ -5908,16 +5908,35 @@
     try {
       const env = JSON.parse(e.content || "{}");
       const mine = env.keys && pub && env.keys[pub];
-      if (mine && sk) {
-        const plain = decrypt(mine, getConversationKey(sk, e.pubkey));
+      const mineRing = env.rings && pub && env.rings[pub];
+      if ((mineRing || mine) && sk) {
+        const open = (ct) => decrypt(ct, getConversationKey(sk, e.pubkey));
+        const asRing = (plain) => {
+          try {
+            const p = JSON.parse(plain);
+            if (Array.isArray(p)) {
+              const r = p.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+              if (r.length) return r;
+            }
+          } catch (x) {
+          }
+          return /^[0-9a-f]+$/i.test(plain || "") ? [plain] : null;
+        };
         let ring = null;
-        try {
-          const p = JSON.parse(plain);
-          if (Array.isArray(p)) ring = p.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
-        } catch (x) {
+        if (mineRing) {
+          try {
+            ring = asRing(open(mineRing));
+          } catch (x) {
+          }
         }
-        _gkeys[k] = (ring && ring.length ? ring : [plain]).map(_unhex);
-      } else if (!mine) delete _gkeys[k];
+        if (!ring && mine) {
+          try {
+            ring = asRing(open(mine));
+          } catch (x) {
+          }
+        }
+        if (ring && ring.length) _gkeys[k] = ring.map(_unhex);
+      } else if (!mine && !mineRing) delete _gkeys[k];
     } catch {
     }
   }
