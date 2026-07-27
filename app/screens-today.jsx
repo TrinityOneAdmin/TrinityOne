@@ -969,8 +969,12 @@ function TodayScreen({ ctx }) {
         </div>
       ) : null}
 
-      {/* Serving (next slot / pending ask) -> opens the Serving overlay */}
-      {(servNext || servPendingN) ? (
+      {/* Serving (next slot / pending ask) -> opens the Serving overlay.
+          Gated on ctx.church, which is null while the app is PIN-locked. The fallback branch below renders
+          unconditionally — "Serving & events · RSVP · your rota" — so a locked phone still announced that its
+          owner belongs to a church with a rota even after the church's NAME was hidden. Hiding one string is
+          not hiding the church. AUDIT-2026-07-27. */}
+      {!ctx.church ? null : (servNext || servPendingN) ? (
         <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 22, cursor: 'pointer', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both',
           background: servPendingN ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 9%, var(--surface))',
           border: servPendingN ? '1px solid color-mix(in oklab, var(--gold) 32%, var(--line))' : '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))' }}>

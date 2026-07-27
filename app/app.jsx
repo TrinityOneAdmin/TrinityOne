@@ -523,6 +523,21 @@ function App() {
   }, []);
   const [churchSwitcher, setChurchSwitcher] = useA(churchParam === '1' || churchParam === 'follow');
   const [churchSwitcherMode, setChurchSwitcherMode] = useA(churchParam === 'follow' ? 'follow' : 'list');
+  // A 12-word restore that recovered the account but found NO church sets this flag and reloads (a church on
+  // its own relay is invisible to a fresh install). Open the scanner straight away so "scan your church's code"
+  // is the very next thing they see, rather than an app with no church and no explanation.
+  // Second half of AUDIT-2026-07-26 CRITICAL 2: do not BURN the one-shot while the wizard is covering the
+  // screen. This effect ran at mount regardless, so on a device that still looked un-onboarded it deleted the
+  // flag under the wizard and the scanner the member had just asked for never opened — on any launch, not only
+  // the lost-words one. Wait until the wizard is out of the way, then spend it.
+  useAE(() => {
+    if (showOnboarding) return;
+    let want = false;
+    try { want = localStorage.getItem('trinityone.openFollow') === '1'; } catch (e) {}
+    if (!want) return;
+    try { localStorage.removeItem('trinityone.openFollow'); } catch (e) {}   // one-shot: never trap them in it
+    setChurchSwitcherMode('follow'); setChurchSwitcher(true);
+  }, [showOnboarding]);
   // first-run prompt to follow a church — skippable (closing it lands them in the Bible). Only nudges
   // if they're not already following a real church (deep-linked joiners skip onboarding entirely).
   const promptFollowChurch = () => {
@@ -680,33 +695,68 @@ function App() {
   // running app, once there is a healthy connection — the state in which the same lookup measurably works.
   // Symptom this fixes: a restored member whose phone received a church's message notification while the app
   // insisted they belonged to no church. The relay knew; the app had asked before it could prove who it was.
+  //
+  // AUDIT-2026-07-26 CRITICAL 4 — how the first version of this became a broadcast station, measured at 12
+  // profile republishes a minute to every member of the church, forever, on the phone that had just come back
+  // from nothing and on the worst connection it will ever have. Four compounding mistakes, all fixed here:
+  //   • it read `restorePending` ONCE at mount and never again, so clearing the flag on success stopped nothing;
+  //   • setInterval does not await an async callback, so up to ~6 recoveries ran concurrently, each holding a
+  //     live 2-filter REQ for the member's entire authored corpus;
+  //   • it called saveIdentity() on every pass with no comparison, and setProfile published a fresh kind-0
+  //     each time — self-sustaining, because recoverIdentity subscribes to the member's own kind-0 and so
+  //     re-found the name it had just written. It could never converge to "nothing to do";
+  //   • its one guard, relaysHealthy(), answered true when nothing was connected (fixed in fellowship.src.js).
+  // Now: a bounded, backing-off chain of single-flight attempts (a recursive timeout cannot overlap itself),
+  // stopping the moment the job is done. If it runs out of attempts the FLAG STAYS SET, so the next launch —
+  // or the next real reconnect, which re-runs this effect via connTick — picks the job up again.
   useAE(() => {
-    let pending = false;
-    try { pending = localStorage.getItem('trinityone.restorePending') === '1'; } catch (e) {}
-    if (!pending) return;
+    const readPending = () => { try { return localStorage.getItem('trinityone.restorePending') === '1'; } catch (e) { return false; } };
+    if (!readPending()) return;
     const F = window.Fellowship;
     if (!F || !F.recoverIdentityRetry) return;
-    let stop = false;
-    const attempt = async () => {
+    let stop = false, t = null, tries = 0, waits = 0;
+    const DELAYS = [0, 4000, 8000, 15000, 30000, 60000, 120000];   // ~4 minutes of trying, then leave it for next launch
+    const clear = () => { if (t) { clearTimeout(t); t = null; } };
+    const halt = () => { stop = true; clear(); };
+    const schedule = (ms) => { if (stop) return; clear(); t = setTimeout(run, ms); };
+    // EXHAUSTED, ON A CONNECTION THAT WORKED, IS AN ANSWER. The flag used to be left armed whenever nothing
+    // came back, so the whole four-minute chain re-ran on every launch for ever. That was survivable while the
+    // name lived in kind-0 (almost every restore found something), but Stage 2 removed it: a member who
+    // belonged to no church has nothing to recover, by definition, and would have re-run this for the life of
+    // the install. The dead-connection case that the flag exists for is handled separately below — we only get
+    // here after relaysHealthy() said yes and we asked seven times over four minutes. AUDIT-2026-07-27.
+    const next = () => {
+      if (tries >= DELAYS.length) { try { localStorage.removeItem('trinityone.restorePending'); } catch (e) {} halt(); return; }
+      schedule(DELAYS[tries++]);
+    };
+    const run = async () => {
       if (stop) return;
-      if (!F.myPubkey || !(F.relaysHealthy && F.relaysHealthy())) return;   // wait for a key AND a live socket
+      if (!readPending()) return halt();      // another route (the restore pane, an earlier pass) already finished
+      if (!F.myPubkey || !(F.relaysHealthy && F.relaysHealthy())) {
+        // not connected yet — that is not a failed attempt, so don't spend one; just look again shortly.
+        if (waits++ < 30) schedule(4000); else halt();
+        return;
+      }
       let found = { churches: [], name: '' };
-      try { found = await F.recoverIdentityRetry(3, 3000); } catch (e) { return; }
+      try { found = await F.recoverIdentityRetry(3, 3000); } catch (e) { found = { churches: [], name: '' }; }
       if (stop) return;
-      if (found.name) { try { saveIdentity({ name: found.name }); } catch (e) {} }
+      // Adopt a recovered name ONLY when it isn't already ours. saveIdentity → setProfile publishes a kind-0 to
+      // every relay and it reaches the whole church, so an unconditional call here is the storm above.
+      const mine = ((F.myProfile || {}).name || '').trim();
+      if (found.name && found.name.trim() && found.name.trim() !== mine) { try { saveIdentity({ name: found.name }); } catch (e) {} }
       if (found.churches.length) {
         const list = found.churches.map(cp => { const np = F.toNpub ? F.toNpub(cp) : cp; return { id: np, npub: np, name: '', initials: '', sub: 'Followed' }; });
         setChurches(prev => [...prev, ...list.filter(l => !prev.find(p => p.id === l.id))]);
         setActiveChurch(list[0].id);
         try { lsSet('trinityone.activeChurch', list[0].id); } catch (e) {}
       }
-      // Clear only once we actually recovered something, so a member who restored on a dead connection is
-      // retried on the next launch rather than silently left church-less forever.
-      if (found.churches.length || found.name) { try { localStorage.removeItem('trinityone.restorePending'); } catch (e) {} }
+      // Done once we recovered something. Otherwise leave the flag set — a member who restored on a dead
+      // connection is retried on the next launch rather than silently left church-less forever.
+      if (found.churches.length || found.name) { try { localStorage.removeItem('trinityone.restorePending'); } catch (e) {} return halt(); }
+      next();
     };
-    const t = setInterval(attempt, 4000);
-    attempt();
-    return () => { stop = true; clearInterval(t); };
+    next();
+    return () => { halt(); };
   }, [connTick]);
   // scope outgoing chat to the active church, so its steward sees who's participating (Members)
   useAE(() => {
@@ -1308,6 +1358,7 @@ function App() {
     openInvite: () => setIdSheet('invite'),
     openShareApp: () => setIdSheet('shareapp'),
     openRelays: () => setIdSheet('relays'),
+    openMovePhone: () => setIdSheet('movephone'),
     openWallet: () => { if (WALLET_ENABLED) setWalletSheet(true); },
     openNewIdentity: () => setNewId(true),
     // library drill-ins
@@ -1316,7 +1367,18 @@ function App() {
     openBook: (b) => setBook(b),
     // multi-church
     churches, activeChurch,
-    church: churches.find(c => c.id === activeChurch) || churches[0] || null,
+    // LOCKED ⇒ NO CHURCH ON SCREEN. With a PIN set and not yet entered, the app is supposed to present as a
+    // plain Bible reader. It did not: Today still drew the church's name and its serving cards, so a seized or
+    // borrowed phone announced which congregation its owner belongs to before anyone typed anything — verified
+    // in a browser, on a cold boot, with the gate up AND after "read the Bible without unlocking".
+    // Nulling here is the single point every church-derived screen reads, so the header, the serving cards and
+    // the care/safety subscriptions all fall away together rather than one string at a time.
+    //
+    // What this does NOT do: the phone still STORES the church list and its cached documents in the clear, so
+    // anyone examining the device finds the church regardless. This defeats a glance — a checkpoint, someone
+    // picking the phone up — and nothing more. The claim that a locked app reveals no church belongs to the
+    // encrypt-at-rest work, not to this. AUDIT-2026-07-27.
+    church: commLocked ? null : (churches.find(c => c.id === activeChurch) || churches[0] || null),
     openChurchSwitcher: (mode) => { setChurchSwitcherMode(mode === 'follow' ? 'follow' : 'list'); setChurchSwitcher(true); },
     setActiveChurch: (id) => { setActiveChurch(id); lsSet('trinityone.activeChurch', id); },
     addChurch: (c) => { setChurches(cs => cs.find(x => x.id === c.id) ? cs : [...cs, c]); setActiveChurch(c.id); lsSet('trinityone.activeChurch', c.id); },
@@ -1377,15 +1439,30 @@ function App() {
     retryConnection: () => bumpConn(x => x + 1),   // force a fresh relay re-subscribe (manual "Try again")
     // steward rule: this church asks members to use a real first + last name (two words)
     requireFullName: !!(((churches.find(c => c.id === activeChurch) || {}).rules) || {}).fullName,
-    canDMPeer: (peer) => {   // peer is a hex pubkey
-      const minors = safeguard.minors || [], approved = safeguard.approved || [], guardians = safeguard.guardians || {};
+    // AUDIT-2026-07-27. This used to read the church's list of children to decide whether to offer a DM. That
+    // list is no longer served to ordinary members — it was a cleartext roll of a congregation's minors, one
+    // self-signed publish away from any stranger — so `safeguard.minors` is empty for everyone but stewards.
+    //
+    // What survives, and why it is enough: the RELAY enforces safeguarding on both read and write
+    // (safeguardAllows), so nothing here is load-bearing for safety. This is a UI courtesy, and it still works
+    // in the direction that matters most — a CHILD's own app knows it is a child (from its sealed clearance)
+    // and knows which adults are cleared, so it never offers a child an unsafe conversation.
+    //
+    // The direction we deliberately gave up is an ordinary adult locally knowing that a peer is a child: that
+    // knowledge IS the list, and no design lets an unapproved adult have it without leaking it. Those DMs are
+    // refused by the relay, and the send path reports that honestly rather than failing silently.
+    canDMPeer: (peer) => {
+      const approved = safeguard.approved || [], guardians = safeguard.guardians || {};
       const me = (window.Fellowship && window.Fellowship.myPubkey) || null;
       const churchPub = (window.Fellowship && window.Fellowship.churchPub) || null;
       if (peer && peer === churchPub) return true;   // anyone may message the church/steward
       const linked = !!(peer && me && (((guardians[peer] || []).includes(me)) || ((guardians[me] || []).includes(peer))));
       if (linked) return true;   // v2: a parent may always message their own child (and vice versa)
       if (safeguard.isMinor && !(peer && approved.includes(peer))) return false;   // a child may only DM a cleared adult
-      if (peer && minors.includes(peer) && !(me && approved.includes(me))) return false; // only a cleared adult may DM a child
+      // A steward still holds the list, so keep the old check for them — it costs nothing and keeps the
+      // console-side experience unchanged.
+      const minors = safeguard.minors || [];
+      if (minors.length && peer && minors.includes(peer) && !(me && approved.includes(me))) return false;
       return true;
     },
     // groups this member may post events for (the steward named them a leader)
@@ -1478,7 +1555,11 @@ function App() {
 
   const screens = {
     today: <TodayScreen ctx={ctx} />,
-    read: readView === 'plans' ? <PlansScreen ctx={ctx} /> : <ReadScreen ctx={ctx} />,
+    // A missing Bible now costs you the READER, not the whole app. Until 2026-07-27 the entire product was
+    // wrapped in `Bible.loaded ? … : <EmptyState/>`, so a module download that failed or had not finished took
+    // Today, Community, groups, Care and the emergency safety check with it. The empty state belongs here.
+    read: !Bible.loaded ? <EmptyState loading={Bible.loading} error={Bible._error} onBrowse={() => setStore(true)} />
+      : readView === 'plans' ? <PlansScreen ctx={ctx} /> : <ReadScreen ctx={ctx} />,
     chat: <ChatScreen ctx={ctx} />,
     library: <LibraryScreen ctx={ctx} />,
   };
@@ -1496,7 +1577,13 @@ function App() {
   return (
     <div ref={wrapRef} className={cx('trinity', t.dark && 'dark')} style={{ ...rootStyle, ...(fullscreen ? { position: 'fixed', inset: 0 } : { transformOrigin: 'center center' }) }}>
       <PhoneFrame bare={fullscreen}>
-        {Bible.loaded ? (
+        {/* The app no longer waits for a Bible to exist. This was `Bible.loaded ? <the entire app> :
+            <EmptyState/>`, so a failed or not-yet-finished module download cost the member Today, Community,
+            their groups, Care AND the emergency safety check — everything — and left a reader empty state as
+            the whole product. For a congregation that uses this to ask for help, losing the app because a
+            3 MB download failed is disproportionate. The Read tab still shows EmptyState on its own (see
+            screens-read), which is where a missing Bible actually belongs. AUDIT-2026-07-27. */}
+        {(
           <React.Fragment>
             <UpdateBanner ctx={ctx} />
             {desktop ? (
@@ -1578,6 +1665,7 @@ function App() {
             <InviteSheet open={idSheet === 'invite'} onClose={() => setIdSheet(null)} identity={identity} ctx={ctx} />
             <ShareAppSheet open={idSheet === 'shareapp'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <RelaysSheet open={idSheet === 'relays'} onClose={() => setIdSheet(null)} ctx={ctx} />
+            <MovePhoneSheet open={idSheet === 'movephone'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <NewIdentitySheet open={newId} identity={identity} onClose={() => setNewId(false)} onCreate={saveIdentity} ctx={ctx} />
             {WALLET_ENABLED && window.WalletSheet ? <WalletSheet open={walletSheet} onClose={() => setWalletSheet(false)} ctx={ctx} /> : null}
             <ChatRoom group={group} open={!!group && !desktop} onClose={() => setGroup(null)} ctx={ctx} />
@@ -1591,9 +1679,6 @@ function App() {
 
             <Toast msg={toastMsg} />
           </React.Fragment>
-        ) : (
-
-          <EmptyState loading={Bible.loading} error={Bible._error} onBrowse={() => setStore(true)} />
         )}
 
         {/* module store — available in both the loaded and first-run states */}

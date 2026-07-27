@@ -7,8 +7,15 @@
 //
 // Exposes window.TrinityIdentity and dispatches a 'trinity-identity' event when it changes.
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
-import { getPublicKey } from 'nostr-tools/pure';
+import { getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+// deep subpath, NOT the `nostr-tools` barrel. AUDIT-2026-07-26 S7: `import { nip44 } from 'nostr-tools'` pulled
+// the whole library into this bundle for one function — vendor/identity.js went 282 KB → 409 KB, and a full
+// relay/WebSocket/fetch/NIP-05/LNURL/wallet stack became resident in the boot-critical module that owns the 12
+// words. None of it was called. +127 KB on first launch is the opposite of the thin-pipe test. Every other
+// import in this file was already a subpath; so is src/fellowship.src.js:8.
+import { v2 as nip44v2 } from 'nostr-tools/nip44';
+import { sha256 } from '@noble/hashes/sha2.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import qrcode from 'qrcode-generator';
@@ -24,6 +31,36 @@ const COLORS = ['#5E8C6A', '#C2913A', '#C25A38', '#5360D6', '#1F9488', '#C24B7A'
 let memMnemonic = null;   // in-memory fallback (private mode / localStorage unavailable)
 let webPersisted = false; // true once the seed is saved in THIS browser's localStorage
 let sessionMnemonic = null;   // seed decrypted from the PIN blob, held in memory for THIS session only (never re-persisted as plaintext)
+
+// ── phone-to-phone transfer (see beginTransfer/sealTransfer/acceptTransfer below) ──
+const XFER_PREFIX = 'trinityone:xfer:';
+let xferSk = null;   // the RECEIVING phone's throwaway private key. Memory only — never persisted, cleared after one use.
+let xferPending = null;   // { mnemonic, sas, npub } decrypted but NOT yet adopted — waiting on the member's check
+
+// The check code both phones display.
+//
+// WHAT IT REPLACED, AND WHY (AUDIT-2026-07-26 S5). The first version was four characters derived from the
+// receiving phone's public key alone: `A[h[i] % 32]` × 4 = exactly 2^20, as a pure function of a value that
+// travels in the open. That is precomputable — grind ~5M keypairs once, index them by code, and you hold a
+// keypair for every possible code forever. A hostile member could read the four characters off the new phone's
+// screen, hold up a pre-ground QR that collides with them, and the old phone would display the SAME four
+// characters while sealing the member's 12 words to the attacker's key. Both screens agreed, so the member was
+// told everything was fine. The check was the entire integrity story of the transfer, and it was free to forge.
+//
+// This one is computed over the WHOLE TRANSCRIPT — the receiving key, the sending key, and the ciphertext —
+// so it does not exist until both phones have actually exchanged, and neither side can steer it: the
+// ciphertext carries a fresh random nonce from the sealing phone. Forging a match now means finding a
+// 40-bit collision against a value you cannot see until the exchange has already happened.
+//
+// 40 bits, not 20: eight characters from a 32-letter alphabet. The alphabet divides 256 exactly, so `% 32`
+// stays uniform, and 0/O and 1/I are left out because these are read aloud across a room.
+function xferSas(recvPubHex, sendPubHex, ct) {
+  const A = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const h = sha256(new TextEncoder().encode('trinityone/xfer/sas/v2\n' + String(recvPubHex) + '\n' + String(sendPubHex) + '\n' + String(ct)));
+  let s = '';
+  for (let i = 0; i < 8; i++) s += A[h[i] % A.length];
+  return s.slice(0, 4) + ' ' + s.slice(4);   // two groups of four — easier to read out and to compare at a glance
+}
 
 // ── Community-PIN crypto — REUSED verbatim from the steward console (src/steward.src.js): PBKDF2
 // (SHA-256, 210 000 iterations) → AES-GCM-256. No home-rolled crypto; identical blob shape {v,salt,iv,ct}. ──
@@ -208,6 +245,68 @@ window.TrinityIdentity = {
   },
   // the current identity's 12-word recovery phrase (native: secure store; web: ephemeral)
   async exportMnemonic() { return secureGet(); },
+
+  // ── PHONE TO PHONE ────────────────────────────────────────────────────────────────────────────────
+  // Moving to a new phone used to mean reading 12 words off one screen and typing them into another.
+  // This carries them across directly, and THE SECRET NEVER APPEARS ON EITHER SCREEN.
+  //
+  // The direction is deliberately reversed. The NEW phone shows a throwaway PUBLIC key; the OLD phone scans
+  // it and encrypts the words to it (NIP-44, the same versioned encryption used everywhere else here). Anyone
+  // photographing either screen gets a public key or a ciphertext — neither is worth anything. Only the new
+  // phone holds the matching private key, and that key lives in memory for the length of the transfer only.
+  //
+  // We carry the MNEMONIC, not the raw signing key. NIP-49 is the standard for moving a key under a
+  // passphrase, but it encrypts the 32 key bytes — a phone given only those could never show its owner their
+  // 12 words again, so the account could never be backed up from it. The words are the recoverable thing.
+  //
+  // The check code is a short authentication string over the whole exchange (see xferSas above). It appears on
+  // BOTH phones only once they have swapped codes, and the member compares them before the account is adopted.
+  // Nothing is shown before that, because before that there is nothing either phone could honestly vouch for.
+  beginTransfer() {
+    xferSk = generateSecretKey();
+    xferPending = null;
+    return { qr: XFER_PREFIX + getPublicKey(xferSk) };
+  },
+  // OLD phone: seal this device's words to the new phone's scanned key.
+  async sealTransfer(scanned) {
+    const pub = String(scanned || '').trim().replace(XFER_PREFIX, '');
+    if (!/^[0-9a-f]{64}$/i.test(pub)) throw new Error('That doesn’t look like a TrinityOne transfer code.');
+    const m = await secureGet();
+    if (!m) throw new Error('This phone’s account is locked — unlock it first, then try again.');
+    const sk = generateSecretKey();   // throwaway SENDER key too, so the QR carries no hint of who this is
+    const c = nip44v2.encrypt(m, nip44v2.utils.getConversationKey(sk, pub));
+    const s = getPublicKey(sk);
+    return { qr: JSON.stringify({ v: 1, t: 'trinityone/xfer', s, c }), code: xferSas(pub, s, c) };
+  },
+  // NEW phone: open the sealed reply. This decrypts and validates, then STOPS — it does not adopt the account.
+  // The member has to see the check code match on both phones first, which is the entire reason there is one;
+  // the previous version adopted silently the moment a payload decrypted, so a mismatched code arrived too
+  // late to protect anything, and nothing ever showed them WHICH account they had just become.
+  async acceptTransfer(scanned) {
+    if (!xferSk) throw new Error('Start the transfer on this phone first.');
+    let o = null;
+    try { o = JSON.parse(String(scanned || '')); } catch (e) { o = null; }
+    if (!o || o.t !== 'trinityone/xfer' || !/^[0-9a-f]{64}$/i.test(o.s || '') || !o.c) throw new Error('That QR isn’t a TrinityOne transfer.');
+    let m = '';
+    try { m = nip44v2.decrypt(o.c, nip44v2.utils.getConversationKey(xferSk, o.s)); }
+    catch (e) { throw new Error('Couldn’t read that code — it was meant for a different phone.'); }
+    m = String(m || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    // Validate BEFORE we show a check code and an account. A payload that opened but carries nothing usable is
+    // a failure to report now, not after the member has confirmed it.
+    if (!validateMnemonic(m, wordlist)) throw new Error('That code opened, but it didn’t carry an account.');
+    xferPending = { mnemonic: m, sas: xferSas(getPublicKey(xferSk), o.s, o.c), npub: deriveProfile(m).npub };
+    return { sas: xferPending.sas, npub: xferPending.npub };
+  },
+  // NEW phone: the member has compared the code on both screens and says they match. Only now do we become
+  // that account. One-shot in both directions — the throwaway key and the held words are dropped here.
+  async confirmTransfer() {
+    if (!xferPending) throw new Error('Nothing to confirm — start the transfer again.');
+    const m = xferPending.mnemonic;
+    xferPending = null;
+    xferSk = null;   // a scanned reply can never be replayed into a second device
+    return window.TrinityIdentity.importMnemonic(m);   // validates the phrase again; clears any PIN
+  },
+  endTransfer() { xferSk = null; xferPending = null; },
 
   // restore an identity from a pasted 12-word BIP-39 phrase. RECOVERY ALWAYS WINS: importing clears any
   // community-PIN lock and restores the plaintext seed, so a forgotten PIN can NEVER trap the key —

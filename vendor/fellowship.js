@@ -5756,12 +5756,15 @@
       return null;
     }
   }
+  var MEMBER_D = "trinityone/member:";
   var GROUP_D = "trinityone/group:";
   var CATEGORY_D = "trinityone/category:";
   var GROUPKEY_D = "trinityone/groupkey:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
   var MEDIAKEY_D = "trinityone/mediakey:";
+  var NAMEKEY_D = "trinityone/namekey:";
+  var NAME_D = "trinityone/name:";
   var CAREKEY_D = "trinityone/carekey:";
   var PINSERMON_D = "trinityone/pinsermon:";
   async function _sha256hex(u82) {
@@ -5907,8 +5910,35 @@
     try {
       const env = JSON.parse(e.content || "{}");
       const mine = env.keys && pub && env.keys[pub];
-      if (mine && sk) _gkeys[k] = _unhex(decrypt(mine, getConversationKey(sk, e.pubkey)));
-      else if (!mine) delete _gkeys[k];
+      const mineRing = env.rings && pub && env.rings[pub];
+      if ((mineRing || mine) && sk) {
+        const open = (ct) => decrypt(ct, getConversationKey(sk, e.pubkey));
+        const asRing = (plain) => {
+          try {
+            const p = JSON.parse(plain);
+            if (Array.isArray(p)) {
+              const r = p.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+              if (r.length) return r;
+            }
+          } catch (x) {
+          }
+          return /^[0-9a-f]+$/i.test(plain || "") ? [plain] : null;
+        };
+        let ring = null;
+        if (mineRing) {
+          try {
+            ring = asRing(open(mineRing));
+          } catch (x) {
+          }
+        }
+        if (!ring && mine) {
+          try {
+            ring = asRing(open(mine));
+          } catch (x) {
+          }
+        }
+        if (ring && ring.length) _gkeys[k] = ring.map(_unhex);
+      } else if (!mine && !mineRing) delete _gkeys[k];
     } catch {
     }
   }
@@ -6005,13 +6035,15 @@
   function _decEvt(cp, e) {
     if (!e.tags || !e.tags.some((t) => t[0] === "enc")) return e;
     const gid = (e.tags.find((t) => t[0] === "t" && t[1] !== NET) || [])[1];
-    const key = gid && _gkeys[_gkKey(cp, gid)];
-    if (!key) return null;
-    try {
-      return { ...e, content: decrypt(e.content, key) };
-    } catch {
-      return null;
+    const ring = gid && _gkeys[_gkKey(cp, gid)];
+    if (!ring || !ring.length) return null;
+    for (const key of ring) {
+      try {
+        return { ...e, content: decrypt(e.content, key) };
+      } catch (x) {
+      }
     }
+    return null;
   }
   var NET = "trinityone";
   function scheduleVisible(list) {
@@ -6049,6 +6081,56 @@
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function churchRelays() {
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
+  }
+  function _restoreFold() {
+    const seen = /* @__PURE__ */ new Map();
+    let name = "", nameAt = 0;
+    return {
+      add(e) {
+        if (!e) return;
+        if (e.kind === 0) {
+          if ((e.created_at || 0) < nameAt) return;
+          nameAt = e.created_at || 0;
+          try {
+            name = (JSON.parse(e.content) || {}).name || name;
+          } catch (x) {
+          }
+          return;
+        }
+        if (!Array.isArray(e.tags)) return;
+        const d = _dtag(e);
+        if (d.startsWith(NAME_D)) {
+          if ((e.created_at || 0) < nameAt || !sk) return;
+          const ct = _nameCipher(e.content, "m");
+          if (!ct) return;
+          try {
+            const o = JSON.parse(decrypt(ct, getConversationKey(sk, pub)));
+            if (o && typeof o.name === "string" && o.name) {
+              name = o.name.slice(0, 40);
+              nameAt = e.created_at || 0;
+            }
+          } catch (x) {
+          }
+          return;
+        }
+        if (!d.startsWith(MEMBER_D)) return;
+        const cp = d.slice(MEMBER_D.length);
+        if (!cp) return;
+        let leftBody = false;
+        try {
+          leftBody = !!(JSON.parse(e.content) || {}).left;
+        } catch (x) {
+        }
+        const left = (e.tags || []).some((t) => t[0] === "deleted" && t[1] === "1") || leftBody;
+        const at = e.created_at || 0;
+        const prev = seen.get(cp);
+        if (!prev || at >= prev.at) seen.set(cp, { at, left });
+      },
+      result() {
+        const churches = [...seen.entries()].filter(([, v]) => !v.left).sort((a, b) => b[1].at - a[1].at).map(([cp]) => cp);
+        return { churches, name };
+      }
+    };
   }
   var _churchRelays = /* @__PURE__ */ new Map();
   var _churchList = /* @__PURE__ */ new Map();
@@ -6224,7 +6306,8 @@
       onevent(e) {
         try {
           const m = JSON.parse(e.content);
-          profiles[e.pubkey] = { name: m.name || m.display_name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
+          const had = profiles[e.pubkey] || {};
+          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
           saveProfiles();
           window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
         } catch {
@@ -6240,6 +6323,8 @@
     });
   }
   var PROFILE_KEY = "trinityone.profile";
+  var _profilePubFor = "";
+  var _profilePubBody = "";
   var PROFILES_KEY = "trinityone.profiles";
   try {
     const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}");
@@ -6357,6 +6442,126 @@
       hub.dirty = true;
     }
   };
+  var RESEAT_D = "trinityone/reseat:";
+  var _reseatOld = /* @__PURE__ */ new Map();
+  var _reseatAt = /* @__PURE__ */ new Map();
+  var _nameKeys = /* @__PURE__ */ new Map();
+  var _nameKeyTs = /* @__PURE__ */ new Map();
+  var _sealedNames = /* @__PURE__ */ new Map();
+  var _sealedMine = /* @__PURE__ */ new Map();
+  function _ingestNameKey(cp, e) {
+    if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
+    if ((e.created_at || 0) < (_nameKeyTs.get(cp) || 0)) return;
+    if (!sk) return;
+    try {
+      const env = JSON.parse(e.content || "{}");
+      const mine = env.keys && pub && env.keys[pub];
+      if (!mine) return;
+      const r = JSON.parse(decrypt(mine, getConversationKey(sk, e.pubkey)));
+      if (!Array.isArray(r)) return;
+      _nameKeyTs.set(cp, e.created_at || 0);
+      _nameKeys.set(cp, r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x)).map(_unhexF));
+    } catch (x) {
+    }
+  }
+  var _unhexF = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
+  function _ringId(cp) {
+    const k = (_nameKeys.get(cp) || [])[0];
+    return k ? [...k.slice(0, 6)].map((b) => b.toString(16).padStart(2, "0")).join("") : "";
+  }
+  function _replaySealedNames(cp, hub) {
+    if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
+    let n = 0;
+    for (const e of hub.buf.values()) {
+      if (_dtag(e) === NAME_D + cp && _openSealedName(cp, e.pubkey, e.content)) n++;
+    }
+    if (n) {
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: null } }));
+      } catch (x) {
+      }
+    }
+  }
+  function _sealNameDoc(cp, nm, congKey) {
+    if (!sk || !cp) return "";
+    const body = JSON.stringify({ name: nm });
+    let c = "", m = "";
+    try {
+      c = congKey ? encrypt(body, congKey) : encrypt(body, getConversationKey(sk, cp));
+    } catch (e) {
+      return "";
+    }
+    try {
+      m = encrypt(body, getConversationKey(sk, pub));
+    } catch (e) {
+    }
+    return JSON.stringify({ c, m });
+  }
+  function _nameCipher(content, which) {
+    const raw = String(content || "");
+    if (!raw.startsWith("{")) return which === "c" ? raw : "";
+    try {
+      const o = JSON.parse(raw);
+      return o && typeof o[which] === "string" ? o[which] : "";
+    } catch (x) {
+      return "";
+    }
+  }
+  function _openSealedName(cp, author, content) {
+    const ct = _nameCipher(content, "c");
+    if (!ct) return "";
+    for (const k of _nameKeys.get(cp) || []) {
+      try {
+        const o = JSON.parse(decrypt(ct, k));
+        if (o && typeof o.name === "string") {
+          const nm = o.name.slice(0, 40);
+          _sealedNames.set(cp + "|" + author, nm);
+          if (!profiles[author]) profiles[author] = {};
+          profiles[author].name = nm;
+          try {
+            saveProfiles();
+          } catch (x) {
+          }
+          return nm;
+        }
+      } catch (x) {
+      }
+    }
+    return "";
+  }
+  var _reseatNamed = /* @__PURE__ */ new Set();
+  function _noteReseat(cp, e) {
+    if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
+    if ((e.created_at || 0) < (_reseatAt.get(cp) || 0)) return;
+    _reseatAt.set(cp, e.created_at || 0);
+    const s = /* @__PURE__ */ new Set();
+    let mine = "";
+    try {
+      for (const p of (JSON.parse(e.content) || {}).pairs || []) {
+        if (!p || !p.old || !p.new || p.old === p.new) continue;
+        s.add(String(p.old).toLowerCase());
+        if (pub && String(p.new).toLowerCase() === pub) mine = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+      }
+    } catch (x) {
+    }
+    _reseatOld.set(cp, s);
+    if (!mine || !pub) return;
+    const key = cp + "|" + pub;
+    if (_reseatNamed.has(key)) return;
+    _reseatNamed.add(key);
+    setTimeout(() => {
+      const have = ((window.Fellowship.myProfile || profiles[pub] || {}).name || "").trim();
+      if (have) return;
+      try {
+        window.Fellowship.setProfile({ name: mine });
+      } catch (x) {
+      }
+    }, 0);
+  }
+  function _superseded(cp, pubHex) {
+    const s = _reseatOld.get(cp);
+    return !!(s && s.has(pubHex));
+  }
   var ADMITTED_D = "trinityone/admitted:";
   var ADMITTED_OK_LS = "trinityone.admitted.";
   var _admittedDone = /* @__PURE__ */ new Set();
@@ -6472,6 +6677,16 @@
     for (const e of hub.buf.values()) {
       if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content);
     }
+    for (const e of hub.buf.values()) {
+      if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e);
+    }
+    for (const e of hub.buf.values()) {
+      if (_dtag(e) === "trinityone/namekey:" + cp) _ingestNameKey(cp, e);
+    }
+    for (const e of hub.buf.values()) {
+      const d0 = _dtag(e);
+      if (d0 === "trinityone/name:" + cp) _openSealedName(cp, e.pubkey, e.content);
+    }
     return hub;
   }
   function _docsHubOpen(hub) {
@@ -6491,11 +6706,38 @@
         hub.dirty = true;
         _hubCursor(hub, e);
         _docsHubSaveSoon(hub);
+        if (d === "trinityone/namekey:" + cp) {
+          _ingestNameKey(cp, e);
+          setTimeout(() => {
+            try {
+              window.Fellowship.syncSealedNames([cp]);
+            } catch (x) {
+            }
+          }, 0);
+          for (const e2 of hub.buf.values()) {
+            if (_dtag(e2) === "trinityone/name:" + cp) _openSealedName(cp, e2.pubkey, e2.content);
+          }
+          try {
+            window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: null } }));
+          } catch (x) {
+          }
+        } else if (d === "trinityone/name:" + cp) {
+          if (_openSealedName(cp, e.pubkey, e.content)) {
+            try {
+              window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
+            } catch (x) {
+            }
+          }
+        }
         if (_absorbRoster(cp, d, e)) {
           for (const e2 of hub.buf.values()) {
             const d2 = _dtag(e2);
             if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2);
             else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2);
+            else if (d2 === NAMEKEY_D + cp) {
+              _ingestNameKey(cp, e2);
+              _replaySealedNames(cp, hub);
+            }
           }
           for (const h of [...hub.handlers]) {
             try {
@@ -6507,6 +6749,7 @@
           return;
         }
         if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);
+        if (d === RESEAT_D + cp) _noteReseat(cp, e);
         if (d.startsWith(GROUPKEY_D)) {
           _ingestGroupKey(cp, e);
           return;
@@ -6674,7 +6917,6 @@
   function _memHubOpen(hub) {
     if (hub.closer) return;
     const cp = hub.cp;
-    const MEMBER_D2 = "trinityone/member:";
     const since = _hubSince(hub);
     const filters = [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }];
     if (since) filters[1].since = since;
@@ -6691,7 +6933,7 @@
         const m = hub.byPub.get(e.pubkey) || { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name: (profiles[e.pubkey] || {}).name || "", nip05: (profiles[e.pubkey] || {}).nip05 || "", picture: (profiles[e.pubkey] || {}).picture || "", hidden: !!(profiles[e.pubkey] || {}).hidden, joined: 0, lastTs: 0, msgs: 0 };
         if (e.kind === 30078) {
           const d = _dtag(e);
-          if (d.indexOf(MEMBER_D2) !== 0) {
+          if (d.indexOf(MEMBER_D) !== 0) {
             _memHubSaveSoon(hub);
             return;
           }
@@ -6791,6 +7033,10 @@
         const d = _dtag(e);
         if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e);
         else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e);
+        else if (d === NAMEKEY_D + hub.cp) {
+          _ingestNameKey(hub.cp, e);
+          _replaySealedNames(hub.cp, hub);
+        }
       }
     }
     try {
@@ -6994,17 +7240,24 @@
     CANONICAL_RELAYS,
     toPub,
     // validate/normalise an npub-or-hex → 64-hex (or null on a bad bech32 checksum); used by the UI to reject a mistyped church code
-    // true if every relay we've opened is still connected. The member app's 90s reconnect tick only re-subscribes when
-    // this is FALSE — so a healthy socket never triggers the full re-REQ storm (perf #2). Mirrors the steward console.
+    // The member app's 90s reconnect tick only re-subscribes when this is FALSE — so a healthy socket never
+    // triggers the full re-REQ storm (perf #2). Mirrors the steward console.
+    // "Is there a live socket?" — and it has to MEAN that. The first version asked the opposite question ("is any
+    // relay explicitly reported as down?") and answered `true` for a relay that had never been dialled at all,
+    // because pool.listConnectionStatus() only contains relays it has opened, so `st.get(url)` was `undefined`.
+    // It also returned `true` on exception. Every caller reads it as "we're connected, go ahead", so on a phone
+    // with no connection whatsoever it green-lit the restore-recovery loop (AUDIT-2026-07-26 CRITICAL 4) and
+    // suppressed the 90s reconnect beat — the two places that exist to recover exactly that state.
+    // Now: at least one of the relays we want must actually be connected.
     relaysHealthy() {
       try {
         const st = pool.listConnectionStatus();
-        for (const url of churchRelays()) {
-          if (st.get(url) === false) return false;
-        }
-        return true;
+        const want = churchRelays();
+        if (!want.length) return true;
+        for (const url of want) if (st.get(url) === true) return true;
+        return false;
       } catch (e) {
-        return true;
+        return false;
       }
     },
     myPubkey: null,
@@ -7386,7 +7639,7 @@
       const hub = _memHub(cp);
       const tally = () => {
         let n = 0;
-        for (const v of hub.byPub.values()) if (v.msgs > 0 || v.joined) n++;
+        for (const v of hub.byPub.values()) if ((v.msgs > 0 || v.joined) && !_superseded(cp, v.pubkey)) n++;
         saveCountCache(cp, n);
         cb(n);
       };
@@ -7409,28 +7662,34 @@
       const profAuthors = /* @__PURE__ */ new Set();
       let profTimer = null;
       const emit = (done) => {
-        const visible = [...hub.byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+        const visible = [...hub.byPub.values()].filter((m) => !m.hidden && (m.joined || m.msgs > 0) && !_superseded(cp, m.pubkey)).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         if (!hub.eosed && !done && !visible.length) return;
         saveMembersCache(cp, [...hub.byPub.values()]);
         onMembers(visible, !!done);
       };
       const refreshProfiles = () => {
         profTimer = null;
-        const authors = [...profAuthors].filter((pk) => !(profiles[pk] && profiles[pk].name));
+        const authors = [...profAuthors].filter((pk) => !(pk in profiles));
         if (!authors.length) return;
         try {
           profSub && profSub.close();
         } catch {
         }
         profSub = pool.subscribeMany(churchRelays(), [{ kinds: [0], authors }], {
+          // MERGE, and never let an empty name win. A kind-0 carries no name since Stage 2, and this overwrote
+          // the whole cached entry AND the roster row — so a profile arriving after _openSealedName had resolved
+          // someone flipped them straight back to Anonymous. Worse than the sibling in _flushProfiles, because
+          // this is the roster the member app actually renders.
           onevent(e) {
             try {
               const meta = JSON.parse(e.content);
-              profiles[e.pubkey] = { name: meta.name || meta.display_name || "", picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
+              const had = profiles[e.pubkey] || {};
+              const nm = meta.name || meta.display_name || had.name || "";
+              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
               saveProfiles();
               const m = hub.byPub.get(e.pubkey);
               if (m) {
-                m.name = profiles[e.pubkey].name;
+                if (nm) m.name = nm;
                 m.picture = profiles[e.pubkey].picture;
                 m.nip05 = profiles[e.pubkey].nip05;
                 m.hidden = !!meta.hidden;
@@ -7446,7 +7705,7 @@
         });
       };
       const ensureProfile = (pk) => {
-        if (profAuthors.has(pk) || profiles[pk] && profiles[pk].name) return;
+        if (profAuthors.has(pk) || pk in profiles) return;
         profAuthors.add(pk);
         if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);
       };
@@ -7488,6 +7747,40 @@
     removeRelay(url) {
       return window.Fellowship.setRelays(window.Fellowship.relays.filter((r) => r !== url));
     },
+    // Resolve a church's memorable relay NAME to the relay's CURRENT wss:// url, via the shared directory.
+    //
+    // This is the way back for a member whose church runs its OWN relay: a fresh install only knows the shared
+    // relays, so their 12 words restore the identity and find no church — through no fault of the words. A name
+    // is stable across restarts where a tunnel URL is not, which is the whole reason the directory exists.
+    //
+    // L5: only ever adopt a wss:// url. A cleartext ws:// would put the whole church's fellowship traffic in the
+    // open, and this input comes from a stranger's directory entry.
+    async resolveRelayName(name) {
+      const h = String(name || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+      if (!h) return null;
+      for (const u of CANONICAL_RELAYS) {
+        const base = u.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "");
+        try {
+          const ctrl = new AbortController();
+          const to = setTimeout(() => {
+            try {
+              ctrl.abort();
+            } catch (e) {
+            }
+          }, 6e3);
+          const r = await Promise.race([
+            fetch(base + "/relay-names/resolve/" + encodeURIComponent(h), { cache: "no-store", signal: ctrl.signal }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6500))
+          ]);
+          clearTimeout(to);
+          if (!r || !r.ok) continue;
+          const j = await r.json();
+          if (j && typeof j.url === "string" && /^wss:\/\//i.test(j.url)) return { handle: h, url: j.url, pub: j.pub || "" };
+        } catch (e) {
+        }
+      }
+      return null;
+    },
     // RESTORE: find what this identity already IS, from the relay.
     //
     // Until now nothing ever asked the relay for the member's OWN documents — the only authors:[pub] queries in
@@ -7521,8 +7814,7 @@
       }
       const me = pub;
       if (!me) return { churches: [], name: "" };
-      const seen = /* @__PURE__ */ new Map();
-      let name = "", nameAt = 0;
+      const fold = _restoreFold();
       await new Promise((resolve) => {
         let done = false;
         const finish = () => {
@@ -7539,38 +7831,10 @@
           // every doc this key has written; we filter for member:<cp> below
           { kinds: [0], authors: [me] }
           // the display name
-        ], {
-          onevent(e) {
-            if (e.kind === 0) {
-              if ((e.created_at || 0) < nameAt) return;
-              nameAt = e.created_at || 0;
-              try {
-                name = (JSON.parse(e.content) || {}).name || name;
-              } catch (x) {
-              }
-              return;
-            }
-            const d = _dtag(e);
-            if (!d.startsWith(MEMBER_D)) return;
-            const cp = d.slice(MEMBER_D.length);
-            if (!cp) return;
-            let left = false;
-            try {
-              left = !!(JSON.parse(e.content) || {}).left;
-            } catch (x) {
-            }
-            if (left) {
-              seen.delete(cp);
-              return;
-            }
-            if ((e.created_at || 0) >= (seen.get(cp) || 0)) seen.set(cp, e.created_at || 0);
-          },
-          oneose: finish
-        });
+        ], { onevent: fold.add, oneose: finish });
         setTimeout(finish, Math.max(2e3, ms || 9e3));
       });
-      const churches = [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([cp]) => cp);
-      return { churches, name };
+      return fold.result();
     },
     // The one above is a single pass, and on a cold connection that is not enough — CONFIRMED on device: the
     // member's NAME came back (kind-0 is public) while their churches did not, because their own member: docs
@@ -7600,6 +7864,73 @@
       }
       return best;
     },
+    // Seal MY display name for one church under its congregation key. This is what replaces putting the name in
+    // a public profile: the relay stores ciphertext, and only people the church wrapped a key for can read it.
+    // Silently does nothing when the church has not published a key yet (an older church, or before setup
+    // finishes) — the caller still writes kind-0, so the name is never simply lost. AUDIT-2026-07-27.
+    async publishSealedName(churchNpub, name) {
+      const cp = toPub(churchNpub);
+      if (!cp) return null;
+      if (!sk) {
+        try {
+          await window.Fellowship.ready;
+        } catch (e) {
+        }
+      }
+      const ring = _nameKeys.get(cp) || [];
+      if (!sk) return null;
+      const nm = String(name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+      const payload = _sealNameDoc(cp, nm, ring[0]);
+      if (!payload) return null;
+      const evt = finalizeEvent2({
+        kind: 30078,
+        created_at: Math.floor(Date.now() / 1e3),
+        tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]],
+        content: payload
+      }, sk);
+      try {
+        await _publishAny(window.Fellowship.relays, evt);
+      } catch (e) {
+        return null;
+      }
+      _sealedNames.set(cp + "|" + pub, nm);
+      _sealedMine.set(cp, nm + "|" + _ringId(cp));
+      return evt;
+    },
+    // ONE NAME, FANNED OUT. A member belongs to one or more churches, and their name is theirs — not a different
+    // name per church they have to remember to keep in step. The wire still carries a SEPARATE sealed copy per
+    // church, deliberately: church A cannot read church B's copy, so two churches (or two mirror operators)
+    // cannot match the same person up by comparing name ciphertext. One shared blob would hand them exactly that.
+    // So the split stays on the wire and disappears in the app — set your name once, and it is re-sealed
+    // everywhere you belong, including churches you join later and churches whose key arrives later.
+    async syncSealedNames(churchNpubs) {
+      const nm = ((window.Fellowship.myProfile || {}).name || "").trim();
+      if (!nm) return 0;
+      const list = churchNpubs && churchNpubs.length ? churchNpubs : [..._nameKeys.keys()];
+      let n = 0;
+      for (const c of list) {
+        const cp = toPub(c) || c;
+        if (!cp || !(_nameKeys.get(cp) || []).length) continue;
+        const stamp = nm + "|" + _ringId(cp);
+        if (_sealedMine.get(cp) === stamp) continue;
+        try {
+          if (await window.Fellowship.publishSealedName(cp, nm)) {
+            _sealedMine.set(cp, stamp);
+            n++;
+          }
+        } catch (e) {
+        }
+      }
+      return n;
+    },
+    // Has this church published a name key we hold a copy of? NO UI CALLS THIS YET — the comment here used to
+    // claim "the UI uses it to explain why a name is public", which was never true. Left in place because Stage 2
+    // (dropping the cleartext name from kind-0) needs exactly this to tell a member whether their name is sealed
+    // or still public, but until that screen exists this is an unused accessor and should be described as one.
+    sealedNamesReady(churchNpub) {
+      const cp = toPub(churchNpub);
+      return !!(cp && (_nameKeys.get(cp) || []).length);
+    },
     // publish this user's kind-0 profile (display name etc.) and cache it
     async setProfile(meta) {
       if (!sk) await window.Fellowship.ready;
@@ -7612,18 +7943,31 @@
       if (meta.av || prev.av) p.av = meta.av || prev.av;
       const hidden = meta.hidden != null ? meta.hidden : prev.hidden;
       if (hidden) p.hidden = true;
-      const handleLocal = p.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "").slice(0, 30);
-      const relayHost = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
-      if (handleLocal && relayHost) p.nip05 = handleLocal + "@" + relayHost;
-      else if (prev.nip05) p.nip05 = prev.nip05;
-      const evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: JSON.stringify(p) }, sk);
+      const wire = { about: p.about, picture: p.picture };
+      if (p.av) wire.av = p.av;
+      if (p.hidden) wire.hidden = true;
+      const body = JSON.stringify(wire);
+      if (_profilePubFor === pub && _profilePubBody === body) return null;
+      const evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
+      let sent = true;
       try {
         await _publishAny(window.Fellowship.relays, evt);
       } catch (e) {
+        sent = false;
         console.warn("[fellowship] profile publish failed", e);
+      }
+      if (sent) {
+        _profilePubFor = pub;
+        _profilePubBody = body;
       }
       profiles[pub] = p;
       window.Fellowship.myProfile = p;
+      if (p.name) setTimeout(() => {
+        try {
+          window.Fellowship.syncSealedNames();
+        } catch (x) {
+        }
+      }, 0);
       try {
         localStorage.setItem(PROFILE_KEY, JSON.stringify(p));
       } catch {
@@ -7633,7 +7977,7 @@
     },
     // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
     requestProfiles(pubkeys) {
-      const need = [...new Set(pubkeys)].filter((pk) => pk && !pendingProfiles.has(pk) && (!(pk in profiles) || !(profiles[pk] && profiles[pk].name)));
+      const need = [...new Set(pubkeys)].filter((pk) => pk && !pendingProfiles.has(pk) && !(pk in profiles));
       if (!need.length) return;
       need.forEach((pk) => {
         pendingProfiles.add(pk);
@@ -7646,7 +7990,7 @@
       if (!sk) await window.Fellowship.ready;
       const churchTag = window.Fellowship.churchPub ? [["p", window.Fellowship.churchPub]] : [];
       let body = content, encTag = [];
-      const gkey = _gkeys[_gkKey(window.Fellowship.churchPub, groupId)];
+      const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];
       if (gkey) {
         try {
           body = encrypt(content, gkey);
@@ -8263,13 +8607,18 @@
       let minors = [], approved = [], guardians = {}, nophoto = [];
       const me = window.Fellowship.myPubkey || pub;
       const _sgTs = { minors: 0, approved: 0, guardians: 0, nophoto: 0 };
+      let clr = null;
+      let _clrTs = 0;
       const emit = () => {
         _noPhoto = new Set(nophoto);
-        onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)), photoBlocked: !!(me && nophoto.includes(me)) });
+        const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
+        const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
+        onLists({ minors, approved, guardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {
-          if (e.pubkey !== pubk) return;
+          if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
+          if (e.pubkey !== pubk && !(d || "").startsWith("trinityone/clearance:")) return;
           const _ts = e.created_at || 0;
           if (d === "trinityone/minors:" + pubk) {
             if (_ts < _sgTs.minors) return;
@@ -8305,6 +8654,15 @@
               nophoto = JSON.parse(e.content).pubkeys || [];
             } catch {
               nophoto = [];
+            }
+            emit();
+          } else if (me && d === "trinityone/clearance:" + me) {
+            if (_ts < _clrTs) return;
+            _clrTs = _ts;
+            try {
+              clr = JSON.parse(decrypt(e.content, getConversationKey(sk, e.pubkey)));
+            } catch (x) {
+              return;
             }
             emit();
           }
@@ -8366,15 +8724,20 @@
       const childSk = privateKeyFromSeedWords(inv.mnemonic);
       const childPub = getPublicKey2(childSk);
       const ts = Math.floor(Date.now() / 1e3);
-      const handleLocal = name.toLowerCase().replace(/[^a-z0-9._-]+/g, "").slice(0, 30);
-      const relayHost = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
-      const childProfile = { name };
-      if (handleLocal && relayHost) childProfile.nip05 = handleLocal + "@" + relayHost;
+      const childProfile = {};
       const k0 = finalizeEvent2({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }, childSk);
+      let childNameDoc = null;
+      try {
+        const body = JSON.stringify({ name });
+        const ct = encrypt(body, getConversationKey(childSk, cp));
+        const own = encrypt(body, getConversationKey(childSk, childPub));
+        childNameDoc = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c: ct, m: own }) }, childSk);
+      } catch (e) {
+      }
       const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
-      const myName = window.Fellowship.myProfile && window.Fellowship.myProfile.name || "";
-      const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub, parentName: myName, childName: name }) }, sk);
-      for (const e of [k0, join2, req]) {
+      const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
+      for (const e of [k0, join2, childNameDoc, req]) {
+        if (!e) continue;
         try {
           await _publishAny(window.Fellowship.relays, e);
         } catch (err) {

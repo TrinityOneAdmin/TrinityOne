@@ -165,8 +165,13 @@ function PublishErrorBanner() {
       clearTimeout(f._t);
       if (!sticky) f._t = setTimeout(() => setMsg(''), 9000);   // actionable failures stay until dismissed
     };
+    // `steward-write-blocked` had been fired for a while by _requireTrustedView and by Finance, and was
+    // listened to NOWHERE — so the refusals the code believed were "visible and retryable" reached no screen
+    // at all. Same banner, same dismiss, and these stay put: a refused write is always actionable.
+    const g = (e) => { const d = e.detail || {}; clearTimeout(f._t); setMsg(d.message || ('That change to the ' + (d.what || 'church') + ' could not be saved.')); };
     window.addEventListener('steward-publish-error', f);
-    return () => window.removeEventListener('steward-publish-error', f);
+    window.addEventListener('steward-write-blocked', g);
+    return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
   }, []);
   if (!msg) return null;
   return (
@@ -221,14 +226,24 @@ function KeyDistributor() {
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
   // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
   React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), []);
+  // the church NAME key — the envelope members seal their display name under, so the relay (and any mirror
+  // holding a copy of this church) stores ciphertext instead of a named roster. AUDIT-2026-07-27.
+  React.useEffect(() => (window.Steward && window.Steward.subscribeNameKey ? window.Steward.subscribeNameKey() : undefined), []);
   // keep the envelope's author check current: a revoked steward's envelope must stop being accepted
   const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];
   React.useEffect(() => { if (window.Steward && window.Steward.setCareRoster) window.Steward.setCareRoster(stewardRoster); }, [stewardRoster]);
+  // BLOCKED MEMBERS MUST NEVER BE RE-KEYED. useStewardMembers() does not filter the blocklist (DashMembers does
+  // that itself), so every recipient set built here silently included people the steward had removed: the next
+  // time anyone joined, `grew` fired and the freshly-rotated key was wrapped straight back to them. The care and
+  // media re-key paths had the same hole via `want`. AUDIT-2026-07-27.
+  const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
+  const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
   React.useEffect(() => {
-    const memberPubs = members.map(m => m.pubkey);
+    const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
     for (const g of groups) {
       if (!g.encrypted) continue;
-      const recips = g.visibility === 'invite' ? (g.members || []) : memberPubs;
+      const recips = (g.visibility === 'invite' ? (g.members || []) : memberPubs).filter(notBlocked);
       const key = [...new Set(recips)].sort().join(',');
       const prev = last.current[g.id];
       if (prev === undefined) { last.current[g.id] = key; continue; }   // first sighting — already keyed by create/edit
@@ -246,7 +261,15 @@ function KeyDistributor() {
     // subscription has confirmed no envelope exists — never on a cold null, which is what orphaned
     // every sealed need in the first attempt. Stewards are included so a delegated console can re-key.
     if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster);
-  }, [groups, members, stewardRoster]);
+    // …and the NAME key. Without this nothing ever mints one, the member app's key list stays empty, and every
+    // seal silently no-ops — the whole mechanism present and doing nothing, which is the failure mode this
+    // codebase specialises in.
+    if (window.Steward && window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(memberPubs, stewardRoster);
+    // `blockedList` IS a dependency — notBlocked closes over it. Without it, unblocking someone re-ran
+    // nothing: `unblock` only rewrites the blocklist, so the person came back to the roster but never got the
+    // group, care, media or name keys back. They saw empty rooms indefinitely, and no one would think to
+    // suspect keys weeks after a reconciliation. AUDIT-2026-07-27.
+  }, [groups, members, stewardRoster, blockedList]);
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
@@ -406,12 +429,28 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   );
 
   if (step === 1) return (
-    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words ARE your church — they sign everything you post. Write them on paper and keep them safe: without them the church can’t be recovered, and no one (not even us) can reset it for you."
+    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words ARE your church — they sign everything you post. Write them on paper, and make a second copy you keep somewhere else. There is no way to reset this: not by us, not from your relay, not from a backup file."
       footer={<React.Fragment>
         <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={() => { if (canContinue) next(); }} disabled={!canContinue} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: canContinue ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
+      {/* WHAT LOSING IT ACTUALLY COSTS. "The church can't be recovered" is true but abstract, and a steward
+          reads it as boilerplate. The realistic way a church loses this key is not theft — it is the laptop
+          dying, or the one person who set it up leaving. Say the consequence in the concrete, and ask for the
+          second copy here rather than hoping they infer it. AUDIT-2026-07-27. */}
+      <div style={{ display: 'flex', gap: 11, padding: '13px 15px', borderRadius: 12, marginBottom: 14,
+        background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
+        <Icon name="shield" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
+          <b style={{ color: 'var(--ink)' }}>If these words are lost, the church is gone — not locked, gone.</b> You
+          would start a new one, and every member would have to join it again. Your groups, your rota, your
+          records and your history stay sealed to the old key, and nobody can open them.
+          <div style={{ marginTop: 7 }}>Most churches don’t lose this to theft. They lose it because the laptop
+          died, or the person who set it up moved on. <b>Two paper copies, in two places</b> — that is the whole
+          precaution.</div>
+        </div>
+      </div>
       <div style={lbl}>RECOVERY PHRASE — 12 WORDS</div>
       {/* The phrase and the check must NEVER share a screen. With the words still visible the "quick check" is
           copying from the box above — it proves nothing about what was written on paper, and it teaches the
@@ -436,7 +475,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       {phrase && !saved ? (
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', fontSize: 13.5, fontWeight: 600 }}>
         <input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
-        I’ve written these 12 words on paper and stored them safely
+        I’ve written these 12 words on paper and stored them safely — and I’ll make a second copy
       </label>
       ) : null}
       {phrase && saved ? (
@@ -2948,6 +2987,86 @@ window.DashResources = DashResources;
 // Steward-initiated parent↔child link: pick an adult member as a child's guardian (no parent request needed).
 // The child keeps their own account; this records who their guardian is (church-signed), so the relay lets
 // them always reach each other and the parent can collect them at check-in.
+// ── Reconnect a member who lost their 12 words ────────────────────────────────────────────────────────
+// Their old key cannot be recovered by anyone, so this does not "restore" it — it moves their SEAT onto the
+// key they have now, on this church's word that they are the same person. The steward recognising them IS the
+// authorisation; there is deliberately no code or token to hand over, because such a token would be a bearer
+// credential to become that member.
+// `realName` is the member's ACTUAL display name or '' — deliberately separate from `memberName`, which
+// falls back to "this member" for the prose. Only a real name may be vouched across with the seat; writing
+// a placeholder into the re-seat doc would publish "this member" as somebody's profile name.
+function ReseatModal({ member, memberName, realName, isMinor, admittedList, onClose }) {
+  const [scan, setScan] = React.useState(false);
+  const [text, setText] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [done, setDone] = React.useState(false);
+  const reseats = window.useStewardReseats ? window.useStewardReseats() : [];
+  const newPub = window.Steward && window.Steward.parseMemberKey ? window.Steward.parseMemberKey(text) : null;
+  const same = newPub && newPub === member;
+
+  const confirm = async () => {
+    if (!newPub || same || busy) return;
+    setBusy(true); setErr('');
+    try {
+      // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
+      // while the church still showed two of them; this order fails the safer way round.
+      const pairs = [...(reseats || []).filter(p => p && p.new !== newPub), { old: member, new: newPub, name: realName || '', at: Math.floor(Date.now() / 1000) }];
+      await window.Steward.setReseats(pairs);
+      await window.Steward.setAdmitted([...new Set([...(admittedList || []), newPub])]);
+      setDone(true);
+    } catch (e) { setErr((e && e.message) || 'Couldn’t save that — try again.'); }
+    setBusy(false);
+  };
+
+  return (
+    <CkModal title={'Reconnect ' + memberName} onClose={onClose}>
+      {done ? (<React.Fragment>
+        <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '4px 0 14px' }}>
+          Done. {memberName} is back in their place on the new phone, and the old entry is folded into it.
+          {realName ? ' Their name goes with them — it will appear on the new phone shortly.' : ''}
+        </p>
+        {/* Say the part the product does NOT do, here, where it can still be acted on. Invite-only group
+            membership is a list of pubkeys on each group document; a re-seat does not rewrite those, so the
+            new key is not in them. Telling the steward now costs one sentence; leaving them to find out means
+            the member sits outside their own small group wondering why. AUDIT-2026-07-26 CRITICAL 3. */}
+        <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', margin: '0 0 14px' }}>
+          One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
+          again. Ordinary groups need nothing — they are already back in those.
+        </p>
+        <button onClick={onClose} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: '10px 14px' }}>Close</button>
+      </React.Fragment>) : (<React.Fragment>
+        <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '4px 0 10px' }}>
+          For a member who has lost their 12 words. On their new phone they choose <b>“I’ve lost my 12 words”</b>, which shows a code — scan or paste it here.
+        </p>
+        <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', margin: '0 0 12px' }}>
+          Only do this if you know it is really them. It gives that new key {memberName}’s name and place in your church, and their access to your ordinary groups. Invite-only groups you will need to add them to again by hand. Their old private messages and any sealed care records stay unreadable — those went with the lost key, and nothing can bring them back.
+        </p>
+        {isMinor ? (
+          <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--clay)', fontWeight: 700, border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', borderRadius: 12, padding: '9px 11px', margin: '0 0 12px' }}>
+            This member is marked as a child. Confirm with their parent or guardian before you reconnect them.
+          </div>
+        ) : null}
+        {scan ? (
+          <StewQRScanner onResult={(t) => { setText(t); setScan(false); setErr(''); }} onCancel={() => setScan(false)} />
+        ) : (
+          <button onClick={() => setScan(true)} className="sk-btn" style={{ width: '100%', padding: '9px 14px', marginBottom: 8 }}>Scan their code</button>
+        )}
+        <input value={text} onChange={e => { setText(e.target.value); setErr(''); }} placeholder="…or paste their new code / npub"
+          style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', marginBottom: 8 }} />
+        {text && !newPub ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 700, marginBottom: 8 }}>That isn’t a TrinityOne member code.</div> : null}
+        {same ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 700, marginBottom: 8 }}>That’s the key they already have — nothing to reconnect.</div> : null}
+        {err ? <div style={{ fontSize: 13, color: 'var(--clay)', fontWeight: 700, marginBottom: 8 }}>{err}</div> : null}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onClose} className="sk-btn" style={{ flex: 1, padding: '10px 14px' }}>Cancel</button>
+          <button onClick={confirm} disabled={!newPub || same || busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: '10px 14px', opacity: (!newPub || same || busy) ? .5 : 1 }}>
+            {busy ? 'Reconnecting…' : 'Yes — this is ' + memberName}</button>
+        </div>
+      </React.Fragment>)}
+    </CkModal>
+  );
+}
+
 function GuardianLinkModal({ child, childName, members, guardians, minorsSet, onLink, onUnlink, onClose }) {
   const [q, setQ] = React.useState('');
   const linked = guardians[child] || [];
@@ -3053,6 +3172,8 @@ function BulkInviteModal({ onClose }) {
 window.BulkInviteModal = BulkInviteModal;
 
 function DashMembers() {
+  // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
+  const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
   const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];   // care-key rotation must keep stewards keyed
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
@@ -3065,8 +3186,33 @@ function DashMembers() {
   const approvedSet = new Set(sg.approved || []);
   const nophotoSet = new Set(sg.nophoto || []);
   const toggleNoPhoto = (pk) => window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk]);
-  const toggleMinor = (pk) => window.Steward.setMinors(minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk]);
-  const toggleApproved = (pk) => window.Steward.setApproved(approvedSet.has(pk) ? (sg.approved || []).filter(p => p !== pk) : [...(sg.approved || []), pk]);
+  // Whenever either safeguarding list changes, re-seal the affected member's OWN clearance. Their app reads that
+  // instead of the church's list of children, which the relay no longer serves to ordinary members.
+  // AUDIT-2026-07-27. Best-effort and deliberately not awaited: the list write is the authoritative one.
+  const _reseal = (mins, appr, who) => { try { if (window.Steward.refreshClearances) window.Steward.refreshClearances(who, mins, appr); } catch (e) {} };
+  // BACKFILL — every child marked BEFORE sealed clearances existed had no clearance doc at all. The four
+  // toggles below only re-seal the member they touch, and the relay had already stopped serving the minors
+  // list to ordinary members, so those children's apps read an empty list and concluded they were adults.
+  // Every existing child in every church was treated as an adult until a steward happened to toggle their
+  // flag off and on again. Seal the whole roster once the lists have actually loaded. AUDIT-2026-07-27.
+  const _sealedAll = React.useRef('');
+  React.useEffect(() => {
+    if (!sg.loaded) return;                 // NEVER from empty lists that merely have not arrived yet
+    if (window.Steward.actingChurch) return;   // a delegated console signs with its own church key
+    if (!members.length) return;
+    const sig = [(sg.minors || []).join(','), (sg.approved || []).join(','), members.map(m => m.pubkey).sort().join(',')].join('|');
+    if (_sealedAll.current === sig) return;   // idempotent: the roster re-emits on every tick
+    _sealedAll.current = sig;
+    _reseal(sg.minors || [], sg.approved || [], members.map(m => m.pubkey));
+  }, [sg.loaded, sg.minors, sg.approved, members]);
+  const toggleMinor = (pk) => {
+    const next = minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
+    const r = window.Steward.setMinors(next); _reseal(next, sg.approved || [], [pk]); return r;
+  };
+  const toggleApproved = (pk) => {
+    const next = approvedSet.has(pk) ? (sg.approved || []).filter(p => p !== pk) : [...(sg.approved || []), pk];
+    const r = window.Steward.setApproved(next); _reseal(sg.minors || [], next, [pk]); return r;
+  };
   // safeguarding v2: parent↔child links — pending parent requests + the confirmed map
   const guardReqs = window.useStewardGuardianRequests ? window.useStewardGuardianRequests() : [];
   const guardians = window.useStewardGuardians ? window.useStewardGuardians() : {};
@@ -3080,10 +3226,11 @@ function DashMembers() {
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = (r) => {
     window.Steward.setGuardians({ ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] });
-    if (!minorsSet.has(r.child)) window.Steward.setMinors([...(sg.minors || []), r.child]);   // a linked child is a minor
+    if (!minorsSet.has(r.child)) { const next = [...(sg.minors || []), r.child]; window.Steward.setMinors(next); _reseal(next, sg.approved || [], [r.child]); }   // a linked child is a minor
   };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
+  const [reseatFor, setReseatFor] = React.useState(null);   // member who lost their 12 words and is back on a new key
   const [bulkOpen, setBulkOpen] = React.useState(false);   // bulk-invite (print join slips) — bring a congregation across
   // safeguarding (child marking, youth clearance, parent links) is OWNER-ONLY at the relay — a delegated
   // steward's writes are rejected. Hide those actions when acting as someone else's steward, so the UI
@@ -3092,7 +3239,7 @@ function DashMembers() {
   const linkParent = (childPub, parentPub) => {
     if (childPub === parentPub || minorsSet.has(parentPub)) return;   // a parent must be a different, adult account
     window.Steward.setGuardians({ ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] });
-    if (!minorsSet.has(childPub)) window.Steward.setMinors([...(sg.minors || []), childPub]);   // a linked child is a minor
+    if (!minorsSet.has(childPub)) { const next = [...(sg.minors || []), childPub]; window.Steward.setMinors(next); _reseal(next, sg.approved || [], [childPub]); }   // a linked child is a minor
     // notify the newly-linked parent so the child actually shows up in THEIR app (they never set it up locally)
     if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '');
   };
@@ -3134,6 +3281,45 @@ function DashMembers() {
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !blockedSet.has(p));
       if (window.Steward.rotateCareKey) window.Steward.rotateCareKey(remaining, stewardRoster || []);
       if (window.Steward.rotateMediaKey) window.Steward.rotateMediaKey(remaining);   // same for encrypted sermons
+      // and the NAME key: a blocked member keeping it could still read the congregation's names, which is the
+      // one thing this encryption exists to stop. The ring carries the superseded keys, so names sealed before
+      // the rotation still open for everyone who remains.
+      // NOT AS A DELEGATED STEWARD — this sat one line above the identical guard applied to groups below, and
+      // was the more destructive of the two. A delegated console can never read the owner's name-key envelope,
+      // so it holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as
+      // the church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed
+      // name in the congregation stops opening — the whole roster goes anonymous from one Block tap.
+      // steward.src.js now refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
+      if (!delegated && window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(remaining, stewardRoster || [], { rotate: true });
+      // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
+      // phone carried on decrypting every future message in every encrypted group — forever. The background
+      // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
+      // so a removal published nothing at all. The only {rotate:true} call site was the invite-only members
+      // editor, which does not exist for an OPEN encrypted group. The contract in steward.src.js says removal
+      // MUST rotate; this is the path that was missing it. AUDIT-2026-07-27.
+      // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeds the recipient set
+      // with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys THEIR
+      // group under OUR key and leaves the owning church out of the recipients, locking them out of their own
+      // room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
+      const grps = (!delegated && Array.isArray(groups)) ? groups : [];
+      for (const g of grps) {
+        if (!g || !g.encrypted) continue;
+        const wasIn = g.visibility === 'invite' ? (g.members || []).includes(pk) : true;   // an open group includes everyone
+        if (!wasIn) continue;
+        const recips = (g.visibility === 'invite' ? (g.members || []).filter(p => p !== pk && !blockedSet.has(String(p || '').toLowerCase())) : remaining);
+        if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { rotate: true });
+        if (g.visibility === 'invite' && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
+      }
+      // SAY SO. Both guards above are correct and both are silent: as a delegated steward you tap Block, the
+      // row greys out, and the removed member's phone keeps decrypting every future message in every encrypted
+      // group and keeps reading the congregation's names — indefinitely, with nothing on screen suggesting a
+      // second step exists. AUDIT-2026-07-27.
+      if (delegated) {
+        const encrypted = (Array.isArray(groups) ? groups : []).some(g => g && g.encrypted);
+        if (encrypted || window.Steward.ensureNameKeyForMembers) {
+          try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'block', message: 'They have been removed from the roster, but only the church owner can change the keys that lock them out of encrypted groups and members’ names. Ask the owner to open their own console and block them there as well.' } })); } catch (e2) {}
+        }
+      }
     } catch (e) {}
   };
   const unblock = (pk) => window.Steward.setBlocked(blockedList.filter(p => p !== pk));
@@ -3192,6 +3378,8 @@ function DashMembers() {
             <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
               <Icon name="users" size={14} color="currentColor" /> {(guardians[m.pubkey] && guardians[m.pubkey].length) ? 'Parents' : 'Link parent'}</button>
           ) : null}
+          <button onClick={() => setReseatFor(m.pubkey)} title="They lost their 12 words and are back on a new phone with a new key — put them back in their place here" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            <Icon name="swap" size={14} color="currentColor" /> Reconnect</button>
           {photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
             <button onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
               <Icon name="refresh" size={14} color="currentColor" /> {nophotoSet.has(m.pubkey) ? 'Photos off ✓' : 'Turn off photo'}</button>
@@ -3302,6 +3490,7 @@ function DashMembers() {
         </React.Fragment>
       )}
       {linkChild ? <GuardianLinkModal child={linkChild} childName={nameByPub[linkChild]} members={members} guardians={guardians} minorsSet={minorsSet} onLink={linkParent} onUnlink={unlinkParent} onClose={() => setLinkChild(null)} /> : null}
+      {reseatFor ? <ReseatModal member={reseatFor} memberName={nameByPub[reseatFor] || 'this member'} realName={nameByPub[reseatFor] || ''} isMinor={minorsSet.has(reseatFor)} admittedList={admittedList} onClose={() => setReseatFor(null)} /> : null}
       {bulkOpen ? <BulkInviteModal onClose={() => setBulkOpen(false)} /> : null}
     </Panel>
   );

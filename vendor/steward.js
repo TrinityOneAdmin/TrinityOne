@@ -10621,6 +10621,10 @@ zoo`.split("\n");
   var APPROVED_D = "trinityone/approved:";
   var NOPHOTO_D = "trinityone/nophoto:";
   var GUARDREQ_D = "trinityone/guardreq:";
+  var NAMEKEY_D = "trinityone/namekey:";
+  var NAME_RING_MAX = 12;
+  var NAME_D = "trinityone/name:";
+  var CLEARANCE_D = "trinityone/clearance:";
   var GUARDIANS_D = "trinityone/guardians:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
@@ -10648,12 +10652,14 @@ zoo`.split("\n");
   }
   var JOINPOLICY_D = "trinityone/joinpolicy:";
   var ADMITTED_D = "trinityone/admitted:";
+  var RESEAT_D = "trinityone/reseat:";
   var STEWARDS_D = "trinityone/stewards:";
   var STEWARDREQ_D = "trinityone/stewardreq:";
   var PIN_D = "trinityone/pin:";
   var HIDE_D = "trinityone/hidden:";
   var GROUPKEY_D = "trinityone/groupkey:";
   var _skeys = {};
+  var GROUP_RING_MAX = 12;
   var _srev = {};
   var _senvTs = {};
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -10675,7 +10681,16 @@ zoo`.split("\n");
       const env = JSON.parse(e.content || "{}");
       _srev[gid] = env.rev || 1;
       const mine = env.keys && churchPub && env.keys[churchPub];
-      if (mine && churchSk) _skeys[gid] = _unhex(decrypt3(mine, getConversationKey(churchSk, e.pubkey)));
+      if (mine && churchSk) {
+        const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+        let ring = null;
+        try {
+          const p = JSON.parse(plain);
+          if (Array.isArray(p)) ring = p.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+        } catch (x) {
+        }
+        _skeys[gid] = (ring && ring.length ? ring : [plain]).map(_unhex);
+      }
     } catch {
     }
   }
@@ -11037,6 +11052,73 @@ zoo`.split("\n");
     return p;
   }
   var _discoverySeed = [];
+  function _probeRelayEnforces(wssUrl, timeoutMs) {
+    return new Promise((resolve) => {
+      let ws = null, done = false;
+      const results = [];
+      const finish = (ok, why) => {
+        if (done) return;
+        done = true;
+        try {
+          ws && ws.close();
+        } catch (e) {
+        }
+        resolve({ ok, why });
+      };
+      const to = setTimeout(() => finish(false, "no answer"), timeoutMs || 8e3);
+      try {
+        ws = new WebSocket(wssUrl);
+      } catch (e) {
+        clearTimeout(to);
+        return finish(false, "unreachable");
+      }
+      const sk2 = generateSecretKey2();
+      const ghost = getPublicKey2(generateSecretKey2());
+      const probes = [
+        { d: "trinityone/minors:" + ghost, what: "a stranger\u2019s list of children" },
+        { d: "trinityone/stewards:" + ghost, what: "a stranger\u2019s steward roster" }
+      ];
+      const ids = /* @__PURE__ */ new Map();
+      ws.onopen = () => {
+        for (const pr of probes) {
+          const evt = finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", pr.d], ["t", NET]], content: JSON.stringify({ pubkeys: [] }) }, sk2);
+          ids.set(evt.id, pr);
+          try {
+            ws.send(JSON.stringify(["EVENT", evt]));
+          } catch (e) {
+          }
+        }
+      };
+      ws.onerror = () => {
+        clearTimeout(to);
+        finish(false, "unreachable");
+      };
+      ws.onclose = () => {
+        clearTimeout(to);
+        if (!done) finish(false, "closed early");
+      };
+      ws.onmessage = (m) => {
+        let msg = null;
+        try {
+          msg = JSON.parse(m.data);
+        } catch (e) {
+          return;
+        }
+        if (!Array.isArray(msg) || msg[0] !== "OK" || !ids.has(msg[1])) return;
+        const pr = ids.get(msg[1]);
+        ids.delete(msg[1]);
+        if (msg[2] === true) {
+          clearTimeout(to);
+          return finish(false, "it accepted " + pr.what);
+        }
+        results.push(pr.d);
+        if (!ids.size) {
+          clearTimeout(to);
+          finish(true, "refused both probes");
+        }
+      };
+    });
+  }
   async function discoverRelayOffers(seedExtra, region) {
     let dirUrls = [];
     for (const base of _dirBases()) {
@@ -11052,8 +11134,19 @@ zoo`.split("\n");
     const seed = [.../* @__PURE__ */ new Set([...seedExtra || [], ...dirUrls, ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
     const probed = await Promise.all(seed.map(async (url) => {
       const t = await _relayInfo(url);
-      if (t && t.enforces === true && t.open === true && !t.full) return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "" };
-      return null;
+      if (!(t && t.enforces === true && t.open === true && !t.full)) return null;
+      const canonical = (CANONICAL_RELAYS || []).includes(url);
+      if (!canonical) {
+        const v = await _probeRelayEnforces(url);
+        if (!v.ok) {
+          try {
+            console.warn("[relay-offers] rejected", url, "\u2014", v.why);
+          } catch (e) {
+          }
+          return null;
+        }
+      }
+      return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "" };
     }));
     const offers = probed.filter(Boolean);
     offers.sort((a, b) => {
@@ -11097,8 +11190,23 @@ zoo`.split("\n");
     _relayAuthed = true;
     return finalizeEvent2(authEvent, sk);
   };
+  var _nameKeyRing = [];
+  var _nameKeyDocKeys = null;
+  var _nameKeyChecked = false;
   var churchSk = null;
   var churchPub = null;
+  var _profileLoaded = false;
+  function _profileSettle(ms = 6e3) {
+    if (_profileLoaded) return Promise.resolve(true);
+    return new Promise((res) => {
+      const t0 = Date.now();
+      const tick = () => {
+        if (_profileLoaded || Date.now() - t0 > ms) return res(_profileLoaded);
+        setTimeout(tick, 150);
+      };
+      tick();
+    });
+  }
   var lastProfile = {};
   var actingChurch = "";
   var stewardedChurches = /* @__PURE__ */ new Map();
@@ -11623,6 +11731,21 @@ zoo`.split("\n");
       s = s.replace(/^trinityone-steward:/i, "").trim();
       return toPubHex(s);
     },
+    // The key a member shows on a NEW phone after losing their 12 words: `trinityone-reseat:<npub>`. A bare
+    // npub or hex is accepted too, so a member who can't be there in person can simply send it — the steward
+    // still has to recognise them and press the button, which is where the authority actually comes from.
+    parseMemberKey(payload) {
+      let s = (payload || "").trim();
+      const q = s.match(/[?&#]reseat=([^&#\s]+)/);
+      if (q) {
+        try {
+          s = decodeURIComponent(q[1]);
+        } catch {
+        }
+      }
+      s = s.replace(/^trinityone-reseat:/i, "").trim();
+      return toPubHex(s);
+    },
     // ---- invite-to-steward handshake: the OWNER shows an invite QR (their church id, public); a would-be
     // steward SCANS it and sends a request; the owner sees it pending and approves it into the roster. ----
     stewardInvitePayload() {
@@ -11737,6 +11860,22 @@ zoo`.split("\n");
     // ---- publish (signed by the church) ----
     publishProfile(meta) {
       if (!sk) return Promise.resolve(null);
+      const _refuse = (what, message) => {
+        try {
+          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what, message } }));
+        } catch (e) {
+        }
+        return Promise.resolve(null);
+      };
+      if (actingChurch) return _refuse("church profile", "Only the church that owns this profile can change its name, logo, giving address or features. Ask the church owner to make this change on their own console.");
+      if (!_profileLoaded && Object.keys(lastProfile).length === 0 && Object.keys(meta || {}).length < 3) {
+        return _profileSettle().then(() => {
+          if (!_profileLoaded && Object.keys(lastProfile).length === 0) {
+            return _refuse("church profile", "That change hasn\u2019t been saved yet \u2014 this device is still connecting to your church\u2019s relay, and saving now would blank the settings it hasn\u2019t read. Check the relay is running and try again.");
+          }
+          return window.Steward.publishProfile(meta);
+        });
+      }
       lastProfile = { ...lastProfile, ...meta };
       const m = lastProfile;
       let nip05 = cleanNip05(m.nip05, m.name);
@@ -12303,7 +12442,7 @@ zoo`.split("\n");
     publishPost(content, group) {
       if (!sk) return Promise.resolve(null);
       let body = content || "", encTag = [];
-      const gkey = group && _skeys[group];
+      const gkey = group && (_skeys[group] || [])[0];
       if (gkey) {
         try {
           body = encrypt3(content || "", gkey);
@@ -12454,13 +12593,18 @@ zoo`.split("\n");
           if (!e.tags.some((t) => t[0] === "p" && t[1] === pub)) return;
           let text = e.content;
           if (e.tags.some((t) => t[0] === "enc")) {
-            const k = _skeys[groupId];
-            if (!k) return;
-            try {
-              text = decrypt3(e.content, k);
-            } catch {
-              return;
+            const ring = _skeys[groupId];
+            if (!ring || !ring.length) return;
+            let ok = false;
+            for (const k of ring) {
+              try {
+                text = decrypt3(e.content, k);
+                ok = true;
+                break;
+              } catch (x) {
+              }
             }
+            if (!ok) return;
           }
           byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find((t) => t[0] === "k") || [])[1] || "" });
           resolveName(e.pubkey);
@@ -12705,26 +12849,40 @@ zoo`.split("\n");
     // the original opaque key material from disk). ----
     publishGroupKey(groupId, memberPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
-      if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);
+      const haveRing = (_skeys[groupId] || []).length > 0;
+      if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
       const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])];
-      let key = _skeys[groupId];
+      let ring = _skeys[groupId] || [];
+      let key = ring[0];
       if (!opts.rotate && !key && !_relayAuthed) return Promise.resolve(null);
       if (opts.rotate || !key) {
         key = crypto.getRandomValues(new Uint8Array(32));
         _srev[groupId] = (_srev[groupId] || 0) + 1;
-      }
-      _skeys[groupId] = key;
+        ring = [key, ...ring].slice(0, GROUP_RING_MAX);
+      } else if (!ring.length) ring = [key];
+      _skeys[groupId] = ring;
       const rev2 = _srev[groupId] || 1;
       _srev[groupId] = rev2;
-      const keys = {};
-      for (const pk of recips) {
-        try {
-          keys[pk] = encrypt3(_hex(key), getConversationKey(churchSk, pk));
-        } catch (e) {
-        }
-      }
       _senvTs[groupId] = now();
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content: JSON.stringify({ rev: rev2, keys }) }, churchSk));
+      const build = (r) => {
+        const keys = {}, rings = {};
+        const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
+        for (const pk of recips) {
+          try {
+            const ck = getConversationKey(churchSk, pk);
+            keys[pk] = encrypt3(cur, ck);
+            rings[pk] = encrypt3(wrapped, ck);
+          } catch (e) {
+          }
+        }
+        return JSON.stringify({ rev: rev2, keys, rings });
+      };
+      let content = build(ring);
+      for (let r = ring.length; content.length > 9e5 && r > 1; ) {
+        r = Math.max(1, r >> 1);
+        content = build(ring.slice(0, r));
+      }
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk));
     },
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
@@ -12770,6 +12928,7 @@ zoo`.split("\n");
     subscribeSafeguard(onLists) {
       let minors = [], approved = [], nophoto = [];
       let tMinors = 0, tApproved = 0, tNophoto = 0;
+      let loaded = false;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -12783,7 +12942,7 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, nophoto });
+            onLists({ minors, approved, nophoto, loaded });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
@@ -12793,7 +12952,7 @@ zoo`.split("\n");
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, nophoto });
+            onLists({ minors, approved, nophoto, loaded });
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -12803,11 +12962,12 @@ zoo`.split("\n");
             } catch {
               nophoto = [];
             }
-            onLists({ minors, approved, nophoto });
+            onLists({ minors, approved, nophoto, loaded });
           }
         },
         oneose() {
-          onLists({ minors, approved, nophoto });
+          loaded = true;
+          onLists({ minors, approved, nophoto, loaded });
         }
       });
       return () => {
@@ -12822,6 +12982,132 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    },
+    // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
+    // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
+    // children to the whole congregation — the relay no longer serves `minors:` to ordinary members, and joining
+    // an open-join church is a single self-signed publish, so that list was one frame away from any stranger.
+    // AUDIT-2026-07-27. Church-tagged so the relay can check the author is that church or one of its stewards.
+    publishClearance(memberPub, status) {
+      if (!sk) return Promise.resolve(null);
+      const mp = toPubHex(memberPub) || memberPub;
+      if (!/^[0-9a-f]{64}$/i.test(mp || "")) return Promise.resolve(null);
+      const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
+      let ct = "";
+      try {
+        ct = encrypt3(body, getConversationKey(sk, mp));
+      } catch (e) {
+        return Promise.resolve(null);
+      }
+      const cp = actingChurch || pub;
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }));
+    },
+    // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
+    // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
+    refreshClearances(memberPubs, minors, approved) {
+      const mins = new Set((minors || []).map((x) => String(x || "").toLowerCase()));
+      const appr = new Set((approved || []).map((x) => String(x || "").toLowerCase()));
+      const out = [];
+      for (const p of [...new Set((memberPubs || []).filter(Boolean))]) {
+        const h = String(p).toLowerCase();
+        out.push(window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }));
+      }
+      return Promise.allSettled(out);
+    },
+    // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
+    // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —
+    // and any mirror holding a copy of this church — a named roster. The church mints a key, wraps a copy for
+    // every member, and members seal their own name under it. Same shape as the care and media keys, including
+    // the RING: rotating on removal must not orphan the names already published. AUDIT-2026-07-27.
+    // Modelled on ensureCareKeyForMembers, which had already learned all of this the hard way. Every guard below
+    // exists because its absence destroys data rather than merely failing. AUDIT-2026-07-27.
+    ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
+      if (!churchSk || !churchPub) return Promise.resolve(null);
+      const cp = actingChurch || pub;
+      if (!_nameKeyChecked || !_relayAuthed) return Promise.resolve(null);
+      let ring = _nameKeyRing.slice();
+      if (!ring.length && _nameKeyDocKeys) return Promise.resolve(null);
+      if (opts.rotate && !ring.length) return Promise.resolve(null);
+      if (opts.rotate || !ring.length) ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, NAME_RING_MAX);
+      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].map((p) => toPubHex(p) || p).filter(Boolean))];
+      const have = _nameKeyDocKeys || {};
+      const recips = opts.rotate ? want : [.../* @__PURE__ */ new Set([...want, ...Object.keys(have)])];
+      if (!opts.rotate && ring.length === _nameKeyRing.length && recips.every((p2) => have[p2])) return Promise.resolve(null);
+      _nameKeyRing = ring;
+      const keys = {};
+      const wrapped = JSON.stringify(ring);
+      for (const pk of recips) {
+        try {
+          keys[pk] = encrypt3(wrapped, getConversationKey(churchSk, pk));
+        } catch (e) {
+        }
+      }
+      const out = publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+      _nameKeyDocKeys = keys;
+      return out;
+    },
+    // read the envelope back (the church's own copy) so the console can decrypt members' names
+    subscribeNameKey() {
+      const cp = actingChurch || pub;
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }], {
+        onevent(e) {
+          if (!_byChurchOrSteward(e)) return;
+          try {
+            const env = JSON.parse(e.content || "{}");
+            if (env.keys && typeof env.keys === "object") {
+              _nameKeyDocKeys = env.keys;
+              _nameKeyChecked = true;
+            }
+            const mine = env.keys && churchPub && env.keys[churchPub];
+            if (!mine || !churchSk) return;
+            const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+            const r = JSON.parse(plain);
+            if (Array.isArray(r)) _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+          } catch (x) {
+          }
+        },
+        oneose() {
+          _nameKeyChecked = true;
+        }
+        // the relay answered — a church with no envelope yet may now mint its first
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
+    openMemberName(content, authorPub) {
+      let ct = String(content || "");
+      if (ct.startsWith("{")) {
+        try {
+          const o = JSON.parse(ct);
+          ct = o && typeof o.c === "string" ? o.c : "";
+        } catch (x) {
+          ct = "";
+        }
+      }
+      if (!ct) return "";
+      for (const k of _nameKeyRing) {
+        try {
+          const o = JSON.parse(decrypt3(ct, _unhex(k)));
+          if (o && typeof o.name === "string") return o.name.slice(0, 40);
+        } catch (x) {
+        }
+      }
+      if (authorPub && churchSk) {
+        try {
+          const o = JSON.parse(decrypt3(ct, getConversationKey(churchSk, toPubHex(authorPub) || authorPub)));
+          if (o && typeof o.name === "string") return o.name.slice(0, 40);
+        } catch (x) {
+        }
+      }
+      return "";
+    },
+    nameKeyReady() {
+      return _nameKeyRing.length > 0;
     },
     setMinors(pubkeys) {
       _requireTrustedView("list of children");
@@ -12851,7 +13137,7 @@ zoo`.split("\n");
             try {
               const c = JSON.parse(e.content);
               if (c.child && c.child !== child) return;
-              byChild.set(child, { child, parent: e.pubkey, claimedParentName: c.parentName || "", claimedChildName: c.childName || "", ts: e.created_at });
+              byChild.set(child, { child, parent: e.pubkey, ts: e.created_at });
             } catch {
             }
           }
@@ -12986,6 +13272,54 @@ zoo`.split("\n");
         } catch {
         }
       };
+    },
+    // ── RE-SEAT: a member lost their 12 words and came back on a NEW key ───────────────────────────────
+    // Their old key is gone for good — nobody has it, not the church, not us. So this does NOT recover an
+    // account; it moves a member's SEAT (their name, their place on the roster) onto the key they have now, on
+    // the church's word that they are the same person. Old DMs and sealed care records stay unreadable, which
+    // is correct: if a steward's click could open them, the privacy was never real.
+    //
+    // The authorisation is the steward's deliberate act in their own console against a key they scanned or were
+    // given. There is NO one-time token by design — a code that re-seats a member would be a bearer credential
+    // to BECOME them, and would be worth stealing.
+    subscribeReseats(onList) {
+      let cur = [], latest = 0;
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d !== RESEAT_D + pub) return;
+          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
+          if (e.created_at < latest) return;
+          latest = e.created_at;
+          try {
+            cur = JSON.parse(e.content).pairs || [];
+          } catch {
+            cur = [];
+          }
+          if (!Array.isArray(cur)) cur = [];
+          onList(cur);
+        },
+        oneose() {
+          onList(cur);
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    setReseats(pairs) {
+      _requireTrustedView("re-seat map");
+      if (!sk) return Promise.resolve(null);
+      const clean3 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => {
+        const nm = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+        const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1e3) };
+        if (nm) out.name = nm;
+        return out;
+      });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean3 }) }));
     },
     setAdmitted(pubkeys) {
       _requireTrustedView("approved-members list");
@@ -13713,8 +14047,23 @@ zoo`.split("\n");
       } catch {
       }
       let emitTimer = null;
+      let reseatOld = /* @__PURE__ */ new Set(), reseatName = /* @__PURE__ */ new Map(), reseatAt = 0;
+      const sealedRaw = /* @__PURE__ */ new Map();
       const emitNow = () => {
-        const arr = [...byPub.values()].sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
+        const sealedName = (pk) => {
+          const c = sealedRaw.get(pk);
+          if (!c) return "";
+          try {
+            return window.Steward.openMemberName(c, pk) || "";
+          } catch (x) {
+            return "";
+          }
+        };
+        const arr = [...byPub.values()].filter((m) => !reseatOld.has(m.pubkey)).map((m) => {
+          if (m.name) return m;
+          const sn = sealedName(m.pubkey);
+          return sn ? { ...m, name: sn, viaSealed: true } : m;
+        }).map((m) => m.name || !reseatName.get(m.pubkey) ? m : { ...m, name: reseatName.get(m.pubkey), viaReseat: true }).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
         } catch {
@@ -13806,9 +14155,44 @@ zoo`.split("\n");
           emit();
         }
       });
+      const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d === NAME_D + pub) {
+            if (e.content) {
+              sealedRaw.set(e.pubkey, e.content);
+              emit();
+            }
+            return;
+          }
+          if (d !== RESEAT_D + pub) return;
+          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
+          if (e.created_at < reseatAt) return;
+          reseatAt = e.created_at;
+          const next = /* @__PURE__ */ new Set(), names = /* @__PURE__ */ new Map();
+          try {
+            for (const pr of (JSON.parse(e.content) || {}).pairs || []) {
+              if (!pr || !pr.old || !pr.new || pr.old === pr.new) continue;
+              next.add(String(pr.old).toLowerCase());
+              const nm = String(pr.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+              if (nm) names.set(String(pr.new).toLowerCase(), nm);
+            }
+          } catch {
+          }
+          reseatOld = next;
+          reseatName = names;
+          emit();
+        },
+        oneose() {
+        }
+      });
       return () => {
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          reseatSub.close();
         } catch {
         }
         if (emitTimer) {
@@ -13845,6 +14229,7 @@ zoo`.split("\n");
           try {
             const p = JSON.parse(e.content);
             lastProfile = { ...lastProfile, ...p };
+            _profileLoaded = true;
             onProfile(p);
             try {
               window.dispatchEvent(new CustomEvent("steward-profile", { detail: lastProfile }));
@@ -13854,7 +14239,9 @@ zoo`.split("\n");
           }
         },
         oneose() {
+          _profileLoaded = true;
         }
+        // the relay answered; a church with no profile yet can still publish its first
       });
       return () => {
         try {
@@ -13967,6 +14354,10 @@ zoo`.split("\n");
         }
       }
       lastProfile = {};
+      _profileLoaded = false;
+      _nameKeyRing = [];
+      _nameKeyDocKeys = null;
+      _nameKeyChecked = false;
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;

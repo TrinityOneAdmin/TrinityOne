@@ -45,7 +45,7 @@ The heavier logic lives in **engines**: `src/*.src.js` (and a few `.mjs`) files 
 
 | Source | Global | Does |
 |---|---|---|
-| `src/identity.src.js` | `window.TrinityIdentity` | the self-custodial key (create / import / sign / recovery phrase) + the optional **PIN** that encrypts the identity at rest (locked ⇒ church side unreachable, app is a plain Bible reader) |
+| `src/identity.src.js` | `window.TrinityIdentity` | the self-custodial key (create / import / sign / recovery phrase) + the optional **PIN** that encrypts the identity at rest (locked ⇒ the key cannot load, so the church side is unreachable and no message can be read, and the SCREEN shows only the Bible). **It is not plausible deniability**: the device still stores the church list and cached church documents in the clear, so anyone who examines the phone can still tell which congregation it belongs to. Verified in a browser 2026-07-27 |
 | `src/fellowship.src.js` | `window.Fellowship` | the **member** app's Nostr transport (chat, church feeds, subscriptions) |
 | `src/steward.src.js` | `window.Steward` | the **church key** + all publishing/subscribing for the console |
 | `src/finance-ledger.mjs` (+ `finance-store`, `finance-import`, bundled via `finance-bundle.mjs`) | `window.FinanceLedger` | double-entry ledger, fund accounting, CSV statement import — see [`docs/design/FINANCE-MODULE.md`](docs/design/FINANCE-MODULE.md) |

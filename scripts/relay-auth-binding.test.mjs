@@ -27,7 +27,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 
 const PORT = 8858;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
-const MEMBER_D = 'trinityone/member:', MINORS_D = 'trinityone/minors:';
+const MEMBER_D = 'trinityone/member:', MINORS_D = 'trinityone/minors:', APPROVED_D = 'trinityone/approved:';
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -69,6 +69,7 @@ before(async () => {
   pub = await connect();
   assert.equal((await publish(pub, doc(member, MEMBER_D + church.pub, { joined: now() })))[0], true, 'member joined');
   assert.equal((await publish(pub, doc(church, MINORS_D + church.pub, { pubkeys: [child.pub] })))[0], true, 'minors list stored');
+  assert.equal((await publish(pub, doc(church, APPROVED_D + church.pub, { pubkeys: [member.pub] })))[0], true, 'cleared-adults list stored');
   await sleep(150);
 });
 after(() => { try { pub && pub.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
@@ -94,11 +95,16 @@ test('an auth with no relay tag at all is refused', async () => {
 });
 
 test('a correctly-addressed auth still works (the binding is not a lockout)', async () => {
+  // Reads the CLEARED-ADULTS list, not the minors list. As of AUDIT-2026-07-27 the relay never serves `minors:`
+  // to an ordinary member — it is a cleartext roll of a congregation's children and joining is one publish —
+  // so asserting a member receives it would now be asserting the leak. `approved:` is still private (an
+  // anonymous read gets nothing) and still member-readable, so it proves the same thing: auth unlocks a gated
+  // document. The test below still covers the withheld-vs-EOSE half using the minors list.
   const ws = await connect();
-  const r = await probe(ws, 'a3', { kinds: [30078], '#d': [MINORS_D + church.pub] }, { authAs: member, relayUrl: WS_URL, window: 1800 });
+  const r = await probe(ws, 'a3', { kinds: [30078], '#d': [APPROVED_D + church.pub] }, { authAs: member, relayUrl: WS_URL, window: 1800 });
   ws.close();
   assert.equal(r.authOk, true, 'an auth naming this relay must be accepted');
-  assert.equal(r.events.length, 1, 'and the member then receives the private minors list');
+  assert.equal(r.events.length, 1, 'and the member then receives a private doc they are entitled to');
 });
 
 test('an unauthenticated read of withheld data does NOT get a prompt "that is everything"', async () => {

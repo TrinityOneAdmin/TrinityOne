@@ -116,6 +116,10 @@ const MINORS_D = 'trinityone/minors:';      // safeguarding: this church's minor
 const APPROVED_D = 'trinityone/approved:';  // safeguarding: adults cleared to contact youth, d=approved:<churchpub>
 const NOPHOTO_D = 'trinityone/nophoto:';    // moderation: members whose uploaded photo is suppressed, d=nophoto:<churchpub>
 const GUARDREQ_D = 'trinityone/guardreq:';  // safeguarding v2: a parent's guardian-link request (parent-authored), d=guardreq:<childpub>
+const NAMEKEY_D = 'trinityone/namekey:';   // per-church name key, wrapped per member (ring: current first)
+const NAME_RING_MAX = 12;   // same bound as the care key: the ring is sealed PER RECIPIENT, so it multiplies
+const NAME_D = 'trinityone/name:';         // a member's own display name for this church, sealed under it
+const CLEARANCE_D = 'trinityone/clearance:';   // a member's OWN safeguarding status, NIP-44 sealed to them
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-confirmed parent↔child map, d=guardians:<churchpub>
 const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent NOTICE that they were linked to a child, d=guardnotice:<parentpub>, p-tagged + content NIP-44-encrypted to the parent (the child link never appears in cleartext)
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a self-hosted media item referencing a content-addressed blob (sha256 + host)
@@ -157,12 +161,16 @@ let _mediaKeyDocKeys = null;                   // the latest media-key doc's wra
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
+const RESEAT_D = 'trinityone/reseat:';       // church-vouched "the member who was <old> is now <new>", d=reseat:<churchpub>
 const STEWARDS_D = 'trinityone/stewards:';   // delegated, revocable steward roster (owner-signed), d=stewards:<churchpub>; see STEWARD-ROSTER-DESIGN.md
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request to a church (requester-signed), d=stewardreq:<churchpub>; the owner approves it into the roster
 const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<groupId> (one per group; empty/deleted = unpinned)
 const HIDE_D = 'trinityone/hidden:';        // a removed/hidden message, d=hidden:<msgId> (one per message; deleted = restored)
 const GROUPKEY_D = 'trinityone/groupkey:'; // church-signed key envelope for an encrypted group
-const _skeys = {};   // groupId -> Uint8Array(32) group key (church-side cache)
+const _skeys = {};   // groupId -> KEY RING [current, ...superseded], each Uint8Array(32) (church-side cache)
+const GROUP_RING_MAX = 12;   // bound the envelope, and match the care key's ring exactly (see _careKeyRing).
+// 32 was too many now that every envelope carries the ring sealed PER RECIPIENT: a large church multiplied
+// that by its member count and pushed the event past the relay's 1 MB maxPayload. AUDIT-2026-07-27.
 const _srev = {};    // groupId -> envelope revision (bumped on rotate)
 const _senvTs = {};  // groupId -> latest envelope created_at (ignore stale/out-of-order)
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -175,7 +183,16 @@ function stewIngestKey(e) {
   const gid = d.slice(GROUPKEY_D.length);
   if ((_senvTs[gid] || 0) > (e.created_at || 0)) return;   // ignore an older envelope arriving late
   _senvTs[gid] = e.created_at || 0;
-  try { const env = JSON.parse(e.content || '{}'); _srev[gid] = env.rev || 1; const mine = env.keys && churchPub && env.keys[churchPub]; if (mine && churchSk) _skeys[gid] = _unhex(nip44d(mine, nip44ck(churchSk, e.pubkey))); } catch {}
+  try {
+    const env = JSON.parse(e.content || '{}'); _srev[gid] = env.rev || 1;
+    const mine = env.keys && churchPub && env.keys[churchPub];
+    if (mine && churchSk) {
+      const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
+      let ring = null;
+      try { const p = JSON.parse(plain); if (Array.isArray(p)) ring = p.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)); } catch (x) {}
+      _skeys[gid] = (ring && ring.length ? ring : [plain]).map(_unhex);   // legacy envelopes hold a bare hex string
+    }
+  } catch {}
 }
 const now = () => Math.floor(Date.now() / 1000);
 // Author discipline for the church's replaceable AUTHORITY docs (blocklist, admitted, stewards, guardians,
@@ -442,6 +459,54 @@ function _relayInfo(wssUrl) {
 // extensible (setDiscoverySeed) and discovery-only — it never carries church content, so it's not a central
 // point (FEDERATION-PLAN guardrail). Empty on the pilot (a8 isn't offering), so auto-pick is a safe no-op.
 let _discoverySeed = [];
+// DOES THIS RELAY ACTUALLY ENFORCE THE RULES? Ask it to break them and see whether it does.
+//
+// Auto-find used to keep a candidate if its own NIP-11 said `enforces: true`. That field is simply
+// `CHURCH_PUBS.size > 0` — a relay reporting on itself — so anyone could stand up a relay, register one dummy
+// church, advertise an offer and be picked. A picked relay then receives EVERYTHING the console publishes,
+// because publish() fans out to relays(). The comment claiming the NIP-11 probe made a dishonest entry
+// impossible was true only of a stale DIRECTORY entry, never of a relay lying about itself. AUDIT-2026-07-27.
+//
+// So: test the behaviour. A throwaway key tries to write two church-authority documents for a church that does
+// not exist on that relay. A relay that enforces the write policy refuses both; a permissive or hostile one
+// accepts them — and a relay that will accept a stranger's safeguarding list is not one to hand a roster to.
+// Both probes are refused by a compliant relay, so this leaves nothing behind on an honest box.
+//
+// What this cannot prove: that the operator is not simply reading their own database. Nothing remote can. It
+// raises the floor from "says the right thing" to "does the right thing".
+function _probeRelayEnforces(wssUrl, timeoutMs) {
+  return new Promise((resolve) => {
+    let ws = null, done = false;
+    const results = [];
+    const finish = (ok, why) => { if (done) return; done = true; try { ws && ws.close(); } catch (e) {} resolve({ ok, why }); };
+    const to = setTimeout(() => finish(false, 'no answer'), timeoutMs || 8000);
+    try { ws = new WebSocket(wssUrl); } catch (e) { clearTimeout(to); return finish(false, 'unreachable'); }
+    const sk = generateSecretKey();
+    const ghost = getPublicKey(generateSecretKey());   // a church pubkey this relay has never heard of
+    const probes = [
+      { d: 'trinityone/minors:' + ghost, what: 'a stranger’s list of children' },
+      { d: 'trinityone/stewards:' + ghost, what: 'a stranger’s steward roster' },
+    ];
+    const ids = new Map();
+    ws.onopen = () => {
+      for (const pr of probes) {
+        const evt = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', pr.d], ['t', NET]], content: JSON.stringify({ pubkeys: [] }) }, sk);
+        ids.set(evt.id, pr);
+        try { ws.send(JSON.stringify(['EVENT', evt])); } catch (e) {}
+      }
+    };
+    ws.onerror = () => { clearTimeout(to); finish(false, 'unreachable'); };
+    ws.onclose = () => { clearTimeout(to); if (!done) finish(false, 'closed early'); };
+    ws.onmessage = (m) => {
+      let msg = null; try { msg = JSON.parse(m.data); } catch (e) { return; }
+      if (!Array.isArray(msg) || msg[0] !== 'OK' || !ids.has(msg[1])) return;
+      const pr = ids.get(msg[1]); ids.delete(msg[1]);
+      if (msg[2] === true) { clearTimeout(to); return finish(false, 'it accepted ' + pr.what); }   // decisive
+      results.push(pr.d);
+      if (!ids.size) { clearTimeout(to); finish(true, 'refused both probes'); }
+    };
+  });
+}
 async function discoverRelayOffers(seedExtra, region) {
   // Global discovery: ask the shared directory which relays have advertised they're open to host, so we can
   // surface relays this church has NEVER added. Merge with the local seed; each candidate is still NIP-11
@@ -453,8 +518,12 @@ async function discoverRelayOffers(seedExtra, region) {
   const seed = [...new Set([...(seedExtra || []), ...dirUrls, ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
   const probed = await Promise.all(seed.map(async (url) => {
     const t = await _relayInfo(url);
-    if (t && t.enforces === true && t.open === true && !t.full) return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '' };
-    return null;
+    if (!(t && t.enforces === true && t.open === true && !t.full)) return null;   // its own claim: necessary, not sufficient
+    // …and now make it prove it. `enforces` is self-reported; a relay that will accept a stranger's
+    // safeguarding list must never be offered as a place to put a congregation's roster.
+    const canonical = (CANONICAL_RELAYS || []).includes(url);
+    if (!canonical) { const v = await _probeRelayEnforces(url); if (!v.ok) { try { console.warn('[relay-offers] rejected', url, '—', v.why); } catch (e) {} return null; } }
+    return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '' };
   }));
   const offers = probed.filter(Boolean);
   offers.sort((a, b) => { if (region) { const ra = a.region === region ? 0 : 1, rb = b.region === region ? 0 : 1; if (ra !== rb) return ra - rb; } return (a.churches || 0) - (b.churches || 0); });
@@ -486,7 +555,21 @@ let sk = null, pub = null;                 // the ACTIVE signing identity (churc
 // and permanently orphans everything sealed with the first. See the mint gate in ensureCareKeyForMembers.
 let _relayAuthed = false;
 pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); _relayAuthed = true; return finalizeEvent(authEvent, sk); };
+let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
+let _nameKeyDocKeys = null;   // the recipient map of the envelope we last SAW — null means "we have not looked"
+let _nameKeyChecked = false;  // the namekey subscription has ANSWERED (event or EOSE) for the active identity
 let churchSk = null, churchPub = null;     // the real church key — preserved so we can always switch back
+let _profileLoaded = false;                // the relay has ANSWERED about this identity's kind-0 (event or EOSE)
+// Resolve as soon as the relay answers, or after a bounded wait. Poll rather than hook the subscription, so a
+// console that has not subscribed at all (or whose relay is down) still settles instead of hanging a save.
+function _profileSettle(ms = 6000) {
+  if (_profileLoaded) return Promise.resolve(true);
+  return new Promise((res) => {
+    const t0 = Date.now();
+    const tick = () => { if (_profileLoaded || Date.now() - t0 > ms) return res(_profileLoaded); setTimeout(tick, 150); };
+    tick();
+  });
+}
 let lastProfile = {};   // cached church profile so partial publishProfile edits don't wipe other fields
 // DELEGATED steward mode (phase 2b): when this console acts as a steward of a church it does NOT own,
 // `actingChurch` is that church's hex pubkey. We sign with OUR OWN key (churchSk) but read+publish in
@@ -918,6 +1001,16 @@ window.Steward = {
     s = s.replace(/^trinityone-steward:/i, '').trim();
     return toPubHex(s);
   },
+  // The key a member shows on a NEW phone after losing their 12 words: `trinityone-reseat:<npub>`. A bare
+  // npub or hex is accepted too, so a member who can't be there in person can simply send it — the steward
+  // still has to recognise them and press the button, which is where the authority actually comes from.
+  parseMemberKey(payload) {
+    let s = (payload || '').trim();
+    const q = s.match(/[?&#]reseat=([^&#\s]+)/);
+    if (q) { try { s = decodeURIComponent(q[1]); } catch {} }
+    s = s.replace(/^trinityone-reseat:/i, '').trim();
+    return toPubHex(s);
+  },
   // ---- invite-to-steward handshake: the OWNER shows an invite QR (their church id, public); a would-be
   // steward SCANS it and sends a request; the owner sees it pending and approves it into the roster. ----
   stewardInvitePayload() { return churchPub ? ('trinityone-stewardinvite:' + npubEncode(churchPub)) : ''; },
@@ -993,6 +1086,38 @@ window.Steward = {
   // ---- publish (signed by the church) ----
   publishProfile(meta) {
     if (!sk) return Promise.resolve(null);
+    // NEVER while acting as a DELEGATED steward. setActiveIdentity's delegated branch sets `sk = churchSk`
+    // (this device's OWN church key) with `pub` = the church we steward, and subscribeProfile fills
+    // `lastProfile` from `authors:[pub]` — the OTHER church's profile. So one toggle in Settings republished
+    // THIS church's kind-0 carrying the other church's name, logo, banner, feature flags and `lud16`: every
+    // member's app renamed the church and repointed giving, irreversibly (kind-0 is replaceable).
+    // A delegated steward cannot legitimately publish the other church's profile anyway — they do not hold its
+    // key — so the honest answer is to refuse. AUDIT-2026-07-27.
+    // Both refusals below MUST reach a screen. They returned Promise.resolve(null), and every one of the 20+
+    // callers treats that as success — NameEditModal closes the dialog, the feature toggles keep their new
+    // position, the giving-address field shows "Saved ✓". Nothing happened, and nothing said so.
+    // AUDIT-2026-07-27.
+    const _refuse = (what, message) => {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message } })); } catch (e) {}
+      return Promise.resolve(null);
+    };
+    if (actingChurch) return _refuse('church profile', 'Only the church that owns this profile can change its name, logo, giving address or features. Ask the church owner to make this change on their own console.');
+    // And never merge an edit into a profile we have not actually READ yet. `lastProfile` starts empty and is
+    // only filled when the relay answers, so editing one field on a cold/slow start published a kind-0 with
+    // every other field blank — wiping picture, banner, accent, features, rules and the giving address.
+    // WAIT, don't refuse outright. A brand-new church types its name in step 0 of the setup wizard, before the
+    // relay has answered about a profile that does not exist yet — so this guard refused the very first name a
+    // church ever sets, the wizard advanced anyway, and the church was created nameless with nothing to retry
+    // it. Give the subscription a bounded moment to answer (an EOSE arrives even when there is no profile,
+    // which is exactly the new-church case), and only refuse if it never does.
+    if (!_profileLoaded && Object.keys(lastProfile).length === 0 && Object.keys(meta || {}).length < 3) {
+      return _profileSettle().then(() => {
+        if (!_profileLoaded && Object.keys(lastProfile).length === 0) {
+          return _refuse('church profile', 'That change hasn\u2019t been saved yet \u2014 this device is still connecting to your church\u2019s relay, and saving now would blank the settings it hasn\u2019t read. Check the relay is running and try again.');
+        }
+        return window.Steward.publishProfile(meta);
+      });
+    }
     lastProfile = { ...lastProfile, ...meta };   // merge so a partial edit (e.g. name) keeps channel etc.
     const m = lastProfile;
     // clean any steward-typed address (strip http/www/path); auto-claim a relay handle if none is set
@@ -1344,7 +1469,7 @@ window.Steward = {
   publishPost(content, group) {
     if (!sk) return Promise.resolve(null);
     let body = content || '', encTag = [];
-    const gkey = group && _skeys[group];   // encrypted group → seal the post
+    const gkey = group && (_skeys[group] || [])[0];   // encrypted group → seal the post under the CURRENT key (ring[0])
     if (gkey) { try { body = nip44e(content || '', gkey); encTag = [['enc', '1']]; } catch (e) {} }
     return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag], content: body }));
   },
@@ -1436,7 +1561,12 @@ window.Steward = {
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
         if (!e.tags.some(t => t[0] === 'p' && t[1] === pub)) return;   // this church's scope
         let text = e.content;
-        if (e.tags.some(t => t[0] === 'enc')) { const k = _skeys[groupId]; if (!k) return; try { text = nip44d(e.content, k); } catch { return; } }
+        if (e.tags.some(t => t[0] === 'enc')) {
+          const ring = _skeys[groupId]; if (!ring || !ring.length) return;
+          let ok = false;
+          for (const k of ring) { try { text = nip44d(e.content, k); ok = true; break; } catch (x) {} }   // current key, then superseded
+          if (!ok) return;
+        }
         byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '' });
         resolveName(e.pubkey);
         emit();
@@ -1592,22 +1722,52 @@ window.Steward = {
   // the original opaque key material from disk). ----
   publishGroupKey(groupId, memberPubs, opts = {}) {
     if (!churchSk || !churchPub) return Promise.resolve(null);
-    if (opts.reuseOnly && !_skeys[groupId]) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
+    const haveRing = (_skeys[groupId] || []).length > 0;
+    if (opts.reuseOnly && !haveRing) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
     const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])];
-    let key = _skeys[groupId];
+    let ring = _skeys[groupId] || [];
+    let key = ring[0];
     // AUDIT-2026-07-24: the contract above ("must NOT mint a new key — would orphan history") was enforced only
     // for the background reuseOnly path. The INTERACTIVE path — a steward adding one member to an existing
     // encrypted group — minted whenever `key` was missing, and `_skeys` is populated only when the envelope has
     // arrived. Adding a member before it landed re-keyed the group and orphaned every prior message in it,
     // permanently. A missing key is only safe to interpret as "new group" once we've had an authenticated read.
     if (!opts.rotate && !key && !_relayAuthed) return Promise.resolve(null);
-    if (opts.rotate || !key) { key = crypto.getRandomValues(new Uint8Array(32)); _srev[groupId] = (_srev[groupId] || 0) + 1; }
-    _skeys[groupId] = key;
+    // ROTATION KEEPS THE OLD KEYS. Replacing the ring with one fresh key is what made a block erase the group's
+    // whole readable history on every phone — _decEvt drops what it cannot open, so the messages simply vanish.
+    // Carry the superseded keys along, newest first, exactly as the care key does. AUDIT-2026-07-27.
+    if (opts.rotate || !key) {
+      key = crypto.getRandomValues(new Uint8Array(32));
+      _srev[groupId] = (_srev[groupId] || 0) + 1;
+      ring = [key, ...ring].slice(0, GROUP_RING_MAX);
+    } else if (!ring.length) ring = [key];
+    _skeys[groupId] = ring;
     const rev = _srev[groupId] || 1; _srev[groupId] = rev;
-    const keys = {};
-    for (const pk of recips) { try { keys[pk] = nip44e(_hex(key), nip44ck(churchSk, pk)); } catch (e) {} }
+    // TWO SHAPES, DELIBERATELY. `keys` holds ONLY the current key as bare hex — exactly what every already-
+    // installed app expects. `rings` holds the whole ring as a JSON array for apps that understand it.
+    // Writing only the ring shape was a silent field break in the direction that actually happens: the console
+    // and relay update first and phones follow over days, so the next roster tick would have re-keyed every
+    // group with a payload old apps parse into garbage. _decEvt DROPS what it cannot open, so every member on
+    // an un-updated phone would have opened Prayer or their life group to an EMPTY ROOM — no error, no spinner,
+    // nothing to diagnose. The compat comment on the member side reasoned about the opposite direction only.
+    // AUDIT-2026-07-27.
     _senvTs[groupId] = now();
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content: JSON.stringify({ rev, keys }) }, churchSk));
+    const build = (r) => {
+      const keys = {}, rings = {};
+      const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
+      for (const pk of recips) {
+        try { const ck = nip44ck(churchSk, pk); keys[pk] = nip44e(cur, ck); rings[pk] = nip44e(wrapped, ck); } catch (e) {}
+      }
+      return JSON.stringify({ rev, keys, rings });
+    };
+    // A church large enough to push the sealed ring past the relay's 1 MB cap sheds history rather than
+    // failing to publish: a shorter ring costs old messages, a refused envelope costs the group entirely.
+    let content = build(ring);
+    for (let r = ring.length; content.length > 900000 && r > 1; ) {
+      r = Math.max(1, r >> 1);
+      content = build(ring.slice(0, r));
+    }
+    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk));
   },
   // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
   // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
@@ -1650,16 +1810,20 @@ window.Steward = {
     // stale copy from a lagging relay win — it would quietly reinstate a child-protection state the church
     // has already changed.
     let tMinors = 0, tApproved = 0, tNophoto = 0;
+    // `loaded` says the relay has ANSWERED, not that the lists are non-empty. The clearance backfill must
+    // not run before it: sealing every member a 'not a minor' clearance from lists that had simply not
+    // arrived yet would strip child status from every child in the church. AUDIT-2026-07-27.
+    let loaded = false;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto, loaded }); }
       },
-      oneose() { onLists({ minors, approved, nophoto }); },
+      oneose() { loaded = true; onLists({ minors, approved, nophoto, loaded }); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -1669,6 +1833,124 @@ window.Steward = {
     const list = [...new Set((pubkeys || []).filter(Boolean))];
     return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
   },
+  // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
+  // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
+  // children to the whole congregation — the relay no longer serves `minors:` to ordinary members, and joining
+  // an open-join church is a single self-signed publish, so that list was one frame away from any stranger.
+  // AUDIT-2026-07-27. Church-tagged so the relay can check the author is that church or one of its stewards.
+  publishClearance(memberPub, status) {
+    if (!sk) return Promise.resolve(null);
+    const mp = toPubHex(memberPub) || memberPub;
+    if (!/^[0-9a-f]{64}$/i.test(mp || '')) return Promise.resolve(null);
+    const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
+    let ct = ''; try { ct = nip44e(body, nip44ck(sk, mp)); } catch (e) { return Promise.resolve(null); }
+    // The ['church'] tag is EXPLICIT, not left to feChurch. feChurch only adds it when acting as a DELEGATED
+    // steward, so a church OWNER — the ordinary case — published this with no church tag, the relay's accept
+    // rule requires one, and every clearance was refused. Silently: the member's app then fell back to the
+    // minors list, which the same day's work stopped serving to members, so isMinor was false for every child
+    // in every church. A safeguarding regression created by the change meant to protect them. The test missed
+    // it by hand-building the event WITH the tag instead of calling this function. AUDIT-2026-07-27.
+    const cp = actingChurch || pub;
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }));
+  },
+  // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
+  // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
+  refreshClearances(memberPubs, minors, approved) {
+    const mins = new Set((minors || []).map(x => String(x || '').toLowerCase()));
+    const appr = new Set((approved || []).map(x => String(x || '').toLowerCase()));
+    const out = [];
+    for (const p of [...new Set((memberPubs || []).filter(Boolean))]) {
+      const h = String(p).toLowerCase();
+      out.push(window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }));
+    }
+    return Promise.allSettled(out);
+  },
+  // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
+  // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —
+  // and any mirror holding a copy of this church — a named roster. The church mints a key, wraps a copy for
+  // every member, and members seal their own name under it. Same shape as the care and media keys, including
+  // the RING: rotating on removal must not orphan the names already published. AUDIT-2026-07-27.
+  // Modelled on ensureCareKeyForMembers, which had already learned all of this the hard way. Every guard below
+  // exists because its absence destroys data rather than merely failing. AUDIT-2026-07-27.
+  ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
+    if (!churchSk || !churchPub) return Promise.resolve(null);
+    const cp = actingChurch || pub;
+    // (1) NEVER act on a view we have not established. "The relay returned no envelope" is not proof that none
+    // exists — the envelope is private, so an unauthenticated or unreachable relay gives the same empty answer.
+    if (!_nameKeyChecked || !_relayAuthed) return Promise.resolve(null);
+    let ring = _nameKeyRing.slice();
+    // (2) An envelope EXISTS and we are not in it: the church owner must add us. Minting here is what a
+    // DELEGATED console did — it can never read the owner's envelope (its own key was not a recipient), so it
+    // held an empty ring, and one block() call minted a brand-new single-key ring and published it as the
+    // church's name key. Members accept it, newest-wins, and every sealed name in the congregation stops
+    // opening. Rotation does NOT excuse this: a rotate with no ring is exactly that bug.
+    if (!ring.length && _nameKeyDocKeys) return Promise.resolve(null);
+    if (opts.rotate && !ring.length) return Promise.resolve(null);
+    if (opts.rotate || !ring.length) ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, NAME_RING_MAX);
+    // (3) Include the acting church and the steward roster, not just this device. Omitting `cp` is why a
+    // delegated console could never read the envelope in the first place.
+    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].map(p => toPubHex(p) || p).filter(Boolean))];
+    const have = _nameKeyDocKeys || {};
+    // (4) GROW, never shrink — except on an explicit rotate. This runs on every roster tick, and the roster
+    // arrives in pieces, so an early call held a PARTIAL member list. Publishing that dropped everyone missing
+    // from it, and the member side treats "I am not in this envelope" as revocation and deletes its keys — so
+    // half the congregation would have gone anonymous until a fuller envelope happened along. A block is the
+    // one case where removing a recipient is the whole point, and that is what opts.rotate marks.
+    const recips = opts.rotate ? want : [...new Set([...want, ...Object.keys(have)])];
+    // (5) Everyone already keyed and nothing rotated → say nothing. Without this the console republished on
+    // every 150 ms roster emit; each envelope makes every member's app re-open every sealed name in the church
+    // and re-render every subscriber.
+    if (!opts.rotate && ring.length === _nameKeyRing.length && recips.every(p2 => have[p2])) return Promise.resolve(null);
+    _nameKeyRing = ring;
+    const keys = {};
+    const wrapped = JSON.stringify(ring);
+    for (const pk of recips) { try { keys[pk] = nip44e(wrapped, nip44ck(churchSk, pk)); } catch (e) {} }
+    const out = publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+    _nameKeyDocKeys = keys;
+    return out;
+  },
+  // read the envelope back (the church's own copy) so the console can decrypt members' names
+  subscribeNameKey() {
+    const cp = actingChurch || pub;
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [NAMEKEY_D + cp] }], {
+      onevent(e) {
+        if (!_byChurchOrSteward(e)) return;   // church key or a CURRENT roster steward, same rule as every other envelope
+        try {
+          const env = JSON.parse(e.content || '{}');
+          // Record the recipient map even when we cannot open our own copy: "an envelope exists" is exactly
+          // what stops this console minting a second key over it.
+          if (env.keys && typeof env.keys === 'object') { _nameKeyDocKeys = env.keys; _nameKeyChecked = true; }
+          const mine = env.keys && churchPub && env.keys[churchPub];
+          if (!mine || !churchSk) return;
+          const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
+          const r = JSON.parse(plain);
+          if (Array.isArray(r)) _nameKeyRing = r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x));
+        } catch (x) {}
+      },
+      oneose() { _nameKeyChecked = true; },   // the relay answered — a church with no envelope yet may now mint its first
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
+  openMemberName(content, authorPub) {
+    // { c, m }: `c` is the congregation's (or, before admission, the church's) copy; `m` is the member's own
+    // recovery copy, which is sealed to them alone and is none of the console's business. A bare string is the
+    // pre-Stage-2 shape.
+    let ct = String(content || '');
+    if (ct.startsWith('{')) { try { const o = JSON.parse(ct); ct = (o && typeof o.c === 'string') ? o.c : ''; } catch (x) { ct = ''; } }
+    if (!ct) return '';
+    for (const k of _nameKeyRing) {
+      try { const o = JSON.parse(nip44d(ct, _unhex(k))); if (o && typeof o.name === 'string') return o.name.slice(0, 40); } catch (x) {}
+    }
+    // A member awaiting approval has no congregation key yet, so their copy is sealed to the church key alone.
+    // Without this fallback a gated church would see every join request as a nameless npub — and the relay
+    // deliberately lets those members write the doc precisely so the steward has a name to approve.
+    if (authorPub && churchSk) {
+      try { const o = JSON.parse(nip44d(ct, nip44ck(churchSk, toPubHex(authorPub) || authorPub))); if (o && typeof o.name === 'string') return o.name.slice(0, 40); } catch (x) {}
+    }
+    return '';
+  },
+  nameKeyReady() { return _nameKeyRing.length > 0; },
   setMinors(pubkeys) {   // replace the whole minors list (pass hex pubkeys)
     _requireTrustedView('list of children');
     if (!sk) return Promise.resolve(null);
@@ -1685,7 +1967,7 @@ window.Steward = {
   // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
   // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
   // which the relay reads so a parent may always DM their own child. ----
-  subscribeGuardianRequests(onReqs) {   // pending parent requests → [{ child, parent, parentName, childName, ts }]
+  subscribeGuardianRequests(onReqs) {   // pending parent requests → [{ child, parent, ts }] — names come from the roster
     const byChild = new Map();
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#p': [pub] }], {
       onevent(e) {
@@ -1700,7 +1982,10 @@ window.Steward = {
         // that adult a minor. The parent is now ALWAYS the signer, which is the one field a forger can't lie
         // about. The claimed names stay untrusted display strings — the UI labels them "claims to be" and
         // shows both npubs, exactly as the steward-approval card already does.
-        else { try { const c = JSON.parse(e.content); if (c.child && c.child !== child) return; byChild.set(child, { child, parent: e.pubkey, claimedParentName: c.parentName || '', claimedChildName: c.childName || '', ts: e.created_at }); } catch {} }
+        // No claimed names any more — Stage 2 removed them from the request entirely. They were never rendered
+        // (C1: a requester-supplied name is forgeable, so the card shows the name WE resolved from the roster),
+        // and carrying a child's name plus their parent's in a member-readable document was the larger leak.
+        else { try { const c = JSON.parse(e.content); if (c.child && c.child !== child) return; byChild.set(child, { child, parent: e.pubkey, ts: e.created_at }); } catch {} }
         onReqs([...byChild.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       },
       oneose() { onReqs([...byChild.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))); },
@@ -1783,6 +2068,55 @@ window.Steward = {
       oneose() { onList(cur); },
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  // ── RE-SEAT: a member lost their 12 words and came back on a NEW key ───────────────────────────────
+  // Their old key is gone for good — nobody has it, not the church, not us. So this does NOT recover an
+  // account; it moves a member's SEAT (their name, their place on the roster) onto the key they have now, on
+  // the church's word that they are the same person. Old DMs and sealed care records stay unreadable, which
+  // is correct: if a steward's click could open them, the privacy was never real.
+  //
+  // The authorisation is the steward's deliberate act in their own console against a key they scanned or were
+  // given. There is NO one-time token by design — a code that re-seats a member would be a bearer credential
+  // to BECOME them, and would be worth stealing.
+  subscribeReseats(onList) {   // the church's re-seat pairs → [{ old, new, at }]
+    let cur = [], latest = 0;
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d !== RESEAT_D + pub) return;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward; the relay enforces this too
+        if (e.created_at < latest) return; latest = e.created_at;   // newest wins
+        try { cur = (JSON.parse(e.content).pairs) || []; } catch { cur = []; }
+        if (!Array.isArray(cur)) cur = [];
+        onList(cur);
+      },
+      oneose() { onList(cur); },
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
+  setReseats(pairs) {   // replace the whole re-seat map (pass [{old,new,name,at}] with hex pubkeys)
+    _requireTrustedView('re-seat map');
+    if (!sk) return Promise.resolve(null);
+    // `name` carries the member's DISPLAY NAME across with the seat. Without it a re-seat moved a pubkey and
+    // nothing else: roster names come from each key's own kind-0, the old key is filtered out of the roster
+    // entirely, and a member arriving by the "I've lost my 12 words" route has never passed through the name
+    // step — so "Maria" vanished and was replaced by "Anonymous …abc123", while three screens promised her
+    // name would come back. AUDIT-2026-07-26 CRITICAL 3. The member's app adopts it as their OWN kind-0 the
+    // moment the doc arrives (fellowship.src.js _noteReseat), so this is a bootstrap value, not a permanent
+    // override: if they rename themselves later, their own profile wins everywhere as it always did.
+    const clean = (pairs || [])
+      .filter(p => p && /^[0-9a-f]{64}$/i.test(p.old || '') && /^[0-9a-f]{64}$/i.test(p.new || '') && p.old !== p.new)
+      .map(p => {
+        const nm = String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+        const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1000) };
+        if (nm) out.name = nm;
+        return out;
+      });
+    // feChurch, NOT finalizeEvent: a DELEGATED steward signs with their own key, and only the ['church',<cp>]
+    // stamp it adds makes the doc match the member app's subscription (authors:[cp] OR #church:[cp]). Without
+    // it the relay would still store and gate the doc correctly, but no member would ever receive it — the
+    // church would keep showing two of the same person and the reconnect would look like it did nothing.
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RESEAT_D + pub], ['t', NET]], content: JSON.stringify({ pairs: clean }) }));
   },
   setAdmitted(pubkeys) {   // replace the whole admitted list (pass hex pubkeys)
     _requireTrustedView('approved-members list');
@@ -2242,7 +2576,28 @@ window.Steward = {
     // JSON.stringify(entire roster) + localStorage write + setState on EVERY incoming event; on a large church's
     // load that was thousands of full-roster serializations. Coalesce to ~150ms (trailing fire keeps final state).
     let emitTimer = null;
-    const emitNow = () => { const arr = [...byPub.values()].sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0))); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr); };
+    // reseatOld holds the DEAD keys of members who lost their 12 words and were re-seated onto a new one.
+    // Without this the church sees the same person twice — the old entry can never post again, but it still
+    // sits in the roster, in the member count, and in every picker a steward uses.
+    // reseatName is the other half: the display name the church vouched across with the seat. A re-seated key
+    // has no kind-0 of its own until the member's app publishes one, so without this the steward's roster
+    // showed the person they had just reconnected as "Anonymous …". AUDIT-2026-07-26 CRITICAL 3. It is a
+    // FALLBACK only — the key's own profile always wins, so a member who renames themselves is never overridden.
+    let reseatOld = new Set(), reseatName = new Map(), reseatAt = 0;
+    // The SEALED name each member published for this church. Stored as ciphertext and opened at emit time on
+    // purpose: the name key routinely arrives after the name documents do, and re-deriving on each emit means a
+    // late key simply starts working instead of needing its own retry path. Until this, openMemberName had no
+    // callers at all — the console resolved every name from the cleartext kind-0 beside it, so the sealed copy
+    // was written by every member, stored by the relay, and read by nobody. AUDIT-2026-07-27.
+    const sealedRaw = new Map();
+    const emitNow = () => {
+      const sealedName = (pk) => { const c = sealedRaw.get(pk); if (!c) return ''; try { return window.Steward.openMemberName(c, pk) || ''; } catch (x) { return ''; } };
+      const arr = [...byPub.values()].filter(m => !reseatOld.has(m.pubkey))
+        .map(m => { if (m.name) return m; const sn = sealedName(m.pubkey); return sn ? { ...m, name: sn, viaSealed: true } : m; })
+        .map(m => (m.name || !reseatName.get(m.pubkey)) ? m : { ...m, name: reseatName.get(m.pubkey), viaReseat: true })
+        .sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)));
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr);
+    };
     const emit = () => { if (emitTimer) return; emitTimer = setTimeout(() => { emitTimer = null; emitNow(); }, 150); };
     const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: '', picture: '', count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
     // SECURITY-AUDIT-2026-07-18 (perf — "names blank = sub cap"): resolve profiles with ONE batched kind-0
@@ -2286,7 +2641,31 @@ window.Steward = {
       },
       oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
+    // the church's own signed re-seat map (same doc the Reconnect button writes). Its own small subscription:
+    // the roster sub above is keyed on ['p',<church>], which a re-seat doc does not carry.
+    const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        // a member's own sealed name for this church — authorised by AUTHORSHIP (it is their own name), so the
+        // church/steward check below must not apply to it.
+        if (d === NAME_D + pub) { if (e.content) { sealedRaw.set(e.pubkey, e.content); emit(); } return; }
+        if (d !== RESEAT_D + pub) return;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward only
+        if (e.created_at < reseatAt) return; reseatAt = e.created_at;   // newest wins
+        const next = new Set(), names = new Map();
+        try {
+          for (const pr of ((JSON.parse(e.content) || {}).pairs || [])) {
+            if (!pr || !pr.old || !pr.new || pr.old === pr.new) continue;
+            next.add(String(pr.old).toLowerCase());
+            const nm = String(pr.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+            if (nm) names.set(String(pr.new).toLowerCase(), nm);
+          }
+        } catch {}
+        reseatOld = next; reseatName = names; emit();
+      },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} try { reseatSub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
   },
 
   // ---- church profile (kind-0): name etc. shown to members and in the console ----
@@ -2296,8 +2675,8 @@ window.Steward = {
     // with the others (avatar/picture shows everywhere at once, not only where it was just edited)
     try { if (lastProfile && Object.keys(lastProfile).length) onProfile(lastProfile); } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pub] }], {
-      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; onProfile(p); try { window.dispatchEvent(new CustomEvent('steward-profile', { detail: lastProfile })); } catch (x) {} } catch {} },
-      oneose() {},
+      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; _profileLoaded = true; onProfile(p); try { window.dispatchEvent(new CustomEvent('steward-profile', { detail: lastProfile })); } catch (x) {} } catch {} },
+      oneose() { _profileLoaded = true; },   // the relay answered; a church with no profile yet can still publish its first
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -2377,7 +2756,13 @@ window.Steward = {
       if (!rec) return false;
       try { sk = privateKeyFromSeedWords(rec.mnemonic); pub = getPublicKey(sk); actingChurch = ''; } catch { return false; }
     }
-    lastProfile = {};   // don't carry one identity's profile fields into the other's edits
+    lastProfile = {}; _profileLoaded = false;   // don't carry one identity's profile fields — or its loaded-ness — into the other's edits
+    // The name key is per-church and MUST NOT survive an identity switch. It was a bare module global, and
+    // subscribeNameKey is mounted once with an empty dependency list, so switching from your own church to one
+    // you steward carried church A's ring across — and the roster effect then published it as church B's name
+    // key, wrapped to church B's members. That hands every member of B the key that opens A's sealed names.
+    // AUDIT-2026-07-27.
+    _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
     window.Steward.pubkey = pub; window.Steward.npub = npubEncode(pub); window.Steward.activePub = pub;
     window.Steward.actingChurch = actingChurch;   // UI reads this to show "acting as steward" + hide owner-only controls
     window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch } }));

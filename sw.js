@@ -1,7 +1,7 @@
 // TrinityOne service worker — makes the app boot offline.
 // The app SHELL (html/jsx/libs/fonts) is cached here; Bible MODULES live in IndexedDB (engine.js)
 // and chat goes over the relay WebSocket — neither is touched by this worker.
-const CACHE = 'trinity-shell-v227';   // bump on each app deploy so installed PWAs refresh the shell
+const CACHE = 'trinity-shell-v229';   // bump on each app deploy so installed PWAs refresh the shell
 // SECURITY-AUDIT-2026-06-25 Critical-1: query-string params that MUST NOT enter the SW cache key.
 // The classic case is `?invite=<full 12-word BIP-39 seed>` — even after the React app strips the URL
 // via history.replaceState (app.jsx ~L466), the SW fetch handler has already cached the response
@@ -10,27 +10,55 @@ const CACHE = 'trinity-shell-v227';   // bump on each app deploy so installed PW
 // address-bar scrub. Strip these before c.put(req, copy).
 const SENSITIVE_QS = ['invite', 'follow', 'relay', 'name', 'adopt', 'church', 'churchkey'];
 
-// Precache the boot-critical core. Everything else same-origin is cached on first fetch, so one
-// online visit (to install / join) makes every screen available offline afterwards.
-const CORE = [
+// PRECACHE, DERIVED FROM THE PAGE ITSELF.
+//
+// This used to be a hand-maintained list of './app/*.jsx'. The web build transpiles those to .js and rewrites
+// index.html to match (scripts/build-pages.sh), so the list silently stopped describing the deployed app:
+// measured against the built output, only 9 of the 43 scripts the page loads were in it, and 28 entries were
+// .jsx files the build never emits. That matters more than it looks, because the service worker registers on
+// `load` — AFTER the page's own scripts have already been fetched without its involvement. So on a FIRST visit
+// the precache is the only thing that lands in the cache. With the list wrong, a reload with the server
+// unreachable found no shell and rendered the browser's error page instead of the app. Verified in a browser.
+//
+// So: read index.html at install time and cache exactly what it references. It cannot drift again, and it is
+// correct for both the .jsx dev shell and the transpiled build without either knowing about this file.
+const EXTRA = [
   './', './index.html',
-  './vendor/react.production.min.js', './vendor/react-dom.production.min.js',
-  './vendor/fflate.js', './vendor/sqljs/sql-wasm.js', './vendor/sqljs/sql-wasm.wasm',
-  './engine.js', './vendor/identity.js', './vendor/fellowship.js', './vendor/mydata.js', './vendor/library/index.js',
-  './vendor/fonts/fonts.css',
-  './app/data.jsx', './app/icons.jsx', './app/ui.jsx', './app/identity-avatar.jsx', './app/identity.jsx', './app/identity-extras.jsx',
-  './app/screens-today.jsx', './app/screens-read.jsx', './app/screens-plans.jsx', './app/screens-library.jsx', './app/screens-bookreader.jsx',
-  './app/screens-watch.jsx', './app/screens-search.jsx', './app/screens-concordance.jsx', './app/screens-audio.jsx', './app/screens-extras.jsx', './app/screens-giving.jsx',
-  './app/screens-church.jsx', './app/screens-serving.jsx', './app/reminders.jsx', './app/backup.jsx', './app/screens-chat.jsx', './app/screens-onboarding.jsx', './app/help-illustrations.jsx', './app/help-data.jsx',
-  './app/screens-help.jsx', './app/screens-help-main.jsx', './app/app.jsx',
+  './vendor/sqljs/sql-wasm.wasm',      // fetched BY sql-wasm.js, so no tag references it
   './catalog.json', './manifest.json', './web-audio-manifest.json',
 ];
+const sameOrigin = (u) => u && !/^[a-z]+:/i.test(u) && !u.startsWith('//') && !u.startsWith('#');
+const norm = (u) => (u.startsWith('./') ? u : './' + u.replace(/^\//, '')).split('#')[0];
+
+async function shellUrls() {
+  const out = new Set(EXTRA);
+  try {
+    const res = await fetch('./index.html', { cache: 'reload' });
+    if (res && res.ok) {
+      const html = await res.text();
+      for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) if (sameOrigin(m[1])) out.add(norm(m[1]));
+    }
+  } catch (_) {}
+  // fonts are referenced from CSS, not from a tag — follow one level so text renders offline too
+  for (const css of [...out].filter((u) => u.endsWith('.css'))) {
+    try {
+      const r = await fetch(css); if (!r || !r.ok) continue;
+      const text = await r.text();
+      const base = css.slice(0, css.lastIndexOf('/') + 1);
+      for (const m of text.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) {
+        const u = m[1]; if (!sameOrigin(u)) continue;
+        out.add(u.startsWith('.') || u.startsWith('/') ? norm(u) : norm(base.replace('./', '') + u));
+      }
+    } catch (_) {}
+  }
+  return [...out];
+}
 
 self.addEventListener('install', (e) => {
   // cache each item independently so one 404 can't fail the whole install
-  e.waitUntil(caches.open(CACHE).then((c) => Promise.all(
-    CORE.map((u) => c.add(u).catch((err) => console.warn('[sw] skip', u, err.message)))
-  )).then(() => self.skipWaiting()));
+  e.waitUntil(shellUrls().then((urls) => caches.open(CACHE).then((c) => Promise.all(
+    urls.map((u) => c.add(u).catch((err) => console.warn('[sw] skip', u, err.message)))
+  ))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -64,7 +92,17 @@ self.addEventListener('fetch', (e) => {
   };
   const fresh = (req) => fetch(req).then((res) => { if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(cacheSafeReq(req), copy)); } return res; });
   if (isShell) {
-    e.respondWith(fresh(e.request).catch(() => caches.match(e.request).then((c) => c || caches.match('./index.html'))));
+    // Network-first so a new deploy is picked up, cache second, and for a NAVIGATION always fall back to the
+    // cached shell — never let the browser's "site can't be reached" page win when we hold a working copy.
+    // Each fallback must be AWAITED. `caches.match(...)` returns a promise, and a promise is always truthy, so
+    // `c || caches.match('./index.html') || caches.match('./')` never reached the last term — and when
+    // index.html happened not to be cached (the install loop caches each URL independently and swallows
+    // individual failures) the handler resolved `undefined` into respondWith, which the browser renders as
+    // "site can't be reached". Precisely the page this branch exists to prevent. AUDIT-2026-07-27.
+    e.respondWith(fresh(e.request).catch(async () => (
+      (await caches.match(e.request)) || (await caches.match('./index.html')) || (await caches.match('./')) ||
+      new Response('<!doctype html><meta charset=utf-8><title>TrinityOne</title><p style="font:16px system-ui;padding:2rem">TrinityOne is offline and this page was never saved to this device. Reconnect once and it will work offline afterwards.', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+    )));
     return;
   }
   // everything else (big immutable libs, fonts, wasm): cache-first, refresh in the background
