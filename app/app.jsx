@@ -1358,7 +1358,18 @@ function App() {
     openBook: (b) => setBook(b),
     // multi-church
     churches, activeChurch,
-    church: churches.find(c => c.id === activeChurch) || churches[0] || null,
+    // LOCKED ⇒ NO CHURCH ON SCREEN. With a PIN set and not yet entered, the app is supposed to present as a
+    // plain Bible reader. It did not: Today still drew the church's name and its serving cards, so a seized or
+    // borrowed phone announced which congregation its owner belongs to before anyone typed anything — verified
+    // in a browser, on a cold boot, with the gate up AND after "read the Bible without unlocking".
+    // Nulling here is the single point every church-derived screen reads, so the header, the serving cards and
+    // the care/safety subscriptions all fall away together rather than one string at a time.
+    //
+    // What this does NOT do: the phone still STORES the church list and its cached documents in the clear, so
+    // anyone examining the device finds the church regardless. This defeats a glance — a checkpoint, someone
+    // picking the phone up — and nothing more. The claim that a locked app reveals no church belongs to the
+    // encrypt-at-rest work, not to this. AUDIT-2026-07-27.
+    church: commLocked ? null : (churches.find(c => c.id === activeChurch) || churches[0] || null),
     openChurchSwitcher: (mode) => { setChurchSwitcherMode(mode === 'follow' ? 'follow' : 'list'); setChurchSwitcher(true); },
     setActiveChurch: (id) => { setActiveChurch(id); lsSet('trinityone.activeChurch', id); },
     addChurch: (c) => { setChurches(cs => cs.find(x => x.id === c.id) ? cs : [...cs, c]); setActiveChurch(c.id); lsSet('trinityone.activeChurch', c.id); },
