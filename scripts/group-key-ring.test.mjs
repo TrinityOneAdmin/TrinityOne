@@ -146,7 +146,9 @@ test('the console seals new posts under the CURRENT key only', () => {
 test('blocking is refused while acting as a delegated steward, and never re-keys a blocked member', () => {
   const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const at = DASH.indexOf('const block = (pk)');
-  const body = DASH.slice(at, at + 2600);
+  // Brace-matched, not a fixed 2600-character window: adding the delegated name-key guard and its explanation
+  // pushed the group guard out of view and turned a correct fix red. Third time a fixed window has done this.
+  const body = (() => { let d = 0; for (let i = DASH.indexOf('{', at); i < DASH.length; i++) { const c = DASH[i]; if (c === '{') d++; else if (c === '}' && --d === 0) return DASH.slice(at, i + 1); } return DASH.slice(at); })();
   assert.match(body, /!delegated\s*&&\s*Array\.isArray\(groups\)/,
     'a delegated steward can re-key another church’s group under the wrong key and lock the owner out');
   const dist = DASH.slice(DASH.indexOf('const memberPubs = members.map'), DASH.indexOf('const memberPubs = members.map') + 600);

@@ -163,7 +163,10 @@ test('the member app fans one name out rather than making the caller remember ev
   const at = F.indexOf('async syncSealedNames');
   const body = F.slice(at, at + 900);
   assert.match(body, /myProfile \|\| \{\}\)\.name/, 'the fan-out must use the member’s ONE name, not a per-church one');
-  assert.match(body, /_sealedMine\.get\(cp\) === nm/, 'it must be idempotent, or every reconnect republishes to every church');
+  // Keyed on the name AND the key it was sealed under. On the name alone, the re-seal that exists to heal a
+  // rotation found the same name and skipped, leaving it sealed under a key nobody holds. AUDIT-2026-07-27.
+  assert.match(body, /_sealedMine\.get\(cp\) === stamp/, 'it must be idempotent, or every reconnect republishes to every church');
+  assert.match(body, /nm \+ ['\"]\|['\"] \+ _ringId\(cp\)/, 'the idempotence key ignores the ring, so a rotation can never be healed');
 });
 
 test('changing your name re-seals it everywhere, and a late-arriving key seals on arrival', () => {
@@ -190,7 +193,9 @@ test('the console mints and maintains the name key', () => {
   assert.match(DASH, /subscribeNameKey/, 'the console never loads the envelope, so it cannot re-key anyone');
   const at = DASH.indexOf('ensureCareKeyForMembers(memberPubs, stewardRoster)');
   assert.notEqual(at, -1, 'the key-distributor loop moved — re-anchor this test');
-  assert.match(DASH.slice(at, at + 700), /ensureNameKeyForMembers\(memberPubs\)/,
+  // The steward roster is passed too: without it a delegated console is not a recipient of the envelope it
+  // is meant to maintain, which is how it ended up holding an empty ring and wiping the church's names.
+  assert.match(DASH.slice(at, at + 900), /ensureNameKeyForMembers\(memberPubs, stewardRoster\)/,
     'nothing mints a name key, so every seal in the member app silently does nothing');
 });
 
