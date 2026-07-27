@@ -1973,10 +1973,26 @@ window.Fellowship = {
     let minors = [], approved = [], guardians = {}, nophoto = [];   // guardians: { childPub: [parentPub, …] }
     const me = window.Fellowship.myPubkey || pub;
     const _sgTs = { minors: 0, approved: 0, guardians: 0, nophoto: 0 };   // newest-wins, one clock per document
-    const emit = () => { _noPhoto = new Set(nophoto); onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)), photoBlocked: !!(me && nophoto.includes(me)) }); };
+    // MY OWN CLEARANCE (AUDIT-2026-07-27). The relay no longer serves `minors:` to ordinary members — it was a
+    // cleartext list of a congregation's children, and joining an open-join church is one self-signed publish.
+    // So `minors` arrives EMPTY for everyone except stewards, and `isMinor` can no longer be derived from it.
+    // The church seals each member a `clearance:<pub>` doc instead, saying only what that member needs to know
+    // about themselves. Fall back to the list when we do have it (stewards, and older churches that have not
+    // published clearances yet), so this degrades rather than breaks.
+    let clr = null;   // { minor, cleared } from my own sealed doc, or null if none has arrived
+    let _clrTs = 0;
+    const emit = () => {
+      _noPhoto = new Set(nophoto);
+      const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
+      const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
+      onLists({ minors, approved, guardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
+    };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
-        if (e.pubkey !== pubk) return;   // safeguarding lists are OWNER-ONLY — only ever trust the church key (M2/safeguarding)
+        // safeguarding lists are OWNER-ONLY — only ever trust the church key (M2/safeguarding). A member's own
+        // sealed clearance may also come from a CURRENT roster steward, which is who marks a child in practice.
+        if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
+        if (e.pubkey !== pubk && !(d || '').startsWith('trinityone/clearance:')) return;
         // NEWEST-WINS (audit 2026-07-24). These are single replaceable documents read from EVERY relay at once,
         // and each assignment took whichever copy ARRIVED last. With two relays that is a race: a lagging relay
         // answering second reinstates an older list — and for safeguarding that means a child stops being
@@ -1988,6 +2004,11 @@ window.Fellowship = {
         else if (d === 'trinityone/approved:' + pubk) { if (_ts < _sgTs.approved) return; _sgTs.approved = _ts; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
         else if (d === 'trinityone/guardians:' + pubk) { if (_ts < _sgTs.guardians) return; _sgTs.guardians = _ts; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
         else if (d === 'trinityone/nophoto:' + pubk) { if (_ts < _sgTs.nophoto) return; _sgTs.nophoto = _ts; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } emit(); }
+        else if (me && d === 'trinityone/clearance:' + me) {
+          if (_ts < _clrTs) return; _clrTs = _ts;
+          try { clr = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch (x) { return; }   // sealed to me by the church
+          emit();
+        }
       },
       oneose() { emit(); },
     });

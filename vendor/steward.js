@@ -10621,6 +10621,7 @@ zoo`.split("\n");
   var APPROVED_D = "trinityone/approved:";
   var NOPHOTO_D = "trinityone/nophoto:";
   var GUARDREQ_D = "trinityone/guardreq:";
+  var CLEARANCE_D = "trinityone/clearance:";
   var GUARDIANS_D = "trinityone/guardians:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
@@ -12866,6 +12867,36 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    },
+    // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
+    // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
+    // children to the whole congregation — the relay no longer serves `minors:` to ordinary members, and joining
+    // an open-join church is a single self-signed publish, so that list was one frame away from any stranger.
+    // AUDIT-2026-07-27. Church-tagged so the relay can check the author is that church or one of its stewards.
+    publishClearance(memberPub, status) {
+      if (!sk) return Promise.resolve(null);
+      const mp = toPubHex(memberPub) || memberPub;
+      if (!/^[0-9a-f]{64}$/i.test(mp || "")) return Promise.resolve(null);
+      const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
+      let ct = "";
+      try {
+        ct = encrypt3(body, getConversationKey(sk, mp));
+      } catch (e) {
+        return Promise.resolve(null);
+      }
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp]], content: ct }));
+    },
+    // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
+    // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
+    refreshClearances(memberPubs, minors, approved) {
+      const mins = new Set((minors || []).map((x) => String(x || "").toLowerCase()));
+      const appr = new Set((approved || []).map((x) => String(x || "").toLowerCase()));
+      const out = [];
+      for (const p of [...new Set((memberPubs || []).filter(Boolean))]) {
+        const h = String(p).toLowerCase();
+        out.push(window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }));
+      }
+      return Promise.allSettled(out);
     },
     setMinors(pubkeys) {
       _requireTrustedView("list of children");

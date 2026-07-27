@@ -338,6 +338,11 @@ const PINSERMON_D = 'trinityone/pinsermon:'; // the church's currently-featured/
 const HIDE_D = 'trinityone/hidden:';       // a removed/hidden message — d=hidden:<msgId> (one per message)
 const MINORS_D = 'trinityone/minors:';     // safeguarding: a church's list of minor (child) pubkeys — d=minors:<churchpub>
 const APPROVED_D = 'trinityone/approved:'; // safeguarding: adults cleared to contact youth (mirrors the church's DBS/cleared list) — d=approved:<churchpub>
+// SAFEGUARDING v3 (AUDIT-2026-07-27): a member's OWN clearance, NIP-44 sealed to them — d=clearance:<memberpub>,
+// church-tagged. It exists so a member can learn whether THEY are a minor / cleared without the church having to
+// publish a cleartext list of its children to every member. The relay still reads minors:/approved:/guardians:
+// itself to enforce safeguarding; what changed is that ordinary members can no longer READ the minors list.
+const CLEARANCE_D = 'trinityone/clearance:';
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-signed child→parents map — d=guardians:<churchpub>; a guardian may always DM their own child
 const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent notice of a steward-made guardian link — d=guardnotice:<parentpub>, p-tagged + NIP-44-encrypted to the parent (child link never in cleartext)
 // member-authored replies to church content — the member signs them and ['p']-tags the church
@@ -1305,6 +1310,14 @@ function accept(e) {
     // the care-team recipient roster (d=careteam:<churchpub>) — church key or a current steward. Just pubkeys
     // (no secrets), so a member can read it to seal an ask-for-help request to exactly the care team.
     if (d.startsWith(CARETEAM_D)) { const cp = toHexPub(d.slice(CARETEAM_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
+    // A member's own safeguarding CLEARANCE (d=clearance:<memberpub>), sealed to them. Church key or a CURRENT
+    // steward of the church NAMED IN THE TAG — deliberately not "any church key on the box", which is the shape
+    // that let one tenant write guardnotice: docs at another tenant's members. A member must never be able to
+    // write their own: that would be self-clearance to contact children. AUDIT-2026-07-27.
+    if (d.startsWith(CLEARANCE_D)) {
+      const ncp = toHexPub((e.tags.find(t => t[0] === 'church') || [])[1] || '') || '';
+      return !!ncp && CHURCH_PUBS.has(ncp) && (e.pubkey === ncp || stewardOf(e.pubkey, ncp));
+    }
     // RE-SEAT map (d=reseat:<churchpub>) — church key or a CURRENT steward of that church. This doc says
     // "the person who was <old> is now <new>", so whoever can write it can hand any member's seat to any key.
     // It must never fall through to the generic member rule (see the nophoto: note below for what that costs).
@@ -1552,6 +1565,23 @@ function canRead(e, authed) {
     // never hit this because those prefixes returned earlier from the private-doc block; the rewrite removed
     // that early return. The revoked-steward concern doesn't apply to them anyway: they are members' own
     // events, authorised by authorship, not by delegated church authority.
+    // SAFEGUARDING READS (AUDIT-2026-07-27). `minors:` is a cleartext list of which members are CHILDREN and
+    // `guardians:` maps each child to their parents. Both were readable by any effective member — and joining is
+    // a single self-signed publish on an open-join church, so a stranger could have the congregation's children
+    // in one frame. The relay keeps reading them itself (safeguardAllows is unchanged); they are simply no
+    // longer served to ordinary members. `approved:` — the adults cleared to work with youth — stays readable,
+    // because a child's own app needs it to know who they may safely message, and it names leaders, not children.
+    // Each member instead receives `clearance:<their pubkey>`, sealed to them, telling them only about THEMSELVES.
+    {
+      const cpS = d.startsWith(MINORS_D) ? d.slice(MINORS_D.length) : d.startsWith(GUARDIANS_D) ? d.slice(GUARDIANS_D.length) : '';
+      if (cpS) return !!authed && (authed === cpS || stewardOf(authed, cpS) || careAdmin(authed, cpS) || networkOf(authed, cpS));
+      if (d.startsWith(CLEARANCE_D)) {
+        const subj = d.slice(CLEARANCE_D.length);
+        const ncp = (e.tags.find(t => t[0] === 'church') || [])[1] || '';
+        if (authed && authed === subj) return true;                       // it is about you, and sealed to you
+        return !!authed && !!ncp && (authed === ncp || stewardOf(authed, ncp) || careAdmin(authed, ncp));
+      }
+    }
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];
     const memberWritable = MEMBER_WRITABLE_D.some(p => d.startsWith(p));
     // A care need (NEED_D) is authored by church / steward / care-team admin / member — accept() gates the

@@ -1419,15 +1419,30 @@ function App() {
     retryConnection: () => bumpConn(x => x + 1),   // force a fresh relay re-subscribe (manual "Try again")
     // steward rule: this church asks members to use a real first + last name (two words)
     requireFullName: !!(((churches.find(c => c.id === activeChurch) || {}).rules) || {}).fullName,
-    canDMPeer: (peer) => {   // peer is a hex pubkey
-      const minors = safeguard.minors || [], approved = safeguard.approved || [], guardians = safeguard.guardians || {};
+    // AUDIT-2026-07-27. This used to read the church's list of children to decide whether to offer a DM. That
+    // list is no longer served to ordinary members — it was a cleartext roll of a congregation's minors, one
+    // self-signed publish away from any stranger — so `safeguard.minors` is empty for everyone but stewards.
+    //
+    // What survives, and why it is enough: the RELAY enforces safeguarding on both read and write
+    // (safeguardAllows), so nothing here is load-bearing for safety. This is a UI courtesy, and it still works
+    // in the direction that matters most — a CHILD's own app knows it is a child (from its sealed clearance)
+    // and knows which adults are cleared, so it never offers a child an unsafe conversation.
+    //
+    // The direction we deliberately gave up is an ordinary adult locally knowing that a peer is a child: that
+    // knowledge IS the list, and no design lets an unapproved adult have it without leaking it. Those DMs are
+    // refused by the relay, and the send path reports that honestly rather than failing silently.
+    canDMPeer: (peer) => {
+      const approved = safeguard.approved || [], guardians = safeguard.guardians || {};
       const me = (window.Fellowship && window.Fellowship.myPubkey) || null;
       const churchPub = (window.Fellowship && window.Fellowship.churchPub) || null;
       if (peer && peer === churchPub) return true;   // anyone may message the church/steward
       const linked = !!(peer && me && (((guardians[peer] || []).includes(me)) || ((guardians[me] || []).includes(peer))));
       if (linked) return true;   // v2: a parent may always message their own child (and vice versa)
       if (safeguard.isMinor && !(peer && approved.includes(peer))) return false;   // a child may only DM a cleared adult
-      if (peer && minors.includes(peer) && !(me && approved.includes(me))) return false; // only a cleared adult may DM a child
+      // A steward still holds the list, so keep the old check for them — it costs nothing and keeps the
+      // console-side experience unchanged.
+      const minors = safeguard.minors || [];
+      if (minors.length && peer && minors.includes(peer) && !(me && approved.includes(me))) return false;
       return true;
     },
     // groups this member may post events for (the steward named them a leader)

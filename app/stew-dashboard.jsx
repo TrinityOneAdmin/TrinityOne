@@ -3154,8 +3154,18 @@ function DashMembers() {
   const approvedSet = new Set(sg.approved || []);
   const nophotoSet = new Set(sg.nophoto || []);
   const toggleNoPhoto = (pk) => window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk]);
-  const toggleMinor = (pk) => window.Steward.setMinors(minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk]);
-  const toggleApproved = (pk) => window.Steward.setApproved(approvedSet.has(pk) ? (sg.approved || []).filter(p => p !== pk) : [...(sg.approved || []), pk]);
+  // Whenever either safeguarding list changes, re-seal the affected member's OWN clearance. Their app reads that
+  // instead of the church's list of children, which the relay no longer serves to ordinary members.
+  // AUDIT-2026-07-27. Best-effort and deliberately not awaited: the list write is the authoritative one.
+  const _reseal = (mins, appr, who) => { try { if (window.Steward.refreshClearances) window.Steward.refreshClearances(who, mins, appr); } catch (e) {} };
+  const toggleMinor = (pk) => {
+    const next = minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
+    const r = window.Steward.setMinors(next); _reseal(next, sg.approved || [], [pk]); return r;
+  };
+  const toggleApproved = (pk) => {
+    const next = approvedSet.has(pk) ? (sg.approved || []).filter(p => p !== pk) : [...(sg.approved || []), pk];
+    const r = window.Steward.setApproved(next); _reseal(sg.minors || [], next, [pk]); return r;
+  };
   // safeguarding v2: parent↔child links — pending parent requests + the confirmed map
   const guardReqs = window.useStewardGuardianRequests ? window.useStewardGuardianRequests() : [];
   const guardians = window.useStewardGuardians ? window.useStewardGuardians() : {};
@@ -3169,7 +3179,7 @@ function DashMembers() {
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = (r) => {
     window.Steward.setGuardians({ ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] });
-    if (!minorsSet.has(r.child)) window.Steward.setMinors([...(sg.minors || []), r.child]);   // a linked child is a minor
+    if (!minorsSet.has(r.child)) { const next = [...(sg.minors || []), r.child]; window.Steward.setMinors(next); _reseal(next, sg.approved || [], [r.child]); }   // a linked child is a minor
   };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
@@ -3182,7 +3192,7 @@ function DashMembers() {
   const linkParent = (childPub, parentPub) => {
     if (childPub === parentPub || minorsSet.has(parentPub)) return;   // a parent must be a different, adult account
     window.Steward.setGuardians({ ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] });
-    if (!minorsSet.has(childPub)) window.Steward.setMinors([...(sg.minors || []), childPub]);   // a linked child is a minor
+    if (!minorsSet.has(childPub)) { const next = [...(sg.minors || []), childPub]; window.Steward.setMinors(next); _reseal(next, sg.approved || [], [childPub]); }   // a linked child is a minor
     // notify the newly-linked parent so the child actually shows up in THEIR app (they never set it up locally)
     if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '');
   };

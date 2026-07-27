@@ -8371,13 +8371,18 @@
       let minors = [], approved = [], guardians = {}, nophoto = [];
       const me = window.Fellowship.myPubkey || pub;
       const _sgTs = { minors: 0, approved: 0, guardians: 0, nophoto: 0 };
+      let clr = null;
+      let _clrTs = 0;
       const emit = () => {
         _noPhoto = new Set(nophoto);
-        onLists({ minors, approved, guardians, nophoto, isMinor: !!(me && minors.includes(me)), photoBlocked: !!(me && nophoto.includes(me)) });
+        const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
+        const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
+        onLists({ minors, approved, guardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {
-          if (e.pubkey !== pubk) return;
+          if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
+          if (e.pubkey !== pubk && !(d || "").startsWith("trinityone/clearance:")) return;
           const _ts = e.created_at || 0;
           if (d === "trinityone/minors:" + pubk) {
             if (_ts < _sgTs.minors) return;
@@ -8413,6 +8418,15 @@
               nophoto = JSON.parse(e.content).pubkeys || [];
             } catch {
               nophoto = [];
+            }
+            emit();
+          } else if (me && d === "trinityone/clearance:" + me) {
+            if (_ts < _clrTs) return;
+            _clrTs = _ts;
+            try {
+              clr = JSON.parse(decrypt(e.content, getConversationKey(sk, e.pubkey)));
+            } catch (x) {
+              return;
             }
             emit();
           }
