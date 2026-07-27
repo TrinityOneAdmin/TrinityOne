@@ -3284,7 +3284,13 @@ function DashMembers() {
       // and the NAME key: a blocked member keeping it could still read the congregation's names, which is the
       // one thing this encryption exists to stop. The ring carries the superseded keys, so names sealed before
       // the rotation still open for everyone who remains.
-      if (window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(remaining, { rotate: true });
+      // NOT AS A DELEGATED STEWARD — this sat one line above the identical guard applied to groups below, and
+      // was the more destructive of the two. A delegated console can never read the owner's name-key envelope,
+      // so it holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as
+      // the church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed
+      // name in the congregation stops opening — the whole roster goes anonymous from one Block tap.
+      // steward.src.js now refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
+      if (!delegated && window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(remaining, stewardRoster || [], { rotate: true });
       // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
       // phone carried on decrypting every future message in every encrypted group — forever. The background
       // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
@@ -3303,6 +3309,16 @@ function DashMembers() {
         const recips = (g.visibility === 'invite' ? (g.members || []).filter(p => p !== pk && !blockedSet.has(String(p || '').toLowerCase())) : remaining);
         if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { rotate: true });
         if (g.visibility === 'invite' && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
+      }
+      // SAY SO. Both guards above are correct and both are silent: as a delegated steward you tap Block, the
+      // row greys out, and the removed member's phone keeps decrypting every future message in every encrypted
+      // group and keeps reading the congregation's names — indefinitely, with nothing on screen suggesting a
+      // second step exists. AUDIT-2026-07-27.
+      if (delegated) {
+        const encrypted = (Array.isArray(groups) ? groups : []).some(g => g && g.encrypted);
+        if (encrypted || window.Steward.ensureNameKeyForMembers) {
+          try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'block', message: 'They have been removed from the roster, but only the church owner can change the keys that lock them out of encrypted groups and members’ names. Ask the owner to open their own console and block them there as well.' } })); } catch (e2) {}
+        }
       }
     } catch (e) {}
   };

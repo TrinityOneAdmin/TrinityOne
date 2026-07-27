@@ -37,6 +37,8 @@ const GROUPKEY_D = 'trinityone/groupkey:';   // church-signed envelope: the grou
 const GUARDNOTICE_D = 'trinityone/guardnotice:';   // church->parent notice of a steward-made guardian link, p-tagged + NIP-44-encrypted to the parent
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a church-signed self-hosted media item — references a content-addressed blob by sha256 + host(s)
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: per-church AES-GCM media key, wrapped (NIP-44) to each member
+const NAMEKEY_D = 'trinityone/namekey:';     // per-church NAME key, wrapped per member — opens sealed member names
+const NAME_D = 'trinityone/name:';           // a member's own name, sealed to their congregation's name key
 const CAREKEY_D = 'trinityone/carekey:';     // per-church CARE key, wrapped (NIP-44) to each member — seals the identifying half of a care need
 const PINSERMON_D = 'trinityone/pinsermon:';   // the church's currently-featured sermon → Today card + notification
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
@@ -664,20 +666,50 @@ const _reseatAt = new Map();    // cp -> created_at of the newest doc we accepte
 const _nameKeys = new Map();    // cp -> [Uint8Array(32)], current first
 const _nameKeyTs = new Map();   // cp -> created_at of the newest envelope accepted
 const _sealedNames = new Map(); // "<cp>|<pubkey>" -> plaintext name, once opened
-const _sealedMine = new Map();  // cp -> the name WE last sealed there, so a resync is idempotent
+// cp -> "<name>|<the key it was sealed under>". The key half matters: this was keyed on the NAME alone, so
+// after any rotation the re-seal that exists specifically to heal a rotation looked up "Maria", found "Maria",
+// and skipped — leaving that member's name sealed under a key nobody holds any more, until the next app start.
+// AUDIT-2026-07-27.
+const _sealedMine = new Map();
 function _ingestNameKey(cp, e) {
   if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
   if ((e.created_at || 0) < (_nameKeyTs.get(cp) || 0)) return;
-  _nameKeyTs.set(cp, e.created_at || 0);
+  // DO NOT bump the newest-wins cursor before we know we can use this envelope. Without a signing key yet — a
+  // boot race, a PIN unlock, a fresh join mid-session — the pass below bails, and having already moved the
+  // cursor forward meant the SAME envelope was refused as stale when the key arrived and it was replayed.
+  // The keys never loaded and every name in the church stayed blank for the session. AUDIT-2026-07-27.
+  if (!sk) return;
   try {
     const env = JSON.parse(e.content || '{}');
     const mine = env.keys && pub && env.keys[pub];
-    if (!mine || !sk) { if (!mine) _nameKeys.delete(cp); return; }   // dropped from the envelope → lose the keys
+    // NOT BEING IN AN ENVELOPE IS NOT REVOCATION. The console republishes this on roster ticks, and the roster
+    // arrives in pieces, so an early envelope legitimately omits members who simply had not loaded yet.
+    // Deleting on sight meant half a congregation went anonymous until a fuller envelope happened along. The
+    // console now only ever grows the recipient list (except on a block, which is a genuine removal), and this
+    // side keeps what it holds: a key we already have opens names we can already read, and the block rotates
+    // the ring so nothing sealed AFTER it is readable to the removed member anyway.
+    if (!mine) return;
     const r = JSON.parse(nip44d(mine, nip44ck(sk, e.pubkey)));
-    if (Array.isArray(r)) _nameKeys.set(cp, r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)).map(_unhexF));
+    if (!Array.isArray(r)) return;
+    _nameKeyTs.set(cp, e.created_at || 0);
+    _nameKeys.set(cp, r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)).map(_unhexF));
   } catch (x) {}
 }
 const _unhexF = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
+// Re-open every sealed name we have already buffered for a church. A name key that arrives (or becomes usable)
+// AFTER the name documents is the normal case on a warm start, and without this the ciphertext just sits there.
+// A short, stable fingerprint of the CURRENT key for a church, so the re-seal cache can tell "same name, same
+// key" from "same name, key rotated underneath us".
+function _ringId(cp) {
+  const k = (_nameKeys.get(cp) || [])[0];
+  return k ? [...k.slice(0, 6)].map(b => b.toString(16).padStart(2, '0')).join('') : '';
+}
+function _replaySealedNames(cp, hub) {
+  if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
+  let n = 0;
+  for (const e of hub.buf.values()) { if (_dtag(e) === NAME_D + cp && _openSealedName(cp, e.pubkey, e.content)) n++; }
+  if (n) { try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: null } })); } catch (x) {} }
+}
 // open a member's sealed name; tries every key so a rotation never hides an older one
 function _openSealedName(cp, author, content) {
   for (const k of (_nameKeys.get(cp) || [])) {
@@ -860,7 +892,10 @@ function _docsHubOpen(hub) {
         // LIVE path BEFORE this roster was rejected by _ingestGroupKey (author not yet trusted) and — unlike the
         // boot path — was never retried, so the encrypted group stayed blank until the next app start. Now that
         // the roster establishes trust, re-ingest the buffered envelopes (mirrors the boot-replay loop).
-        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); }
+        // The name key needs this too, and for exactly the L7 reason: _ingestNameKey requires the author to
+        // be the church or a CURRENT roster steward, so an envelope that arrives before the roster does is
+        // dropped and never retried. AUDIT-2026-07-27.
+        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); else if (d2 === NAMEKEY_D + cp) { _ingestNameKey(cp, e2); _replaySealedNames(cp, hub); } }
         for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return;
       }
       if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);   // just approved? re-announce + re-fetch once
@@ -1040,7 +1075,11 @@ async function deriveFromIdentity() {
   if (_loadChildren().length) _needAuth = true;
   // group-key envelopes can replay from the persisted docs buffer BEFORE the signing key exists —
   // re-unwrap them now that sk/pub are known, so invite-group decryption never needs a reload.
-  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); } }
+  // …and the name key. Left out of both recovery hooks, it was the one key with no way back: the docs hub uses
+  // a persisted since-cursor, and a name key is published once at church setup, so it does not re-arrive. On any
+  // launch where the hub cache was warm and the signing key derived a moment late, the ring stayed empty for the
+  // whole session and every member showed as anonymous. AUDIT-2026-07-27.
+  for (const hub of _docsHubs.values()) { for (const e of hub.buf.values()) { const d = _dtag(e); if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e); else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e); else if (d === NAMEKEY_D + hub.cp) { _ingestNameKey(hub.cp, e); _replaySealedNames(hub.cp, hub); } } }
   // signal that the signing key is now ready, so listeners (e.g. the app's serving subscriptions,
   // which bail when myPubkey is null) re-run with a valid pubkey instead of needing a restart.
   try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch {}
@@ -1622,13 +1661,22 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp) return null;
     if (!sk) { try { await window.Fellowship.ready; } catch (e) {} }
     const ring = _nameKeys.get(cp) || [];
-    if (!ring.length || !sk) return null;
+    if (!sk) return null;
     const nm = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-    let ct = ''; try { ct = nip44e(JSON.stringify({ name: nm }), ring[0]); } catch (e) { return null; }
+    let ct = '';
+    // NO KEY YET? Seal to the CHURCH instead. A member awaiting approval at a gated church can write this doc
+    // (the relay allows it on purpose, so a steward has a name to approve) but is not served the congregation's
+    // name key — and rightly so: handing it over before admission would let anyone who taps Join read the whole
+    // roster, which is the exact thing this encryption exists to prevent. So the pending copy is sealed to the
+    // church key alone. The console tries the ring first and falls back to its own conversation key, so the
+    // steward sees the name and nobody else does. It is re-sealed to the congregation key on admission, when
+    // the key arrives and syncSealedNames runs. AUDIT-2026-07-27.
+    try { ct = ring.length ? nip44e(JSON.stringify({ name: nm }), ring[0]) : nip44e(JSON.stringify({ name: nm }), nip44ck(sk, cp)); } catch (e) { return null; }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: ct }, sk);
     try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
     _sealedNames.set(cp + '|' + pub, nm);
+    _sealedMine.set(cp, nm + '|' + _ringId(cp));
     return evt;
   },
   // ONE NAME, FANNED OUT. A member belongs to one or more churches, and their name is theirs — not a different
@@ -1645,12 +1693,16 @@ window.Fellowship = {
     for (const c of list) {
       const cp = toPub(c) || c;
       if (!cp || !(_nameKeys.get(cp) || []).length) continue;   // no key yet — sealed on arrival instead
-      if (_sealedMine.get(cp) === nm) continue;                 // already sealed this exact name there
-      try { if (await window.Fellowship.publishSealedName(cp, nm)) { _sealedMine.set(cp, nm); n++; } } catch (e) {}
+      const stamp = nm + '|' + _ringId(cp);
+      if (_sealedMine.get(cp) === stamp) continue;              // same name AND same key — nothing to redo
+      try { if (await window.Fellowship.publishSealedName(cp, nm)) { _sealedMine.set(cp, stamp); n++; } } catch (e) {}
     }
     return n;
   },
-  // has this church published a name key we hold a copy of? (the UI uses it to explain why a name is public)
+  // Has this church published a name key we hold a copy of? NO UI CALLS THIS YET — the comment here used to
+  // claim "the UI uses it to explain why a name is public", which was never true. Left in place because Stage 2
+  // (dropping the cleartext name from kind-0) needs exactly this to tell a member whether their name is sealed
+  // or still public, but until that screen exists this is an unused accessor and should be described as one.
   sealedNamesReady(churchNpub) { const cp = toPub(churchNpub); return !!(cp && (_nameKeys.get(cp) || []).length); },
   // publish this user's kind-0 profile (display name etc.) and cache it
   async setProfile(meta) {

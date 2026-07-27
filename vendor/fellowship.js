@@ -5763,6 +5763,8 @@
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
   var MEDIAKEY_D = "trinityone/mediakey:";
+  var NAMEKEY_D = "trinityone/namekey:";
+  var NAME_D = "trinityone/name:";
   var CAREKEY_D = "trinityone/carekey:";
   var PINSERMON_D = "trinityone/pinsermon:";
   async function _sha256hex(u82) {
@@ -6435,20 +6437,36 @@
   function _ingestNameKey(cp, e) {
     if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
     if ((e.created_at || 0) < (_nameKeyTs.get(cp) || 0)) return;
-    _nameKeyTs.set(cp, e.created_at || 0);
+    if (!sk) return;
     try {
       const env = JSON.parse(e.content || "{}");
       const mine = env.keys && pub && env.keys[pub];
-      if (!mine || !sk) {
-        if (!mine) _nameKeys.delete(cp);
-        return;
-      }
+      if (!mine) return;
       const r = JSON.parse(decrypt(mine, getConversationKey(sk, e.pubkey)));
-      if (Array.isArray(r)) _nameKeys.set(cp, r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x)).map(_unhexF));
+      if (!Array.isArray(r)) return;
+      _nameKeyTs.set(cp, e.created_at || 0);
+      _nameKeys.set(cp, r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x)).map(_unhexF));
     } catch (x) {
     }
   }
   var _unhexF = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
+  function _ringId(cp) {
+    const k = (_nameKeys.get(cp) || [])[0];
+    return k ? [...k.slice(0, 6)].map((b) => b.toString(16).padStart(2, "0")).join("") : "";
+  }
+  function _replaySealedNames(cp, hub) {
+    if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
+    let n = 0;
+    for (const e of hub.buf.values()) {
+      if (_dtag(e) === NAME_D + cp && _openSealedName(cp, e.pubkey, e.content)) n++;
+    }
+    if (n) {
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: null } }));
+      } catch (x) {
+      }
+    }
+  }
   function _openSealedName(cp, author, content) {
     for (const k of _nameKeys.get(cp) || []) {
       try {
@@ -6670,6 +6688,10 @@
             const d2 = _dtag(e2);
             if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2);
             else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2);
+            else if (d2 === NAMEKEY_D + cp) {
+              _ingestNameKey(cp, e2);
+              _replaySealedNames(cp, hub);
+            }
           }
           for (const h of [...hub.handlers]) {
             try {
@@ -6965,6 +6987,10 @@
         const d = _dtag(e);
         if (d.startsWith(GROUPKEY_D)) _ingestGroupKey(hub.cp, e);
         else if (d === CAREKEY_D + hub.cp) _ingestCareKey(hub.cp, e);
+        else if (d === NAMEKEY_D + hub.cp) {
+          _ingestNameKey(hub.cp, e);
+          _replaySealedNames(hub.cp, hub);
+        }
       }
     }
     try {
@@ -7800,11 +7826,11 @@
         }
       }
       const ring = _nameKeys.get(cp) || [];
-      if (!ring.length || !sk) return null;
+      if (!sk) return null;
       const nm = String(name || "").replace(/\s+/g, " ").trim().slice(0, 40);
       let ct = "";
       try {
-        ct = encrypt(JSON.stringify({ name: nm }), ring[0]);
+        ct = ring.length ? encrypt(JSON.stringify({ name: nm }), ring[0]) : encrypt(JSON.stringify({ name: nm }), getConversationKey(sk, cp));
       } catch (e) {
         return null;
       }
@@ -7820,6 +7846,7 @@
         return null;
       }
       _sealedNames.set(cp + "|" + pub, nm);
+      _sealedMine.set(cp, nm + "|" + _ringId(cp));
       return evt;
     },
     // ONE NAME, FANNED OUT. A member belongs to one or more churches, and their name is theirs — not a different
@@ -7836,10 +7863,11 @@
       for (const c of list) {
         const cp = toPub(c) || c;
         if (!cp || !(_nameKeys.get(cp) || []).length) continue;
-        if (_sealedMine.get(cp) === nm) continue;
+        const stamp = nm + "|" + _ringId(cp);
+        if (_sealedMine.get(cp) === stamp) continue;
         try {
           if (await window.Fellowship.publishSealedName(cp, nm)) {
-            _sealedMine.set(cp, nm);
+            _sealedMine.set(cp, stamp);
             n++;
           }
         } catch (e) {
@@ -7847,7 +7875,10 @@
       }
       return n;
     },
-    // has this church published a name key we hold a copy of? (the UI uses it to explain why a name is public)
+    // Has this church published a name key we hold a copy of? NO UI CALLS THIS YET — the comment here used to
+    // claim "the UI uses it to explain why a name is public", which was never true. Left in place because Stage 2
+    // (dropping the cleartext name from kind-0) needs exactly this to tell a member whether their name is sealed
+    // or still public, but until that screen exists this is an unused accessor and should be described as one.
     sealedNamesReady(churchNpub) {
       const cp = toPub(churchNpub);
       return !!(cp && (_nameKeys.get(cp) || []).length);
