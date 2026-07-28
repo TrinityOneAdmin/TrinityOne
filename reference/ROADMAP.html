@@ -206,6 +206,31 @@
       </div></div>
     </li>
 
+    <li class="item" data-id="pin-confirm">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Confirm the PIN when it is first set<span class="tag t-block">Before pilot</span></span>
+        <div class="note">Type it twice, church creation and member setup both. Noticed while creating a
+        church on 2026-07-28.</div>
+        <div class="why"><b>Why it is a bug, not a nicety:</b> the PIN cannot be reset — the app says so
+        itself, "not even by us". So one mistyped digit at setup makes the church key unrecoverable, and with
+        it every sealed name and record that key opens. Data loss caused by a missing keystroke.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="pin-strength">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Answer whether the PIN can be attacked offline, then pick its length</span>
+        <div class="note">Proposed 4 → 6 digits. Decide it on the threat, not the digit count.</div>
+        <div class="why"><b>The question that settles it:</b> can someone holding the device guess against
+        the stored key directly, or must every attempt go through the app? If it must go through the app,
+        four digits plus a lockout is fine — that is how phones work. If it can be attacked offline, six
+        digits is only 100× harder and still weak; what helps is making each guess SLOW (a deliberately
+        expensive key derivation). A quick look found no such derivation in the identity module, which is a
+        hint rather than a finding — confirm before choosing. Adding two digits without checking could feel
+        safer while changing very little. Pairs with the throttle already on the security list.</div>
+      </div></div>
+    </li>
+
     <li class="item" data-id="keys-backup">
       <div class="row"><input type="checkbox"><div class="body">
         <span class="title">Get the release signing key off this machine</span>
