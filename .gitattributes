@@ -1,3 +1,28 @@
 # Stamp the build commit + date into version.txt when `git archive` makes the relay bundle.
 # (export-subst substitutes the $Format$ placeholders only in the archive, not the working tree.)
 version.txt export-subst
+
+# ── the public bundle carries no internal documentation ─────────────────────────────────────────────────
+# AUDIT-2026-07-28 F2. /relay-app/bundle.tgz is public on purpose — the self-host installer curls it and
+# every relay's self-update pulls it — and it is a `git archive` of the release ref, so it carried every
+# tracked file regardless of the static handler's denylist. Measured on the release funnel: HTTP 200,
+# 54,055,346 bytes, no auth, 61 markdown files including HANDOFF.md, AUDIT-BACKLOG.md,
+# AUDIT-2026-07-26-RECOVERY.md and DEVICE-TEST-CHECKLIST.md. Those name live vulnerabilities and the dates
+# they were introduced: the cheapest, highest-value thing on the box for an attacker.
+#
+# The morning's fix named the STATIC ROUTE only (DENY_DIR, scripts/gateway.mjs ~3196) and the bundle route
+# (~2386, 800 lines earlier) walked straight past it. export-ignore is the one place that covers every
+# producer at once: build-strict-tgz.sh (what the release host actually serves), ensureSignedBundle's raw
+# `git archive` fallback, the un-cached streaming route that never touches the cache, and build-pages.sh.
+# Because ensureSignedBundle signs the bytes it has just produced, the release signature covers the
+# filtered bundle with no other change.
+#
+# This stops the documents SHIPPING. It does not remove them from a relay that already pulled an older
+# bundle — relay-update.sh untars OVER the install and deletes nothing — so the static denylist remains
+# the thing that stops those copies being served. Guarded by scripts/bundle-contents.test.mjs, which
+# builds the real tarballs and lists them rather than reasoning about the rules.
+#
+# LICENSE has no extension and still ships, deliberately.
+docs        export-ignore
+reference   export-ignore
+*.md        export-ignore
