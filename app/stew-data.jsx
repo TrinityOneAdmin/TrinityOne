@@ -83,7 +83,24 @@ function SkPill({ children, tint = 'clay', style = {} }) {
 }
 
 // ── church badge (rounded square initials) ──
-function SkBadge({ size = 44, radius = 13, accent = 'var(--clay)', initials = 'GC', picture = '', style = {} }) {
+// `av` is a MEMBER's chosen avatar, straight from their kind-0 — untrusted relay-published content.
+// The console has never drawn one: subscribeMembers stores av and hasPhoto, then every screen fell back to
+// initials, so a roster of unnamed people was a wall of identical grey badges on exactly the screen where a
+// steward decides whether to approve someone. AUDIT-2026-07-28.
+//
+// SECURITY, same rule as invImgDataUrl in stew-dashboard.jsx: only ever embed a data: image, NEVER fetch a
+// remote URL. An <img src="https://…"> here would leak the steward's IP, rough location and online time to
+// whoever published that profile — the exact deanonymisation the app forbids everywhere else, and a member's
+// avatar is attacker-controlled. Anything that is not a data: image falls back to initials.
+// The colour is likewise interpolated into CSS, so it is restricted to a plain hex value: a crafted string
+// could otherwise smuggle url() into the gradient and beacon that way.
+const _avPhoto = (av) => (av && av.kind === 'photo' && /^data:image\//i.test(String(av.photo || ''))) ? String(av.photo) : '';
+const _avColor = (av) => (av && /^#[0-9a-f]{3,8}$/i.test(String(av.color || ''))) ? String(av.color) : '';
+function SkBadge({ size = 44, radius = 13, accent = 'var(--clay)', initials = 'GC', picture = '', av = null, style = {} }) {
+  const avPic = _avPhoto(av);
+  const avCol = _avColor(av);
+  if (avPic) picture = avPic;                 // their photo, where the church allows photos
+  if (!picture && avCol) accent = avCol;      // else at least THEIR colour, not everyone's identical grey
   return (
     <div style={{
       width: size, height: size, borderRadius: radius, flexShrink: 0, overflow: 'hidden',
