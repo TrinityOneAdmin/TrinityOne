@@ -475,20 +475,15 @@ test('an admitted member is never downgraded to the church-key name copy', () =>
   assert.ok(ringAt !== -1 && ringAt < pubAt, 'the ring must be checked before anything is published');
 });
 
-test('a restore never publishes over a profile it has not read', () => {
-  // THE WORST ONE. kind-0 is REPLACEABLE and `prev` is the LOCAL cache — empty on a restored phone. So the
-  // name-only patch every restore performs computed picture:'' and about:'' and published that over the
-  // member's real profile, destroying their photo and clearing their directory opt-out ON THE RELAY.
-  // The 12-word restore was safe from this only by accident: it called a function that did not exist and
-  // threw before reaching here. Fixing that ReferenceError opened this. AUDIT-2026-07-28.
-  const at = FELLOWSHIP.search(/async setProfile\s*\(/);
-  assert.notEqual(at, -1, 'setProfile is gone');
-  const fn = FELLOWSHIP.slice(at, FELLOWSHIP.indexOf('requestProfiles(pubkeys)', at));
-  assert.match(fn, /_k0Seen\.has\(pub\)/,
-    'setProfile publishes a partial patch without first reading our own profile — a restore will blank it');
-  const waitAt = fn.indexOf('_k0Seen.has(pub)'), wireAt = fn.indexOf('const wire =');
-  assert.ok(waitAt !== -1 && wireAt !== -1 && waitAt < wireAt, 'the wait must happen BEFORE the wire copy is built');
-});
+// ── "a restore never publishes over a profile it has not read" USED TO LIVE HERE ────────────────────────
+// It asserted that `_k0Seen.has(pub)` appeared in setProfile, before `const wire =`. Both strings were
+// present in the vulnerable code, so the test could not fail: it was green for a full day standing over a
+// live bug that was destroying members' photos and directory opt-outs on the relay, and its green tick is
+// what stopped anyone looking again. AUDIT-2026-07-28 F1/F13.
+//
+// A test shaped like the FIX cannot fail while the bug survives beside it. The real coverage is
+// scripts/profile-overwrite.test.mjs, which RUNS the shipped setProfile against a relay that never answers
+// and asserts on what came out on the wire. Do not re-add a string-matching version of this here.
 
 test('the directory opt-out survives a locked boot too', () => {
   // `hidden` is published, so it was always recoverable — it simply was not recovered, so a lock silently

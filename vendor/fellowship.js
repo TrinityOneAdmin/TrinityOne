@@ -8060,13 +8060,15 @@
     // publish this user's kind-0 profile (display name etc.) and cache it
     async setProfile(meta) {
       if (!sk) await window.Fellowship.ready;
-      if (pub && !_k0Seen.has(pub) && Object.keys(profiles[pub] || {}).length === 0) {
+      let known = !pub || _k0Seen.has(pub);
+      if (!known) {
         try {
           window.Fellowship.requestProfiles([pub]);
           const t0 = Date.now();
           while (!_k0Seen.has(pub) && Date.now() - t0 < 6e3) await new Promise((r) => setTimeout(r, 150));
         } catch (e) {
         }
+        known = _k0Seen.has(pub);
       }
       const prev = profiles[pub] || {};
       const p = {
@@ -8082,13 +8084,24 @@
       if (p.hidden) wire.hidden = true;
       const body = JSON.stringify(wire);
       if (_profilePubFor === pub && _profilePubBody === body) return null;
-      const evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
-      let sent = true;
-      try {
-        await _publishAny(window.Fellowship.relays, evt);
-      } catch (e) {
-        sent = false;
-        console.warn("[fellowship] profile publish failed", e);
+      let evt = null, sent = false;
+      if (known) {
+        evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
+        sent = true;
+        try {
+          await _publishAny(window.Fellowship.relays, evt);
+        } catch (e) {
+          sent = false;
+          console.warn("[fellowship] profile publish failed", e);
+        }
+      } else {
+        console.warn("[fellowship] profile publish withheld \u2014 our own kind-0 has not arrived, publishing now would blank it");
+        if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+          try {
+            if (window.trinityToast) window.trinityToast("Your photo and profile details aren\u2019t saved yet \u2014 this phone is still connecting to your church\u2019s relay. Try again in a moment.");
+          } catch (x) {
+          }
+        }
       }
       if (sent) {
         _profilePubFor = pub;

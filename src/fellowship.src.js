@@ -1886,14 +1886,27 @@ window.Fellowship = {
     // computed picture:'' and about:'' and published that over the member's real profile, destroying their
     // photo and clearing their directory opt-out on the relay. The 12-word restore used to be safe from this
     // only by accident: it called a function that did not exist, threw, and never reached here — fixing that
-    // ReferenceError opened this. Wait for our own kind-0 first, exactly as the console's publishProfile does.
-    // Found by an adversarial review of my own work, 2026-07-28.
-    if (pub && !_k0Seen.has(pub) && Object.keys(profiles[pub] || {}).length === 0) {
+    // ReferenceError opened this.
+    //
+    // AUDIT-2026-07-28 F1. The first version of this guard DID NOT REFUSE. It waited six seconds and then
+    // fell through and published the blank patch anyway — a wait that reads as protection and is not one,
+    // and on the connections this product is built for, "the wait elapsed" is the ordinary path, not the
+    // edge case. It was also skipped entirely once a name was known, because it required `profiles[pub]` to
+    // be EMPTY: _recoverOwnName writes a name-only entry, so after a restore — the exact case it was written
+    // for — the guard was false and the blank publish went straight out with no wait at all.
+    //
+    // Gate on the one fact that matters: has the relay ANSWERED about our own kind-0? _k0Seen is set both by
+    // a kind-0 arriving and by EOSE, so "there is no profile yet" is an answer — which is what lets a
+    // brand-new member through. (The console's publishProfile refused that case for a while and churches were
+    // created nameless; this is the same mistake seen from the other side.)
+    let known = !pub || _k0Seen.has(pub);
+    if (!known) {
       try {
         window.Fellowship.requestProfiles([pub]);
         const t0 = Date.now();
         while (!_k0Seen.has(pub) && Date.now() - t0 < 6000) await new Promise(r => setTimeout(r, 150));
       } catch (e) {}
+      known = _k0Seen.has(pub);
     }
     const prev = profiles[pub] || {};
     const p = {
@@ -1933,9 +1946,25 @@ window.Fellowship = {
     if (p.hidden) wire.hidden = true;
     const body = JSON.stringify(wire);
     if (_profilePubFor === pub && _profilePubBody === body) return null;
-    const evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
-    let sent = true;
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { sent = false; console.warn('[fellowship] profile publish failed', e); }
+    // REFUSE THE WIRE COPY — not the whole call. Since Stage 2 the NAME does not travel in kind-0 at all: it
+    // goes out sealed, through syncSealedNames below. So refusing outright to protect kind-0 would leave a
+    // member on a slow link unable to tell their congregation what they are called, which is the one thing
+    // they set — a worse failure than the one being fixed, and aimed at exactly the same people. Everything
+    // local still happens; only the replaceable publish is withheld.
+    let evt = null, sent = false;
+    if (known) {
+      evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
+      sent = true;
+      try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { sent = false; console.warn('[fellowship] profile publish failed', e); }
+    } else {
+      // A silent refusal is the console's publishProfile bug in a new place: the sheet closes, the change
+      // never reached the network, and nothing said so. Only speak up about a field that actually travels in
+      // kind-0 — a name-only save has lost nothing, so saying "not saved" about it would be a lie.
+      console.warn('[fellowship] profile publish withheld — our own kind-0 has not arrived, publishing now would blank it');
+      if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)) {
+        try { if (window.trinityToast) window.trinityToast('Your photo and profile details aren’t saved yet — this phone is still connecting to your church’s relay. Try again in a moment.'); } catch (x) {}
+      }
+    }
     if (sent) { _profilePubFor = pub; _profilePubBody = body; }
     profiles[pub] = p; window.Fellowship.myProfile = p;
     // the name changed → re-seal it in every church we belong to, so the copies can never drift apart
