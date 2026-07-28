@@ -548,6 +548,13 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     </WizShell>
   );
 
+  // ALREADY LOCKED? Step aside. StewardForcedPin is the universal gate — it fires for every route into the
+  // console, including the ones this wizard never sees (restored from 12 words, adopted onto an existing
+  // church, a network console, or anyone who dismissed the wizard once). By the time a brand-new church
+  // reaches this step it has already set a PIN there, so asking again was pure duplication — and it was the
+  // duplication, not the gate, that made the flow feel wrong. AUDIT-2026-07-28.
+  const _alreadyLocked = (() => { try { return !window.Steward.needsPin && !!(window.Steward.hasPinLock && window.Steward.hasPinLock()); } catch (e) { return false; } })();
+  if (step === 2 && _alreadyLocked) { setTimeout(() => next(), 0); return null; }
   if (step === 2) return (
     <WizShell step={step} title="Lock this device with a PIN" sub="Your 12 words live encrypted on this computer. A PIN adds a second lock: without it, anyone who picks up this laptop could open the console and post as your whole church. You’ll enter it when you open the console."
       footer={<React.Fragment>

@@ -401,15 +401,29 @@ function SegBtn({ on, onClick, children, icon }) {
 // localStorage on init (legacy install, needs migration). PIN is now MANDATORY — no Skip. The
 // modal blocks every other surface until the steward sets one, which atomically replaces any
 // plaintext seed in KEY_LS with the AES-GCM/PBKDF2-encrypted form in ENC_LS.
+// THIS IS THE UNIVERSAL GATE, and it stays. The setup wizard asks for a PIN too, and the obvious tidy-up is
+// to delete this weaker duplicate — but the wizard only runs for a brand-new, not-yet-named church that has
+// never dismissed it. A console restored from 12 words, a steward adopted onto an existing church, a network
+// console, or anyone who dismissed the wizard once, all reach the dashboard without it. Removing this would
+// open those consoles with the church key UNENCRYPTED and nothing would ever ask.
+// So it was brought up to the wizard's standard instead: a confirm field, the same length floor, and the same
+// refusal of bare digits. The wizard's own step now steps aside when a PIN already exists, so a new church is
+// still only asked once. AUDIT-2026-07-28.
 function StewardForcedPin() {
   const [pin, setPin] = useSt('');
+  const [pin2, setPin2] = useSt('');
   const [busy, setBusy] = useSt(false);
   const [err, setErr] = useSt('');
   const submit = async () => {
-    if (pin.length < 4 || busy) return;
+    if (busy) return;
+    // Same rules as the wizard, deliberately — this key signs as the whole church, and six digits is a
+    // million guesses: minutes of offline work against a stolen laptop even at 600k PBKDF2 rounds.
+    if ((pin || '').length < 8) { setErr('Use at least 8 characters. A short phrase you will remember — three or four words — is far stronger than digits.'); return; }
+    if (/^\d+$/.test(pin) && pin.length < 12) { setErr('Digits alone are guessable by a computer in minutes. Use a few words instead, or at least 12 digits.'); return; }
+    if (pin !== pin2) { setErr('The two entries don’t match.'); return; }
     setBusy(true); setErr('');
     const ok = await window.Steward.setPin(pin);
-    if (!ok) { setBusy(false); setErr('Setting the PIN failed — try again.'); setPin(''); return; }
+    if (!ok) { setBusy(false); setErr('Setting the PIN failed — try again.'); setPin(''); setPin2(''); return; }
     // success: window.Steward.needsPin becomes false, the steward-needs-pin event fires, StewardRoot re-renders into the console.
   };
   return (
@@ -424,10 +438,13 @@ function StewardForcedPin() {
           <b>Settings → Security</b>.
         </div>
         <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
-          placeholder="Choose a PIN (4+ chars; passphrase OK)" inputMode="numeric" autoComplete="new-password"
-          style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
+          placeholder="A few words you'll remember" autoComplete="new-password"
+          style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', fontSize: 18, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
+        <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+          placeholder="Type it again" autoComplete="new-password"
+          style={{ width: '100%', boxSizing: 'border-box', height: 50, marginTop: 10, textAlign: 'center', fontSize: 18, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
-        <button onClick={submit} disabled={pin.length < 4 || busy} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (pin.length >= 4 && !busy) ? 1 : .5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {busy ? 'Setting…' : 'Set PIN & enter'}</button>
+        <button onClick={submit} disabled={!pin || !pin2 || busy} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (pin && pin2 && !busy) ? 1 : .5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {busy ? 'Setting…' : 'Set PIN & enter'}</button>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 11, lineHeight: 1.5 }}>
           Required. If you forget the PIN, recover the church via your 12-word phrase on any device.
         </div>
