@@ -342,7 +342,7 @@ function StewardWelcome() {
         ) : mode === 'steward-pin' ? (
           <div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Set a PIN to protect this device. Your steward key can act for a church, so it’s <b>encrypted on this device</b> and the PIN unlocks it — a lost or shared phone can’t act as a church without it.</div>
-            <input type="password" inputMode="numeric" value={pinVal} onChange={e => { setPinVal(e.target.value); setErr(''); }} autoFocus placeholder="Choose a PIN (6+ chars, or a longer passphrase)" onKeyDown={e => { if (e.key === 'Enter' && pinVal.length >= 6 && !pinBusy) finishWithPin(); }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
+            <input type="password" value={pinVal} onChange={e => { setPinVal(e.target.value); setErr(''); }} autoFocus placeholder="At least 6 — digits are fine" onKeyDown={e => { if (e.key === 'Enter' && pinVal.length >= 6 && !pinBusy) finishWithPin(); }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{err}</div> : null}
             <button onClick={finishWithPin} disabled={pinVal.length < 6 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 6 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
             <button onClick={() => { setErr(''); setMode('steward'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 8 }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
@@ -421,10 +421,9 @@ function StewardForcedPin() {
   const [err, setErr] = useSt('');
   const submit = async () => {
     if (busy) return;
-    // Same rules as the wizard, deliberately — this key signs as the whole church, and six digits is a
-    // million guesses: minutes of offline work against a stolen laptop even at 600k PBKDF2 rounds.
-    if ((pin || '').length < 8) { setErr('Use at least 8 characters. A short phrase you will remember — three or four words — is far stronger than digits.'); return; }
-    if (/^\d+$/.test(pin) && pin.length < 12) { setErr('Digits alone are guessable by a computer in minutes. Use a few words instead, or at least 12 digits.'); return; }
+    // Same rule as the wizard: six minimum, digits fine. See the note there — the stricter version locked
+    // people out because the unlock keyboard did not follow it. AUDIT-2026-07-28.
+    if ((pin || '').length < 6) { setErr('Use at least 6 characters.'); return; }
     if (pin !== pin2) { setErr('The two entries don’t match.'); return; }
     setBusy(true); setErr('');
     const ok = await window.Steward.setPin(pin);
@@ -443,7 +442,7 @@ function StewardForcedPin() {
           <b>Settings → Security</b>.
         </div>
         <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
-          placeholder="A few words you'll remember" autoComplete="new-password"
+          placeholder="At least 6 — digits are fine" autoComplete="new-password"
           style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', fontSize: 18, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
         <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
           placeholder="Type it again" autoComplete="new-password"
@@ -493,7 +492,7 @@ function StewardUnlock() {
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Console locked</div>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 18 }}>Enter the PIN to unlock this church on this device.</div>
         <input type="password" value={pin} autoFocus disabled={blocked} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && !blocked) submit(); }}
-          placeholder="PIN" inputMode="numeric" autoComplete="off"
+          placeholder="Your PIN or passphrase" autoComplete="off"
           style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)', opacity: blocked ? .6 : 1 }} />
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}{blocked ? ' (' + waitLeft + 's)' : ''}</div> : null}
         <button onClick={submit} disabled={!pin || busy || blocked} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || busy || blocked) ? .5 : 1 }}>{blocked ? 'Locked — wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>

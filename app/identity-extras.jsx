@@ -300,7 +300,7 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
           ) : (
             <div style={{ marginTop: 12, padding: 13, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <div style={{ fontSize: 13, color: 'var(--ink-2)', marginBottom: 9 }}>Enter your PIN to turn protection off. Your identity will be stored unencrypted again.</div>
-              <input type="password" inputMode="numeric" value={off} onChange={e => setOff(e.target.value)} placeholder="Your PIN" style={inp} />
+              <input type="password" value={off} onChange={e => setOff(e.target.value)} placeholder="Your PIN" style={inp} />
               {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
               <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
                 <button onClick={() => { setShowOff(false); setOff(''); setErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>

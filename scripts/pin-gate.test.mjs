@@ -30,8 +30,10 @@ test('it asks twice, like every other place that sets a secret', () => {
 });
 
 test('it enforces the same strength as the wizard', () => {
-  assert.match(forced, /length < 8/, 'the floor is back below 8 characters');
-  assert.match(forced, /\^\\d\+\$/, 'bare digits are accepted without a length penalty');
+  // Six characters, digits allowed — reverted from the stricter 8-and-no-bare-digits rule on 2026-07-28,
+  // because that demanded a passphrase while the unlock screens still offered a numeric keypad and locked
+  // the owner out of the account he had just made. What matters here is that this gate and the wizard agree.
+  assert.match(forced, /length < 6/, 'the floor moved away from 6 — the wizard and this gate must match');
   assert.doesNotMatch(forced, /4\+ chars/, 'the old 4-character wording is still on screen');
 });
 

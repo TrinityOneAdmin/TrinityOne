@@ -361,10 +361,11 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [pinBusy, setPinBusy] = React.useState(false);
   const savePin = async () => {
     if (pinBusy) return;
-    // Six DIGITS is a million guesses — minutes of offline work against a stolen laptop, even at 600k
-    // PBKDF2 rounds. A passphrase is not. The field accepts one; the wording should ask for one.
-    if ((pinA || '').length < 8) { setPinErr('Use at least 8 characters. A short phrase you will remember — three or four words — is far stronger than digits.'); return; }
-    if (/^\d+$/.test(pinA) && pinA.length < 12) { setPinErr('Digits alone are guessable by a computer in minutes. Use a few words instead, or at least 12 digits.'); return; }
+    // SIX MINIMUM, digits fine. The stricter rule — 8 characters, and 12 if all digits — was correct about
+    // the maths and wrong about the product: it demanded a passphrase on the set screen while the unlock
+    // screen still offered a numeric keypad, and locked the owner out of the account he had just made.
+    // Revisit strength AND the keyboard together, or not at all. AUDIT-2026-07-28.
+    if ((pinA || '').length < 6) { setPinErr('Use at least 6 characters.'); return; }
     if (pinA !== pinB) { setPinErr('The two entries don’t match.'); return; }
     setPinBusy(true); setPinErr('');
     let ok = false; try { ok = await window.Steward.setPin(pinA); } catch (e) { ok = false; }
@@ -566,9 +567,9 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
         <button onClick={savePin} disabled={pinBusy || !pinA || !pinB} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (pinBusy || !pinA || !pinB) ? .5 : 1 }}>{pinBusy ? 'Setting…' : 'Set a PIN'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>PIN OR PASSPHRASE</div>
-      <input type="password" autoFocus value={pinA} onChange={e => { setPinA(e.target.value); setPinErr(''); }} placeholder="At least 6 characters" inputMode="numeric" autoComplete="new-password" style={fld} />
+      <input type="password" autoFocus value={pinA} onChange={e => { setPinA(e.target.value); setPinErr(''); }} placeholder="At least 6 — digits are fine" autoComplete="new-password" style={fld} />
       <div style={{ ...lbl, marginTop: 12 }}>CONFIRM</div>
-      <input type="password" value={pinB} onChange={e => { setPinB(e.target.value); setPinErr(''); }} onKeyDown={e => { if (e.key === 'Enter') savePin(); }} placeholder="Type it again" inputMode="numeric" autoComplete="new-password" style={fld} />
+      <input type="password" value={pinB} onChange={e => { setPinB(e.target.value); setPinErr(''); }} onKeyDown={e => { if (e.key === 'Enter') savePin(); }} placeholder="Type it again" autoComplete="new-password" style={fld} />
       {pinErr ? <div style={{ fontSize: 12.5, color: 'var(--clay)', marginTop: 9, fontWeight: 600 }}>{pinErr}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>We can’t reset this for you — if you forget it, restore the church from your 12 words. You can add or change it later in <b>Settings → Security</b>.</div>
     </WizShell>
@@ -3930,7 +3931,7 @@ function DashStewardsPanel({ church }) {
             {approving === r.pubkey ? <div style={{ marginTop: 9 }}>
               <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 6 }}>Enter your PIN to approve <b>{niceName(r.pubkey)}</b>{r.name ? ' (claims to be “' + r.name + '”)' : ''} — check the npub above is who you expect.</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <input type="password" inputMode="numeric" autoFocus value={approvePin} onChange={e => { setApprovePin(e.target.value); setApproveErr(''); }} onKeyDown={e => { if (e.key === 'Enter') confirmApprove(); }} placeholder="PIN" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
+                <input type="password" autoFocus value={approvePin} onChange={e => { setApprovePin(e.target.value); setApproveErr(''); }} onKeyDown={e => { if (e.key === 'Enter') confirmApprove(); }} placeholder="PIN" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
                 <button onClick={confirmApprove} className="sk-btn sk-btn--clay" style={{ padding: '8px 12px', fontSize: 12.5 }}>Approve</button>
                 <button onClick={() => setApproving(null)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 10px', fontSize: 12.5 }}>Cancel</button>
               </div>
@@ -4824,8 +4825,8 @@ function PinModal({ action, onClose }) {
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 16 }}>{remove
           ? 'Enter your current PIN to remove the lock. The key goes back to being stored unlocked on this device.'
           : 'Encrypts the church key on this device. You’ll enter it to open the console; it auto-locks after 10 minutes idle. Don’t forget it — without it (or the 12-word phrase) this device can’t open the church.'}</div>
-        <input type="password" autoFocus value={pin} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && remove) save(); }} placeholder={remove ? 'Current PIN' : 'New PIN or passphrase'} inputMode="numeric" autoComplete="off" style={inp} />
-        {!remove ? <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="Confirm" inputMode="numeric" autoComplete="off" style={inp} /> : null}
+        <input type="password" autoFocus value={pin} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && remove) save(); }} placeholder={remove ? 'Current PIN' : 'New PIN or passphrase'} autoComplete="off" style={inp} />
+        {!remove ? <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="Confirm" autoComplete="off" style={inp} /> : null}
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginBottom: 8 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 9, marginTop: 6 }}>
           <button onClick={() => onClose(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '11px' }}>Cancel</button>

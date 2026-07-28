@@ -32,14 +32,15 @@ test('the PIN step cannot be skipped', () => {
   assert.match(step, /savePin/, 'the PIN step no longer offers a way to set one');
 });
 
-test('digits alone are refused, and a phrase is asked for', () => {
-  // Six digits is a million guesses — minutes of offline work against a stolen laptop even at 600k PBKDF2
-  // rounds. The field already accepts a passphrase; the wording has to ask for one.
+test('the PIN has a real minimum, matched by the keyboard', () => {
+  // Was 'digits alone are refused, and a phrase is asked for'. Reverted 2026-07-28: the stricter rule
+  // demanded a passphrase on the set screen while the unlock screen still offered a numeric keypad, which
+  // locked the owner out of the account he had just created — and a PIN cannot be reset. Six with digits
+  // allowed, and the keyboards must never contradict it again (see scripts/pin-keyboard.test.mjs).
   const at = wizard.indexOf('const savePin');
   const fn = wizard.slice(at, at + 900);
-  assert.match(fn, /length < 8/, 'the minimum is back below 8 characters');
-  assert.match(fn, /\^\\d\+\$/, 'an all-digit PIN is accepted without a length penalty');
-  assert.match(fn, /words/i, 'nothing tells the steward that a phrase is stronger than digits');
+  assert.match(fn, /length < 6/, 'the wizard minimum is gone');
+  assert.doesNotMatch(fn, /length < 8/, 'the strict rule is back without the keyboard to match it');
 });
 
 test('a new church requires approval to join', () => {
