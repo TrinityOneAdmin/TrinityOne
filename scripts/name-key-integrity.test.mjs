@@ -449,3 +449,51 @@ test('but a member with no profile at all is not re-asked for ever', () => {
   assert.match(FELLOWSHIP, /oneose\(\)\s*\{[^}]*_k0Seen\.add\(pk\)/,
     'nothing marks a pubkey as asked when the relay answers with nothing, so it will be re-asked in every window');
 });
+
+// ── two bugs an adversarial review of my own work found, 2026-07-28 ──────────────────────────────────────────
+test('a mid-session lock does not blank every face for the rest of the session', () => {
+  // clearCommunityCache empties `profiles`, which is what made the OLD fetch gate self-healing. Gating on
+  // _k0Seen instead fixed the churn and removed that healing: after a lock, every member was filtered out of
+  // requestProfiles for ever, so no kind-0 arrived again. Our own profile too — so _recoverOwnProfile never
+  // ran, and the next edit republished a kind-0 with an empty picture, destroying the photo on the relay.
+  const at = FELLOWSHIP.search(/clearCommunityCache/);
+  assert.notEqual(at, -1, 'clearCommunityCache is gone');
+  const fn = FELLOWSHIP.slice(at, at + 1600);
+  assert.match(fn, /_k0Seen\.clear\(\)/,
+    'the wipe does not reset "have we asked the relay", so a lock leaves every member permanently unfetchable');
+});
+
+test('an admitted member is never downgraded to the church-key name copy', () => {
+  // Dropping the ring check let a PENDING member publish (right) and also let an ADMITTED member republish
+  // while the ring was transiently empty — a locked boot, or a warm buffer. That took the church-key branch
+  // and replaced their congregation-sealed name with one only the owner can read: Anonymous to everyone else.
+  const at = FELLOWSHIP.search(/async syncSealedNames\s*\(/);
+  const fn = FELLOWSHIP.slice(at, at + 1400);
+  assert.match(fn, /hub\.eosed/,
+    'syncSealedNames publishes on an empty ring without waiting for the relay to answer, so a boot race downgrades a real member');
+  const ringAt = fn.indexOf('ring.length'), pubAt = fn.indexOf('publishSealedName');
+  assert.ok(ringAt !== -1 && ringAt < pubAt, 'the ring must be checked before anything is published');
+});
+
+test('a restore never publishes over a profile it has not read', () => {
+  // THE WORST ONE. kind-0 is REPLACEABLE and `prev` is the LOCAL cache — empty on a restored phone. So the
+  // name-only patch every restore performs computed picture:'' and about:'' and published that over the
+  // member's real profile, destroying their photo and clearing their directory opt-out ON THE RELAY.
+  // The 12-word restore was safe from this only by accident: it called a function that did not exist and
+  // threw before reaching here. Fixing that ReferenceError opened this. AUDIT-2026-07-28.
+  const at = FELLOWSHIP.search(/async setProfile\s*\(/);
+  assert.notEqual(at, -1, 'setProfile is gone');
+  const fn = FELLOWSHIP.slice(at, FELLOWSHIP.indexOf('requestProfiles(pubkeys)', at));
+  assert.match(fn, /_k0Seen\.has\(pub\)/,
+    'setProfile publishes a partial patch without first reading our own profile — a restore will blank it');
+  const waitAt = fn.indexOf('_k0Seen.has(pub)'), wireAt = fn.indexOf('const wire =');
+  assert.ok(waitAt !== -1 && wireAt !== -1 && waitAt < wireAt, 'the wait must happen BEFORE the wire copy is built');
+});
+
+test('the directory opt-out survives a locked boot too', () => {
+  // `hidden` is published, so it was always recoverable — it simply was not recovered, so a lock silently
+  // made a member who had opted OUT of the directory visible again.
+  const at = FELLOWSHIP.indexOf('function _recoverOwnProfile');
+  const fn = FELLOWSHIP.slice(at, at + 900);
+  assert.match(fn, /hidden/, 'a member who opted out of the directory is made visible again by a lock');
+});

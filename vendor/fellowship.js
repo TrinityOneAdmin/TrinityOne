@@ -6547,6 +6547,10 @@
     const cur = window.Fellowship.myProfile || {};
     const next = { ...cur };
     let changed = false;
+    if (cur.hidden === void 0 && m.hidden !== void 0) {
+      next.hidden = !!m.hidden;
+      changed = true;
+    }
     for (const k of ["about", "picture"]) {
       if (!cur[k] && typeof m[k] === "string" && m[k]) {
         next[k] = m[k];
@@ -7673,6 +7677,7 @@
           }
         });
         for (const k of Object.keys(profiles)) delete profiles[k];
+        _k0Seen.clear();
         window.Fellowship.myProfile = null;
       } catch (e) {
         console.warn("[fellowship] clearCommunityCache failed", e);
@@ -8027,6 +8032,11 @@
       for (const c of list) {
         const cp = toPub(c) || c;
         if (!cp) continue;
+        const ring = _nameKeys.get(cp) || [];
+        if (!ring.length) {
+          const hub = _docsHubs.get(cp);
+          if (!hub || !hub.eosed) continue;
+        }
         const stamp = nm + "|" + _ringId(cp);
         if (_sealedMine.get(cp) === stamp) continue;
         try {
@@ -8050,6 +8060,14 @@
     // publish this user's kind-0 profile (display name etc.) and cache it
     async setProfile(meta) {
       if (!sk) await window.Fellowship.ready;
+      if (pub && !_k0Seen.has(pub) && Object.keys(profiles[pub] || {}).length === 0) {
+        try {
+          window.Fellowship.requestProfiles([pub]);
+          const t0 = Date.now();
+          while (!_k0Seen.has(pub) && Date.now() - t0 < 6e3) await new Promise((r) => setTimeout(r, 150));
+        } catch (e) {
+        }
+      }
       const prev = profiles[pub] || {};
       const p = {
         name: (meta.name != null ? meta.name : prev.name || "").trim(),

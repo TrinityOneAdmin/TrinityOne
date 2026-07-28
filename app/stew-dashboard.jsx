@@ -3228,7 +3228,13 @@ function DashMembers() {
   // flag off and on again. Seal the whole roster once the lists have actually loaded. AUDIT-2026-07-27.
   const _sealedAll = React.useRef('');
   React.useEffect(() => {
-    if (!sg.loaded) return;                 // NEVER from empty lists that merely have not arrived yet
+    if (!sg.loaded) return;                 // the minors doc itself arrived — not merely "a subscription ended"
+    // AND the relay must have authenticated us. The minors document is served only to an authenticated
+    // reader, so an unauthenticated connection returns the same empty answer as a church with no children.
+    // Sealing every member "not a minor" from that is worse than the bug this back-fill fixes: the member's
+    // app trusts the clearance OVER the list fallback, so it pins each child as an adult until a steward
+    // happens to toggle their flag. AUDIT-2026-07-28.
+    try { if (!(window.Steward.relayAuthed && window.Steward.relayAuthed())) return; } catch (e) { return; }
     if (window.Steward.actingChurch) return;   // a delegated console signs with its own church key
     if (!members.length) return;
     const sig = [(sg.minors || []).join(','), (sg.approved || []).join(','), members.map(m => m.pubkey).sort().join(',')].join('|');

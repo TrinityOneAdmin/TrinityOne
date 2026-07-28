@@ -43,6 +43,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   // Did they get back in by TYPING their 12 words? A ref, not state: finishRestore is awaited from inside
   // the same handler that sets it, so a state update would not be visible to it.
   const rTypedWords = React.useRef(false);
+  const [scanNonce, setScanNonce] = useId(0);   // bump to remount the single-shot QRScanner after a rejected code
   // This phone's own public name-tag, shown to a steward when the 12 words are gone. The secure store can
   // answer empty for a moment right after boot, so poll rather than render an empty QR.
   const [myNpub, setMyNpub] = useId('');
@@ -163,13 +164,26 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   };
   const doScanSignIn = async (text) => {
     const seed = seedFromScan(text);
-    if (!seed) { setRErr('That code isn’t a TrinityOne sign-in code. Point the camera at the code on the other phone, or use your 12 words.'); setRMode('scan'); return; }
-    // Replacing an identity that already has churches would strand them, so ask first. On a fresh phone
-    // there is nothing to lose and nothing to ask about.
-    try {
-      const existing = JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]') || [];
-      if (existing.length && !window.confirm('This will replace the account already on this phone.\n\nMake sure its 12 words are written down first — without them it cannot be recovered.')) { setRMode('choose'); return; }
-    } catch (e) {}
+    // QRScanner is SINGLE-SHOT: its loop calls onResult and stops rescheduling, relying on the caller to
+    // unmount it. Re-rendering the same instance leaves a live preview with a dead decoder — so scanning
+    // anything unrecognised (a church join QR, a Wi-Fi code, a poster) killed the camera silently and only
+    // "Back" escaped. The transfer flow avoids this by passing through a busy stage that unmounts it; this
+    // route had no such step. Remount by bumping the key instead. AUDIT-2026-07-28.
+    if (!seed) { setRErr('That code isn’t a TrinityOne sign-in code. Point the camera at the code on the other phone, or use your 12 words.'); setScanNonce(n => n + 1); setRMode('scan'); return; }
+    // CONFIRM IN BOTH CASES. My first version asked only when the phone already had churches — "on a fresh
+    // phone there is nothing to lose". That is wrong, and app.jsx already says why in its own comment: a
+    // crafted link must never silently take over a device, "whether replacing an existing identity OR seeding
+    // a fresh phone. This closes the old gap where a fresh device adopted an invite seed with no prompt."
+    // I re-opened that gap (SECURITY-AUDIT-2026-07-06 L4) and then promoted it to a top-level button on the
+    // first screen a new user sees — so a QR on a poster, or in a group chat, would have signed someone into
+    // an account whose key the attacker holds, reading their messages and signing as them, with no prompt.
+    // Caught by an adversarial review of my own work, 2026-07-28.
+    let existing = [];
+    try { existing = JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]') || []; } catch (e) {}
+    const warn = existing.length
+      ? 'This REPLACES the account already on this phone.\n\nMake sure its 12 words are written down first — without them it cannot be recovered.'
+      : 'This signs you in to an account someone ELSE created, using a key they know.\n\nThat is how a parent sets up a child\u2019s phone. Only continue if you are expecting this and you trust whoever showed you the code.';
+    if (!window.confirm(warn)) { setRMode('choose'); return; }
     setRBusy('Signing in…'); setRErr(''); rTypedWords.current = false;
     try {
       await window.TrinityIdentity.importMnemonic(seed);
@@ -432,7 +446,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
           </p>
           {rErr ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 600, textAlign: 'center', margin: '0 0 12px' }}>{rErr}</div> : null}
           {rBusy ? <div style={{ fontSize: 14, color: 'var(--ink-2)', textAlign: 'center', margin: '10px 0' }}>{rBusy}</div>
-            : <QRScanner onResult={doScanSignIn} onCancel={() => { setRErr(''); setRMode('choose'); }}
+            : <QRScanner key={scanNonce} onResult={doScanSignIn} onCancel={() => { setRErr(''); setRMode('choose'); }}
                 prompt="Point at the code on the other phone"
                 onManual={doScanSignIn} manualPrompt="Or paste the link they sent you" />}
           <button onClick={() => { setRErr(''); setRBusy(''); setRMode('choose'); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>Back</button>

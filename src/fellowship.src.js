@@ -800,6 +800,10 @@ function _recoverOwnProfile(e) {
   const cur = window.Fellowship.myProfile || {};
   const next = { ...cur };
   let changed = false;
+  // `hidden` is the member's opt-out from the church directory. It IS published (wire.hidden), so it was
+  // always recoverable — it simply was not recovered, so a locked boot silently made a member who had opted
+  // OUT visible again, and the Settings toggle then agreed with the wrong answer. AUDIT-2026-07-28.
+  if (cur.hidden === undefined && m.hidden !== undefined) { next.hidden = !!m.hidden; changed = true; }
   for (const k of ['about', 'picture']) {
     if (!cur[k] && typeof m[k] === 'string' && m[k]) { next[k] = m[k]; changed = true; }
   }
@@ -1593,6 +1597,14 @@ window.Fellowship = {
       kill.forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
       // drop in-memory caches too, so nothing repaints from RAM before the next fetch
       for (const k of Object.keys(profiles)) delete profiles[k];
+      // AND the "have we asked the relay" set. Gating the fetch on _k0Seen instead of "is there an entry in
+      // profiles" fixed the refetch churn — and quietly removed the self-healing the old gate had by
+      // accident, because THIS function empties profiles. Without clearing it, a mid-session PIN lock left
+      // every member permanently unfetchable: no kind-0 ever arrives again, so every face goes blank until
+      // the app restarts. Worse, our own profile is filtered out too, so _recoverOwnProfile never runs, and
+      // the next edit republishes a kind-0 with an EMPTY picture — destroying the member's photo on the
+      // relay. Found by an adversarial review of my own work, 2026-07-28.
+      _k0Seen.clear();
       window.Fellowship.myProfile = null;
     } catch (e) { console.warn('[fellowship] clearCommunityCache failed', e); }
   },
@@ -1843,7 +1855,18 @@ window.Fellowship = {
     let n = 0;
     for (const c of list) {
       const cp = toPub(c) || c;
-      if (!cp) continue;   // no ring is NOT a reason to skip — see above
+      if (!cp) continue;
+      // A MISSING RING IS NOT THE SAME AS BEING PENDING. Dropping the old ring check let a pending member
+      // publish (right), and also let an ADMITTED member republish while the ring was transiently empty —
+      // a locked boot, or a warm buffer where the key had not been ingested yet. That fell through to the
+      // church-key branch and replaced their good congregation-sealed name with one only the owner can read,
+      // making them Anonymous to their whole congregation. Wait until the church's docs hub has actually
+      // answered before concluding we have no key. AUDIT-2026-07-28.
+      const ring = _nameKeys.get(cp) || [];
+      if (!ring.length) {
+        const hub = _docsHubs.get(cp);
+        if (!hub || !hub.eosed) continue;   // we have not heard back yet — say nothing rather than downgrade
+      }
       const stamp = nm + '|' + _ringId(cp);
       if (_sealedMine.get(cp) === stamp) continue;              // same name AND same key — nothing to redo
       try { if (await window.Fellowship.publishSealedName(cp, nm)) { _sealedMine.set(cp, stamp); n++; } } catch (e) {}
@@ -1858,6 +1881,20 @@ window.Fellowship = {
   // publish this user's kind-0 profile (display name etc.) and cache it
   async setProfile(meta) {
     if (!sk) await window.Fellowship.ready;
+    // NEVER PUBLISH OVER A PROFILE WE HAVE NOT READ. kind-0 is REPLACEABLE, and `prev` is our local cache —
+    // empty on a restored or wiped phone. So a name-only patch (which is exactly what every restore does)
+    // computed picture:'' and about:'' and published that over the member's real profile, destroying their
+    // photo and clearing their directory opt-out on the relay. The 12-word restore used to be safe from this
+    // only by accident: it called a function that did not exist, threw, and never reached here — fixing that
+    // ReferenceError opened this. Wait for our own kind-0 first, exactly as the console's publishProfile does.
+    // Found by an adversarial review of my own work, 2026-07-28.
+    if (pub && !_k0Seen.has(pub) && Object.keys(profiles[pub] || {}).length === 0) {
+      try {
+        window.Fellowship.requestProfiles([pub]);
+        const t0 = Date.now();
+        while (!_k0Seen.has(pub) && Date.now() - t0 < 6000) await new Promise(r => setTimeout(r, 150));
+      } catch (e) {}
+    }
     const prev = profiles[pub] || {};
     const p = {
       name: (meta.name != null ? meta.name : (prev.name || '')).trim(),

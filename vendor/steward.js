@@ -12937,6 +12937,7 @@ zoo`.split("\n");
             if (!_byChurch(e)) return;
             if (e.created_at < tMinors) return;
             tMinors = e.created_at;
+            loaded = true;
             try {
               minors = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -12965,8 +12966,13 @@ zoo`.split("\n");
             onLists({ minors, approved, nophoto, loaded });
           }
         },
+        // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
+        // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
+        // subscription ended", and the clearance back-fill downstream treated that as "this church has no
+        // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
+        // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
+        // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
         oneose() {
-          loaded = true;
           onLists({ minors, approved, nophoto, loaded });
         }
       });

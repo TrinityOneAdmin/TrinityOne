@@ -19,6 +19,23 @@ const seedFromScan = (() => {
   return new Function(ID.slice(at, end) + '\nreturn seedFromScan;')();
 })();
 
+
+// Brace-matched, quote-aware. Fixed-window slices have reported correct code as broken FIVE times today —
+// adding a comment to a function pushed the assertion out of view. Never slice by character count again.
+function body(src, anchor) {
+  const at = src.indexOf(anchor);
+  assert.notEqual(at, -1, anchor + ' is gone');
+  let d = 0, q = '';
+  for (let i = src.indexOf('{', at); i < src.length; i++) {
+    const c = src[i], prev = src[i - 1];
+    if (q) { if (c === q && prev !== '\\') q = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if (c === '/' && src[i + 1] === '/') { i = src.indexOf('\n', i); if (i === -1) break; continue; }
+    if (c === '{') d++; else if (c === '}' && --d === 0) return src.slice(at, i + 1);
+  }
+  assert.fail('could not find the end of ' + anchor);
+}
+
 const PHRASE = 'ridge lunar absent gospel timber olive candle harvest meadow bishop anchor kindle';
 
 test('it reads the seed out of a real invite link', () => {
@@ -52,20 +69,22 @@ test('an older ?invite= link still works', () => {
 test('scanning does not count as proving you have your phrase', () => {
   // Only the typed-words route earns dismissal of the backup nudge — a member who scanned has never seen
   // their 12 words, and silencing the one warning that matters for them would be the worst outcome.
-  const at = ID.indexOf('const doScanSignIn');
-  const fn = ID.slice(at, at + 1400);
+  const fn = body(ID, 'const doScanSignIn');
   assert.match(fn, /rTypedWords\.current = false/, 'the scan route claims the member has their phrase');
 });
 
 test('it warns before replacing an account that has churches', () => {
-  const at = ID.indexOf('const doScanSignIn');
-  const fn = ID.slice(at, at + 1400);
+  const fn = body(ID, 'const doScanSignIn');
   assert.match(fn, /followedChurches/, 'it does not check whether an account is already set up here');
   // Assert the LIVE guard, not merely that the words appear: `if (false && !window.confirm(...))` kept an
   // earlier version of this test green while replacing an account without asking. A test that survives its
   // own sabotage is worse than none.
-  assert.match(fn, /if \(existing\.length && !window\.confirm\(/,
-    'the confirmation is not actually gating the replacement');
+  // ALWAYS confirms now, fresh phone included. The first version asked only when churches existed — which
+  // re-opened a documented, previously-closed hole (SECURITY-AUDIT-2026-07-06 L4): a crafted QR on a poster
+  // would have signed a brand-new phone into an account whose key the attacker holds, with no prompt. And I
+  // had just promoted that route to a top-level button on the first screen.
+  assert.match(fn, /if \(!window\.confirm\(warn\)\)/, 'the confirmation is not actually gating the sign-in');
+  assert.match(fn, /existing\.length\s*\?/, 'the warning no longer distinguishes replacing an account from seeding a fresh phone');
   const guard = fn.indexOf('followedChurches'), imp = fn.indexOf('importMnemonic');
   assert.ok(guard < imp, 'the warning must come BEFORE the identity is replaced');
 });
@@ -73,6 +92,6 @@ test('it warns before replacing an account that has churches', () => {
 test('the route is reachable from the restore fork', () => {
   assert.match(ID, /Someone set this up for me/, 'nothing offers the scan, so the child still cannot get in');
   assert.match(ID, /rMode === 'scan'/, 'the scanner screen is missing');
-  assert.match(ID, /<QRScanner onResult=\{doScanSignIn\}/, 'the scanner is not wired to the handler');
+  assert.match(ID, /<QRScanner[^>]{0,60}onResult=\{doScanSignIn\}/, 'the scanner is not wired to the handler');
   assert.match(ID, /onManual=\{doScanSignIn\}/, 'no manual fallback — a phone with no camera has no way in');
 });
