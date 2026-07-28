@@ -138,7 +138,36 @@
   The first three are the queue: a child who cannot get in, a console that shows nobody’s face, and one PIN
   prompt too many. They are what a congregation meets on day one.</p>
   <ul class="items">
-<li class="item" data-id="child-qr-deadend">
+<li class="item" data-id="delegate-ux">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Design what a delegated steward actually sees — and give the card real permissions<span class="tag t-block">Pilot</span></span>
+        <div class="note">Pilot-critical: the pilot church has <b>four elders</b> who all need access. Copying
+        the church key four times would be the worst possible answer — four devices with full, irreversible
+        authority, any one of which opens every sealed name in the congregation. Delegation is the right
+        mechanism and it has never been designed.</div>
+        <div class="why"><b>Getting IN already works.</b> "Help run another church" in the steward app hands
+        the owner a code, they approve it, done. The gap is everything after.
+        <br><b>What a delegate sees today:</b> a near-identical console, a small STEWARD badge, and "Acting as
+        steward · tap to switch". Nothing says what they may do. <b>Zero owner-only controls are disabled</b> —
+        every one looks live and fails when pressed, and until 2026-07-28 most failed SILENTLY: the dialog
+        closed, the toggle stayed put, the giving field showed "Saved ✓", and nothing had happened. A delegate
+        learns the boundaries by hitting them.
+        <br><b>So:</b> orient them once on arrival (what you can do, what only the owner can, that you can be
+        removed at any time); make owner-only controls visibly unavailable with a reason rather than
+        present-then-refused; and have somebody walk the whole console AS a delegate, which nobody ever has —
+        two of the most serious bugs found on 2026-07-28 were in delegated paths precisely because nobody
+        goes there.
+        <br><br><b>PERMISSIONS ARE A RELAY CHANGE, NOT A UI CHANGE.</b> The steward roster is a flat
+        <code>{pubkeys:[…]}</code> list and the relay's steward check is BINARY — you are a steward or you are
+        not. So per-elder settings ("can post", "can manage members", "can see Finance", "can see Care") need
+        the roster document to carry capabilities AND the relay to enforce them. Hiding buttons alone would be
+        theatre: a delegate could do the hidden thing from any other client, and we would have promised a
+        control that does not exist. Sensible first split — the pastoral and financial ones (Finance, Care,
+        safeguarding) are what a church actually wants to scope; posting and rotas rarely need restricting.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="child-qr-deadend">
       <div class="row"><input type="checkbox"><div class="body">
         <span class="title">A child cannot get in by the route their parent is told to use<span class="tag t-block">Copy is wrong now</span></span>
         <div class="note">Creating a child account shows the parent a QR and says "On your child's phone,
