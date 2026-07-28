@@ -349,3 +349,34 @@ test('it only ever reads OUR OWN document', () => {
   assert.equal(ok, false, 'a member adopted someone else’s name as their own');
   assert.equal(side.w.Fellowship.myProfile, null);
 });
+
+// ── a member awaiting approval must still have a name ────────────────────────────────────────────────────────
+// Reported 2026-07-28: a phone joined as "Testi Bob" and appeared on the steward console as "Anon". Confirmed
+// against the live relay — 19 members had a join document and only 18 had a name; the missing one was the
+// phone. publishSealedName has always handled the pending case, sealing to the CHURCH key because a member
+// awaiting approval has no congregation key by design. That fallback was unreachable: syncSealedNames built
+// its list from _nameKeys, so the only people it skipped were precisely the ones a steward needs to see —
+// the ones asking to join, whose name is how you decide whether to approve them.
+test('the sync covers churches we hold no congregation key for', () => {
+  // Anchor on the DEFINITION. Plain indexOf('syncSealedNames') found an earlier call site and tested a
+  // window of unrelated code — reporting a correct fix as broken.
+  const at = FELLOWSHIP.search(/async syncSealedNames\s*\(/);
+  assert.notEqual(at, -1, 'syncSealedNames is gone from the shipped bundle');
+  const fn = FELLOWSHIP.slice(at, at + 1400);
+  assert.match(fn, /_docsHubs\.keys\(\)/,
+    'the list is built from the congregation keys we hold, so a member awaiting approval is skipped and shows as Anon');
+  assert.doesNotMatch(fn, /!\(_nameKeys\.get\(cp\) \|\| \[\]\)\.length\) continue/,
+    'a missing congregation key still skips the member — the pending fallback stays unreachable');
+});
+
+test('and the pending copy it writes is the one the church can open', () => {
+  // Belt and braces: prove the shape a pending member ends up publishing is readable by the church key and
+  // by nobody else. This is what the steward console reads to put a name on a join request.
+  const payload = sealDoc(alice)(church.pub, 'Testi Bob', undefined);
+  const c = JSON.parse(payload).c;
+  const got = JSON.parse(nip44v2.decrypt(c, nip44v2.utils.getConversationKey(church.sk, alice.pub)));
+  assert.equal(got.name, 'Testi Bob', 'the church cannot read a pending member’s name');
+  let leaked = false;
+  try { JSON.parse(nip44v2.decrypt(c, nip44v2.utils.getConversationKey(bob.sk, alice.pub))); leaked = true; } catch (e) {}
+  assert.equal(leaked, false, 'another member can read a pending member’s name');
+});

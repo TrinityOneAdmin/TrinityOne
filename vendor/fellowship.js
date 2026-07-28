@@ -7942,11 +7942,11 @@
     async syncSealedNames(churchNpubs) {
       const nm = ((window.Fellowship.myProfile || {}).name || "").trim();
       if (!nm) return 0;
-      const list = churchNpubs && churchNpubs.length ? churchNpubs : [..._nameKeys.keys()];
+      const list = churchNpubs && churchNpubs.length ? churchNpubs : [.../* @__PURE__ */ new Set([..._nameKeys.keys(), ..._docsHubs.keys()])];
       let n = 0;
       for (const c of list) {
         const cp = toPub(c) || c;
-        if (!cp || !(_nameKeys.get(cp) || []).length) continue;
+        if (!cp) continue;
         const stamp = nm + "|" + _ringId(cp);
         if (_sealedMine.get(cp) === stamp) continue;
         try {

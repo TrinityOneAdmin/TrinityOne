@@ -1756,11 +1756,18 @@ window.Fellowship = {
   async syncSealedNames(churchNpubs) {
     const nm = ((window.Fellowship.myProfile || {}).name || '').trim();
     if (!nm) return 0;
-    const list = (churchNpubs && churchNpubs.length) ? churchNpubs : [...(_nameKeys.keys())];
+    // EVERY church we are connected to, not just the ones that have handed us a congregation key. A member
+    // awaiting approval has no such key BY DESIGN — giving them one would open the whole roster before they
+    // are admitted — so keying the list on _nameKeys skipped exactly the people whose names a steward needs
+    // most: the ones asking to join. publishSealedName already handles this, sealing to the CHURCH key
+    // instead, and that fallback was unreachable because this caller never let it run.
+    // Reported 2026-07-28: a phone joined as "Testi Bob" and showed on the console as Anon. Confirmed
+    // against the relay — 19 members had a join document and only 18 had a name.
+    const list = (churchNpubs && churchNpubs.length) ? churchNpubs : [...new Set([..._nameKeys.keys(), ..._docsHubs.keys()])];
     let n = 0;
     for (const c of list) {
       const cp = toPub(c) || c;
-      if (!cp || !(_nameKeys.get(cp) || []).length) continue;   // no key yet — sealed on arrival instead
+      if (!cp) continue;   // no ring is NOT a reason to skip — see above
       const stamp = nm + '|' + _ringId(cp);
       if (_sealedMine.get(cp) === stamp) continue;              // same name AND same key — nothing to redo
       try { if (await window.Fellowship.publishSealedName(cp, nm)) { _sealedMine.set(cp, stamp); n++; } } catch (e) {}
