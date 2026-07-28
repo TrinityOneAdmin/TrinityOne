@@ -540,6 +540,101 @@
 
 <!-- ═══════════════════════════ 7 ═══════════════════════════ -->
 <section>
+  <h2>Beyond one congregation <span class="phase p-after">After pilot</span> <span class="sec-count" data-count></span></h2>
+  <p class="lede">Two asks that turn out to be the same shape: a <b>network</b> over several churches
+  (Regions Beyond over Trinity Littlehampton), and <b>church-adjacent organisations</b> — a foodbank, a youth
+  charity, a mission agency, a student group, a church plant. Both are "TrinityOne for something that isn't a
+  single congregation", and both are mostly a language and permissions problem rather than a new product.</p>
+  <ul class="items">
+
+    <li class="item" data-id="net-keep">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Keep the direction of the relationship — a church declares its network<span class="tag t-block">Don't break</span></span>
+        <div class="note">Today a church publishes "we belong to X". A network cannot claim a church.</div>
+        <div class="why"><b>Why this matters more than it looks:</b> it is the answer to "can a denomination
+        watch its churches?" — no, unless invited, and the invitation is revocable by the church alone.
+        Any oversight feature that quietly reverses this direction turns the product into the thing it was
+        built against. Whatever gets built below, this stays.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="net-console">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Design what a network console is actually <em>for</em></span>
+        <div class="note">The identity switcher and network view exist; there is no network dashboard behind
+        them. Before building one, decide whether the model is oversight or support.</div>
+        <div class="why"><b>The design question:</b> Regions Beyond over Trinity Littlehampton is an
+        apostolic sphere, not a head office. That argues for a console that <em>resources</em> — shares a
+        safeguarding policy, a teaching series, a rota template, a trusted relay — rather than one that
+        <em>reports</em>. A dashboard of attendance and giving across member churches is the obvious build
+        and probably the wrong one; it also creates exactly the aggregated target this product avoids.</div>
+        <ul>
+          <li class="sub-item" data-id="nc-ask"><input type="checkbox"><span>Ask two real network leaders what they actually need, before designing</span></li>
+          <li class="sub-item" data-id="nc-default"><input type="checkbox"><span>Default: a network sees no individual member of any church, ever</span></li>
+          <li class="sub-item" data-id="nc-share"><input type="checkbox"><span>Share downward: policies, series, templates, a relay churches can trust</span></li>
+          <li class="sub-item" data-id="nc-agg"><input type="checkbox"><span>If any aggregate is shown, the church opts in per figure and can see what it shares</span></li>
+          <li class="sub-item" data-id="nc-leave"><input type="checkbox"><span>Leaving a network is one tap and needs nobody's permission</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="net-multi">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Handle the ordinary messiness: a church in more than one network</span>
+        <div class="note">A congregation may sit under a denomination, a local churches-together group, and
+        a mission partnership at once — and a leader may serve several churches.</div>
+        <div class="why"><b>Why to check early:</b> the member side had exactly this bug last week — a person
+        in two churches went nameless in one because the relay kept a single slot. The same
+        single-slot assumption is worth hunting for on the network side before anyone hits it.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="adjacent-lang">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Make the vocabulary switchable</span>
+        <div class="note">"Church", "congregation", "steward", "member", "giving" are written into every
+        screen. A foodbank has volunteers and donors; a charity has trustees and supporters.</div>
+        <div class="why"><b>Why it is worth doing properly:</b> an organisation that reads "your church" on
+        every screen concludes the product is not for them within a minute, whatever the feature list says.
+        This is a labelling layer chosen at setup, not a fork — and it is the cheapest way to widen who this
+        serves without diluting what it is.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="charity-map">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Map the tools onto how a charity actually works</span>
+        <div class="note">Much of it already fits — Finance models <b>restricted and designated funds</b>
+        today, which is the hard part and the thing generic tools get wrong.</div>
+        <div class="why"><b>Where it fits and where it doesn't:</b> teams map to projects, rotas to volunteer
+        shifts, safeguarding is if anything more demanding. What is missing is trustee-shaped: who is a
+        trustee, an annual return, a reserves policy, and Gift Aid — the same Gift Aid work the payments plan
+        needs, which makes it one job serving two audiences.</div>
+        <ul>
+          <li class="sub-item" data-id="cm-trustee"><input type="checkbox"><span>Trustees as a distinct role, not just "stewards"</span></li>
+          <li class="sub-item" data-id="cm-report"><input type="checkbox"><span>An export a trustee can take to an accountant or the regulator</span></li>
+          <li class="sub-item" data-id="cm-giftaid"><input type="checkbox"><span>Gift Aid — shared with the payments plan, build once</span></li>
+          <li class="sub-item" data-id="cm-safeg"><input type="checkbox"><span>Check safeguarding still holds when there is no congregation, only volunteers</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="adjacent-why">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Notice that adjacent organisations are often the ones under most pressure<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">A street-preaching ministry, a pregnancy counselling service, a group supporting
+        converts from other faiths — these attract attention a Sunday congregation does not.</div>
+        <div class="why"><b>Why this belongs on the roadmap and not just in marketing:</b> if the hardest
+        cases are adjacent organisations rather than churches, then serving them is not a widening of scope —
+        it is the core use case arriving under a different name, and their requirements should shape the
+        product rather than be retrofitted to it.</div>
+      </div></div>
+    </li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════ 8 ═══════════════════════════ -->
+<section>
   <h2>Deliberately not doing <span class="phase p-ongoing">Standing</span></h2>
   <p class="lede">As useful as the task list. Each of these will be suggested by someone reasonable.</p>
   <ul class="items">
