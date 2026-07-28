@@ -148,13 +148,27 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
       // unlocks the member's own documents. Cheap, and it costs nothing when the first pass already worked.
       found = F && F.recoverIdentityRetry ? await F.recoverIdentityRetry(2, 1500) : await F.recoverIdentity(7000);
     } catch (e) { found = { churches: [], name: '' }; }
+    // saveIdentity IS NOT IN SCOPE HERE. It is a local inside a component in app.jsx; this file only receives
+    // { open, identity, onSave, onSkip }. So this line threw ReferenceError on every restore that recovered a
+    // NAME — and the empty catch below swallowed it, taking the church list and the onboarded flag with it.
+    // The member ended up with a working identity, no churches, and no record of having onboarded, so the app
+    // bounced straight back to "Welcome to TrinityOne" seconds after finding their church.
+    // It only ever bit when a name came back, which is why it survived: earlier restores had no name to find,
+    // so the line never executed. A child account is the first identity that always has one waiting.
+    // Reported from a child's phone 2026-07-28. Same shape as the bug that opened this whole audit — a throw
+    // inside a handler, swallowed, leaving a feature that silently does nothing.
+    // Each step now stands alone: one failure must not take the other two with it.
     try {
-      if (found.name) saveIdentity({ name: found.name });
+      if (found.name) { const FS = window.Fellowship; if (FS && FS.setProfile && FS.ready) FS.ready.then(() => FS.setProfile({ name: found.name })).catch(() => {}); }
+    } catch (e) {}
+    try {
       if (found.churches.length) {
         const list = found.churches.map(cp => { const np = window.Fellowship.toNpub ? window.Fellowship.toNpub(cp) : cp; return { id: np, npub: np, name: '', initials: '', sub: 'Followed' }; });
         localStorage.setItem('trinityone.followedChurches', JSON.stringify(list));
         localStorage.setItem('trinityone.activeChurch', JSON.stringify(list[0].id));
       }
+    } catch (e) {}
+    try {
       localStorage.setItem('trinityone.onboarded', 'true');
       // Only the TYPED-WORDS route proves the member has their recovery phrase. This used to be written for
       // every route, including the transfer — whose whole selling point is "nothing to type" — so a member
