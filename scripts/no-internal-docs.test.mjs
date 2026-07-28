@@ -14,12 +14,13 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request as httpRequest } from 'node:http';
 import { requireFreePort } from './test-ports.mjs';
 
+const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 8907;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const get = async (p) => { try { return (await fetch(`http://127.0.0.1:${PORT}${p}`)).status; } catch { return 0; } };
@@ -76,6 +77,98 @@ test('the path-traversal guard still holds', async () => {
   for (const p of ['/../package.json', '/../../etc/passwd', '/docs/../HANDOFF.md', '/./docs/README.md']) {
     assert.notEqual(await rawGet(p), 200, p + ' escaped the guard');
   }
+});
+
+// ── what IS served, rather than "are the documents served" ───────────────────────────────────────────────
+// AUDIT-2026-07-28 F3. The tests above ask about markdown, so by construction they cannot catch anything
+// that is not markdown — and the audit that wrote them said, in its own header, that the 2026-07-06 fix
+// failed because it "named one directory rather than asking what else the bundle contains". Then it made
+// the same mistake one layer down.
+//
+// So: ask the relay for EVERY tracked file and look at what comes back 200. Measured on a live gateway
+// before the fix, 220 of 447 were served, and among them deploy/systemd/*.service (the install path, the
+// service account name and the exact Node version — on every church's own box), ci/*.yml, and the Tauri
+// build sources. None of them is referenced by anything served.
+//
+// The assertion is a CLASS rule, not the list of files I happened to find, so a config or build descriptor
+// added tomorrow fails here without anyone remembering to edit this file.
+const WEB_EXT = /\.(html|css|js|jsx|mjs|map|json|png|jpe?g|webp|avif|svg|gif|ico|woff2?|ttf|otf|wasm|mp3|m4a|ogg|mp4|webm|pdf|txt|webmanifest)$/i;
+// Served on purpose, each for a stated reason. Anything not covered here has to be justified before it
+// gets added — which is the point.
+const SERVE_OK = (f) =>
+  WEB_EXT.test(f)                                   // the web surface itself
+  || f === 'LICENSE'                                // the licence, deliberately readable
+  || /^modules\//.test(f)                           // Bible/lexicon packs the app downloads on demand
+  || /^vendor\/library\/.*\.gz$/.test(f)            // the public-domain book library, fetched by the reader
+  || f === 'relay-app/install.sh'                   // the documented one-line self-host installer curls this
+  || /^relay-app\/(start\.(sh|bat|command|mjs)|release-pubkey\.pem)$/.test(f);   // launchers + the public trust anchor
+
+test('nothing outside the web surface is served', async () => {
+  const served = [];
+  for (let i = 0; i < tracked.length; i += 24) {
+    const batch = tracked.slice(i, i + 24);
+    const codes = await Promise.all(batch.map(f => get('/' + f.split('/').map(encodeURIComponent).join('/'))));
+    codes.forEach((c, j) => { if (c === 200) served.push(batch[j]); });
+  }
+  assert.ok(served.length > 100, 'almost nothing is served (' + served.length + ') — the app is broken, or this check is not running');
+  const unexpected = served.filter(f => !SERVE_OK(f)).sort();
+  assert.deepEqual(unexpected, [],
+    'the relay serves these, and nothing served references them. Each one describes the box rather than\n' +
+    '    running it. Either add it to SERVE_OK with a reason, or stop serving it');
+});
+
+// Both halves of the F3 fix independently. Every file that sweep found is caught by the directory rule AND
+// by the extension rule, so breaking either one on its own leaves the other standing and the tests above
+// stay green — I only noticed by sabotaging my own fix and watching nothing happen. Untestable redundancy
+// is how a rule gets deleted later as "dead", so each layer is pinned here with a file only it can catch.
+// The probe file has a web extension (so the extension rule ignores it) and lives for a few milliseconds.
+test('the directory rule holds on its own', async () => {
+  const probes = [join(ROOT, 'deploy', `probe-${process.pid}.txt`), join(ROOT, 'ci', `probe-${process.pid}.txt`)];
+  try {
+    for (const f of probes) writeFileSync(f, 'if you can read this over HTTP, the directory rule is gone');
+    assert.equal(await get(`/deploy/probe-${process.pid}.txt`), 404,
+      'a non-config file under deploy/ is served — only the directory rule stops that, and it is gone');
+    assert.equal(await get(`/ci/probe-${process.pid}.txt`), 404, 'a non-config file under ci/ is served');
+  } finally { for (const f of probes) { try { rmSync(f, { force: true }); } catch {} } }
+});
+
+test('the extension rule holds on its own', async () => {
+  // Every config file this sweep FOUND also sits in a denied directory, so the extension rule is invisible
+  // in today's tree — I removed it and all nine tests stayed green. Its whole value is the file that has
+  // not been added yet: a compose file at the repo root, a .toml beside the app, a build descriptor
+  // somewhere nobody thought to deny. Pin it where only it can be responsible: the repo root IS served.
+  const probes = ['.service', '.yml', '.toml'].map(ext => join(ROOT, `probe-${process.pid}${ext}`));
+  try {
+    for (const f of probes) writeFileSync(f, 'if you can read this over HTTP, the extension rule is gone');
+    for (const ext of ['.service', '.yml', '.toml']) {
+      assert.equal(await get(`/probe-${process.pid}${ext}`), 404,
+        `a ${ext} file at the repo root is served — the directory rules cannot cover the root, so only the extension rule can`);
+    }
+  } finally { for (const f of probes) { try { rmSync(f, { force: true }); } catch {} } }
+});
+
+test('the relay-app/desktop rule holds on its own', async () => {
+  // relay-app is deliberately public (the control UI and the installer live there), so ONLY the explicit
+  // desktop prefix keeps the desktop app's build tree out.
+  const dir = join(ROOT, 'relay-app', 'desktop');
+  const probe = join(dir, `probe-${process.pid}.txt`);
+  try {
+    writeFileSync(probe, 'if you can read this over HTTP, the desktop rule is gone');
+    assert.equal(await get(`/relay-app/desktop/probe-${process.pid}.txt`), 404,
+      'the desktop build tree is served — the rest of relay-app/ is public, so nothing else covers this');
+  } finally { try { rmSync(probe, { force: true }); } catch {} }
+});
+
+test('the specific things found by that sweep stay gone', async () => {
+  // Belt and braces, and it reads as what it is: these were 200 on a live gateway on 2026-07-28.
+  for (const p of ['/deploy/systemd/trinity-gateway.service', '/deploy/systemd/trinity-relay.service',
+    '/ci/ios-simulator-smoke.job.yml', '/relay-app/desktop/src-tauri/Cargo.toml',
+    '/relay-app/desktop/src-tauri/build.rs']) {
+    assert.equal(await get(p), 404, p + ' still tells anyone who asks how this box is built');
+  }
+  // …and the two that must NOT be caught by the widened rule.
+  assert.equal(await get('/relay-app/install.sh'), 200, 'the self-host installer stopped being served — the documented one-liner is broken');
+  assert.equal(await get('/relay-app/control.html'), 200, 'the relay control UI stopped being served');
 });
 
 test('build files that describe the box are not served', async () => {

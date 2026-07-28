@@ -3193,9 +3193,23 @@ function serveStatic(req, res) {
   // a map of where to push, served from the church's own box, to anyone who guesses a filename.
   // Same shape as the 2026-07-06 incident that put `relay` in this list — that fix named one directory
   // instead of asking what else ships. Nothing served links to a .md or into docs/ or reference/.
-  const DENY_DIR = new Set(['relay', 'android', 'ios', 'node_modules', 'docs', 'reference', 'scripts', 'src']);
+  // AUDIT-2026-07-28 F3. The same mistake again, one layer down: the .md rule above was written by asking
+  // "are the DOCUMENTS served", so it could not catch anything that is not a document. Enumerating every
+  // tracked file against a live gateway (220 of 447 were served) turned up three more classes:
+  //   • deploy/systemd/*.service — the install path, the service ACCOUNT NAME and the exact Node version,
+  //     published by every church's own box. On this one: /mnt/storage/projects/TrinityOne and
+  //     node/v22.22.2. That is a shell to aim at and a version to look up advisories for.
+  //   • ci/*.yml — how the build is driven.
+  //   • relay-app/desktop/src-tauri/{Cargo.toml,build.rs} — desktop build sources; the control UI beside
+  //     them is deliberately public, these are not part of it.
+  // So the extension rule below is a CLASS rule, not a list of the files I happened to find: config and
+  // build descriptors, wherever they turn up. relay-app/install.sh stays served on purpose — the
+  // documented one-liner curls it — and so do decks/*.pdf, which about.html links.
+  const DENY_DIR = new Set(['relay', 'android', 'ios', 'node_modules', 'docs', 'reference', 'scripts', 'src', 'deploy', 'ci']);
   if (p.split('/').some(s => DENY_DIR.has(s) || (s && s[0] === '.'))) { res.writeHead(404).end('not found'); return; }
-  if (extname(p).toLowerCase() === '.md') { res.writeHead(404).end('not found'); return; }
+  if (p.startsWith('/relay-app/desktop/')) { res.writeHead(404).end('not found'); return; }
+  const DENY_EXT = new Set(['.md', '.service', '.yml', '.yaml', '.toml', '.rs', '.lock', '.gradle', '.pro']);
+  if (DENY_EXT.has(extname(p).toLowerCase())) { res.writeHead(404).end('not found'); return; }
   // Build files that describe the box rather than serve it. package-lock fingerprints every dependency and
   // its exact version — a ready-made list of which published advisories to try — and capacitor.config.json
   // states plainly whether the shipped app has remote debugging enabled. Neither is referenced by any shell.
