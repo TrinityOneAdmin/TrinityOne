@@ -1853,6 +1853,11 @@ function GroupChatModal({ group, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const members = window.useStewardMembers ? window.useStewardMembers() : [];   // resolve a sender's display name
   const nameFor = (pub) => { const mm = members.find(x => x.pubkey === pub); return (mm && (mm.name || '').trim()) || ('member …' + (pub || '').slice(-8)); };
+  // The console's chat has never shown who is speaking beyond a name — no face, no symbol, nothing. On a busy
+  // group that is the hardest possible way to follow a conversation, and it is the same data the members list
+  // already draws. SkBadge does the safety work (data: images only, hex colours only). AUDIT-2026-07-28.
+  const avFor = (pub) => { const mm = members.find(x => x.pubkey === pub); return (mm && mm.av) || null; };
+  const initialsFor = (pub) => { const n = nameFor(pub); return /^member …/.test(n) ? 'AN' : n.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase(); };
   const [text, setText] = React.useState('');
   const [rxFor, setRxFor] = React.useState('');
   const [pin, setPin] = React.useState(null);     // the group's pinned message { msgId, text, by, ts } or null
@@ -1934,7 +1939,10 @@ function GroupChatModal({ group, onClose }) {
           {msgs.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto' }}>No messages yet. Say hello to your church.</div> : null}
           {msgs.map(m => (
             <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
-              {!m.mine ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginBottom: 2, paddingLeft: 4, fontWeight: 600 }}>{nameFor(m.by)}</div> : null}
+              {!m.mine ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, paddingLeft: 2 }}>
+                <SkBadge initials={initialsFor(m.by)} av={avFor(m.by)} size={20} radius={7} accent="var(--sage)" />
+                <span style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{nameFor(m.by)}</span>
+              </div> : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
                 <div style={{ position: 'relative', flexShrink: 0 }}>

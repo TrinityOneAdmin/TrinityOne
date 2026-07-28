@@ -71,3 +71,15 @@ test('the console passes it where it draws a member', () => {
   assert.match(DASH.slice(at, at + 2500), /av=\{m\.av\}/,
     'join requests still show a faceless badge, which is the screen where a steward approves a stranger');
 });
+
+test('the console chat shows who is speaking', () => {
+  // Reported 2026-07-28: avatars appeared in the members list but not in the steward's chat window, because
+  // GroupChatModal drew a name and nothing else. On a busy group that is the hardest way to follow a
+  // conversation, and it is the same data the members list already had.
+  const at = DASH.indexOf('function GroupChatModal');
+  assert.notEqual(at, -1, 'the console group chat is gone');
+  const fn = DASH.slice(at, DASH.indexOf('\nfunction ', at + 10));
+  assert.match(fn, /const avFor = /, 'the chat cannot look up a sender’s avatar');
+  assert.match(fn, /<SkBadge[\s\S]{0,120}av=\{avFor\(m\.by\)\}/,
+    'incoming messages still show a bare name with no face or symbol');
+});
