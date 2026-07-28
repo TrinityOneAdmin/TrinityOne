@@ -1141,7 +1141,18 @@ function FamilySheet({ open, onClose, ctx }) {
             </div>
             <button onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(made.mnemonic).catch(() => {}); ctx.toast('Recovery words copied — store them safely'); }} style={{ width: '100%', border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', padding: '11px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', marginBottom: 22 }}>Copy the 12 words</button>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '0 4px 10px' }}>HAND IT TO THE CHILD’S DEVICE</div>
-            <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 2px 14px' }}>On your child’s phone, open TrinityOne’s camera and scan this — it signs them in as <b>{made && made.name}</b> and joins them to {(ctx.church && ctx.church.name) || 'your church'}.</p>
+            {/* "TrinityOne's camera" sent a parent hunting for an in-app scanner that does not exist and was
+                never meant to: a fresh install offers only the device-TRANSFER scanner, which expects a live
+                mutually-verified exchange with another running phone, so the child's phone sat showing its own
+                code waiting for a partner that never came. The intended route is the phone's OWN camera — the
+                code is a link, and the app reads the seed from its fragment. Reported 2026-07-28.
+                Still imperfect, and recorded on the roadmap: the link lives at "/" while the app only claims
+                "/join", so the camera opens it in the BROWSER rather than the installed app. Routing it through
+                /join is not the fix — that path deliberately refuses an invite, because an invite REPLACES the
+                device identity. A child with the app installed should use the 12 words instead, which is why
+                they are offered here as an equal route rather than a footnote. */}
+            <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 2px 14px' }}>On your child’s phone, open its <b>normal camera app</b> and point it at this code — it signs them in as <b>{made && made.name}</b> and joins them to {(ctx.church && ctx.church.name) || 'your church'}. That opens TrinityOne in the browser.</p>
+            <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 2px 14px' }}>If they already have the TrinityOne app installed, open it there instead and choose <b>“I’ve used it before” → “I have my 12 words”</b>, then type the phrase above.</p>
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
               <div style={{ width: 220, height: 220, background: '#fff', borderRadius: 18, padding: 12, boxShadow: 'var(--shadow)', boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: qrSvg }} />
             </div>
