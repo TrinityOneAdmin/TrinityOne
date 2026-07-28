@@ -6469,11 +6469,43 @@
     const k = (_nameKeys.get(cp) || [])[0];
     return k ? [...k.slice(0, 6)].map((b) => b.toString(16).padStart(2, "0")).join("") : "";
   }
+  function _recoverOwnName(cp, e) {
+    if (!sk || !pub || !e || e.pubkey !== pub) return false;
+    if (((window.Fellowship.myProfile || {}).name || "").trim()) return false;
+    const ct = _nameCipher(e.content, "m");
+    if (!ct) return false;
+    try {
+      const o = JSON.parse(decrypt(ct, getConversationKey(sk, pub)));
+      const nm = o && typeof o.name === "string" ? o.name.slice(0, 40).trim() : "";
+      if (!nm) return false;
+      const p2 = { ...window.Fellowship.myProfile || {}, name: nm };
+      window.Fellowship.myProfile = p2;
+      profiles[pub] = { ...profiles[pub] || {}, name: nm };
+      try {
+        localStorage.setItem(PROFILE_KEY, JSON.stringify(p2));
+      } catch (x) {
+      }
+      try {
+        saveProfiles();
+      } catch (x) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: pub } }));
+      } catch (x) {
+      }
+      return true;
+    } catch (x) {
+      return false;
+    }
+  }
   function _replaySealedNames(cp, hub) {
     if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
     let n = 0;
     for (const e of hub.buf.values()) {
-      if (_dtag(e) === NAME_D + cp && _openSealedName(cp, e.pubkey, e.content)) n++;
+      if (_dtag(e) === NAME_D + cp) {
+        _recoverOwnName(cp, e);
+        if (_openSealedName(cp, e.pubkey, e.content)) n++;
+      }
     }
     if (n) {
       try {
@@ -6685,7 +6717,10 @@
     }
     for (const e of hub.buf.values()) {
       const d0 = _dtag(e);
-      if (d0 === "trinityone/name:" + cp) _openSealedName(cp, e.pubkey, e.content);
+      if (d0 === "trinityone/name:" + cp) {
+        _recoverOwnName(cp, e);
+        _openSealedName(cp, e.pubkey, e.content);
+      }
     }
     return hub;
   }
@@ -6722,6 +6757,7 @@
           } catch (x) {
           }
         } else if (d === "trinityone/name:" + cp) {
+          _recoverOwnName(cp, e);
           if (_openSealedName(cp, e.pubkey, e.content)) {
             try {
               window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));

@@ -717,10 +717,36 @@ function _ringId(cp) {
   const k = (_nameKeys.get(cp) || [])[0];
   return k ? [...k.slice(0, 6)].map(b => b.toString(16).padStart(2, '0')).join('') : '';
 }
+// GET YOUR OWN NAME BACK. A locked boot calls clearCommunityCache, which wipes every `trinityone.profile*`
+// key — deliberate forensic hygiene, and the member's own name is identifying, so it goes with the rest.
+// Before Stage 2 that was invisible: the name lived in the public kind-0 and came straight back on the next
+// profile fetch. It is not there any more, so ONE lock left a member permanently "Anonymous" — to themselves
+// and to their whole congregation — and, because syncSealedNames needs the name in memory to re-seal it,
+// their sealed copy would never refresh either, so a key rotation would erase them from the church for good.
+// The copy sealed to their OWN key exists for exactly this; it was only being read during a 12-word restore.
+// Readable by nobody else, so restoring from it costs the locked phone nothing. AUDIT-2026-07-28.
+function _recoverOwnName(cp, e) {
+  if (!sk || !pub || !e || e.pubkey !== pub) return false;
+  if (((window.Fellowship.myProfile || {}).name || '').trim()) return false;   // we already know who we are
+  const ct = _nameCipher(e.content, 'm');
+  if (!ct) return false;
+  try {
+    const o = JSON.parse(nip44d(ct, nip44ck(sk, pub)));
+    const nm = (o && typeof o.name === 'string') ? o.name.slice(0, 40).trim() : '';
+    if (!nm) return false;
+    const p2 = { ...(window.Fellowship.myProfile || {}), name: nm };
+    window.Fellowship.myProfile = p2;
+    profiles[pub] = { ...(profiles[pub] || {}), name: nm };
+    try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p2)); } catch (x) {}
+    try { saveProfiles(); } catch (x) {}
+    try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch (x) {}
+    return true;
+  } catch (x) { return false; }
+}
 function _replaySealedNames(cp, hub) {
   if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
   let n = 0;
-  for (const e of hub.buf.values()) { if (_dtag(e) === NAME_D + cp && _openSealedName(cp, e.pubkey, e.content)) n++; }
+  for (const e of hub.buf.values()) { if (_dtag(e) === NAME_D + cp) { _recoverOwnName(cp, e); if (_openSealedName(cp, e.pubkey, e.content)) n++; } }
   if (n) { try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: null } })); } catch (x) {} }
 }
 // open a member's sealed name; tries every key so a rotation never hides an older one
@@ -893,7 +919,7 @@ function _docsHub(cp) {
   for (const e of hub.buf.values()) { if (_dtag(e) === ADMITTED_D + cp) _noteAdmitted(cp, e.content); }   // approved while the app was closed
   for (const e of hub.buf.values()) { if (_dtag(e) === RESEAT_D + cp) _noteReseat(cp, e); }            // re-seats recorded while the app was closed
   for (const e of hub.buf.values()) { if (_dtag(e) === 'trinityone/namekey:' + cp) _ingestNameKey(cp, e); }   // the key FIRST
-  for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0 === 'trinityone/name:' + cp) _openSealedName(cp, e.pubkey, e.content); }
+  for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0 === 'trinityone/name:' + cp) { _recoverOwnName(cp, e); _openSealedName(cp, e.pubkey, e.content); } }
   return hub;
 }
 function _docsHubOpen(hub) {
@@ -925,6 +951,7 @@ function _docsHubOpen(hub) {
         for (const e2 of hub.buf.values()) { if (_dtag(e2) === 'trinityone/name:' + cp) _openSealedName(cp, e2.pubkey, e2.content); }
         try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: null } })); } catch (x) {}
       } else if (d === 'trinityone/name:' + cp) {
+        _recoverOwnName(cp, e);   // our own doc carries the copy that restores us after a locked boot
         if (_openSealedName(cp, e.pubkey, e.content)) { try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } })); } catch (x) {} }
       }
       if (_absorbRoster(cp, d, e)) {

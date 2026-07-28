@@ -299,3 +299,53 @@ test('the roster row is not blanked by a nameless profile', () => {
   assert.match(SRC.slice(at, at + 220), /if \(nm\) m\.name = nm/,
     'the member hub writes the kind-0 name onto the roster row unconditionally, so a nameless profile blanks a decrypted name');
 });
+
+// ── getting your own name back after a locked boot ───────────────────────────────────────────────────────────
+// A locked boot wipes every `trinityone.profile*` key — deliberate forensic hygiene, and the member's own name
+// is identifying so it goes too. Before Stage 2 that was invisible: the name lived in the public kind-0 and
+// came straight back. It does not any more, so ONE lock left a member permanently "Anonymous" — and because
+// re-sealing needs the name in memory, their sealed copy would never refresh either, so a key rotation would
+// erase them from the congregation for good. Found on a real phone, 2026-07-28.
+function ownNameSide(me) {
+  const body = `
+    const decrypt = nip44v2.decrypt, getConversationKey = nip44v2.utils.getConversationKey;
+    const nip44d = decrypt, nip44ck = getConversationKey;
+    const PROFILE_KEY = 'trinityone.profile';
+    const profiles = {}, saved = {};
+    const localStorage = { setItem: (k,v) => { saved[k] = v; }, getItem: (k) => saved[k] || null };
+    const saveProfiles = () => {};
+    const window = { Fellowship: { myProfile: null }, dispatchEvent: () => {} };
+    const CustomEvent = function(){};
+    const pub = ${JSON.stringify(me.pub)};
+    const sk = _SK;
+    ${grab(FELLOWSHIP, '_nameCipher')}
+    ${grab(FELLOWSHIP, '_recoverOwnName')}
+    return { recover: _recoverOwnName, w: window, saved, profiles };
+  `;
+  return new Function('nip44v2', '_SK', body)(nip44v2, me.sk);
+}
+
+test('a member gets their own name back from their own sealed copy', () => {
+  const side = ownNameSide(alice);
+  const doc = nameDoc(alice, church.pub, 'Maria', K1);
+  assert.equal(side.w.Fellowship.myProfile, null, 'sanity: the locked boot wiped the profile');
+  const ok = side.recover(church.pub, doc);
+  assert.equal(ok, true, 'the member cannot recover their own name — one lock leaves them Anonymous for ever');
+  assert.equal(side.w.Fellowship.myProfile.name, 'Maria');
+  assert.match(side.saved['trinityone.profile'] || '', /Maria/, 'the recovered name must be written back to disk, or the next boot loses it again');
+});
+
+test('it never overwrites a name the member already has', () => {
+  const side = ownNameSide(alice);
+  side.w.Fellowship.myProfile = { name: 'Maria Renamed' };
+  const ok = side.recover(church.pub, nameDoc(alice, church.pub, 'Maria', K1));
+  assert.equal(ok, false, 'recovery clobbered a name the member had already set');
+  assert.equal(side.w.Fellowship.myProfile.name, 'Maria Renamed');
+});
+
+test('it only ever reads OUR OWN document', () => {
+  const side = ownNameSide(alice);
+  const ok = side.recover(church.pub, nameDoc(bob, church.pub, 'Bob', K1));
+  assert.equal(ok, false, 'a member adopted someone else’s name as their own');
+  assert.equal(side.w.Fellowship.myProfile, null);
+});
