@@ -738,6 +738,28 @@
       </div></div>
     </li>
 
+    <li class="item" data-id="child-qr-deadend">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">A child cannot get in by the route their parent is told to use<span class="tag t-block">Copy is wrong now</span></span>
+        <div class="note">Creating a child account shows the parent a QR and says "On your child's phone,
+        open TrinityOne's camera and scan this — it signs them in as…". There is no such camera on a fresh
+        phone. Found 2026-07-28; this path had never been walked.</div>
+        <div class="why"><b>Why it cannot work as built:</b> the child's identity is minted on the PARENT'S
+        phone, and the parent's app never becomes the child — so the transfer flow is no help, because it
+        moves whichever identity is currently active. And the only scanner a fresh install offers belongs to
+        that transfer flow, which expects a live mutually-verified exchange with another running device. A
+        child's phone therefore sits showing its own code, waiting for a partner that never arrives.<br>
+        <b>The 12 words do work</b> — "I have my 12 words", typed from the parent's reveal screen — so this
+        is a broken shortcut rather than a locked door. But asking a parent to transcribe twelve words onto a
+        child's phone, in a hall, is exactly the moment the product should be at its easiest.<br>
+        <b>Three ways out:</b> make the reveal QR something a fresh install can consume (a scan-to-sign-in
+        entry point, distinct from device transfer); or make the child hand-off use the real transfer flow by
+        having the parent temporarily act as the child; or, until either exists, <b>change the copy to say
+        "type the 12 words"</b> — it currently promises something that does not happen. The last one is
+        hours, and should not wait for the others.</div>
+      </div></div>
+    </li>
+
     <li class="item" data-id="invite-individual">
       <div class="path"></div>
       <div class="row"><input type="checkbox"><div class="body">
