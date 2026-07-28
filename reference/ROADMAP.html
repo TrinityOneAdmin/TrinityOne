@@ -712,13 +712,19 @@
 
     <li class="item" data-id="ux-dp">
       <div class="row"><input type="checkbox"><div class="body">
-        <span class="title">Show the member's picture in the members list</span>
-        <div class="note">Members appear as text rows. The picture is only used on the profile page — so a
-        roster of thirty people is thirty lines of names, which is the hardest possible way to find someone.</div>
-        <div class="why"><b>The policy already exists, the display doesn't:</b> Settings has "let adult
-        members use a real photo as their picture (children never can)", so the safeguarding rule is built —
-        it just is not surfaced anywhere it would help. Respect that toggle and the children-never rule
-        wherever this lands, and fall back to the chosen symbol avatar, which every member already has.<br>
+        <span class="title">The steward console shows no member avatars at all</span>
+        <div class="note">Members see each other's avatars fine — symbols in chat and the directory, and real
+        photos where the church allows them. The CONSOLE draws initials everywhere: members list, chat, join
+        requests, care rows. It has never shown a member's face or symbol anywhere.</div>
+        <div class="why"><b>It already has the data and discards it.</b> subscribeMembers stores each
+        member's <code>av</code> and a <code>hasPhoto</code> flag from their profile, then every render site
+        uses an initials badge. The avatar component is not even loaded into <code>steward.html</code>, so
+        there is nothing there that could draw one. (There is also a dead <code>Avatar</code> component with
+        no call sites, which suggests someone meant to and stopped.)<br>
+        <b>Why it matters more than it looks:</b> an unnamed member collapses to identical grey initials, so
+        the screen where you decide whether to approve someone tells you nothing about them. Honour the
+        existing photo toggle and the children-never rule at every site, and fall back to the symbol avatar
+        every member already has.<br>
         <b>Worth deciding at the same time:</b> pictures sit in the PUBLIC profile in the clear, while names
         are now sealed to the congregation. A face identifies a person more surely than a name does. Making
         photos more visible in the product is fine; leaving them as the one identifying thing still in the
