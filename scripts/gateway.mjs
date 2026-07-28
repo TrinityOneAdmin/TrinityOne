@@ -3185,7 +3185,22 @@ function serveStatic(req, res) {
   // .git/.github/.claude/.env. The traversal guard below only stops ESCAPING ROOT — these are inside it.
   // The web app + control UI stay reachable: 'relay-app' is a distinct path segment from 'relay', and the
   // APK/module handlers ran above. 404 (not 403) so the endpoint doesn't confirm a file exists.
-  if (p.split('/').some(s => s === 'relay' || s === 'android' || s === 'ios' || s === 'node_modules' || (s && s[0] === '.'))) { res.writeHead(404).end('not found'); return; }
+  // INTERNAL DOCUMENTATION IS NOT PUBLIC. The deploy bundle is a `git archive` of the whole ref, so every
+  // tracked file lands on the box — and this handler serves anything under ROOT that the denylist above
+  // misses. Confirmed live against a real gateway on 2026-07-28: /AUDIT-2026-07-26-RECOVERY.md, /HANDOFF.md
+  // and /docs/design/TREASURY.md all returned 200. The audit files name vulnerabilities and the dates they
+  // were found; the handoff describes the internals; the design notes describe what is not built yet. That is
+  // a map of where to push, served from the church's own box, to anyone who guesses a filename.
+  // Same shape as the 2026-07-06 incident that put `relay` in this list — that fix named one directory
+  // instead of asking what else ships. Nothing served links to a .md or into docs/ or reference/.
+  const DENY_DIR = new Set(['relay', 'android', 'ios', 'node_modules', 'docs', 'reference', 'scripts', 'src']);
+  if (p.split('/').some(s => DENY_DIR.has(s) || (s && s[0] === '.'))) { res.writeHead(404).end('not found'); return; }
+  if (extname(p).toLowerCase() === '.md') { res.writeHead(404).end('not found'); return; }
+  // Build files that describe the box rather than serve it. package-lock fingerprints every dependency and
+  // its exact version — a ready-made list of which published advisories to try — and capacitor.config.json
+  // states plainly whether the shipped app has remote debugging enabled. Neither is referenced by any shell.
+  // (manifest/catalog/ebible-catalog/apk-latest ARE needed, so this is a named list, not a blanket .json rule.)
+  if (['/package.json', '/package-lock.json', '/capacitor.config.json'].includes(p)) { res.writeHead(404).end('not found'); return; }
   let file = normalize(join(ROOT, p));
   // path-traversal guard: the resolved path must stay strictly inside ROOT. Normalize ROOT's trailing
   // separator first (it may already carry one), so the boundary is exactly `<root>/` — a sibling like
