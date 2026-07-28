@@ -380,3 +380,50 @@ test('and the pending copy it writes is the one the church can open', () => {
   try { JSON.parse(nip44v2.decrypt(c, nip44v2.utils.getConversationKey(bob.sk, alice.pub))); leaked = true; } catch (e) {}
   assert.equal(leaked, false, 'another member can read a pending member’s name');
 });
+
+// ── and the rest of the profile a locked boot wiped ──────────────────────────────────────────────────────────
+// Reported the same afternoon I fixed the NAME: "Testi Bob's picture has gone". The locked-boot wipe takes the
+// whole stored profile — name, about, picture, avatar — and _recoverOwnName restored only the name, so a
+// member's photo vanished on every locked boot and came back only if they noticed and re-added it. Unlike the
+// name, these ARE published in kind-0, so they can simply be read back. AUDIT-2026-07-28.
+function ownProfileSide(me, current) {
+  const body = `
+    const PROFILE_KEY = 'trinityone.profile';
+    const saved = {};
+    const localStorage = { setItem: (k,v) => { saved[k] = v; }, getItem: (k) => saved[k] || null };
+    const window = { Fellowship: { myProfile: CURRENT }, dispatchEvent: () => {} };
+    const CustomEvent = function(){};
+    const pub = ${JSON.stringify(me.pub)};
+    ${grab(FELLOWSHIP, '_recoverOwnProfile')}
+    return { recover: _recoverOwnProfile, w: window, saved };
+  `.replace('CURRENT', JSON.stringify(current));
+  return new Function(body)();
+}
+const k0 = (who, content) => ({ pubkey: who.pub, kind: 0, content: JSON.stringify(content) });
+const PHOTO = { kind: 'photo', color: '#C2913A', photo: 'data:image/webp;base64,AAAA' };
+
+test('a wiped profile gets its picture and avatar back from our own kind-0', () => {
+  const side = ownProfileSide(alice, { name: 'Maria' });   // name recovered already; the rest still missing
+  assert.equal(side.recover(k0(alice, { about: 'hello', picture: 'data:image/png;base64,BBBB', av: PHOTO })), true);
+  assert.equal(side.w.Fellowship.myProfile.av.kind, 'photo', 'the avatar was not restored');
+  assert.equal(side.w.Fellowship.myProfile.picture, 'data:image/png;base64,BBBB');
+  assert.equal(side.w.Fellowship.myProfile.name, 'Maria', 'recovery must not disturb the name');
+  assert.match(side.saved['trinityone.profile'] || '', /photo/, 'it must be written back, or the next boot loses it again');
+});
+
+test('it never undoes a newer picture the member just set', () => {
+  const side = ownProfileSide(alice, { name: 'Maria', av: { kind: 'symbol', color: '#111' } });
+  assert.equal(side.recover(k0(alice, { av: PHOTO })), false, 'an older published avatar overwrote a newer local one');
+  assert.equal(side.w.Fellowship.myProfile.av.kind, 'symbol');
+});
+
+test('it only ever reads OUR OWN profile', () => {
+  const side = ownProfileSide(alice, {});
+  assert.equal(side.recover(k0(bob, { av: PHOTO })), false, 'a member adopted someone else’s avatar');
+  assert.equal(side.w.Fellowship.myProfile.av, undefined);
+});
+
+test('and something actually asks for it', () => {
+  assert.match(FELLOWSHIP, /!mine\.av && !mine\.picture\)[\s\S]{0,80}requestProfiles/,
+    'nothing requests our own kind-0, so the refill only happens by luck');
+});

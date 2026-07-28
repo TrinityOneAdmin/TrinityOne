@@ -6308,6 +6308,7 @@
           const m = JSON.parse(e.content);
           const had = profiles[e.pubkey] || {};
           profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
+          _recoverOwnProfile(e);
           saveProfiles();
           window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
         } catch {
@@ -6497,6 +6498,40 @@
     } catch (x) {
       return false;
     }
+  }
+  function _recoverOwnProfile(e) {
+    if (!pub || !e || e.pubkey !== pub) return false;
+    let m = null;
+    try {
+      m = JSON.parse(e.content || "{}");
+    } catch (x) {
+      return false;
+    }
+    if (!m || typeof m !== "object") return false;
+    const cur = window.Fellowship.myProfile || {};
+    const next = { ...cur };
+    let changed = false;
+    for (const k of ["about", "picture"]) {
+      if (!cur[k] && typeof m[k] === "string" && m[k]) {
+        next[k] = m[k];
+        changed = true;
+      }
+    }
+    if (!cur.av && m.av && typeof m.av === "object") {
+      next.av = m.av;
+      changed = true;
+    }
+    if (!changed) return false;
+    window.Fellowship.myProfile = next;
+    try {
+      localStorage.setItem(PROFILE_KEY, JSON.stringify(next));
+    } catch (x) {
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: pub } }));
+    } catch (x) {
+    }
+    return true;
   }
   function _replaySealedNames(cp, hub) {
     if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
@@ -7064,6 +7099,11 @@
     pub = getPublicKey2(sk);
     window.Fellowship.myPubkey = pub;
     if (_loadChildren().length) _needAuth = true;
+    try {
+      const mine = window.Fellowship.myProfile || {};
+      if (pub && (!mine.av && !mine.picture)) window.Fellowship.requestProfiles([pub]);
+    } catch (e) {
+    }
     for (const hub of _docsHubs.values()) {
       for (const e of hub.buf.values()) {
         const d = _dtag(e);

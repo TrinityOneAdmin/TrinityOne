@@ -563,6 +563,7 @@ function _flushProfiles() {
         // opened unless this event actually carries one (a church's own kind-0 still does, deliberately).
         const had = profiles[e.pubkey] || {};
         profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
+        _recoverOwnProfile(e);   // our OWN kind-0 also refills what a locked boot wiped (picture, avatar, about)
         saveProfiles();
         window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } }));
       } catch {}
@@ -742,6 +743,30 @@ function _recoverOwnName(cp, e) {
     try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch (x) {}
     return true;
   } catch (x) { return false; }
+}
+// AND GET YOUR FACE BACK. The locked-boot wipe takes the whole stored profile — name, about, picture and
+// avatar. _recoverOwnName restores the NAME from the sealed copy, and left the rest behind, so a member's
+// photo vanished on the next locked boot and only came back if they noticed and re-added it. Reported
+// 2026-07-28 ("Testi Bob's picture has gone"), after I had fixed exactly half of this the same afternoon.
+// Unlike the name, these ARE published — kind-0 carries picture and av deliberately — so they can simply be
+// read back from our own profile. Never overwrite something we already hold: a member who set a new photo
+// before the old event arrives must not have it undone. AUDIT-2026-07-28.
+function _recoverOwnProfile(e) {
+  if (!pub || !e || e.pubkey !== pub) return false;
+  let m = null; try { m = JSON.parse(e.content || '{}'); } catch (x) { return false; }
+  if (!m || typeof m !== 'object') return false;
+  const cur = window.Fellowship.myProfile || {};
+  const next = { ...cur };
+  let changed = false;
+  for (const k of ['about', 'picture']) {
+    if (!cur[k] && typeof m[k] === 'string' && m[k]) { next[k] = m[k]; changed = true; }
+  }
+  if (!cur.av && m.av && typeof m.av === 'object') { next.av = m.av; changed = true; }
+  if (!changed) return false;
+  window.Fellowship.myProfile = next;
+  try { localStorage.setItem(PROFILE_KEY, JSON.stringify(next)); } catch (x) {}
+  try { window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: pub } })); } catch (x) {}
+  return true;
 }
 function _replaySealedNames(cp, hub) {
   if (!hub || !hub.buf || !(_nameKeys.get(cp) || []).length) return;
@@ -1142,6 +1167,13 @@ async function deriveFromIdentity() {
   if (_loadChildren().length) _needAuth = true;
   // group-key envelopes can replay from the persisted docs buffer BEFORE the signing key exists —
   // re-unwrap them now that sk/pub are known, so invite-group decryption never needs a reload.
+  // Ask for our OWN kind-0 when the stored profile is missing what a locked boot wiped. Without this the
+  // refill above depends on luck — our pubkey only reaches requestProfiles when we happen to appear in a
+  // roster or authored a visible message. AUDIT-2026-07-28.
+  try {
+    const mine = window.Fellowship.myProfile || {};
+    if (pub && (!mine.av && !mine.picture)) window.Fellowship.requestProfiles([pub]);
+  } catch (e) {}
   // …and the name key. Left out of both recovery hooks, it was the one key with no way back: the docs hub uses
   // a persisted since-cursor, and a name key is published once at church setup, so it does not re-arrive. On any
   // launch where the hub cache was warm and the signing key derived a moment late, the ring stayed empty for the
