@@ -85,6 +85,40 @@ const SAFE_D = 'trinityone/safe:';         // a member's response — d=safe:<ch
 const FAMILY_KEY = 'trinityone.family';
 function _loadChildren() { try { return JSON.parse(localStorage.getItem(FAMILY_KEY) || '[]') || []; } catch { return []; } }
 function _saveChildLink(link) { const list = _loadChildren().filter(c => c && c.child !== link.child); list.push(link); try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {} }
+// REBUILD THE FAMILY LIST FROM THE RELAY. trinityone.family is written when a child account is created and
+// read straight back — nothing ever rebuilt it. It is also in the locked-boot wipe list, so restoring an
+// identity cleared it and a parent's children simply vanished from their phone. The accounts were never
+// lost: the church's guardian map still showed the link, which is exactly how this was reported —
+// "in the console the child is still linked, I just can't see it in my app". AUDIT-2026-07-28.
+//
+// Rebuilt from the parent's OWN guardreq documents, not the church's guardians map: that map is deliberately
+// served only to stewards now (it maps every child in the congregation to their parents), while a member may
+// always read back what they themselves signed.
+//
+// Merge only, never remove — a link the relay has not served yet must not delete one we already hold, and a
+// parent who has genuinely unlinked a child is handled by the church's map rather than here.
+function _rebuildFamily(churchNpub) {
+  const cp = toPub(churchNpub) || churchNpub;
+  if (!pub || !cp) return Promise.resolve(0);
+  return new Promise((resolve) => {
+    let added = 0, done = false;
+    const finish = () => { if (done) return; done = true; try { sub.close(); } catch (e) {} resolve(added); };
+    const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [pub] }], {
+      onevent(e) {
+        const d = _dtag(e);
+        if (!d.startsWith('trinityone/guardreq:')) return;
+        if ((e.tags || []).some(t => t[0] === 'deleted')) return;
+        const child = d.slice('trinityone/guardreq:'.length);
+        if (!/^[0-9a-f]{64}$/i.test(child)) return;
+        if (_loadChildren().some(c => c && c.child === child)) return;
+        _saveChildLink({ child, name: '', churchPub: cp, ts: e.created_at || 0 });
+        added++;
+      },
+      oneose: finish,
+    });
+    setTimeout(finish, 9000);
+  });
+}
 // SECURITY-AUDIT-2026-07-06 H5: cache group keys per CHURCH, not by bare group-id. Group ids are the
 // low-entropy, attacker-guessable `grp<Date.now()>`; a member also joined to an attacker-run church could
 // otherwise publish a church-signed `groupkey:<victimGroupId>` that clobbers the real church's cached key
@@ -1182,6 +1216,8 @@ async function deriveFromIdentity() {
     const mine = window.Fellowship.myProfile || {};
     if (pub && (!mine.av && !mine.picture)) window.Fellowship.requestProfiles([pub]);
   } catch (e) {}
+  // …and the children, wiped by the same locked boot and rebuildable from our own guardian requests.
+  try { for (const hub of _docsHubs.values()) _rebuildFamily(hub.cp); } catch (e) {}
   // …and the name key. Left out of both recovery hooks, it was the one key with no way back: the docs hub uses
   // a persisted since-cursor, and a name key is published once at church setup, so it does not re-arrive. On any
   // launch where the hub cache was warm and the signing key derived a moment late, the ring stayed empty for the

@@ -5821,6 +5821,36 @@
     } catch {
     }
   }
+  function _rebuildFamily(churchNpub) {
+    const cp = toPub(churchNpub) || churchNpub;
+    if (!pub || !cp) return Promise.resolve(0);
+    return new Promise((resolve) => {
+      let added = 0, done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try {
+          sub.close();
+        } catch (e) {
+        }
+        resolve(added);
+      };
+      const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [pub] }], {
+        onevent(e) {
+          const d = _dtag(e);
+          if (!d.startsWith("trinityone/guardreq:")) return;
+          if ((e.tags || []).some((t) => t[0] === "deleted")) return;
+          const child = d.slice("trinityone/guardreq:".length);
+          if (!/^[0-9a-f]{64}$/i.test(child)) return;
+          if (_loadChildren().some((c) => c && c.child === child)) return;
+          _saveChildLink({ child, name: "", churchPub: cp, ts: e.created_at || 0 });
+          added++;
+        },
+        oneose: finish
+      });
+      setTimeout(finish, 9e3);
+    });
+  }
   var _gkeys = {};
   var _gkeyTs = {};
   var _gkKey = (cp, gid) => (cp || "") + "|" + gid;
@@ -7108,6 +7138,10 @@
     try {
       const mine = window.Fellowship.myProfile || {};
       if (pub && (!mine.av && !mine.picture)) window.Fellowship.requestProfiles([pub]);
+    } catch (e) {
+    }
+    try {
+      for (const hub of _docsHubs.values()) _rebuildFamily(hub.cp);
     } catch (e) {
     }
     for (const hub of _docsHubs.values()) {
