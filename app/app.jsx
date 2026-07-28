@@ -363,16 +363,36 @@ function App() {
   const [idTick, forceId] = useA(0);           // bumps on identity / profile changes (also re-runs subs that need myPubkey)
   // Optional community PIN: when a PIN is set and not entered this session the identity is locked, the
   // church side is hidden, and the app presents as a plain Bible reader. Tracked live off the identity.
-  const [commLocked, setCommLocked] = useA(() => !!(window.TrinityIdentity && window.TrinityIdentity.isLocked && window.TrinityIdentity.isLocked()));
+  // LOCKED-NESS IS NOT A ONE-SHOT READING. This sampled TrinityIdentity.isLocked() once, synchronously, at
+  // first render — and on native the identity module can still be loading then, so the guard fell through to
+  // FALSE, the front-door gate never rendered, and the app opened as if unlocked while holding no identity at
+  // all. It then read the relay anonymously. For months that was invisible, because kind-0 was public and
+  // every name still resolved; closing that hole (AUDIT-2026-07-27) turned a silent failure into a
+  // congregation of nameless people on a screen that looked completely normal. Found on a real phone
+  // 2026-07-28. The second clause is the load-bearing one: a PIN blob exists and yet no identity has
+  // materialised means we ARE locked, whatever a half-initialised module reports.
+  const lockNow = () => {
+    const ID = window.TrinityIdentity;
+    if (!ID) return false;                                   // module not ready — the poll below re-checks
+    if (ID.isLocked && ID.isLocked()) return true;
+    if (ID.hasPin && ID.hasPin() && !(window.Fellowship && window.Fellowship.myPubkey)) return true;
+    return false;
+  };
+  const [commLocked, setCommLocked] = useA(lockNow);
   const [commSec, setCommSec] = useA(false);   // the Community-lock sheet (set up / unlock / turn off)
   const [gateEscaped, setGateEscaped] = useA(false);   // "read the Bible without unlocking" — hides the front-door gate for this session (identity stays locked)
   useAE(() => {
-    const refreshLock = () => setCommLocked(!!(window.TrinityIdentity && window.TrinityIdentity.isLocked && window.TrinityIdentity.isLocked()));
+    const refreshLock = () => setCommLocked(lockNow());
     const h = () => { forceId(x => x + 1); refreshLock(); };
     window.addEventListener('trinity-identity', h);
     window.addEventListener('trinity-identity-lock', h);
     window.addEventListener('trinity-profiles', h);
-    return () => { window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); };
+    // …and re-check for the first few seconds regardless of whether any of those events fire. The events are
+    // the fast path; this is the one that catches a module that finished loading after we first looked, which
+    // is exactly the case that shipped the app open with no identity. Bounded, then it stops.
+    let n = 0;
+    const t = setInterval(() => { refreshLock(); if (++n >= 20) clearInterval(t); }, 400);
+    return () => { clearInterval(t); window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); };
   }, []);
   // forensic hygiene: at a locked boot, wipe any community caches left on disk from a previous session
   // (Fellowship is loaded by the time this React effect runs, so the load-order gap in identity.js is safe).
@@ -1705,6 +1725,20 @@ function App() {
             Not during the splash or first-run onboarding (there's no PIN yet then). */}
         {!showSplash && !showOnboarding && commLocked && !gateEscaped
           ? <PinUnlockGate onUnlocked={() => { setCommLocked(false); setGateEscaped(false); }} onReadBible={() => setGateEscaped(true)} /> : null}
+        {/* "Read the Bible without unlocking" leaves the app running with NO identity — which is the state
+            that looked completely normal and made the missing gate invisible for months. Say so, permanently,
+            and keep the way back one tap away. An empty church and a broken one must never look the same. */}
+        {!showSplash && !showOnboarding && commLocked && gateEscaped ? (
+          <div onClick={() => setGateEscaped(false)} role="button" tabIndex={0}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') setGateEscaped(false); }}
+            style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 88, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              padding: '10px 14px', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))',
+              borderTop: '1px solid color-mix(in oklab, var(--clay) 35%, transparent)', cursor: 'pointer' }}>
+            <Icon name="lock" size={14} color="var(--clay)" />
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>Your account is locked — Bible only.</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--clay)' }}>Unlock</span>
+          </div>
+        ) : null}
         {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity}
           onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }}
           onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }} /> : null}
