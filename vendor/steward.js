@@ -11190,6 +11190,10 @@ zoo`.split("\n");
     _relayAuthed = true;
     return finalizeEvent2(authEvent, sk);
   };
+  var _noPhoto = /* @__PURE__ */ new Set();
+  var _applyNoPhotoList = (list) => {
+    _noPhoto = new Set((list || []).map((x) => String(x || "").toLowerCase()));
+  };
   var _nameKeyRing = [];
   var _nameKeyDocKeys = null;
   var _nameKeyChecked = false;
@@ -12925,6 +12929,16 @@ zoo`.split("\n");
     // (should mirror the church's real DBS/cleared list). The relay rejects a kind-4 DM where one party is
     // a minor and the other isn't on the approved list. The member app uses minors to show a child only
     // child-safe groups. Replaceable docs, church-only writes. ----
+    // AUDIT-2026-07-28 F6. Is this member's uploaded photo one a steward has switched off? The member app has
+    // had this since the feature shipped (_avSuppressPhoto in fellowship.src.js, consulted inside displayFor,
+    // so EVERY member-app surface gets it for free). The console had no equivalent at all, so a photo suppressed
+    // for safeguarding still drew — on the one screen where a steward would be moderating an image of a child,
+    // while the button beside it promised "your church sees their symbol/initial". Kept as a module-level set
+    // fed by subscribeSafeguard, deliberately the same shape as the member app's, so the two cannot drift.
+    photoSuppressed(memberPub) {
+      const h = String(memberPub || "").toLowerCase();
+      return !!h && _noPhoto.has(h);
+    },
     subscribeSafeguard(onLists) {
       let minors = [], approved = [], nophoto = [];
       let tMinors = 0, tApproved = 0, tNophoto = 0;
@@ -12963,6 +12977,7 @@ zoo`.split("\n");
             } catch {
               nophoto = [];
             }
+            _applyNoPhotoList(nophoto);
             onLists({ minors, approved, nophoto, loaded });
           }
         },
@@ -14459,6 +14474,7 @@ zoo`.split("\n");
       _nameKeyRing = [];
       _nameKeyDocKeys = null;
       _nameKeyChecked = false;
+      _applyNoPhotoList([]);
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;

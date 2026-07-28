@@ -1962,7 +1962,7 @@ function GroupChatModal({ group, onClose }) {
           {msgs.map(m => (
             <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
               {!m.mine ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, paddingLeft: 2 }}>
-                <SkBadge initials={initialsFor(m.by)} av={avFor(m.by)} size={20} radius={7} accent="var(--sage)" />
+                <SkBadge initials={initialsFor(m.by)} av={avFor(m.by)} pubkey={m.by} size={20} radius={7} accent="var(--sage)" />
                 <span style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{nameFor(m.by)}</span>
               </div> : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
@@ -3410,7 +3410,7 @@ function DashMembers() {
     return (
       <div key={m.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: inactive ? 0.62 : 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-          <SkBadge initials={initials} av={m.av} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+          <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
               <span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1 }}>{label}</span>
@@ -3491,7 +3491,7 @@ function DashMembers() {
               const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
               return (
                 <div key={m.pubkey} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  <SkBadge initials={initials} av={m.av} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+                  <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
                     <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
@@ -4019,7 +4019,7 @@ function DashStewardsPanel({ church }) {
               <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {candidates.slice(0, 40).map(m => (
                   <button key={m.pubkey} onClick={() => add(m.pubkey)} title="Add this member as a steward" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
-                    <SkBadge initials={(m.name ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase()} av={m.av} size={30} radius={9} accent={SK_TINT[m.name ? 'gold' : 'sage'].fg} />
+                    <SkBadge initials={(m.name ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase()} av={m.av} pubkey={m.pubkey} size={30} radius={9} accent={SK_TINT[m.name ? 'gold' : 'sage'].fg} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || 'Anonymous'}</div>
                       <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>{shortNpub(m.npub)}</div>

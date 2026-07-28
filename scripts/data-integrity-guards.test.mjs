@@ -19,7 +19,19 @@ const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'u
 const FINANCE = readFileSync(new URL('../app/stew-finance.jsx', import.meta.url), 'utf8');
 
 function body(name, src = BUNDLE) {
-  const at = src.indexOf(name);
+  // Find the DEFINITION, not any string that happens to contain the name. `indexOf('setNoPhoto(')` also
+  // matches a helper called `_setNoPhoto(` — and then this reads a completely different function and reports
+  // correct code as broken. Require a non-identifier character (or start of file) immediately before.
+  // AUDIT-2026-07-28.
+  const at = (() => {
+    let i = -1;
+    for (;;) {
+      i = src.indexOf(name, i + 1);
+      if (i === -1) return -1;
+      const prev = i === 0 ? '' : src[i - 1];
+      if (!/[A-Za-z0-9_$]/.test(prev)) return i;
+    }
+  })();
   assert.notEqual(at, -1, `${name} is missing from the shipped code`);
   // Start at the brace that opens the BODY, not the first '{' after the name — a default parameter
   // (`opts = {}`) would otherwise close depth immediately and return an empty body that matches nothing.

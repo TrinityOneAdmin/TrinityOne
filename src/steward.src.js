@@ -555,6 +555,13 @@ let sk = null, pub = null;                 // the ACTIVE signing identity (churc
 // and permanently orphans everything sealed with the first. See the mint gate in ensureCareKeyForMembers.
 let _relayAuthed = false;
 pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); _relayAuthed = true; return finalizeEvent(authEvent, sk); };
+// AUDIT-2026-07-28 F6. Pubkeys whose uploaded photo a steward has switched off. The MEMBER app has always
+// honoured this (fellowship.src.js _avSuppressPhoto, called inside displayFor so every surface inherits it);
+// the console had no equivalent, so a photo suppressed for safeguarding still drew on the steward's own
+// members list — the exact screen where someone would be moderating an image of a child, with a button
+// beside it promising the opposite. Module-level and fed by subscribeSafeguard, mirroring the member app.
+let _noPhoto = new Set();
+const _applyNoPhotoList = (list) => { _noPhoto = new Set((list || []).map(x => String(x || '').toLowerCase())); };
 let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
 let _nameKeyDocKeys = null;   // the recipient map of the envelope we last SAW — null means "we have not looked"
 let _nameKeyChecked = false;  // the namekey subscription has ANSWERED (event or EOSE) for the active identity
@@ -1802,6 +1809,16 @@ window.Steward = {
   // (should mirror the church's real DBS/cleared list). The relay rejects a kind-4 DM where one party is
   // a minor and the other isn't on the approved list. The member app uses minors to show a child only
   // child-safe groups. Replaceable docs, church-only writes. ----
+  // AUDIT-2026-07-28 F6. Is this member's uploaded photo one a steward has switched off? The member app has
+  // had this since the feature shipped (_avSuppressPhoto in fellowship.src.js, consulted inside displayFor,
+  // so EVERY member-app surface gets it for free). The console had no equivalent at all, so a photo suppressed
+  // for safeguarding still drew — on the one screen where a steward would be moderating an image of a child,
+  // while the button beside it promised "your church sees their symbol/initial". Kept as a module-level set
+  // fed by subscribeSafeguard, deliberately the same shape as the member app's, so the two cannot drift.
+  photoSuppressed(memberPub) {
+    const h = String(memberPub || '').toLowerCase();
+    return !!h && _noPhoto.has(h);
+  },
   subscribeSafeguard(onLists) {   // onLists({ minors:[…], approved:[…], nophoto:[…] })
     let minors = [], approved = [], nophoto = [];
     // NEWEST WINS, per document. These are three separate replaceable docs riding one subscription, so they
@@ -1821,7 +1838,7 @@ window.Steward = {
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
         if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; loaded = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
         else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } onLists({ minors, approved, nophoto, loaded }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, nophoto, loaded }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -2854,6 +2871,11 @@ window.Steward = {
     // key, wrapped to church B's members. That hands every member of B the key that opens A's sealed names.
     // AUDIT-2026-07-27.
     _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
+    // F6: photo suppression is PER CHURCH. Carrying it across an identity switch would suppress whichever
+    // members of the new church happened to share a pubkey position with the old list — and, worse, leak one
+    // church's moderation decisions into another's screen. Cleared here beside the other per-identity state;
+    // subscribeSafeguard refills it within a beat. (Same shape as the member app, which resets on church change.)
+    _applyNoPhotoList([]);
     window.Steward.pubkey = pub; window.Steward.npub = npubEncode(pub); window.Steward.activePub = pub;
     window.Steward.actingChurch = actingChurch;   // UI reads this to show "acting as steward" + hide owner-only controls
     window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch } }));

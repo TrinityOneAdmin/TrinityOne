@@ -166,10 +166,16 @@ test('CONTROL: the harness can actually PUBLISH for a hosted church', async () =
 test('a policy that already exists is never overwritten', async () => {
   // A steward who deliberately chose OPEN must stay open. Self-healing that ignores an existing choice is a
   // different bug wearing the fix's clothes.
+  // Replaceable docs are newest-wins to the SECOND, and an earlier test already wrote a policy for this
+  // church — so publishing again inside the same second is REFUSED and the old value survives. Wait FIRST,
+  // and assert the write was actually accepted: without that, this test read back the earlier document and
+  // reported the console as having overwritten a choice it never touched. It only failed under full-suite
+  // load, which is exactly how a race hides. HANDOFF warns about this shape; I still walked into it.
+  await sleep(1100);
   const w = await conn();
-  await rawPublish(w, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', JP + hosted.pub], ['t', 'trinityone']], content: JSON.stringify({ approval: false }) }, hosted.sk));
+  const [wrote] = await rawPublish(w, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', JP + hosted.pub], ['t', 'trinityone']], content: JSON.stringify({ approval: false }) }, hosted.sk));
   w.close();
-  await sleep(1200);   // replaceable docs are newest-wins to the SECOND; publishing twice inside one second is refused
+  assert.equal(wrote, true, 'the fixture could not store "anyone may join" — the test would then check the wrong document');
   const { api } = consoleSide(hosted);
   const r = await api.ensureJoinPolicy();
   assert.equal(r.already, true, 'ensureJoinPolicy did not notice an existing policy');

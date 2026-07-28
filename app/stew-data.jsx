@@ -109,9 +109,21 @@ const _avPhoto = (av) => {
   return /^data:image\/(?:png|jpe?g|gif|webp|avif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(v) ? v : '';
 };
 const _avColor = (av) => (av && /^#[0-9a-f]{3,8}$/i.test(String(av.color || ''))) ? String(av.color) : '';
-function SkBadge({ size = 44, radius = 13, accent = 'var(--clay)', initials = 'GC', picture = '', av = null, style = {} }) {
-  const avPic = _avPhoto(av);
+// AUDIT-2026-07-28 F6. A photo a steward has SWITCHED OFF was still drawn by the console — on the members
+// list, which is the one screen where someone would be moderating an image of a child, and with a button
+// beside it promising "your church sees their symbol/initial". Every member's phone had honoured the setting
+// since the feature shipped; the console never consulted it once.
+//
+// Suppressed HERE rather than at each call site, deliberately: the member app does the same thing (inside
+// displayFor, so every surface inherits it), and per-call-site suppression is what produced this bug — the
+// members list, the join requests and the chat all draw the same badge from different code. A caller that
+// passes `pubkey` is safe automatically; one that does not is drawing a church logo or a mock, not a member.
+function SkBadge({ size = 44, radius = 13, accent = 'var(--clay)', initials = 'GC', picture = '', av = null, pubkey = '', style = {} }) {
+  let suppressed = false;
+  try { suppressed = !!(pubkey && window.Steward && window.Steward.photoSuppressed && window.Steward.photoSuppressed(pubkey)); } catch (e) {}
+  const avPic = suppressed ? '' : _avPhoto(av);
   const avCol = _avColor(av);
+  if (suppressed) picture = '';               // a steward switched this member's photo off: symbol/initial only
   if (avPic) picture = avPic;                 // their photo, where the church allows photos
   if (!picture && avCol) accent = avCol;      // else at least THEIR colour, not everyone's identical grey
   return (
