@@ -93,7 +93,17 @@
     if (!prefs.enabled) { await unsubscribePush(); return; }         // master toggle off → no push
     if (pushDone === pubkey && !force) return;
     try {
-      if (Notification.permission !== 'granted') { const ok = await ensurePerm(); if (!ok) return; }
+      // NEVER ASK FROM HERE. This runs as soon as the app has a key — on first launch, before the person has
+      // joined a church, before they have done anything at all — so the very first thing a new member saw was
+      // a browser asking to send them notifications about a congregation they had not joined yet. Reported
+      // from a real phone on 2026-07-28.
+      // It also spends the one chance we get: a reflexive "Block" is close to permanent, since recovering it
+      // means digging into browser site settings, and Chrome penalises sites that prompt with no user gesture.
+      // Registration now happens only if permission has ALREADY been granted. The asking belongs where the
+      // person opts in — the notifications toggle in Settings (screens-extras.jsx) already does it correctly,
+      // at the moment they ask for it. `sync()` may still prompt, but only when there are confirmed serving
+      // slots to remind them about, which is a reason they can see.
+      if (Notification.permission !== 'granted') return;
       const reg = await navigator.serviceWorker.ready;
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
