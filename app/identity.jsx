@@ -128,6 +128,54 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
     } catch (e) { setRBusy(''); setRErr((e && e.message) || 'That phrase isn’t valid — check the words and their order.'); return; }
     await finishRestore();
   };
+  // SCAN TO SIGN IN. The third way back, and the one the product already promised: creating a child account
+  // tells the parent to point the child's phone at a code, and until now nothing could consume it — a fresh
+  // install's only scanner belongs to device TRANSFER, which needs a live exchange with another running
+  // phone. So a child could not get in by the route their own screen described. Reported 2026-07-28.
+  //
+  // The code is a link carrying the seed in its FRAGMENT (#invite=…), which never reaches a server. We accept
+  // that, and a bare 12-word phrase, and nothing else — a QR is scanned from across a room by whoever is
+  // holding the camera, so anything we cannot recognise is refused rather than guessed at.
+  //
+  // rTypedWords stays FALSE here: this route does not prove the person has their recovery phrase, so the
+  // backup nudge must still fire. Only typing the words earns its dismissal.
+  const seedFromScan = (text) => {
+    const raw = String(text || '').trim();
+    if (!raw) return '';
+    // a link with the seed in the fragment (or, for older links, the query)
+    try {
+      const u = new URL(raw);
+      const frag = new URLSearchParams((u.hash || '').replace(/^#/, '')).get('invite');
+      const q = u.searchParams.get('invite');
+      const v = (frag || q || '').trim();
+      // Validate the WORD COUNT here too, not just on the bare-phrase branch. Without it any link carrying
+      // invite=anything came back as a "seed", and the member was told their code held an invalid phrase
+      // rather than that it was not a TrinityOne code at all. Refuse early and say the right thing.
+      if (v) {
+        const w = decodeURIComponent(v).trim().toLowerCase().replace(/\s+/g, ' ');
+        return w.split(' ').length === 12 ? w : '';
+      }
+    } catch (e) {}
+    // or the bare phrase
+    const words = raw.toLowerCase().replace(/\s+/g, ' ');
+    if (words.split(' ').length === 12) return words;
+    return '';
+  };
+  const doScanSignIn = async (text) => {
+    const seed = seedFromScan(text);
+    if (!seed) { setRErr('That code isn’t a TrinityOne sign-in code. Point the camera at the code on the other phone, or use your 12 words.'); setRMode('scan'); return; }
+    // Replacing an identity that already has churches would strand them, so ask first. On a fresh phone
+    // there is nothing to lose and nothing to ask about.
+    try {
+      const existing = JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]') || [];
+      if (existing.length && !window.confirm('This will replace the account already on this phone.\n\nMake sure its 12 words are written down first — without them it cannot be recovered.')) { setRMode('choose'); return; }
+    } catch (e) {}
+    setRBusy('Signing in…'); setRErr(''); rTypedWords.current = false;
+    try {
+      await window.TrinityIdentity.importMnemonic(seed);
+    } catch (e) { setRBusy(''); setRErr((e && e.message) || 'That code carried an invalid phrase.'); setRMode('choose'); return; }
+    await finishRestore();
+  };
   // Shared tail of EVERY way back in — typed words, a transfer from the old phone, or (later) a steward
   // re-seat. By this point the key is already in place; all that remains is to find out what it belongs to.
   const finishRestore = async () => {
@@ -335,6 +383,10 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
             <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I still have my old phone</div>
             <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Move it across by scanning — nothing to type</div>
           </button>
+          <button onClick={() => { setRErr(''); setRMode('scan'); }} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>Someone set this up for me</div>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Scan the code they’re showing you — nothing to type</div>
+          </button>
           <button onClick={() => setRMode('words')} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I have my 12 words</div>
             <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Type the phrase you wrote down</div>
@@ -358,6 +410,28 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   // ── Lost the words entirely. Nothing can bring the old key back — so instead the church vouches that this
   // NEW key is the same person, and moves their name and place onto it. Be plain about the limits: pretending
   // old private messages will reappear would be a lie the member discovers later, at a bad moment.
+  // The scanner. Reuses QRScanner (camera + a manual-paste fallback for a phone with no camera, or a code
+  // that will not focus), and hands whatever it reads to doScanSignIn, which refuses anything it does not
+  // recognise rather than guessing.
+  if (restoring && rMode === 'scan') return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column' }}>
+      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
+        <div style={{ maxWidth: 440, margin: '0 auto' }}>
+          <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '0 0 8px' }}>Scan their code</h1>
+          <p style={{ textAlign: 'center', fontSize: 14.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 16px', maxWidth: 340 }}>
+            On the other phone, open the code they were shown when they set this up. Point this camera at it.
+          </p>
+          {rErr ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 600, textAlign: 'center', margin: '0 0 12px' }}>{rErr}</div> : null}
+          {rBusy ? <div style={{ fontSize: 14, color: 'var(--ink-2)', textAlign: 'center', margin: '10px 0' }}>{rBusy}</div>
+            : <QRScanner onResult={doScanSignIn} onCancel={() => { setRErr(''); setRMode('choose'); }}
+                prompt="Point at the code on the other phone"
+                onManual={doScanSignIn} manualPrompt="Or paste the link they sent you" />}
+          <button onClick={() => { setRErr(''); setRBusy(''); setRMode('choose'); }} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>Back</button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (restoring && rMode === 'lost') return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '48px 22px 18px' }}>
