@@ -361,7 +361,10 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const [pinBusy, setPinBusy] = React.useState(false);
   const savePin = async () => {
     if (pinBusy) return;
-    if ((pinA || '').length < 6) { setPinErr('Use at least 6 characters — a longer passphrase is stronger.'); return; }
+    // Six DIGITS is a million guesses — minutes of offline work against a stolen laptop, even at 600k
+    // PBKDF2 rounds. A passphrase is not. The field accepts one; the wording should ask for one.
+    if ((pinA || '').length < 8) { setPinErr('Use at least 8 characters. A short phrase you will remember — three or four words — is far stronger than digits.'); return; }
+    if (/^\d+$/.test(pinA) && pinA.length < 12) { setPinErr('Digits alone are guessable by a computer in minutes. Use a few words instead, or at least 12 digits.'); return; }
     if (pinA !== pinB) { setPinErr('The two entries don’t match.'); return; }
     setPinBusy(true); setPinErr('');
     let ok = false; try { ok = await window.Steward.setPin(pinA); } catch (e) { ok = false; }
@@ -379,7 +382,17 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const fld = { width: '100%', boxSizing: 'border-box', height: 48, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 };
 
-  const saveName = async () => { const n = name.trim(); if (n && n !== church.name) { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 })); setBusy(false); } next(); };
+  // A NEW CHURCH GATES JOINS BY DEFAULT. The relay treats "no join policy published" as open, so a church
+  // that never visited the setting let anyone holding the join code straight in — and, once the name key
+  // reached them, straight to every member's name. Open is a reasonable choice for a church that chooses it;
+  // it is the wrong thing to get by never being asked. Published here rather than changing the relay's
+  // default, so the console and the relay always agree about what the policy is. AUDIT-2026-07-28.
+  const saveName = async () => {
+    const n = name.trim();
+    if (n && n !== church.name) { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 })); setBusy(false); }
+    try { if (window.Steward.setJoinPolicy) await Promise.resolve(window.Steward.setJoinPolicy(true)); } catch (e) {}
+    next();
+  };
   const saveGroups = async () => { const chosen = STARTERS.filter(s => picks.has(s.id)); if (chosen.length) { setBusy(true); for (const g of chosen) await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub })); setBusy(false); } next(); };
   const saveTeam = async () => { const t = teamName.trim(); if (t) { setBusy(true); await Promise.resolve(window.Steward.publishGroup({ name: t, kind: 'team', sub: 'Serving team' })); setBusy(false); } next(); };
   // Step 4 — the church's weekly rhythm. This step did not exist: the ONLY wizard that pre-filled Sunday
@@ -540,7 +553,9 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
       footer={<React.Fragment>
         <button onClick={() => setStep(1)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
-        <button onClick={() => next()} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}>Skip for now</button>
+        {/* No skip. This key signs as the WHOLE church, and "Skip for now" is how a laptop in a church
+            office ends up holding it unencrypted — the people most likely to skip are the ones for whom it
+            matters most. AUDIT-2026-07-28. */}
         <button onClick={savePin} disabled={pinBusy || !pinA || !pinB} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: (pinBusy || !pinA || !pinB) ? .5 : 1 }}>{pinBusy ? 'Setting…' : 'Set a PIN'} <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
       <div style={lbl}>PIN OR PASSPHRASE</div>
