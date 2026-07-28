@@ -5183,6 +5183,16 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
             <button onClick={() => setShowQR(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Show handoff QR</button>
           ) : (
             <div style={{ textAlign: 'center', padding: 14, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              {/* Say what it COSTS, right next to the button. The three cards on this screen all say
+                  "steward" and differ in weight enormously: this one COPIES the church key, and that key
+                  opens every sealed name in the congregation — so it doubles what a single seizure yields.
+                  Delegating does not. Renaming the cards by intent is the real fix and wants its own pass;
+                  this is the part that should not wait. AUDIT-2026-07-28. */}
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px' }}>
+                Scanning this puts <b>this church</b> on another device — your own phone, or another leader’s.
+                That device then holds the full church key, so a lost or seized phone gives up everything this
+                one does. To let someone help <i>without</i> copying the key, use <b>Delegated stewards</b>.
+              </div>
               {handoffSvg
                 ? <div style={{ width: 184, height: 184, margin: '0 auto', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: handoffSvg }} />
                 : <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: 20 }}>No church key on this device.</div>}

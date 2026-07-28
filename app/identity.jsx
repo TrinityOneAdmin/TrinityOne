@@ -310,6 +310,15 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
             <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>I’ve used it before</div>
             <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>Bring my account back — new phone, or reinstalled</div>
           </button>
+          {/* TOP-LEVEL, not tucked under "I've used it before". A child whose parent made their account has
+              never used TrinityOne — asking them to claim they have is how a parent picks "I'm new here" and
+              creates a SECOND account, leaving the real one (with its church and guardian link) orphaned on
+              the parent's phone. The same wording fails a member the church re-seated onto a new key.
+              Raised 2026-07-28: "they might not have used it before". AUDIT-2026-07-28. */}
+          <button onClick={() => { setRestoring(true); setRErr(''); setRMode('scan'); }} style={{ width: '100%', textAlign: 'left', padding: '15px 17px', borderRadius: 16, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', marginBottom: 10, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>Someone set this up for me</div>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-3)', marginTop: 3, lineHeight: 1.45 }}>A parent or leader — scan the code they’re showing you</div>
+          </button>
         </div>
       </div>
       <div style={{ flexShrink: 0, padding: '10px 22px 26px', background: 'var(--paper)' }}>

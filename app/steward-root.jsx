@@ -313,6 +313,11 @@ function StewardWelcome() {
         {mode === 'choose' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             <button onClick={seedNewChurch} className="sk-btn sk-btn--clay" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="plus" size={17} color="var(--on-clay)" /> Start a new church</button>
+            {/* First-class, not buried under "Restore a church". "How do I add the church from my workstation
+                to the phone?" was asked by the person who built it — the handoff QR and this scanner both
+                existed, and nothing named the thing anyone actually wants to do. Native only, because it
+                needs a camera. AUDIT-2026-07-28. */}
+            {isNative ? <button onClick={() => { setErr(''); setMode('scanning'); }} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="qr" size={17} color="currentColor" /> My church is on another device</button> : null}
             <button onClick={() => { setErr(''); setMode('restore'); }} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="refresh" size={17} color="currentColor" /> Restore a church</button>
             <button onClick={becomeSteward} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="shield" size={17} color="currentColor" /> Help run a church</button>
             <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', marginTop: 4, lineHeight: 1.5 }}>“Help run a church” makes your steward code — the church’s owner adds it to make you a steward (no key shared).</div>
