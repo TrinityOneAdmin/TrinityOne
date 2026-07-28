@@ -1,0 +1,646 @@
+<title>TrinityOne — Roadmap</title>
+<style>
+  :root{
+    --bg:#faf8f5; --surface:#fff; --surface-2:#f2eee8; --line:#e3ddd3;
+    --ink:#241f1a; --ink-2:#5a5148; --ink-3:#8d8378;
+    --clay:#b4552d; --sage:#5d7a5e; --gold:#b08340; --stone:#6b7280;
+    --shadow:0 1px 2px rgba(0,0,0,.05); --shadow-lg:0 10px 30px rgba(0,0,0,.09);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#17140f; --surface:#201c16; --surface-2:#2a251e; --line:#38312a;
+      --ink:#f0eae1; --ink-2:#bcb2a5; --ink-3:#8c8377;
+      --clay:#e0784a; --sage:#8fae8f; --gold:#d3a55f; --stone:#9aa2af;
+      --shadow:0 1px 2px rgba(0,0,0,.35); --shadow-lg:0 10px 30px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#faf8f5; --surface:#fff; --surface-2:#f2eee8; --line:#e3ddd3;
+    --ink:#241f1a; --ink-2:#5a5148; --ink-3:#8d8378;
+    --clay:#b4552d; --sage:#5d7a5e; --gold:#b08340; --stone:#6b7280;
+  }
+  :root[data-theme="dark"]{
+    --bg:#17140f; --surface:#201c16; --surface-2:#2a251e; --line:#38312a;
+    --ink:#f0eae1; --ink-2:#bcb2a5; --ink-3:#8c8377;
+    --clay:#e0784a; --sage:#8fae8f; --gold:#d3a55f; --stone:#9aa2af;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:920px;margin:0 auto;padding:32px 20px 96px}
+
+  header.top{margin-bottom:8px}
+  h1{font-size:clamp(26px,4.4vw,38px);line-height:1.15;margin:0 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--ink-2);font-size:15.5px;margin:0 0 4px;max-width:62ch}
+  .meta{color:var(--ink-3);font-size:12.5px;margin-top:10px}
+
+  .bar{position:sticky;top:0;z-index:20;background:color-mix(in oklab,var(--bg) 88%,transparent);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line);margin:22px -20px 26px;padding:11px 20px;
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .track{flex:1;min-width:150px;height:8px;border-radius:99px;background:var(--surface-2);overflow:hidden;border:1px solid var(--line)}
+  .fill{height:100%;width:0;background:linear-gradient(90deg,var(--sage),var(--gold));transition:width .35s ease}
+  .count{font-size:13px;color:var(--ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .btn{border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:9px;
+    padding:5px 11px;font-size:12.5px;cursor:pointer;font-family:inherit}
+  .btn:hover{border-color:var(--ink-3);color:var(--ink)}
+
+  section{margin:0 0 30px;background:var(--surface);border:1px solid var(--line);border-radius:16px;
+    padding:20px 22px;box-shadow:var(--shadow)}
+  section > h2{font-size:20px;margin:0 0 3px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .sec-count{font-size:12px;color:var(--ink-3);font-weight:400;font-variant-numeric:tabular-nums}
+  .lede{color:var(--ink-2);font-size:14.5px;margin:0 0 16px;max-width:70ch}
+  .phase{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
+    padding:3px 8px;border-radius:6px;border:1px solid;vertical-align:middle}
+  .p-now{color:var(--clay);border-color:color-mix(in oklab,var(--clay) 45%,transparent);background:color-mix(in oklab,var(--clay) 10%,transparent)}
+  .p-pilot{color:var(--gold);border-color:color-mix(in oklab,var(--gold) 45%,transparent);background:color-mix(in oklab,var(--gold) 10%,transparent)}
+  .p-after{color:var(--sage);border-color:color-mix(in oklab,var(--sage) 45%,transparent);background:color-mix(in oklab,var(--sage) 10%,transparent)}
+  .p-ongoing{color:var(--stone);border-color:color-mix(in oklab,var(--stone) 45%,transparent);background:color-mix(in oklab,var(--stone) 10%,transparent)}
+
+  ul.items{list-style:none;margin:0;padding:0}
+  ul.items ul{list-style:none;margin:7px 0 0;padding:0 0 0 2px}
+  li.item{border-top:1px solid var(--line);padding:11px 0 11px 0}
+  li.item:first-child{border-top:none}
+  .row{display:flex;gap:11px;align-items:flex-start}
+  input[type=checkbox]{appearance:none;flex:0 0 auto;width:19px;height:19px;margin-top:2px;border:1.5px solid var(--ink-3);
+    border-radius:5px;background:var(--surface);cursor:pointer;position:relative;transition:all .12s}
+  input[type=checkbox]:hover{border-color:var(--sage)}
+  input[type=checkbox]:checked{background:var(--sage);border-color:var(--sage)}
+  input[type=checkbox]:checked::after{content:"";position:absolute;left:5.5px;top:1.5px;width:5px;height:10px;
+    border:solid #fff;border-width:0 2.2px 2.2px 0;transform:rotate(42deg)}
+  .body{flex:1;min-width:0}
+  .title{font-weight:600;font-size:15.5px;cursor:pointer;display:block}
+  li.done > .row > .body > .title{text-decoration:line-through;color:var(--ink-3);text-decoration-thickness:1.5px}
+  li.done > .row > .body > .note{opacity:.5}
+  .note{color:var(--ink-2);font-size:14px;margin-top:4px;max-width:72ch}
+  .why{color:var(--ink-2);font-size:13.5px;margin-top:7px;padding:9px 12px;border-left:2.5px solid var(--gold);
+    background:var(--surface-2);border-radius:0 8px 8px 0;max-width:72ch}
+  .why b{color:var(--ink)}
+  .sub-item{display:flex;gap:9px;align-items:flex-start;padding:5px 0;font-size:14px;color:var(--ink-2)}
+  .sub-item input[type=checkbox]{width:15px;height:15px;margin-top:3px;border-radius:4px}
+  .sub-item input[type=checkbox]:checked::after{left:4px;top:0.5px;width:4px;height:8.5px;border-width:0 2px 2px 0}
+  .sub-item.done > span{text-decoration:line-through;opacity:.5}
+  .tag{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.4px;padding:2px 6px;border-radius:5px;
+    margin-left:7px;vertical-align:1.5px;text-transform:uppercase}
+  .t-block{background:color-mix(in oklab,var(--clay) 15%,transparent);color:var(--clay)}
+  .t-nocode{background:color-mix(in oklab,var(--stone) 16%,transparent);color:var(--stone)}
+  .t-unusual{background:color-mix(in oklab,var(--gold) 16%,transparent);color:var(--gold)}
+
+  .callout{border:1px solid var(--line);border-left:3px solid var(--clay);background:var(--surface-2);
+    border-radius:0 12px 12px 0;padding:14px 16px;margin:0 0 22px}
+  .callout h3{margin:0 0 6px;font-size:15px}
+  .callout p{margin:0;font-size:14px;color:var(--ink-2);max-width:72ch}
+
+  table{width:100%;border-collapse:collapse;font-size:14px;margin-top:6px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-3);font-weight:700}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;background:var(--surface-2);
+    padding:1px 5px;border-radius:5px;border:1px solid var(--line)}
+  footer{color:var(--ink-3);font-size:12.5px;text-align:center;margin-top:36px;line-height:1.7}
+
+  @media print{
+    .bar,.btn{display:none}
+    body{background:#fff;color:#000}
+    section{break-inside:avoid;box-shadow:none;border-color:#ccc}
+    .why{background:#f6f6f6}
+  }
+</style>
+
+<div class="wrap">
+<header class="top">
+  <h1>TrinityOne — road to pilot, and after</h1>
+  <p class="sub">Two or three UK churches. The pilot is not a rehearsal for the real thing — in a country
+  where Christians get police visits over posts and street preaching, it <em>is</em> the real thing, with
+  better lawyers. Tasks are ordered by what blocks what, not by what is easiest.</p>
+  <p class="meta">Ticks are saved in this browser only. Nothing here is served publicly —
+  <code>reference/</code> is refused by the relay.</p>
+</header>
+
+<div class="bar">
+  <div class="track"><div class="fill" id="fill"></div></div>
+  <span class="count" id="count">0 / 0</span>
+  <button class="btn" id="theme">Theme</button>
+  <button class="btn" id="collapse">Hide done</button>
+  <button class="btn" id="reset">Reset</button>
+</div>
+
+<div class="callout">
+  <h3>The one rule that orders everything below</h3>
+  <p>Never describe a protection as more than it is. An honest limit survives a police visit; an overclaim
+  gets someone charged. Where a task exists to make a claim <em>true</em>, it outranks a task that makes the
+  product nicer.</p>
+</div>
+
+<!-- ═══════════════════════════ 1 ═══════════════════════════ -->
+<section>
+  <h2>Before anything ships <span class="phase p-now">Now</span> <span class="sec-count" data-count></span></h2>
+  <p class="lede">Everything from the last three days is merged and passing 471 automated tests, and none of
+  it has been run on a phone. That is the only thing between here and a pilot.</p>
+  <ul class="items">
+
+    <li class="item" data-id="dev-test">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Work the device checklist end to end<span class="tag t-block">Blocks all</span></span>
+        <div class="note">The existing checklist covers the recovery work but predates the name encryption. It needs a second half.</div>
+        <div class="why"><b>Why it can't be compressed:</b> the last two days found twelve faults that looked
+        perfect on paper, and the worst one — the roster blanking people's names — was found by reading code,
+        not by any test.</div>
+        <ul>
+          <li class="sub-item" data-id="dt-names"><input type="checkbox"><span>Names appear: in chat, the member directory, the steward console</span></li>
+          <li class="sub-item" data-id="dt-pending"><input type="checkbox"><span>Someone awaiting approval shows a readable name, not gibberish</span></li>
+          <li class="sub-item" data-id="dt-child"><input type="checkbox"><span>Set up a child account — the leader sees the child's name</span></li>
+          <li class="sub-item" data-id="dt-block"><input type="checkbox"><span>Block a member — everyone else's names still work, history intact</span></li>
+          <li class="sub-item" data-id="dt-restore"><input type="checkbox"><span>Restore from 12 words — name and churches both come back</span></li>
+          <li class="sub-item" data-id="dt-two"><input type="checkbox"><span>Phone-to-phone transfer, both handsets present</span></li>
+          <li class="sub-item" data-id="dt-safeg"><input type="checkbox"><span>A child's app knows it is a child (the clearance fix)</span></li>
+          <li class="sub-item" data-id="dt-offline"><input type="checkbox"><span>Airplane mode: reload the app, it still opens</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="thin-pipe">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Test on the phone your audience actually has<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">A cheap Android five years old, throttled to 2G, with the screen in a language you don't read.</div>
+        <div class="why"><b>Why:</b> every device test so far has been on a Pixel 10 Pro on wifi. That is not
+        the target device and never was. A shared family phone is also worth one pass — the app assumes one
+        person per handset.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="debug-off">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Turn off web debugging, and prove it</span>
+        <div class="note"><code>webContentsDebuggingEnabled</code> is <b>true</b> in two files. It stays on
+        while you test, and comes off in the same pass as the deploy.</div>
+        <div class="why"><b>Why "prove it":</b> a memory note once recorded this as done when it wasn't.
+        Verify by attaching a debugger to the release build and failing to connect.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="forensic">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Seize your own phone<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">Take a test handset with a real church on it, and examine it the way a competent
+        examiner would. Write down everything learned.</div>
+        <div class="why"><b>Why:</b> we make claims about what a locked app reveals. This is the only way to
+        know whether they are true. Whatever it finds becomes the honest wording — and one already-known
+        answer is that the app's presence and church membership are visible to a proper inspection.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="deploy">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Deploy both halves together</span>
+        <div class="note">The relay update and a fresh signed app build. They must go out as a pair.</div>
+        <div class="why"><b>Why paired:</b> the console and app now share a secret older versions don't
+        understand. Deploying one without the other blanks names or empties group chats.</div>
+        <ul>
+          <li class="sub-item" data-id="dp-wipe"><input type="checkbox"><span>Wipe test data after the merge, before anyone joins</span></li>
+          <li class="sub-item" data-id="dp-apk"><input type="checkbox"><span>Rebuild + release-sign the app</span></li>
+          <li class="sub-item" data-id="dp-a8"><input type="checkbox"><span>Update the relay box</span></li>
+          <li class="sub-item" data-id="dp-fresh"><input type="checkbox"><span>Fresh install against the live system, as a stranger would</span></li>
+          <li class="sub-item" data-id="dp-docs"><input type="checkbox"><span>Confirm the internal-docs leak is closed on the deployed box</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="keys-backup">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Get the release signing key off this machine</span>
+        <div class="note">If the keystore is lost, no existing install can ever be updated again. Not by us, not by anyone.</div>
+        <div class="why"><b>Why now:</b> this is the one failure with no recovery path at all, and it gets
+        worse with every phone that installs the app. Two copies, two places, at least one offline.</div>
+      </div></div>
+    </li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════ 2 ═══════════════════════════ -->
+<section>
+  <h2>Running the pilot <span class="phase p-pilot">Pilot</span> <span class="sec-count" data-count></span></h2>
+  <p class="lede">Two or three churches — enough to break assumptions that only hold for one congregation.
+  Different sizes, different leadership, at least one where you are not in the room.</p>
+  <ul class="items">
+
+    <li class="item" data-id="church-pack">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Write the honest limits into the joining pack<span class="tag t-nocode">No code</span></span>
+        <div class="note">Plain words: what this protects you from, and what it does not.</div>
+        <div class="why"><b>Why it's a pilot task and not a nicety:</b> a member who understands the limits
+        makes better decisions than one trusting a claim we can't back — and someone in that room may end up
+        explaining it to an officer. Must say plainly that a PIN does not defeat a court order.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="bad-week">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Run a "bad week" drill with each church<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">Sit down and rehearse: the bank account is frozen; a steward's laptop is taken; the
+        relay box is seized. What happens in the next hour, and who does what?</div>
+        <div class="why"><b>Why:</b> this is the product's entire purpose and it has never been exercised.
+        A drill will find missing tools faster than any feature list — and it tells you which roadmap items
+        below are real and which are theatre.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="redteam">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Try to enumerate the pilot churches from outside<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">Given only the public site and a relay address, how much can an outsider learn —
+        which churches exist, how many members, who they are?</div>
+        <div class="why"><b>Why:</b> "unenumerable" is the claim the name encryption exists to support.
+        Success means finding nothing. Do it before real congregations depend on it, and repeat it after
+        every change to what the relay serves — that is exactly how the internal-docs leak was found.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="gdpr">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Answer the data-protection question before a church asks it<span class="tag t-nocode">No code</span></span>
+        <div class="note">A UK church using this is a data controller. Members have rights over their data —
+        access, correction, deletion — and the church has retention duties, especially around children.</div>
+        <div class="why"><b>Why it's awkward and worth solving:</b> encryption helps enormously — the relay
+        holds ciphertext — but "we can't read it" is not the same as "we have no obligations". A one-page
+        answer a church trustee can hand to their safeguarding officer removes a real adoption blocker.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="legal">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Get a UK lawyer's read on steward exposure<span class="tag t-nocode">No code</span></span>
+        <div class="note">Specifically: what a steward can be compelled to produce, and what happens if they
+        genuinely cannot.</div>
+        <div class="why"><b>Why:</b> we are asking volunteers to hold a key that opens their congregation.
+        They deserve to know their position before they accept it, and the answer shapes the multisig design.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="support">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Decide how a church reaches you when it breaks</span>
+        <div class="note">One route, stated in the app, that works when the app is the thing that's broken.</div>
+        <div class="why"><b>Why:</b> with three churches this is a phone number. It is worth writing down
+        anyway, because the answer at thirty churches is different and you'll want to know when it changed.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="feedback">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Capture what people actually do, without instrumenting them<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">No analytics, no telemetry, no phone-home. Ask instead: a short call at week one
+        and week four with each church.</div>
+        <div class="why"><b>Why this constraint is a feature:</b> a product whose whole pitch is "we can't
+        see your data" cannot ship usage tracking. Talking to three churches is better research than a
+        dashboard anyway — and it stays honest at thirty.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="premortem">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Write the pre-mortem<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">One page: it is three months from now and the pilot failed. What happened?</div>
+        <div class="why"><b>Why:</b> the likely answers ("names showed as Anonymous and it looked broken",
+        "the steward lost the key", "nobody could get a Lightning address") are all cheap to prevent now and
+        expensive to fix in front of a congregation.</div>
+      </div></div>
+    </li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════ 3 ═══════════════════════════ -->
+<section>
+  <h2>Making one target into many <span class="phase p-after">After pilot</span> <span class="sec-count" data-count></span></h2>
+  <p class="lede">The strategy is to make attacking churches one-by-one uneconomic. That is an infrastructure
+  and governance problem more than a code problem.</p>
+  <ul class="items">
+
+    <li class="item" data-id="relays-juris">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Public relays in more than one jurisdiction</span>
+        <div class="note">Additional boxes like the current one, run in countries whose legal systems do not
+        readily cooperate with each other.</div>
+        <div class="why"><b>Why "jurisdiction" not "location":</b> three servers in three data centres under
+        one legal regime is one demand, not three. The property you want is that no single court order
+        reaches them all. Pick on legal diversity first and latency second.</div>
+        <ul>
+          <li class="sub-item" data-id="rj-pick"><input type="checkbox"><span>Choose jurisdictions on legal grounds, written down</span></li>
+          <li class="sub-item" data-id="rj-stand"><input type="checkbox"><span>Stand up the first additional public relay</span></li>
+          <li class="sub-item" data-id="rj-fail"><input type="checkbox"><span>Prove a church survives losing its primary relay — pull the plug and watch</span></li>
+          <li class="sub-item" data-id="rj-own"><input type="checkbox"><span>Confirm operators are separate people, not all you</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="canary">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">A warrant canary on every public relay<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">A signed statement, refreshed on a schedule, saying no demand has been received.
+        Its absence is the signal.</div>
+        <div class="why"><b>Why it fits here:</b> operators can be forbidden from disclosing a demand. They
+        cannot generally be compelled to keep signing something untrue. Cheap to build, and it makes the
+        multi-jurisdiction spread legible to churches rather than a claim they take on faith.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="sneakernet">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Prove the app installs with no app store and no internet<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">From a memory card, a local box, or one phone to another in the room.</div>
+        <div class="why"><b>Why:</b> app stores are a single point of removal — the tidiest way to delete
+        this product from a country is one takedown request. The QR identity transfer already proves the
+        pattern works; this extends it to the app itself. It is also how it reaches somewhere with no data.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="paper">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">The paper fallback pack<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">What a church can print and keep in a drawer: join slips (built), key recovery
+        sheets, and a one-page "the internet is off, what still works" card.</div>
+        <div class="why"><b>Why:</b> paper does not have a battery, cannot be remotely wiped, and is not
+        seized as a data-bearing device in the same way. For a congregation, it is also the format their
+        least technical member is least frightened of.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="bus">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Answer the bus question<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">If this dev box dies, or you are unavailable for six months, what happens to the
+        churches already running?</div>
+        <div class="why"><b>Why it belongs on a roadmap:</b> churches are being asked to move their whole
+        community onto this. The honest answer today is that they keep running but stop receiving updates,
+        and the signing key is the pinch point. Write that down and decide whether it is acceptable.</div>
+      </div></div>
+    </li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════ 4 ═══════════════════════════ -->
+<section>
+  <h2>Being findable, without making a target list <span class="phase p-ongoing">Ongoing</span> <span class="sec-count" data-count></span></h2>
+  <p class="lede">Marketing wants churches named and visible. Security wants them unenumerable. This tension
+  is real and should be decided deliberately rather than drifted into.</p>
+  <ul class="items">
+
+    <li class="item" data-id="naming">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Decide whether a church is ever named publicly<span class="tag t-block">Decide first</span></span>
+        <div class="note">Case studies, logos on the site, testimonials, a launch post thanking the pilot churches.</div>
+        <div class="why"><b>Why this comes before the accounts:</b> every social channel below will want
+        exactly that content, and a named pilot church is a published list of congregations using
+        privacy tooling. Whatever you decide, decide it once, in writing, before the first post.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="social-accounts">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Claim the names everywhere, post on few</span>
+        <div class="note">Register the handles now so nobody else does; actively run only what you can sustain.</div>
+        <div class="why"><b>Why:</b> a dormant account someone else takes is worse than no account —
+        for a product about trust, an impostor account is a genuine attack, not an annoyance.</div>
+        <ul>
+          <li class="sub-item" data-id="so-fb"><input type="checkbox"><span>Facebook + Instagram — where UK congregations and their leaders actually are</span></li>
+          <li class="sub-item" data-id="so-x"><input type="checkbox"><span>X + YouTube — reach, and the home for walkthrough videos</span></li>
+          <li class="sub-item" data-id="so-nostr"><input type="checkbox"><span>Nostr + Bluesky — aligned, and dogfooding: the app already speaks Nostr</span></li>
+          <li class="sub-item" data-id="so-li"><input type="checkbox"><span>LinkedIn — administrators, denominational staff, trustees: the people who sign off</span></li>
+          <li class="sub-item" data-id="so-verify"><input type="checkbox"><span>Cross-link every account from the site so the real ones are provable</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="news-channel">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Run the news channel on your own infrastructure first</span>
+        <div class="note">Announcements go out over TrinityOne itself, and are mirrored to the social
+        accounts — not the other way round.</div>
+        <div class="why"><b>Why:</b> if the announcement channel lives on a platform, the platform can end
+        your relationship with your own users. Doing it this way also makes the product demonstrate its own
+        argument every time you post, and gives you a real user's view of the app weekly.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="videos">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">The walkthrough videos</span>
+        <div class="note">Connecting a church to a relay, first launch, restoring an account. The written
+        guides exist; the visual parity does not.</div>
+        <div class="why"><b>Why:</b> "connect a church to a relay" was the single biggest documentation gap,
+        and it is the step where a leader most likely gives up alone at a laptop on a Saturday.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="faq">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">The FAQ page</span>
+        <div class="note">Long agreed, never built. The honest-limits answers from the joining pack belong here too.</div>
+      </div></div>
+    </li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════ 5 ═══════════════════════════ -->
+<section>
+  <h2>Tying off what's already half-built <span class="phase p-after">After pilot</span> <span class="sec-count" data-count></span></h2>
+  <p class="lede">Five branches carrying real work. None are needed for the pilot and none make it better —
+  but each is a decision left open, and open decisions rot.</p>
+  <div class="scroll"><table>
+    <tr><th>Branch</th><th>What it is</th><th>What it needs</th></tr>
+    <tr><td><code>replication-phase-a</code></td><td>Operator's view of relay mirroring — which churches have a mirror, how fresh</td><td>Two relay boxes to test against. Small; the mirroring itself already shipped</td></tr>
+    <tr><td><code>push/nostr-unifiedpush</code></td><td>Notifications</td><td><b>Superseded in approach</b> — keep as the fallback, build periodic instead</td></tr>
+    <tr><td><code>blossom/module-distribution</code></td><td>Spreading Bible downloads across independent hosts</td><td>Testing from scratch. Largest and least proven — keep well away from the pilot</td></tr>
+    <tr><td><code>multisig/church-key</code></td><td>Plan only, no code</td><td>Four decisions, then build</td></tr>
+    <tr><td><code>payments/lightning-giving</code></td><td>Plan only, no code</td><td>The address question answered</td></tr>
+  </table></div>
+  <ul class="items" style="margin-top:14px">
+    <li class="item" data-id="b-repl">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Merge the replication panel once a second relay exists</span>
+        <div class="note">It becomes useful the moment there is more than one box — which is the
+        multi-jurisdiction task above.</div>
+      </div></div>
+    </li>
+    <li class="item" data-id="b-push">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Build periodic notifications; keep the existing branch as fallback</span>
+        <div class="note">Wake on a schedule and check, rather than holding a connection open.</div>
+        <div class="why"><b>Why the change of approach:</b> the always-on route needs either Google, or a
+        second app, or a permanent "TrinityOne is running" notice on the lock screen — which on an inspected
+        phone is a constant, visible statement of which church app you use. Periodic costs a delay instead,
+        and the emergency roll-call turned out to be mostly soft check-ins hours later.</div>
+        <ul>
+          <li class="sub-item" data-id="pn-measure"><input type="checkbox"><span>Measure real wake reliability on several handsets before committing</span></li>
+          <li class="sub-item" data-id="pn-build"><input type="checkbox"><span>Build it</span></li>
+        </ul>
+      </div></div>
+    </li>
+    <li class="item" data-id="b-blossom">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Decide the fate of module distribution</span>
+        <div class="note">Test it properly on its own, or close the branch. Do not leave it half-alive.</div>
+      </div></div>
+    </li>
+    <li class="item" data-id="b-ci">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Fix the build job that hangs for a day and gets killed</span>
+        <div class="note">One platform's desktop relay build never ships because the job hangs until it is
+        cancelled. A timeout at minimum, so it fails honestly rather than pretending.</div>
+      </div></div>
+    </li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════ 6 ═══════════════════════════ -->
+<section>
+  <h2>The two big builds after the pilot <span class="phase p-after">After pilot</span> <span class="sec-count" data-count></span></h2>
+  <p class="lede">Both have written plans on branches. Both are answers to "what happens when they go around
+  the encryption instead of through it".</p>
+  <ul class="items">
+
+    <li class="item" data-id="multisig">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Split the church key — <code>reference/MULTISIG-CHURCH-KEY.md</code></span>
+        <div class="note">Encrypting names moved the roster's readability rather than removing it: from the
+        relay box to one steward's laptop. Splitting the key means a demand needs several people in several
+        places.</div>
+        <div class="why"><b>The risk to respect:</b> lose a quorum of pieces and that church's records are
+        unopenable by anyone, for ever. That is the feature working. It is why nothing is destroyed until a
+        real reassembly has been rehearsed — and why it must not be in the pilot.</div>
+        <ul>
+          <li class="sub-item" data-id="ms-d1"><input type="checkbox"><span>Decide how pieces reach holders (paper / scan / locked to their account)</span></li>
+          <li class="sub-item" data-id="ms-d2"><input type="checkbox"><span>Decide whether a holder must be a TrinityOne user</span></li>
+          <li class="sub-item" data-id="ms-d3"><input type="checkbox"><span>Confirm there is no escape hatch — any recovery route can also be compelled</span></li>
+          <li class="sub-item" data-id="ms-build"><input type="checkbox"><span>Build phases A–E</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="payments">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Lightning giving — <code>reference/PAYMENTS-LIGHTNING.md</code></span>
+        <div class="note">Not how a UK church gets funded — congregations don't hold bitcoin. It is how a
+        church still receives money the week its bank account is closed over its beliefs.</div>
+        <div class="why"><b>The blocker:</b> a church has nowhere to <em>get</em> a Lightning address, and
+        nothing else can be tested until one does. The option that fits the thesis is the church's own relay
+        box issuing it — no account for anyone to close. Same move as making that box the push carrier.</div>
+        <ul>
+          <li class="sub-item" data-id="pay-addr"><input type="checkbox"><span>Answer the address question — this gates everything</span></li>
+          <li class="sub-item" data-id="pay-setup"><input type="checkbox"><span>Pilot churches complete + verify setup, without opening it to the congregation</span></li>
+          <li class="sub-item" data-id="pay-receipt"><input type="checkbox"><span>Receipts and records: a gift the church can't see is worse than no gift</span></li>
+          <li class="sub-item" data-id="pay-rate"><input type="checkbox"><span>Live exchange rate — no currency symbol on screen until then</span></li>
+          <li class="sub-item" data-id="pay-bank"><input type="checkbox"><span>The second rail: publish ordinary bank details alongside</span></li>
+          <li class="sub-item" data-id="pay-giftaid"><input type="checkbox"><span>Gift Aid — the biggest financial lever for a UK church</span></li>
+        </ul>
+      </div></div>
+    </li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════ 7 ═══════════════════════════ -->
+<section>
+  <h2>Deliberately not doing <span class="phase p-ongoing">Standing</span></h2>
+  <p class="lede">As useful as the task list. Each of these will be suggested by someone reasonable.</p>
+  <ul class="items">
+    <li class="item" data-id="no-1"><div class="row"><div class="body">
+      <span class="title" style="cursor:default">Usage analytics of any kind</span>
+      <div class="note">A product whose pitch is "we can't see your data" cannot ship telemetry. Talk to churches instead.</div>
+    </div></div></li>
+    <li class="item" data-id="no-2"><div class="row"><div class="body">
+      <span class="title" style="cursor:default">Holding anyone's money, even briefly</span>
+      <div class="note">No balance, no float, no custody, for any convenience gain.</div>
+    </div></div></li>
+    <li class="item" data-id="no-3"><div class="row"><div class="body">
+      <span class="title" style="cursor:default">A central directory of churches</span>
+      <div class="note">It is the target list. Discovery has to work without one.</div>
+    </div></div></li>
+    <li class="item" data-id="no-4"><div class="row"><div class="body">
+      <span class="title" style="cursor:default">Any recovery route we control</span>
+      <div class="note">If we can restore a church's data, we can be compelled to.</div>
+    </div></div></li>
+    <li class="item" data-id="no-5"><div class="row"><div class="body">
+      <span class="title" style="cursor:default">Naming a protection more strongly than it deserves</span>
+      <div class="note">The standing rule at the top of this page.</div>
+    </div></div></li>
+  </ul>
+</section>
+
+<footer>
+  Progress is stored in this browser only — no server, nothing shared.<br>
+  Plans: <code>reference/MULTISIG-CHURCH-KEY.md</code> · <code>reference/PAYMENTS-LIGHTNING.md</code>
+</footer>
+</div>
+
+<script>
+(function(){
+  var KEY='trinityone.roadmap.v1';
+  var state={}; try{state=JSON.parse(localStorage.getItem(KEY)||'{}')||{}}catch(e){state={}}
+  var save=function(){try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}};
+
+  var nodes=[].slice.call(document.querySelectorAll('[data-id]')).filter(function(n){
+    return n.querySelector('input[type=checkbox]');
+  });
+
+  function apply(n){
+    var box=n.querySelector('input[type=checkbox]');
+    var on=!!state[n.getAttribute('data-id')];
+    box.checked=on; n.classList.toggle('done',on);
+  }
+  function counts(){
+    var total=0,done=0;
+    document.querySelectorAll('section').forEach(function(sec){
+      var ns=[].slice.call(sec.querySelectorAll('[data-id]')).filter(function(n){return n.querySelector('input[type=checkbox]')});
+      var d=ns.filter(function(n){return state[n.getAttribute('data-id')]}).length;
+      total+=ns.length; done+=d;
+      var el=sec.querySelector('[data-count]');
+      if(el) el.textContent = ns.length ? d+' of '+ns.length : '';
+    });
+    document.getElementById('count').textContent=done+' / '+total;
+    document.getElementById('fill').style.width=(total?(done/total*100):0)+'%';
+  }
+
+  nodes.forEach(function(n){
+    apply(n);
+    var box=n.querySelector('input[type=checkbox]');
+    var toggle=function(){
+      var id=n.getAttribute('data-id');
+      state[id]=!state[id];
+      // ticking a parent ticks its children — they are steps of the same job
+      if(n.classList.contains('item')){
+        n.querySelectorAll('.sub-item[data-id]').forEach(function(s){
+          state[s.getAttribute('data-id')]=state[id]; apply(s);
+        });
+      }
+      apply(n); save(); counts(); hide();
+    };
+    box.addEventListener('change',toggle);
+    var t=n.querySelector(':scope > .row > .body > .title, :scope > span');
+    if(t && t.style.cursor!=='default') t.addEventListener('click',toggle);
+  });
+
+  var hidden=false;
+  function hide(){
+    nodes.forEach(function(n){
+      if(!n.classList.contains('item'))return;
+      n.style.display=(hidden && state[n.getAttribute('data-id')])?'none':'';
+    });
+  }
+  document.getElementById('collapse').addEventListener('click',function(){
+    hidden=!hidden; this.textContent=hidden?'Show all':'Hide done'; hide();
+  });
+  document.getElementById('reset').addEventListener('click',function(){
+    if(!confirm('Clear every tick on this page?'))return;
+    state={}; save(); nodes.forEach(apply); counts(); hide();
+  });
+  document.getElementById('theme').addEventListener('click',function(){
+    var r=document.documentElement;
+    var cur=r.getAttribute('data-theme');
+    var sysDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+    if(!cur) cur=sysDark?'dark':'light';
+    r.setAttribute('data-theme',cur==='dark'?'light':'dark');
+  });
+
+  counts();
+})();
+</script>
