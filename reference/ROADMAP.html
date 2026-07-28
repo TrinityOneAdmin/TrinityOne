@@ -264,6 +264,26 @@
         <div class="why"><b>Why it's awkward and worth solving:</b> encryption helps enormously — the relay
         holds ciphertext — but "we can't read it" is not the same as "we have no obligations". A one-page
         answer a church trustee can hand to their safeguarding officer removes a real adoption blocker.</div>
+        <ul>
+          <li class="sub-item" data-id="gd-page"><input type="checkbox"><span>One page a trustee can hand to their safeguarding officer</span></li>
+          <li class="sub-item" data-id="gd-erase"><input type="checkbox"><span><b>Build "remove this church from this relay"</b> — scoped to one church, backup first, type the church name to confirm, operator only, logged</span></li>
+          <li class="sub-item" data-id="gd-leave"><input type="checkbox"><span>Answer plainly: what happens to our data if we stop using TrinityOne?</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="purge-tool">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">A church's data must be removable without a shell<span class="tag t-unusual">Unusual</span></span>
+        <div class="note">Wiping a relay by hand on 2026-07-28 took a dozen commands, tripped over file
+        permissions and shell globbing twice, and an earlier auto-detecting version would have reported
+        success while deleting nothing.</div>
+        <div class="why"><b>Scope it to ONE church, not the box.</b> A remote endpoint that destroys
+        everything makes the admin token the only thing standing between a congregation and oblivion — a
+        nasty thing to leave on a public relay. Scoped removal is the version that is actually needed in
+        production: a church moving to its own relay, a pilot church leaving, or a lawful erasure request.
+        It is also the honest answer to "what happens to our data if we stop?", which someone will ask.<br>
+        Backup first — today proved why — and make them type the church's name rather than click once.</div>
       </div></div>
     </li>
 
