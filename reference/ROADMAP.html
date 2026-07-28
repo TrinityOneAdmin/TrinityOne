@@ -407,6 +407,31 @@
         <div class="why"><b>Why:</b> paper does not have a battery, cannot be remotely wiped, and is not
         seized as a data-bearing device in the same way. For a congregation, it is also the format their
         least technical member is least frightened of.</div>
+        <ul>
+          <li class="sub-item" data-id="pf-qr"><input type="checkbox"><span><b>Printable QR recovery</b> — scan instead of typing twelve words</span></li>
+          <li class="sub-item" data-id="pf-enc"><input type="checkbox"><span>Encrypt it under a passphrase, so a photographed sheet is not an account</span></li>
+          <li class="sub-item" data-id="pf-split"><input type="checkbox"><span>One QR per Shamir share — three sheets, three people, any two restore</span></li>
+          <li class="sub-item" data-id="pf-slips"><input type="checkbox"><span>Join slips (built) and the "internet is off" card</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="qr-backup">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Recovery you can print and scan<span class="tag t-unusual">Parts already built</span></span>
+        <div class="note">Twelve words typed on a phone keyboard is the single most error-prone moment in
+        the product, and it happens when someone has already lost something.</div>
+        <div class="why"><b>Nearly all of this is shipped already:</b> <code>qrSVG</code> renders codes today
+        (invites, invoices), <code>splitMnemonic</code>/<code>combineMnemonic</code> do Shamir splitting, and
+        <code>argon2Raw</code> is there for passphrase encryption. What is missing is the printable sheet
+        that puts them together.<br>
+        <b>The decision that matters:</b> a bare seed QR is a bearer credential — a camera lifts it silently
+        across a room, which is worse than written words that at least have to be read and copied. So the
+        printed sheet should be encrypted under a passphrase the person keeps separately, or split into
+        shares held by different people. Both are already possible; a plain seed QR should not be the
+        default, however convenient it looks.<br>
+        Pairs naturally with the child-account flow, which already shows a login QR — and with the church
+        key work, where printed shares are the physical form of splitting it.</div>
       </div></div>
     </li>
 
