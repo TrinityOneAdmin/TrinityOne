@@ -85,3 +85,4 @@ relay/blobs/
 relay/relay-names.json
 relay/relay-names.json.tmp
 scripts/.seed-members.json
+.secrets/

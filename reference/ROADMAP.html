@@ -160,7 +160,30 @@
       </div></div>
     </li>
 
-<li class="item" data-id="reply-privately">
+<li class="item" data-id="steward-handoff-ux">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Steward / handoff / delegate — three different things wearing one name<span class="tag t-block">Tomorrow</span></span>
+        <div class="note">"How do I add the church from my workstation to the phone?" — asked by the person who
+        built it, which is the clearest possible signal. The mechanism EXISTS: the console can show a handoff
+        QR (<code>handoffPayload()</code>) and another device can scan it (<code>adoptScanned</code>). It is
+        simply not findable, and the words around it do not distinguish three quite different acts.</div>
+        <div class="why"><b>The three, which the UI currently blurs:</b>
+        <br>· <b>Handoff / adopt</b> — copy the SAME church key to a second device. Both then hold full
+        church authority. This is what "get my church onto my phone" means, and it is the buried one.
+        <br>· <b>Delegate a steward</b> — a second person gets their OWN key with granted, revocable
+        authority. Nothing is copied.
+        <br>· <b>Restore</b> — bring a church back from a backup file or phrase, usually onto a replacement.
+        <br><b>The safety difference should drive the wording, not just clarity:</b> handoff DOUBLES the
+        number of devices holding the church key, and that key opens every sealed name in the congregation —
+        so it doubles what one seizure yields. Delegation does not: it can be revoked, and it never puts the
+        church key on the second device. For most "I also want it on my phone" cases delegation is the better
+        answer, and the interface should say so rather than treating them as equivalent menu items.
+        <br>Pairs with the child hand-off and the missing sign-in scanner: three separate places where an
+        account or a church cannot reach a second device by the route the screen implies.</div>
+      </div></div>
+    </li>
+
+    <li class="item" data-id="reply-privately">
       <div class="row"><input type="checkbox"><div class="body">
         <span class="title">Reply privately from a group chat</span>
         <div class="note">Tap someone's name or picture in a group and open a direct conversation with them —
