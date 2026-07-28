@@ -12,9 +12,20 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 git archive --format=tar HEAD | tar -x -C "$OUT"
 
 # remove tracked-but-not-needed: server code, engine sources, docs, build config, admin tooling
-rm -rf "$OUT"/scripts "$OUT"/src "$OUT"/reference "$OUT"/.github "$OUT"/relay-app "$OUT"/android
-rm -f  "$OUT"/*.md "$OUT"/package*.json "$OUT"/capacitor.config.* "$OUT"/tsconfig* \
+#
+# AUDIT-2026-07-28 F4. `docs` was never in this list and `rm -f "$OUT"/*.md` matched the ROOT ONLY, so the
+# last build published 27 documents — the whole docs/ tree plus relay/deploy/DEPLOY.md. (`reference` was
+# removed, which is exactly why nobody noticed docs wasn't.) Two changes, because a hand-maintained list of
+# directories is what failed: the removals now mirror the classes the gateway denies, and the sweep below
+# is RECURSIVE and ABORTS rather than trusting that the list stayed complete.
+rm -rf "$OUT"/scripts "$OUT"/src "$OUT"/reference "$OUT"/docs "$OUT"/.github "$OUT"/relay-app "$OUT"/android \
+       "$OUT"/deploy "$OUT"/ci "$OUT"/relay
+rm -f  "$OUT"/package*.json "$OUT"/capacitor.config.* "$OUT"/tsconfig* \
        "$OUT"/.gitignore "$OUT"/.nojekyll "$OUT"/.design-canvas* 2>/dev/null || true
+# recursive, and by CLASS — the same set scripts/gateway.mjs refuses to serve. A nested document or config
+# file added tomorrow is caught without anyone remembering to edit the list above.
+find "$OUT" -type f \( -name '*.md' -o -name '*.service' -o -name '*.yml' -o -name '*.yaml' \
+     -o -name '*.toml' -o -name '*.rs' -o -name '*.lock' \) -delete
 
 # ── Pre-transpile JSX -> JS so the APP shells (index.html, steward.html) need NO runtime Babel and no
 # injected inline scripts — that's what lets us serve them a strict CSP. We keep the .jsx files too,
@@ -85,6 +96,15 @@ CF_CAP=26214400
 # safety: never ship secrets, and nothing over Cloudflare's 25 MiB/file cap
 if find "$OUT" \( -name 'admin.json' -o -name 'vapid.json' -o -name 'church.json' -o -name 'push-subs.json' -o -name 'relay-db.json' \) | grep -q .; then
   echo "ABORT: a secret file slipped into $OUT" >&2; exit 1
+fi
+# …and never publish anything that describes the box rather than serving it. This is the gate, not the
+# removal list above: the removal list is what silently went stale and put 27 internal documents on a
+# public CDN. A build that would leak now FAILS instead. AUDIT-2026-07-28 F4.
+LEAK=$(find "$OUT" \( -type d \( -name docs -o -name reference -o -name deploy -o -name ci -o -name scripts -o -name src \) \) \
+        -o \( -type f \( -name '*.md' -o -name '*.service' -o -name '*.yml' -o -name '*.yaml' -o -name '*.toml' -o -name '*.rs' \) \) )
+if [ -n "$LEAK" ]; then
+  echo "ABORT: internal files would be published to the CDN:" >&2; echo "$LEAK" >&2
+  echo "  Add them to the removal step above, or stop tracking them. Do not deploy this build." >&2; exit 1
 fi
 BIG=$(find "$OUT" -type f -size +25M || true)
 if [ -n "$BIG" ]; then echo "ABORT: file(s) over Cloudflare's 25 MiB limit:" >&2; echo "$BIG" >&2; exit 1; fi

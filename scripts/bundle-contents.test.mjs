@@ -54,14 +54,19 @@ function strictBundleListing() {
 
 // Files whose presence is the finding, named explicitly so a failure reads as what it is.
 const NAMED = ['HANDOFF.md', 'AUDIT-BACKLOG.md', 'AUDIT-2026-07-26-RECOVERY.md', 'DEVICE-TEST-CHECKLIST.md',
-  'docs/design/TREASURY.md', 'reference/SPINE.md', 'reference/PILOT-CHECKLIST.md'];
+  'docs/design/TREASURY.md', 'reference/SPINE.md', 'reference/PILOT-CHECKLIST.md',
+  // F3/F4: the relay refuses to SERVE these, but it was still copying them onto every church's box.
+  // deploy/ is this box's own systemd units — the install path, the service account, the Node version.
+  // A self-hoster never needs them: relay-app/install.sh writes its unit files inline.
+  'deploy/systemd/trinity-gateway.service', 'deploy/systemd/trinity-relay.service',
+  'ci/ios-simulator-smoke.job.yml'];
 
 // The property, not the list. A document added tomorrow is covered without anyone remembering to edit this.
 function assertNoInternalDocs(listing, who) {
   const md = listing.filter(f => f.toLowerCase().endsWith('.md'));
   assert.deepEqual(md, [], who + ' ships internal markdown to anyone who curls it');
-  const dirs = listing.filter(f => /^(docs|reference)\//.test(f));
-  assert.deepEqual(dirs, [], who + ' ships the docs/ or reference/ trees');
+  const dirs = listing.filter(f => /^(docs|reference|deploy|ci)\//.test(f));
+  assert.deepEqual(dirs, [], who + ' ships a tree that describes the box rather than running it');
   for (const f of NAMED) assert.ok(!listing.includes(f), who + ' still contains ' + f);
 }
 
@@ -96,7 +101,8 @@ test('the strict bundle the release host serves carries no internal documentatio
 // changes nothing about what ships — which is the trap this fix could quietly fall into.
 test('the exclusion is committed, not just present on disk', () => {
   const committed = String(sh('git', ['show', REF + ':.gitattributes']));
-  for (const pat of [/^docs\s+export-ignore/m, /^reference\s+export-ignore/m, /^\*\.md\s+export-ignore/m]) {
+  for (const pat of [/^docs\s+export-ignore/m, /^reference\s+export-ignore/m, /^\*\.md\s+export-ignore/m,
+    /^deploy\s+export-ignore/m, /^ci\s+export-ignore/m]) {
     assert.match(committed, pat, 'the export-ignore rules are not in the archived tree, so nothing is excluded');
   }
 });

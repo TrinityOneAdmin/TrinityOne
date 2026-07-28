@@ -26,3 +26,13 @@ version.txt export-subst
 docs        export-ignore
 reference   export-ignore
 *.md        export-ignore
+
+# AUDIT-2026-07-28 F3/F4. The same files the relay now REFUSES TO SERVE were still being shipped to every
+# church's box inside the bundle, and into the Cloudflare Pages build, because both start from this same
+# archive. Not serving a file you have already copied onto someone's disk is half a fix.
+#   deploy/  — THIS box's systemd units: the install path, the service account name, the exact Node
+#              version. A self-hoster never needs them: relay-app/install.sh writes its own unit files
+#              inline (`cat > /etc/systemd/system/$SVC.service`), it does not copy these.
+#   ci/      — build/CI job descriptors. Read by .github/workflows from a git checkout, never from a bundle.
+deploy      export-ignore
+ci          export-ignore
