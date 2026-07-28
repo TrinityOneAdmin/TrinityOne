@@ -46,10 +46,17 @@ test('the PIN has a real minimum, matched by the keyboard', () => {
 test('a new church requires approval to join', () => {
   // The relay reads "no join policy published" as OPEN, so a church that never visited the setting let
   // anyone with the join code straight in — and, once the name key reached them, to every member's name.
+  // AUDIT-2026-07-28 F10: this used to assert setJoinPolicy(true) here, and that call was REFUSED by every
+  // relay that already hosts a church — the relay does not accept documents from a church it has not been
+  // told about, and at this point in the wizard it has not. The wizard swallowed the refusal and advanced, so
+  // the church was created open-join anyway. The one-shot is replaced by ensureJoinPolicy, which converges:
+  // see scripts/join-policy.test.mjs, which drives it against a relay that already hosts a congregation.
   const at = wizard.indexOf('const saveName');
   const fn = wizard.slice(at, at + 900);
-  assert.match(fn, /setJoinPolicy\(true\)/, 'church setup no longer gates joins, so a new church is open to anyone holding the code');
-  const policyAt = fn.indexOf('setJoinPolicy');
+  assert.match(fn, /ensureJoinPolicy\(\)/, 'church setup no longer gates joins, so a new church is open to anyone holding the code');
+  assert.doesNotMatch(fn, /setJoinPolicy\(true\)/,
+    'the one-shot is back — it is refused by any relay that already hosts a church, and the refusal is swallowed here');
+  const policyAt = fn.indexOf('ensureJoinPolicy');
   const nextAt = fn.indexOf('next()');
   assert.ok(policyAt < nextAt, 'the policy must be published before the wizard moves on');
 });

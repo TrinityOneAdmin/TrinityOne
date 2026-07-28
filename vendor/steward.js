@@ -13287,6 +13287,66 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", JOINPOLICY_D + pub], ["t", NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
     },
+    // AUDIT-2026-07-28 F10. A new church published its join policy at wizard step 0 — before the relay had been
+    // told the church exists. accept() refuses any kind-30078 write from a key that is not a configured church
+    // of that relay, so that write succeeded ONLY against an empty relay, where accept() short-circuits to
+    // "unconfigured = open". Measured against a real gateway:
+    //
+    //     relay hosts NOTHING,        new church sets approval  -> accepted
+    //     relay hosts church A,       church A sets approval    -> accepted
+    //     relay hosts church A,   NEW church B sets approval    -> REFUSED  "blocked: not a member…"
+    //
+    // The wizard swallowed the refusal and advanced, and "no policy published" is precisely what the relay
+    // reads as OPEN — so a church set up on any relay that already hosts a congregation was created open-join
+    // and nobody was told. The same shape as the publishClearance bug earlier in the week: correct against the
+    // one empty relay it was tried on, refused by a real one.
+    //
+    // So this is idempotent and self-healing rather than a single shot at the worst possible moment. Call it
+    // again after the church registers with its relay, and on console boot — which repairs the churches the
+    // broken flow has already created, the next time a steward opens the console.
+    //
+    // It publishes ONLY when the church has never published a policy at all: a steward who deliberately chose
+    // open must stay open. And it acts only on an ANSWERED read. EOSE is trustworthy HERE — unlike the
+    // safeguarding lists, where treating it as "no data" is its own bug — precisely because joinpolicy is the
+    // one document canRead() serves to everyone, so an empty answer cannot be an auth failure in disguise.
+    async ensureJoinPolicy() {
+      if (!sk) return { ok: false, reason: "no key" };
+      const cp = pub;
+      const read = await new Promise((resolve) => {
+        let best = null, eosed = false, done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          try {
+            sub.close();
+          } catch (e) {
+          }
+          resolve({ best, eosed });
+        };
+        const sub = pool.subscribeMany(relays(), [
+          { kinds: [30078], authors: [cp], "#d": [JOINPOLICY_D + cp] },
+          { kinds: [30078], "#church": [cp], "#d": [JOINPOLICY_D + cp] }
+        ], { onevent(e) {
+          if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+        }, oneose() {
+          eosed = true;
+          finish();
+        } });
+        setTimeout(finish, 5e3);
+      });
+      if (!read.eosed) return { ok: false, reason: "the relay did not answer" };
+      if (read.best) return { ok: true, already: true };
+      const r = await window.Steward.setJoinPolicy(true);
+      if (r) return { ok: true, published: true };
+      try {
+        window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+          what: "join policy",
+          message: "Your church is not set up on this relay yet, so \u201Cpeople must be approved before they can join\u201D could not be saved \u2014 anyone with your join link can currently join straight in. Finish connecting your church to its relay, then reopen the console and this will apply itself."
+        } }));
+      } catch (e) {
+      }
+      return { ok: false, reason: "refused" };
+    },
     subscribeAdmitted(onList) {
       let cur = [], latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {

@@ -375,7 +375,13 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const doRegister = async () => {
     if (!relayToken.trim()) return;
     setRelayBusy(true); setRelayMsg('Connecting…');
-    try { await window.Steward.registerWithRelay(relayToken.trim(), name.trim() || church.name); setRelayMsg('✓ Registered — this relay will accept your church now.'); }
+    try {
+      await window.Steward.registerWithRelay(relayToken.trim(), name.trim() || church.name);
+      setRelayMsg('✓ Registered — this relay will accept your church now.');
+      // F10: the relay refuses a church it does not know, so the join policy set a step or two ago was very
+      // likely rejected. Now that it DOES know us, apply it. Idempotent: it does nothing if a policy exists.
+      try { if (window.Steward.ensureJoinPolicy) await window.Steward.ensureJoinPolicy(); } catch (e2) {}
+    }
     catch (e) { setRelayMsg('✗ ' + (e.message || 'Couldn’t reach the relay.')); }
     setRelayBusy(false);
   };
@@ -391,7 +397,11 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
   const saveName = async () => {
     const n = name.trim();
     if (n && n !== church.name) { setBusy(true); await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 })); setBusy(false); }
-    try { if (window.Steward.setJoinPolicy) await Promise.resolve(window.Steward.setJoinPolicy(true)); } catch (e) {}
+    // AUDIT-2026-07-28 F10: ensureJoinPolicy, not setJoinPolicy. At this point in the wizard the relay may
+    // not know this church exists yet, and it refuses the write — which was swallowed here, leaving the
+    // church open-join. ensureJoinPolicy retries on registration and on the next console boot, and says so
+    // if it could not be applied.
+    try { if (window.Steward.ensureJoinPolicy) await Promise.resolve(window.Steward.ensureJoinPolicy()); } catch (e) {}
     next();
   };
   const saveGroups = async () => { const chosen = STARTERS.filter(s => picks.has(s.id)); if (chosen.length) { setBusy(true); for (const g of chosen) await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub })); setBusy(false); } next(); };
@@ -766,6 +776,17 @@ function StewDashboard({ initial = 'overview' }) {
     return () => clearTimeout(t);
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   const finishWizard = () => { try { localStorage.setItem('trinityone.steward.wizard.done', '1'); localStorage.removeItem('trinityone.steward.newchurch'); } catch {} setWizard(false); };
+  // AUDIT-2026-07-28 F10 — SELF-HEAL. A church set up on a relay that already hosts a congregation had its
+  // "people must be approved before they can join" write REFUSED (the relay does not accept documents from a
+  // church it has not been told about), and the wizard swallowed it. Those churches are open-join right now
+  // and nothing on screen says so. ensureJoinPolicy publishes only when NO policy has ever been published, so
+  // a church that deliberately chose open is untouched, and it needs the relay to have actually answered
+  // before it concludes anything. Once per console boot; the delay lets the relay connect and authenticate.
+  React.useEffect(() => {
+    if (church.isNetwork) return;
+    const t = setTimeout(() => { try { if (window.Steward.ensureJoinPolicy) window.Steward.ensureJoinPolicy(); } catch (e) {} }, 6000);
+    return () => clearTimeout(t);
+  }, [church.isNetwork]);
   // the church's brand accent (a hex) recolours the whole console too, derived from the one hex
   const ca = (typeof church.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(church.accent.trim())) ? church.accent.trim() : null;
   const accentStyle = ca ? {
