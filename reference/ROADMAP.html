@@ -132,6 +132,118 @@
   product nicer.</p>
 </div>
 
+<section>
+  <h2>Doing next <span class="phase p-now">Top priority</span> <span class="sec-count" data-count></span></h2>
+  <p class="lede">Found by walking the product as a real church would, 2026-07-28 onwards — not by any audit.
+  The first three are the queue: a child who cannot get in, a console that shows nobody’s face, and one PIN
+  prompt too many. They are what a congregation meets on day one.</p>
+  <ul class="items">
+<li class="item" data-id="child-qr-deadend">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">A child cannot get in by the route their parent is told to use<span class="tag t-block">Copy is wrong now</span></span>
+        <div class="note">Creating a child account shows the parent a QR and says "On your child's phone,
+        open TrinityOne's camera and scan this — it signs them in as…". There is no such camera on a fresh
+        phone. Found 2026-07-28; this path had never been walked.</div>
+        <div class="why"><b>Why it cannot work as built:</b> the child's identity is minted on the PARENT'S
+        phone, and the parent's app never becomes the child — so the transfer flow is no help, because it
+        moves whichever identity is currently active. And the only scanner a fresh install offers belongs to
+        that transfer flow, which expects a live mutually-verified exchange with another running device. A
+        child's phone therefore sits showing its own code, waiting for a partner that never arrives.<br>
+        <b>The 12 words do work</b> — "I have my 12 words", typed from the parent's reveal screen — so this
+        is a broken shortcut rather than a locked door. But asking a parent to transcribe twelve words onto a
+        child's phone, in a hall, is exactly the moment the product should be at its easiest.<br>
+        <b>Three ways out:</b> make the reveal QR something a fresh install can consume (a scan-to-sign-in
+        entry point, distinct from device transfer); or make the child hand-off use the real transfer flow by
+        having the parent temporarily act as the child; or, until either exists, <b>change the copy to say
+        "type the 12 words"</b> — it currently promises something that does not happen. The last one is
+        hours, and should not wait for the others.</div>
+      </div></div>
+    </li>
+
+<li class="item" data-id="ux-forcedpin">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Remove the older forced-PIN dialog<span class="tag t-block">Carefully</span></span>
+        <div class="note">Two PIN prompts appear when creating a church. The wizard's is better in every way;
+        the first has no confirm and accepts 4 characters.</div>
+        <div class="why"><b>Why it was left in:</b> it is currently the only thing guaranteeing a PIN exists
+        at all. Deleting it needs the wizard proven to cover every route into the console first — otherwise a
+        steward reaches the dashboard with the church key sitting unencrypted, which is worse than the
+        duplication. Half an hour with a clear head, not a rushed edit mid-test.</div>
+      </div></div>
+    </li>
+
+<li class="item" data-id="ux-dp">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">The steward console shows no member avatars at all</span>
+        <div class="note">Members see each other's avatars fine — symbols in chat and the directory, and real
+        photos where the church allows them. The CONSOLE draws initials everywhere: members list, chat, join
+        requests, care rows. It has never shown a member's face or symbol anywhere.</div>
+        <div class="why"><b>It already has the data and discards it.</b> subscribeMembers stores each
+        member's <code>av</code> and a <code>hasPhoto</code> flag from their profile, then every render site
+        uses an initials badge. The avatar component is not even loaded into <code>steward.html</code>, so
+        there is nothing there that could draw one. (There is also a dead <code>Avatar</code> component with
+        no call sites, which suggests someone meant to and stopped.)<br>
+        <b>Why it matters more than it looks:</b> an unnamed member collapses to identical grey initials, so
+        the screen where you decide whether to approve someone tells you nothing about them. Honour the
+        existing photo toggle and the children-never rule at every site, and fall back to the symbol avatar
+        every member already has.<br>
+        <b>Worth deciding at the same time:</b> pictures sit in the PUBLIC profile in the clear, while names
+        are now sealed to the congregation. A face identifies a person more surely than a name does. Making
+        photos more visible in the product is fine; leaving them as the one identifying thing still in the
+        clear is the inconsistency to close.</div>
+        <ul>
+          <li class="sub-item" data-id="dp-console"><input type="checkbox"><span>Members list in the steward console</span></li>
+          <li class="sub-item" data-id="dp-member"><input type="checkbox"><span>The member app's people directory and chat</span></li>
+          <li class="sub-item" data-id="dp-policy"><input type="checkbox"><span>Honour the photo toggle + children-never rule in every place it appears</span></li>
+          <li class="sub-item" data-id="dp-seal"><input type="checkbox"><span>Decide whether pictures should be sealed like names</span></li>
+        </ul>
+      </div></div>
+    </li>
+
+
+    
+
+    
+
+    <li class="item" data-id="invite-individual">
+      <div class="path"></div>
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Individual QR invites, one per person<span class="phase p-after" style="margin-left:6px">Well after pilot</span></span>
+        <div class="note">Today a church has ONE joining code. It works, and the poster and bulk slips are
+        already built — but every copy of it is the same key, and it never expires.</div>
+        <div class="why"><b>What individual codes buy that a shared one cannot:</b>
+        <br>· <b>You know who joined.</b> Right now a join request arrives from a stranger and the steward
+        matches it to a person by name alone. An invite handed to Margaret that comes back as Margaret is a
+        far better signal — and it is exactly the moment safeguarding decisions get made.
+        <br>· <b>It can be revoked.</b> One code passed around a WhatsApp group cannot be un-shared without
+        changing it for the whole church. An individual code is revoked alone.
+        <br>· <b>It can pre-approve.</b> Now that a new church gates joins by default, a code the steward
+        personally handed over could admit that person without a second approval step — the approval already
+        happened, in the room, on paper.
+        <br>· <b>It can be one-use, or expire</b> — so a slip found in a bin months later is worthless.
+        <br><b>The physical workflow is the point:</b> a sheet of slips, one handed to each person after a
+        service. That is how a congregation actually migrates, and the printing side already exists for the
+        poster and bulk slips. Shares its plumbing with printable QR recovery above.</div>
+      </div></div>
+    </li>
+
+    
+
+    <li class="item" data-id="ux-nameloss">
+      <div class="row"><input type="checkbox"><div class="body">
+        <span class="title">Never wipe the member's name before its sealed copy exists<span class="tag t-unusual">Data loss</span></span>
+        <div class="note">A locked boot wipes cached identity from disk. Everything in a profile survives on
+        the relay — avatar, picture, about — except the name, which is deliberately kept off it.</div>
+        <div class="why"><b>Seen for real on 2026-07-28:</b> a member set "Testi Bob", the sealed copy failed
+        to publish (since fixed), a locked boot wiped the local copy, and the name was simply gone — while
+        the avatar came back untouched, because avatars are public and names are not. Sealing the name
+        removed its only redundancy, so the publish has to be confirmed before the wipe can be safe. The wipe
+        itself is right and should stay.</div>
+      </div></div>
+    </li>
+  </ul>
+</section>
+
 <!-- ═══════════════════════════ 1 ═══════════════════════════ -->
 <section>
   <h2>Before anything ships <span class="phase p-now">Now</span> <span class="sec-count" data-count></span></h2>
@@ -704,110 +816,7 @@
 </section>
 
 <!-- ═══════════════════════════ 8 ═══════════════════════════ -->
-<section>
-  <h2>Found while testing <span class="phase p-now">Live list</span> <span class="sec-count" data-count></span></h2>
-  <p class="lede">Things noticed walking the product as a real church would, 2026-07-28 onwards. Small,
-  mostly — but they are the ones a congregation meets on day one.</p>
-  <ul class="items">
 
-    <li class="item" data-id="ux-dp">
-      <div class="row"><input type="checkbox"><div class="body">
-        <span class="title">The steward console shows no member avatars at all</span>
-        <div class="note">Members see each other's avatars fine — symbols in chat and the directory, and real
-        photos where the church allows them. The CONSOLE draws initials everywhere: members list, chat, join
-        requests, care rows. It has never shown a member's face or symbol anywhere.</div>
-        <div class="why"><b>It already has the data and discards it.</b> subscribeMembers stores each
-        member's <code>av</code> and a <code>hasPhoto</code> flag from their profile, then every render site
-        uses an initials badge. The avatar component is not even loaded into <code>steward.html</code>, so
-        there is nothing there that could draw one. (There is also a dead <code>Avatar</code> component with
-        no call sites, which suggests someone meant to and stopped.)<br>
-        <b>Why it matters more than it looks:</b> an unnamed member collapses to identical grey initials, so
-        the screen where you decide whether to approve someone tells you nothing about them. Honour the
-        existing photo toggle and the children-never rule at every site, and fall back to the symbol avatar
-        every member already has.<br>
-        <b>Worth deciding at the same time:</b> pictures sit in the PUBLIC profile in the clear, while names
-        are now sealed to the congregation. A face identifies a person more surely than a name does. Making
-        photos more visible in the product is fine; leaving them as the one identifying thing still in the
-        clear is the inconsistency to close.</div>
-        <ul>
-          <li class="sub-item" data-id="dp-console"><input type="checkbox"><span>Members list in the steward console</span></li>
-          <li class="sub-item" data-id="dp-member"><input type="checkbox"><span>The member app's people directory and chat</span></li>
-          <li class="sub-item" data-id="dp-policy"><input type="checkbox"><span>Honour the photo toggle + children-never rule in every place it appears</span></li>
-          <li class="sub-item" data-id="dp-seal"><input type="checkbox"><span>Decide whether pictures should be sealed like names</span></li>
-        </ul>
-      </div></div>
-    </li>
-
-    <li class="item" data-id="child-qr-deadend">
-      <div class="row"><input type="checkbox"><div class="body">
-        <span class="title">A child cannot get in by the route their parent is told to use<span class="tag t-block">Copy is wrong now</span></span>
-        <div class="note">Creating a child account shows the parent a QR and says "On your child's phone,
-        open TrinityOne's camera and scan this — it signs them in as…". There is no such camera on a fresh
-        phone. Found 2026-07-28; this path had never been walked.</div>
-        <div class="why"><b>Why it cannot work as built:</b> the child's identity is minted on the PARENT'S
-        phone, and the parent's app never becomes the child — so the transfer flow is no help, because it
-        moves whichever identity is currently active. And the only scanner a fresh install offers belongs to
-        that transfer flow, which expects a live mutually-verified exchange with another running device. A
-        child's phone therefore sits showing its own code, waiting for a partner that never arrives.<br>
-        <b>The 12 words do work</b> — "I have my 12 words", typed from the parent's reveal screen — so this
-        is a broken shortcut rather than a locked door. But asking a parent to transcribe twelve words onto a
-        child's phone, in a hall, is exactly the moment the product should be at its easiest.<br>
-        <b>Three ways out:</b> make the reveal QR something a fresh install can consume (a scan-to-sign-in
-        entry point, distinct from device transfer); or make the child hand-off use the real transfer flow by
-        having the parent temporarily act as the child; or, until either exists, <b>change the copy to say
-        "type the 12 words"</b> — it currently promises something that does not happen. The last one is
-        hours, and should not wait for the others.</div>
-      </div></div>
-    </li>
-
-    <li class="item" data-id="invite-individual">
-      <div class="path"></div>
-      <div class="row"><input type="checkbox"><div class="body">
-        <span class="title">Individual QR invites, one per person<span class="phase p-after" style="margin-left:6px">Well after pilot</span></span>
-        <div class="note">Today a church has ONE joining code. It works, and the poster and bulk slips are
-        already built — but every copy of it is the same key, and it never expires.</div>
-        <div class="why"><b>What individual codes buy that a shared one cannot:</b>
-        <br>· <b>You know who joined.</b> Right now a join request arrives from a stranger and the steward
-        matches it to a person by name alone. An invite handed to Margaret that comes back as Margaret is a
-        far better signal — and it is exactly the moment safeguarding decisions get made.
-        <br>· <b>It can be revoked.</b> One code passed around a WhatsApp group cannot be un-shared without
-        changing it for the whole church. An individual code is revoked alone.
-        <br>· <b>It can pre-approve.</b> Now that a new church gates joins by default, a code the steward
-        personally handed over could admit that person without a second approval step — the approval already
-        happened, in the room, on paper.
-        <br>· <b>It can be one-use, or expire</b> — so a slip found in a bin months later is worthless.
-        <br><b>The physical workflow is the point:</b> a sheet of slips, one handed to each person after a
-        service. That is how a congregation actually migrates, and the printing side already exists for the
-        poster and bulk slips. Shares its plumbing with printable QR recovery above.</div>
-      </div></div>
-    </li>
-
-    <li class="item" data-id="ux-forcedpin">
-      <div class="row"><input type="checkbox"><div class="body">
-        <span class="title">Remove the older forced-PIN dialog<span class="tag t-block">Carefully</span></span>
-        <div class="note">Two PIN prompts appear when creating a church. The wizard's is better in every way;
-        the first has no confirm and accepts 4 characters.</div>
-        <div class="why"><b>Why it was left in:</b> it is currently the only thing guaranteeing a PIN exists
-        at all. Deleting it needs the wizard proven to cover every route into the console first — otherwise a
-        steward reaches the dashboard with the church key sitting unencrypted, which is worse than the
-        duplication. Half an hour with a clear head, not a rushed edit mid-test.</div>
-      </div></div>
-    </li>
-
-    <li class="item" data-id="ux-nameloss">
-      <div class="row"><input type="checkbox"><div class="body">
-        <span class="title">Never wipe the member's name before its sealed copy exists<span class="tag t-unusual">Data loss</span></span>
-        <div class="note">A locked boot wipes cached identity from disk. Everything in a profile survives on
-        the relay — avatar, picture, about — except the name, which is deliberately kept off it.</div>
-        <div class="why"><b>Seen for real on 2026-07-28:</b> a member set "Testi Bob", the sealed copy failed
-        to publish (since fixed), a locked boot wiped the local copy, and the name was simply gone — while
-        the avatar came back untouched, because avatars are public and names are not. Sealing the name
-        removed its only redundancy, so the publish has to be confirmed before the wipe can be safe. The wipe
-        itself is right and should stay.</div>
-      </div></div>
-    </li>
-  </ul>
-</section>
 
 <!-- ═══════════════════════════ 9 ═══════════════════════════ -->
 <section>
