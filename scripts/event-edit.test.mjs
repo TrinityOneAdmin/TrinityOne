@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8877;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -47,6 +48,7 @@ function read(sock, id, ms = 1200) {
 }
 
 before(async () => {
+  await requireFreePort(PORT, 'event-edit.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-edit-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
     env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(church.pub), RELAY_MAX_EVENTS: '5000' } });

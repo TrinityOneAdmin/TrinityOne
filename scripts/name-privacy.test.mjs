@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8899;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -28,6 +29,7 @@ const church = K(), maria = K();
 let relay, dataDir;
 
 before(async () => {
+  await requireFreePort(PORT, 'name-privacy.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-namepriv-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',

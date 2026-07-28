@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const PORT = 8893, CDP = 9350;
@@ -35,6 +36,8 @@ async function waitReady(ms = 20000) {
 }
 
 before(async () => {
+  await requireFreePort(PORT, 'app-boots.test.mjs');
+  await requireFreePort(CDP, 'app-boots.test.mjs (Chrome debug port)');
   if (!CHROME) return;
   dataDir = mkdtempSync(join(tmpdir(), 'trin-boot-'));
   const cp = getPublicKey(generateSecretKey());

@@ -19,6 +19,7 @@ import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { v2 as nip44v2 } from 'nostr-tools/nip44';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8897;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -45,6 +46,7 @@ function reqCollect(w, subId, filter, authSk, win = 900) {
 }
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-clearance.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-clearance-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',

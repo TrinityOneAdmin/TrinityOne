@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const PORT = 8894, CDP = 9351;   // unique across scripts/*.test.mjs — a duplicate fixed port deadlocks both files
@@ -43,6 +44,8 @@ async function waitReady(ms = 20000) {
 }
 
 before(async () => {
+  await requireFreePort(PORT, 'restore-storm.test.mjs');
+  await requireFreePort(CDP, 'restore-storm.test.mjs (Chrome debug port)');
   if (!CHROME) return;
   dataDir = mkdtempSync(join(tmpdir(), 'trin-storm-'));
   // A relay with NO CHURCH_NPUB refuses every publish, so the test would prove nothing (HANDOFF §4). Give it a

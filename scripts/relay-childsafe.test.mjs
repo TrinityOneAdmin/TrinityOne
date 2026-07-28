@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8859;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -46,6 +47,7 @@ function reqCollect(ws, subId, filter, authSk, window = 800) {
 }
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-childsafe.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-childsafe-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,

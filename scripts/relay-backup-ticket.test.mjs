@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8846;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -16,6 +17,7 @@ const url = p => `http://127.0.0.1:${PORT}${p}`;
 let relay, dataDir, token;
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-backup-ticket.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-bkt-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,

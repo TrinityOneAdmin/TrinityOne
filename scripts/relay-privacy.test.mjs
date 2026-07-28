@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8837;                                   // isolated high port (memory: adversarial/local tests live at 8811+)
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;   // the relay ws endpoint is /relay (root gets socket.destroy())
@@ -56,6 +57,7 @@ function reqCollect(ws, subId, filter, authSk, window = 700) {
 const kinds = (r, k) => r.events.filter(e => e.kind === k);
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-privacy.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-relay-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,

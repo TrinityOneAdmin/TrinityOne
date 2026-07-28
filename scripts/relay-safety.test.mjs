@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8839;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -49,6 +50,7 @@ function reqCollect(ws, subId, filter, authSk, window = 700) {
 const ofKind = (r, d) => r.events.filter(e => (e.tags.find(t => t[0] === 'd') || [])[1] === d);
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-safety.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-safe-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(cp), RELAY_MAX_EVENTS: '5000' }, stdio: 'ignore' });
   await waitReady();

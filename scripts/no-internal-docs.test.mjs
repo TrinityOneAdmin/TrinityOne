@@ -18,6 +18,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request as httpRequest } from 'node:http';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8907;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -25,6 +26,7 @@ const get = async (p) => { try { return (await fetch(`http://127.0.0.1:${PORT}${
 let relay, dataDir;
 
 before(async () => {
+  await requireFreePort(PORT, 'no-internal-docs.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-docs-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',

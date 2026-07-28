@@ -25,6 +25,7 @@ import { WebSocket } from 'ws';
 import { DatabaseSync } from 'node:sqlite';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8871;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -62,6 +63,7 @@ function reqCollect(ws, subId, filter, authSk, window = 700) {
 const holds = async (id, authSk) => { const ws = await connect(); const r = await reqCollect(ws, 'q' + id.slice(0, 6), { ids: [id] }, authSk); ws.close(); return r.some(e => e.id === id); };
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-deletion.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-del-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(cp), RELAY_MAX_EVENTS: '5000' }, stdio: 'ignore' });
   await waitReady();

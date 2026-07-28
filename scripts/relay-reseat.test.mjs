@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8884;   /* unique across scripts/*.test.mjs — the suite runs files in parallel and every relay test binds a FIXED port, so a duplicate deadlocks both and reports false failures */
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -54,6 +55,7 @@ function read(sock, subId, filter, { authAs = null, window = 3500 } = {}) {
 }
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-reseat.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-reseat-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,

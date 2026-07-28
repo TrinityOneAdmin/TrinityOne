@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8881;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -43,6 +44,7 @@ const leaveDoc  = (who, at) => finalizeEvent({ kind: 30078, created_at: at || no
 const msg = (who, text) => finalizeEvent({ kind: 1, created_at: now(), tags: [['t', 'trinityone'], ['church', cp]], content: text }, who.sk);
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-replay-authz.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-replay-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
     env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(cp), RELAY_MAX_EVENTS: '5000' } });

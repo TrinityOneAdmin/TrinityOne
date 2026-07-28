@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8898;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -31,6 +32,7 @@ const conn = () => new Promise((res, rej) => { const w = new WebSocket(WS_URL); 
 const publish = (w, e) => new Promise(res => { const on = d => { const m = JSON.parse(d); if (m[0] === 'OK' && m[1] === e.id) { w.off('message', on); res([m[2], m[3] || '']); } }; w.on('message', on); w.send(JSON.stringify(['EVENT', e])); });
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-offer-probe.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-offer-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',

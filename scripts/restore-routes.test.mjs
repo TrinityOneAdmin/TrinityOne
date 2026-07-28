@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const PORT = 8895, CDP = 9352;   // unique across scripts/*.test.mjs — a duplicate fixed port deadlocks both files
@@ -36,6 +37,8 @@ async function waitReady(ms = 20000) {
 }
 
 before(async () => {
+  await requireFreePort(PORT, 'restore-routes.test.mjs');
+  await requireFreePort(CDP, 'restore-routes.test.mjs (Chrome debug port)');
   if (!CHROME) return;
   dataDir = mkdtempSync(join(tmpdir(), 'trin-routes-'));
   const cp = getPublicKey(generateSecretKey());   // a THROWAWAY church, never a real one

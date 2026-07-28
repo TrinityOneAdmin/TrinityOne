@@ -19,6 +19,7 @@ import { createHash, webcrypto } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 // isolated high port — 8837 privacy, 8838 safeguarding, 8839 safety, 8840 tenancy, 8841 config.
 // `npm test` globs these files and node --test runs them CONCURRENTLY, so a shared port makes every
@@ -63,6 +64,7 @@ const skip = (who, careId, iso, tok) => finalizeEvent({
 }, who.sk);
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-careskip.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-skip-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,

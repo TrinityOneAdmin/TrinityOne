@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8901;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -49,6 +50,7 @@ function readAs(who, filter, win = 900) {
 }
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-multichurch.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-multichurch-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',

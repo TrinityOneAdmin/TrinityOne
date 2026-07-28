@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 // isolated high port — 8837 privacy, 8838 safeguarding, 8839 safety, 8840 tenancy, 8841 config,
 // 8842 careskip. `npm test` runs these files CONCURRENTLY, so a shared port fails both.
@@ -36,6 +37,7 @@ const memberDoc = who => finalizeEvent({ kind: 30078, created_at: now(), tags: [
 const getStats = (auth, qs = '') => fetch(`http://127.0.0.1:${PORT}/stats${qs}`, { headers: auth ? { Authorization: 'Bearer ' + token } : {} });
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-stats.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-stats-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,

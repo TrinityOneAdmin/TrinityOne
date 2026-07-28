@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8896;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs — a duplicate deadlocks both
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -56,6 +57,7 @@ function reqCollect(w, subId, filter, authSk, window = 900) {
 }
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-member-gate.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-membergate-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',

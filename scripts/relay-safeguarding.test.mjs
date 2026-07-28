@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8838;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -65,6 +66,7 @@ const dms = r => r.events.filter(e => e.kind === 4);
 
 let pub;   // a persistent publisher connection reused by the write-side tests
 before(async () => {
+  await requireFreePort(PORT, 'relay-safeguarding.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-sg-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,

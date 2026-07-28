@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8841;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -35,6 +36,7 @@ const publish = (ws, evt) => new Promise((res) => { const on = d => { const m = 
 const memberDoc = (cp, sk) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/member:' + cp]], content: JSON.stringify({ name: 'Mem' }) }, sk);
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-config.test.mjs');
   dataDir = mkdtempSync(join(tmpdir(), 'trin-cfg-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,

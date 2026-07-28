@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8848;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -16,6 +17,7 @@ const NAME = '_test-media-' + PORT + '.mp4';   // served from ROOT (the repo dir
 let relay, dataDir;
 
 before(async () => {
+  await requireFreePort(PORT, 'relay-static-media.test.mjs');
   writeFileSync(NAME, Buffer.alloc(SIZE, 7));
   dataDir = mkdtempSync(join(tmpdir(), 'trin-media-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
