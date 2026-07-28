@@ -563,12 +563,14 @@ function _flushProfiles() {
         // opened unless this event actually carries one (a church's own kind-0 still does, deliberately).
         const had = profiles[e.pubkey] || {};
         profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
+        _k0Seen.add(e.pubkey);
         _recoverOwnProfile(e);   // our OWN kind-0 also refills what a locked boot wiped (picture, avatar, about)
         saveProfiles();
         window.dispatchEvent(new CustomEvent('trinity-profiles', { detail: { pubkey: e.pubkey } }));
       } catch {}
     },
-    oneose() { authors.forEach(pk => pendingProfiles.delete(pk)); try { sub.close(); } catch {} },
+    // Mark on EOSE too: a member who has published no kind-0 at all must not be re-asked for ever.
+    oneose() { authors.forEach(pk => { pendingProfiles.delete(pk); _k0Seen.add(pk); }); try { sub.close(); } catch {} },
   });
 }
 const PROFILE_KEY = 'trinityone.profile';   // own display name (public; ok in localStorage)
@@ -576,6 +578,12 @@ const PROFILE_KEY = 'trinityone.profile';   // own display name (public; ok in l
 // setProfile(). Session-scoped on purpose: a reload is allowed to re-announce, a retry loop is not.
 let _profilePubFor = '', _profilePubBody = '';
 const PROFILES_KEY = 'trinityone.profiles'; // cache of OTHER people's resolved profiles
+// Pubkeys we have actually ASKED the relay about, and got an answer for (event or EOSE). Distinct from
+// "is there an entry in profiles", because _openSealedName creates an entry holding ONLY a name — so
+// gating the fetch on the entry meant anyone whose name arrived by the sealed route never had their
+// kind-0 fetched, and kind-0 is where the AVATAR lives. Reported 2026-07-28: display pictures missing in
+// chat while showing correctly in the steward console, which resolves profiles by another path.
+const _k0Seen = new Set();
 try { const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || '{}'); if (c && typeof c === 'object') Object.assign(profiles, c); } catch {}
 let _profSaveT = null;
 function saveProfiles() {
@@ -1871,7 +1879,7 @@ window.Fellowship = {
     // the church qualified in every 250 ms batch window, for ever: a permanent re-subscribe churn that would
     // look like a network problem and never be traced back to here. A member who later picks a name republishes
     // their sealed `name:` doc, which arrives on the docs hub, so nothing depends on re-asking. AUDIT-2026-07-27.
-    const need = [...new Set(pubkeys)].filter(pk => pk && !pendingProfiles.has(pk) && !(pk in profiles));
+    const need = [...new Set(pubkeys)].filter(pk => pk && !pendingProfiles.has(pk) && !_k0Seen.has(pk));
     if (!need.length) return;
     need.forEach(pk => { pendingProfiles.add(pk); _profQueue.add(pk); });
     if (!_profTimer) _profTimer = setTimeout(_flushProfiles, 250);   // fixed window (don't reset) so a steady stream still flushes promptly

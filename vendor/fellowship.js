@@ -6308,14 +6308,19 @@
           const m = JSON.parse(e.content);
           const had = profiles[e.pubkey] || {};
           profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
+          _k0Seen.add(e.pubkey);
           _recoverOwnProfile(e);
           saveProfiles();
           window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: e.pubkey } }));
         } catch {
         }
       },
+      // Mark on EOSE too: a member who has published no kind-0 at all must not be re-asked for ever.
       oneose() {
-        authors.forEach((pk) => pendingProfiles.delete(pk));
+        authors.forEach((pk) => {
+          pendingProfiles.delete(pk);
+          _k0Seen.add(pk);
+        });
         try {
           sub.close();
         } catch {
@@ -6327,6 +6332,7 @@
   var _profilePubFor = "";
   var _profilePubBody = "";
   var PROFILES_KEY = "trinityone.profiles";
+  var _k0Seen = /* @__PURE__ */ new Set();
   try {
     const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}");
     if (c && typeof c === "object") Object.assign(profiles, c);
@@ -8053,7 +8059,7 @@
     },
     // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
     requestProfiles(pubkeys) {
-      const need = [...new Set(pubkeys)].filter((pk) => pk && !pendingProfiles.has(pk) && !(pk in profiles));
+      const need = [...new Set(pubkeys)].filter((pk) => pk && !pendingProfiles.has(pk) && !_k0Seen.has(pk));
       if (!need.length) return;
       need.forEach((pk) => {
         pendingProfiles.add(pk);

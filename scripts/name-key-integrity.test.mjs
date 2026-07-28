@@ -427,3 +427,25 @@ test('and something actually asks for it', () => {
   assert.match(FELLOWSHIP, /!mine\.av && !mine\.picture\)[\s\S]{0,80}requestProfiles/,
     'nothing requests our own kind-0, so the refill only happens by luck');
 });
+
+// ── a sealed name must not block the avatar ──────────────────────────────────────────────────────────────────
+// Reported 2026-07-28: display pictures missing in chat, while showing correctly in the steward console.
+// A regression from Stage 2. _openSealedName creates a profiles entry holding ONLY a name, and requestProfiles
+// had been changed to skip anyone "already in profiles" — so for every member whose name arrived by the sealed
+// route, their kind-0 was never fetched, and kind-0 is where the avatar lives. The console was unaffected
+// because subscribeMembers resolves profiles by a different path.
+test('having a sealed name does not stop the avatar being fetched', () => {
+  const at = FELLOWSHIP.search(/requestProfiles\s*\(pubkeys\)/);
+  assert.notEqual(at, -1, 'requestProfiles is gone from the shipped bundle');
+  const fn = FELLOWSHIP.slice(at, at + 700);
+  assert.doesNotMatch(fn, /!\(pk in profiles\)/,
+    'the fetch is gated on having an ENTRY — a sealed name creates one with no avatar, so kind-0 never arrives');
+  assert.match(fn, /_k0Seen\.has\(pk\)/,
+    'the fetch must be gated on whether we ASKED the relay, not on whether some entry exists');
+});
+
+test('but a member with no profile at all is not re-asked for ever', () => {
+  // The churn this replaced was real: gating on "has a name" refetched every member in every batch window.
+  assert.match(FELLOWSHIP, /oneose\(\)\s*\{[^}]*_k0Seen\.add\(pk\)/,
+    'nothing marks a pubkey as asked when the relay answers with nothing, so it will be re-asked in every window');
+});
