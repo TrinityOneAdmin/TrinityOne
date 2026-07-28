@@ -13010,15 +13010,50 @@ zoo`.split("\n");
     },
     // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
     // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
-    refreshClearances(memberPubs, minors, approved) {
+    // AUDIT-2026-07-28 F9. This fired one publish per member with nothing awaited between them, so a
+    // whole-roster back-fill hit the relay as a single burst on ONE socket. gateway.mjs caps inbound messages
+    // at 100 per second per connection and — this is the part that makes it a safeguarding bug rather than a
+    // performance one — a message over the cap is `return`ed with NO REPLY AT ALL. Not OK=false, not a NOTICE.
+    // Measured against a real gateway: 150 clearance publishes sent in 7ms produced 100 OK, 0 refusals, and
+    // 50 with no answer of any kind; the relay stored 100 of 150. Those 50 members have no clearance document,
+    // their app falls back to the minors list, and the relay stopped serving that list to ordinary members —
+    // so every child past roughly the hundredth is treated as an ADULT, silently.
+    //
+    // So: publish in small batches, paced under the cap, and never let the failure be quiet again. The batch
+    // is awaited, which gives back-pressure for free; the wait is bounded so one publish that never resolves
+    // (exactly what a dropped message looks like) cannot stall the rest of the roster.
+    async refreshClearances(memberPubs, minors, approved) {
       const mins = new Set((minors || []).map((x) => String(x || "").toLowerCase()));
       const appr = new Set((approved || []).map((x) => String(x || "").toLowerCase()));
+      const pubs = [...new Set((memberPubs || []).filter(Boolean))];
+      const BATCH = 20, GAP_MS = 250;
       const out = [];
-      for (const p of [...new Set((memberPubs || []).filter(Boolean))]) {
-        const h = String(p).toLowerCase();
-        out.push(window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }));
+      let failed = 0;
+      for (let i3 = 0; i3 < pubs.length; i3 += BATCH) {
+        const slice = pubs.slice(i3, i3 + BATCH);
+        const settle = Promise.allSettled(slice.map((p) => {
+          const h = String(p).toLowerCase();
+          return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) });
+        }));
+        const rs = await Promise.race([settle, new Promise((r) => setTimeout(() => r(null), 8e3))]);
+        if (!rs) {
+          failed += slice.length;
+        } else {
+          out.push(...rs);
+          failed += rs.filter((r) => r.status === "rejected" || r.value === false || r.value === null).length;
+        }
+        if (i3 + BATCH < pubs.length) await new Promise((r) => setTimeout(r, GAP_MS));
       }
-      return Promise.allSettled(out);
+      if (failed) {
+        try {
+          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+            what: "safeguarding clearances",
+            message: failed + " of " + pubs.length + " members did not receive their updated safeguarding record. Until they do, their app cannot tell that they are a child. Open the Members tab again while connected to your relay to retry."
+          } }));
+        } catch (e) {
+        }
+      }
+      return { results: out, failed, total: pubs.length };
     },
     // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
     // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —

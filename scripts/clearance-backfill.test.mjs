@@ -1,0 +1,208 @@
+// A whole-roster safeguarding back-fill must reach EVERY member, or the ones it misses are treated as adults.
+// Run: node --test scripts/clearance-backfill.test.mjs
+//
+// AUDIT-2026-07-28 F9. refreshClearances fired one publish per member with nothing awaited between them, so
+// the back-fill hit the relay as a single burst on ONE socket. gateway.mjs caps inbound messages at 100 per
+// second per connection, and a message over that cap is `return`ed with NO REPLY AT ALL — not OK=false, not
+// a NOTICE, not a CLOSED. Measured against a real gateway before the fix:
+//
+//     sent 150 clearance publishes in 7ms on one socket
+//     OK replies: 100    explicit refusals: 0    NO REPLY AT ALL: 50
+//     clearances actually stored: 100 of 150
+//
+// A member with no clearance document falls back to the church's minors list, and the relay stopped serving
+// that list to ordinary members on 2026-07-27. So every child past roughly the hundredth is treated as an
+// ADULT, and nothing anywhere says so. That is the whole finding: not a performance problem, a safeguarding one.
+//
+// This drives the SHIPPED refreshClearances out of vendor/steward.js against a real gateway. A test that
+// re-implemented the batching here would pass against the burst version — which is the mistake that let the
+// original clearance bug ship (relay-clearance.test.mjs hand-built the event instead of calling the function).
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { WebSocket } from 'ws';
+import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { npubEncode } from 'nostr-tools/nip19';
+import { v2 as nip44v2 } from 'nostr-tools/nip44';
+import { requireFreePort } from './test-ports.mjs';
+
+const PORT = 8971;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
+const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
+const CLEAR_D = 'trinityone/clearance:';
+const ROSTER = 150;             // > the relay's 100/s cap, which is the entire point
+const now = () => Math.floor(Date.now() / 1000);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
+const church = K();
+const members = Array.from({ length: ROSTER }, K);
+let relay, dataDir;
+
+before(async () => {
+  await requireFreePort(PORT, 'clearance-backfill.test.mjs');
+  dataDir = mkdtempSync(join(tmpdir(), 'trin-backfill-'));
+  relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
+    cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
+    env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_MAX_EVENTS: '20000', CHURCH_NPUB: npubEncode(church.pub) },
+  });
+  const t0 = Date.now();
+  while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${PORT}/status`)).ok) break; } catch {} await sleep(150); }
+});
+after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
+
+// Lift the shipped refreshClearances + publishClearance and run them over one real websocket, so the timing
+// under test is the timing that ships.
+const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+function grabMethod(src, sig) {
+  let at = src.indexOf(sig);
+  assert.notEqual(at, -1, sig + ' is gone from the shipped console bundle — re-anchor this test');
+  // Keep an `async` prefix. Slicing from the NAME drops it, and the method then fails to compile with
+  // "await is only valid in async functions" — which the runner reports as a test failure, i.e. it looks
+  // exactly like the bug being tested. Caught by checking WHY a red test was red.
+  if (src.slice(Math.max(0, at - 6), at) === 'async ') at -= 6;
+  let depth = 0, q = '';
+  for (let i = src.indexOf('{', at); i < src.length; i++) {
+    const c = src[i], prev = src[i - 1];
+    if (q) { if (c === q && prev !== '\\') q = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if (c === '/' && src[i + 1] === '/') { i = src.indexOf('\n', i); if (i === -1) break; continue; }
+    if (c === '{') depth++; else if (c === '}' && --depth === 0) return src.slice(at, i + 1);
+  }
+  assert.fail('could not find the end of ' + sig);
+}
+
+function consoleSide(ws) {
+  const pending = new Map();          // event id -> resolve
+  const blocked = [], refused = [];
+  let okCount = 0;
+  ws.on('message', d => {
+    const m = JSON.parse(d);
+    if (m[0] === 'OK') { if (m[2]) okCount++; else refused.push(m[3] || '(no reason)'); }
+    if (m[0] === 'OK' && pending.has(m[1])) { pending.get(m[1])(m[2] ? true : false); pending.delete(m[1]); }
+  });
+  // The real publish(): resolves on OK, and NEVER resolves if the relay says nothing — which is exactly the
+  // shape a rate-limited drop has, and why the fix needs its own bound.
+  const publish = (evt) => new Promise(res => { pending.set(evt.id, res); ws.send(JSON.stringify(['EVENT', evt])); });
+  const pubClearance = grabMethod(STEWARD, 'publishClearance(memberPub, status)');
+  const refresh = grabMethod(STEWARD, 'refreshClearances(memberPubs, minors, approved)');
+  // esbuild renames the nip44 imports (encrypt3 / getConversationKey today). Binding the names I EXPECTED
+  // instead of the ones it uses made every publish throw inside publishClearance's own try/catch and return
+  // null — 150 nulls, nothing on the wire, indistinguishable from the bug under test. Detect them, and fail
+  // loudly if a rebuild renumbers them, rather than quietly testing nothing.
+  const encName = (pubClearance.match(/=\s*(encrypt\d*)\(/) || [])[1];
+  const ckName = (pubClearance.match(/\b(getConversationKey\d*)\(/) || [])[1];
+  assert.ok(encName && ckName, 'publishClearance no longer encrypts the way this test expects — re-anchor it');
+  const scope = {
+    sk: church.sk, pub: church.pub, actingChurch: '',
+    CLEARANCE_D: CLEAR_D, NET: 'trinityone',
+    now, publish,
+    feChurch: (t) => finalizeEvent(t, church.sk),
+    toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
+    [encName]: (s, k) => nip44v2.encrypt(s, k),
+    [ckName]: (a, b) => nip44v2.utils.getConversationKey(a, b),
+    window: { Steward: {}, dispatchEvent: (e) => { blocked.push(e); } },
+    CustomEvent: function (t, d) { this.type = t; this.detail = (d || {}).detail; },
+    setTimeout, Promise, Set, String, JSON,
+  };
+  const args = Object.keys(scope);
+  const api = new Function(...args, `return ({ ${pubClearance},\n    ${refresh} });`)(...args.map(k => scope[k]));
+  Object.assign(scope.window.Steward, api);
+  return { api, blocked, refused, ok: () => okCount };
+}
+
+const conn = () => new Promise((res, rej) => { const w = new WebSocket(WS_URL); w.on('open', () => res(w)); w.on('error', rej); });
+
+async function storedCount(pubs) {
+  const w = await conn();
+  const seen = new Set();
+  await new Promise(res => {
+    const on = d => {
+      const m = JSON.parse(d);
+      if (m[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', WS_URL], ['challenge', m[1]]], content: '' }, church.sk)]));
+      if (m[0] === 'EVENT' && m[1] === 'q') seen.add((m[2].tags.find(t => t[0] === 'd') || [])[1]);
+      if (m[0] === 'EOSE' && m[1] === 'q') { w.off('message', on); res(); }
+    };
+    w.on('message', on);
+    w.send(JSON.stringify(['REQ', 'q', { kinds: [30078], '#d': pubs.map(p => CLEAR_D + p) }]));
+    setTimeout(res, 8000);
+  });
+  w.close();
+  return seen.size;
+}
+
+// CONTROL, and it runs first on purpose. A harness that cannot publish AT ALL produces exactly the same
+// symptom as the bug — nothing stored — so without this, a broken harness reads as a confirmed finding. That
+// happened while writing this file: the wrong nip44 identifier made publishClearance throw inside its own
+// catch and return null 150 times, and the headline test went red for a reason that had nothing to do with
+// the code under test. If this control fails, the TEST is broken, not the console.
+test('CONTROL: the harness can publish a clearance at all', async () => {
+  const w = await conn();
+  const side = consoleSide(w);
+  const one = members[0].pub;
+  await side.api.refreshClearances([one], [one], []);
+  await sleep(400);
+  const stored = await storedCount([one]);
+  w.close();
+  assert.equal(side.ok(), 1, 'the relay never acknowledged a single publish — the HARNESS is broken (check the ' +
+    'identifier names lifted from vendor/steward.js), not the back-fill');
+  assert.equal(stored, 1, 'one clearance for one member did not store — the harness or the relay fixture is wrong');
+});
+
+test('every member on a 150-strong roster gets a clearance', async (t) => {
+  t.diagnostic(`roster of ${ROSTER}, relay cap is 100 inbound messages/second/connection`);
+  const w = await conn();
+  const side = consoleSide(w);
+  const minors = members.slice(0, 40).map(m => m.pub);          // 40 children, spread across the roster
+  // Bounded, because the burst version never returns: it awaits Promise.allSettled over every publish, and a
+  // rate-limited message is answered with silence, so those promises never settle. Without this the old code
+  // hangs the runner instead of failing, which reads as an infrastructure problem rather than a finding.
+  const r = await Promise.race([
+    side.api.refreshClearances(members.map(m => m.pub), minors, []),
+    new Promise(res => setTimeout(() => res({ timedOut: true }), 60000)),
+  ]);
+  await sleep(500);
+  const stored = await storedCount(members.map(m => m.pub));
+  w.close();
+  t.diagnostic(`OK=${side.ok()} refused=${side.refused.length} ${side.refused.slice(0,2).join('|')}`);
+  t.diagnostic(`stored ${stored}/${ROSTER}, refreshClearances reported failed=${r && r.failed}`);
+  assert.equal(stored, ROSTER,
+    `${ROSTER - stored} members have NO clearance document. Their app falls back to the minors list, which the ` +
+    'relay does not serve to ordinary members — so every child among them is treated as an adult, silently');
+});
+
+test('and it reports how many it reached, instead of returning nothing', async () => {
+  // The burst version returned Promise.allSettled and nobody looked. The caller needs to know whether to
+  // record the back-fill as done, and the steward needs to know if children were missed.
+  const w = await conn();
+  const { api } = consoleSide(w).api ? consoleSide(w) : consoleSide(w);
+  const r = await api.refreshClearances(members.slice(0, 5).map(m => m.pub), [], []);
+  w.close();
+  assert.equal(typeof r, 'object', 'refreshClearances tells the caller nothing about what happened');
+  assert.equal(r.total, 5);
+  assert.equal(r.failed, 0, 'a small back-fill against a healthy relay should not report failures');
+});
+
+test('a failure reaches a screen', async () => {
+  // The console has had a mounted PublishErrorBanner since AUDIT-2026-07-27. A safeguarding write that half
+  // worked must use it; that is the difference between this being fixed and being fixed-looking.
+  const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  assert.match(D, /addEventListener\('steward-write-blocked'/, 'nothing renders write refusals any more');
+  const at = STEWARD.indexOf('refreshClearances(memberPubs');
+  const fn = STEWARD.slice(at, at + 2600);
+  assert.match(fn, /steward-write-blocked/,
+    'a partial safeguarding back-fill is still silent — the children it missed stay missed and nobody is told');
+});
+
+test('the batching is paced under the relay cap, and bounded', () => {
+  const at = STEWARD.indexOf('refreshClearances(memberPubs');
+  const fn = STEWARD.slice(at, at + 2600);
+  const batch = Number((fn.match(/BATCH = (\d+)/) || [])[1]);
+  const gap = Number((fn.match(/GAP_MS = (\d+)/) || [])[1]);
+  assert.ok(batch > 0 && gap > 0, 'the pacing constants are gone — re-anchor this test');
+  assert.ok((batch * 1000) / gap < 100,
+    `pacing is ${(batch * 1000) / gap}/s, at or above the relay's 100/s cap — messages will be dropped with no reply`);
+  assert.match(fn, /Promise\.race/,
+    'the await is unbounded, so one publish the relay never answers stalls the rest of the roster');
+});

@@ -3202,6 +3202,11 @@ function BulkInviteModal({ onClose }) {
 }
 window.BulkInviteModal = BulkInviteModal;
 
+// Survives DashMembers unmounting when the steward leaves the Members tab — see the back-fill effect below.
+// (These files are classic scripts sharing ONE global scope, so this name must stay unique across app/*.jsx;
+// scripts/bundle-free-globals.test.mjs is the guard.)
+let clearanceBackfillDone = '';
+
 function DashMembers() {
   // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
@@ -3226,7 +3231,11 @@ function DashMembers() {
   // list to ordinary members, so those children's apps read an empty list and concluded they were adults.
   // Every existing child in every church was treated as an adult until a steward happened to toggle their
   // flag off and on again. Seal the whole roster once the lists have actually loaded. AUDIT-2026-07-27.
-  const _sealedAll = React.useRef('');
+  // AUDIT-2026-07-28 F9. This guard was a useRef, and the dashboard renders tabs conditionally
+  // ({tab === 'members' && <DashMembers />}), so leaving the Members tab UNMOUNTS this component and the ref
+  // resets to ''. Every return to the tab therefore re-published a clearance for every member on the roster.
+  // Module scope survives that. It is deliberately NOT persisted to disk: the signature is only recorded on a
+  // FULLY successful back-fill, so a partial one retries on the next visit rather than being remembered as done.
   React.useEffect(() => {
     if (!sg.loaded) return;                 // the minors doc itself arrived — not merely "a subscription ended"
     // AND the relay must have authenticated us. The minors document is served only to an authenticated
@@ -3237,10 +3246,15 @@ function DashMembers() {
     try { if (!(window.Steward.relayAuthed && window.Steward.relayAuthed())) return; } catch (e) { return; }
     if (window.Steward.actingChurch) return;   // a delegated console signs with its own church key
     if (!members.length) return;
-    const sig = [(sg.minors || []).join(','), (sg.approved || []).join(','), members.map(m => m.pubkey).sort().join(',')].join('|');
-    if (_sealedAll.current === sig) return;   // idempotent: the roster re-emits on every tick
-    _sealedAll.current = sig;
-    _reseal(sg.minors || [], sg.approved || [], members.map(m => m.pubkey));
+    const sig = [window.Steward.churchPub || '', (sg.minors || []).join(','), (sg.approved || []).join(','),
+      members.map(m => m.pubkey).sort().join(',')].join('|');
+    if (clearanceBackfillDone === sig) return;   // idempotent: the roster re-emits on every tick
+    // Record only on FULL success. Marking it done up-front is what would turn a truncated back-fill into a
+    // permanent one — the members who got nothing would never be retried.
+    const roster = members.map(m => m.pubkey);
+    Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || []))
+      .then(r => { if (r && !r.failed) clearanceBackfillDone = sig; })
+      .catch(() => {});
   }, [sg.loaded, sg.minors, sg.approved, members]);
   const toggleMinor = (pk) => {
     const next = minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];

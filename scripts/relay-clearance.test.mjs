@@ -164,21 +164,47 @@ test('a clearance built exactly like the console builds it is accepted', async (
 // happened to toggle their flag off and on. AUDIT-2026-07-27.
 test('the console seals the whole roster, not only the member a steward just toggled', () => {
   const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
-  const at = D.indexOf('const _sealedAll = React.useRef');
+  const at = D.indexOf('let clearanceBackfillDone');
   assert.notEqual(at, -1, 'the clearance backfill is gone — existing children go back to being treated as adults');
-  // to the end of the effect, not a character count — the guard block grew and pushed these out of view
-  const body = D.slice(at, D.indexOf('}, [sg.loaded', at));
-  assert.match(body, /_reseal\([^)]*members\.map\(m => m\.pubkey\)\)/, 'the backfill must seal every member on the roster');
+  const body = D.slice(D.indexOf('if (!sg.loaded) return', at), D.indexOf('}, [sg.loaded', at));
+  assert.match(body, /refreshClearances\(roster,/, 'the backfill must seal every member on the roster');
+  assert.match(body, /const roster = members\.map\(m => m\.pubkey\)/, 'the backfill must build that roster from the member list');
+});
+
+test('the backfill guard survives leaving the Members tab', () => {
+  // AUDIT-2026-07-28 F9. It was a React.useRef, and the dashboard renders tabs conditionally, so switching
+  // away UNMOUNTS DashMembers and the ref resets — every return to the tab re-published a clearance for every
+  // member. Combined with the burst defect above, that is a whole-roster storm on each visit.
+  const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  assert.match(D, /\{tab === 'members' && <DashMembers \/>\}/,
+    'the tab is no longer conditionally rendered — re-check whether the guard still needs module scope');
+  const at = D.indexOf('let clearanceBackfillDone');
+  assert.ok(at !== -1 && at < D.indexOf('function DashMembers()'),
+    'the guard must live OUTSIDE the component, or unmounting the tab resets it');
+  const body = D.slice(D.indexOf('if (!sg.loaded) return', at), D.indexOf('}, [sg.loaded', at));
+  assert.doesNotMatch(body, /_sealedAll/, 'the per-mount ref is still in use');
+});
+
+test('a partial backfill is not remembered as done', () => {
+  // Recording the signature up-front turns a truncated run into a permanent one: the members who received
+  // nothing are never retried, and nothing on screen says so.
+  const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  const at = D.indexOf('let clearanceBackfillDone');
+  const body = D.slice(D.indexOf('if (!sg.loaded) return', at), D.indexOf('}, [sg.loaded', at));
+  const mark = body.indexOf('clearanceBackfillDone = sig'), call = body.indexOf('refreshClearances(roster');
+  assert.ok(call !== -1 && mark > call, 'the backfill is marked done before it has been attempted');
+  assert.match(body, /!r\.failed/, 'the backfill is marked done regardless of whether every member was reached');
 });
 
 test('the backfill cannot fire before the safeguarding lists have loaded', () => {
   // The dangerous failure is not "no backfill" — it is a backfill from lists that have not arrived. That seals
   // every child a 'you are not a minor' clearance signed by the church, stripping child status congregation-wide.
   const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
-  const at = D.indexOf('const _sealedAll = React.useRef');
+  const at = D.indexOf('let clearanceBackfillDone');
+  assert.notEqual(at, -1, 'the backfill guard is gone — re-anchor this test');
   const body = D.slice(at, D.indexOf('}, [sg.loaded', at));
   const guard = body.indexOf('if (!sg.loaded) return');
-  const call = body.indexOf('_reseal(sg.minors');
+  const call = body.indexOf('refreshClearances(roster');
   assert.notEqual(guard, -1, 'the backfill has no loaded-guard — it will seal every child as an adult from empty lists');
   assert.ok(guard < call, 'the loaded-guard must come before the publish');
 
