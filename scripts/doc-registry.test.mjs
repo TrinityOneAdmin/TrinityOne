@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { DOC_TYPES, UNDECLARED, ALL_PREFIXES, describe as describeDoc } from './trinity-doc-types.mjs';
+import { DOC_TYPES, UNDECLARED, ALL_PREFIXES, D as REG_D, describe as describeDoc } from './trinity-doc-types.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
@@ -49,7 +49,12 @@ const SOURCES = [
 const literals = (src) => new Set(
   [...src.matchAll(/'((?:trinityone|finance)\/[a-z0-9-]+:?)'/g)].map(m => m[1]));
 
-const G = literals(GATEWAY), F = literals(FELLOWSHIP), S = literals(STEWARD);
+// The RELAY's vocabulary is no longer literals in gateway.mjs — the spine imports it from this registry (the
+// rec-2 wiring, 2026-07-30), so gateway.mjs contains almost no d-tag strings any more. Reading only its
+// literals would make every client type look ungated, and this file's "types with NO relay rule" check would
+// fire on all of them. The relay knows a type if it is in D, or still written inline.
+const G = new Set([...literals(GATEWAY), ...Object.values(REG_D)]);
+const F = literals(FELLOWSHIP), S = literals(STEWARD);
 
 // Strings in the `trinityone/…` namespace that are NOT document types. Widening the scan to the whole tree
 // turned one up immediately, and declaring it would have made the registry describe something that never

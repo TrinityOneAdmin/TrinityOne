@@ -13,7 +13,12 @@ import { extname, normalize, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
-import { openStore, matchFilter } from './event-store.mjs';   // durable event storage (node:sqlite) + the canonical read predicate
+import { openStore, matchFilter } from './event-store.mjs';
+// The names this relay gates by, from the ONE declared list (ARCHITECTURE-AUDIT-2026-07-30, rec 2's deferred
+// half). These 50 strings used to be typed out below; a typo was not a build error but a document gated under
+// one name and published under another, failing silently. D.* is checked against the registry at module load,
+// so an undeclared name throws before this relay serves a request. POLICY stays in accept()/canRead().
+import { D } from './trinity-doc-types.mjs';   // durable event storage (node:sqlite) + the canonical read predicate
 import { verifyEvent, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
 import { randomBytes, timingSafeEqual, createHash } from 'crypto';
@@ -324,44 +329,44 @@ function ensureSignedBundle() {
 // enforces: only the church key defines groups/funds and posts to BROADCAST groups; only joined
 // members (or the church) may post messages / reactions / DMs / their own data. Unset = open (dev).
 const NET = 'trinityone';
-const GROUP_D = 'trinityone/group:', FUND_D = 'trinityone/fund:', MEMBER_D = 'trinityone/member:', PLAN_D = 'trinityone/plan:', DEVO_D = 'trinityone/devotional:', ROTA_D = 'trinityone/rota:';
-const CATEGORY_D = 'trinityone/category:';   // steward-editable named container for groups (SECURITY-AUDIT-2026-06-24 M1)
-const ROSTER_D = 'trinityone/roster:', SERVICE_D = 'trinityone/service:', EVENT_D = 'trinityone/event:', REQUEST_D = 'trinityone/request:';
-const FIN_JOURNAL_D = 'finance/journal:';   // church-book double-entry journal entry — d=finance/journal:<seq>, ["church",<cp>], single-writer & append-only
-const ROOM_D = 'trinityone/room:', BOOKING_D = 'trinityone/booking:';   // shared room calendar (church-only writes)
-const RUNSHEET_D = 'trinityone/runsheet:';   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
-const RELAYS_D = 'trinityone/relays';   // the church's trusted-relays list (resync): d=trinityone/relays, church-signed, content=[{pubkey,url}]
-const NETWORK_D = 'trinityone/network:';   // the church declares it belongs to a network (the network's pubkey)
-const BLOCKED_D = 'trinityone/blocked:';   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
-const PIN_D = 'trinityone/pin:';           // a group's pinned message — d=pin:<groupId> (one per group)
-const PINSERMON_D = 'trinityone/pinsermon:'; // the church's currently-featured/pinned sermon — d=pinsermon:<churchpub> (one per church) → member Today card + notification
-const HIDE_D = 'trinityone/hidden:';       // a removed/hidden message — d=hidden:<msgId> (one per message)
-const MINORS_D = 'trinityone/minors:';     // safeguarding: a church's list of minor (child) pubkeys — d=minors:<churchpub>
-const APPROVED_D = 'trinityone/approved:'; // safeguarding: adults cleared to contact youth (mirrors the church's DBS/cleared list) — d=approved:<churchpub>
+const GROUP_D = D.GROUP, FUND_D = D.FUND, MEMBER_D = D.MEMBER, PLAN_D = D.PLAN, DEVO_D = D.DEVO, ROTA_D = D.ROTA;
+const CATEGORY_D = D.CATEGORY;   // steward-editable named container for groups (SECURITY-AUDIT-2026-06-24 M1)
+const ROSTER_D = D.ROSTER, SERVICE_D = D.SERVICE, EVENT_D = D.EVENT, REQUEST_D = D.REQUEST;
+const FIN_JOURNAL_D = D.FIN_JOURNAL;   // church-book double-entry journal entry — d=finance/journal:<seq>, ["church",<cp>], single-writer & append-only
+const ROOM_D = D.ROOM, BOOKING_D = D.BOOKING;   // shared room calendar (church-only writes)
+const RUNSHEET_D = D.RUNSHEET;   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
+const RELAYS_D = D.RELAYS;   // the church's trusted-relays list (resync): d=trinityone/relays, church-signed, content=[{pubkey,url}]
+const NETWORK_D = D.NETWORK;   // the church declares it belongs to a network (the network's pubkey)
+const BLOCKED_D = D.BLOCKED;   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
+const PIN_D = D.PIN;           // a group's pinned message — d=pin:<groupId> (one per group)
+const PINSERMON_D = D.PINSERMON; // the church's currently-featured/pinned sermon — d=pinsermon:<churchpub> (one per church) → member Today card + notification
+const HIDE_D = D.HIDE;       // a removed/hidden message — d=hidden:<msgId> (one per message)
+const MINORS_D = D.MINORS;     // safeguarding: a church's list of minor (child) pubkeys — d=minors:<churchpub>
+const APPROVED_D = D.APPROVED; // safeguarding: adults cleared to contact youth (mirrors the church's DBS/cleared list) — d=approved:<churchpub>
 // SAFEGUARDING v3 (AUDIT-2026-07-27): a member's OWN clearance, NIP-44 sealed to them — d=clearance:<memberpub>,
 // church-tagged. It exists so a member can learn whether THEY are a minor / cleared without the church having to
 // publish a cleartext list of its children to every member. The relay still reads minors:/approved:/guardians:
 // itself to enforce safeguarding; what changed is that ordinary members can no longer READ the minors list.
-const CLEARANCE_D = 'trinityone/clearance:';
-const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-signed child→parents map — d=guardians:<churchpub>; a guardian may always DM their own child
-const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent notice of a steward-made guardian link — d=guardnotice:<parentpub>, p-tagged + NIP-44-encrypted to the parent (child link never in cleartext)
+const CLEARANCE_D = D.CLEARANCE;
+const GUARDIANS_D = D.GUARDIANS; // safeguarding v2: church-signed child→parents map — d=guardians:<churchpub>; a guardian may always DM their own child
+const GUARDNOTICE_D = D.GUARDNOTICE; // safeguarding v2: church->parent notice of a steward-made guardian link — d=guardnotice:<parentpub>, p-tagged + NIP-44-encrypted to the parent (child link never in cleartext)
 // member-authored replies to church content — the member signs them and ['p']-tags the church
-const RSVP_D = 'trinityone/rsvp:';           // a member's RSVP to an event — d=rsvp:<eventId>
-const REQREPLY_D = 'trinityone/reqreply:';   // a member's accept/decline/swap on a serving request — d=reqreply:<requestId>
-const UNAVAIL_D = 'trinityone/unavail:';     // a member's unavailable dates for the rota — d=unavail:<memberpub>
+const RSVP_D = D.RSVP;           // a member's RSVP to an event — d=rsvp:<eventId>
+const REQREPLY_D = D.REQREPLY;   // a member's accept/decline/swap on a serving request — d=reqreply:<requestId>
+const UNAVAIL_D = D.UNAVAIL;     // a member's unavailable dates for the rota — d=unavail:<memberpub>
 // CONGREGATION NAME KEY (2026-07-27). A member's display name is the thing that turns a pubkey into a person,
 // and it was published in the clear — so a mirror operator, and the relay itself, held a named roster. The
 // church now mints a key, wraps a copy for each member (exactly like carekey:/mediakey:), and members publish
 // their name for that church encrypted under it. The relay stores ciphertext it cannot read.
-const NAMEKEY_D = 'trinityone/namekey:';     // per-church name key envelope, wrapped per member — church/steward-signed
-const NAME_D = 'trinityone/name:';           // a MEMBER's own display name for one church, sealed under that key
-const CAREKEY_D = 'trinityone/carekey:';     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
-const GUARDREQ_D = 'trinityone/guardreq:';   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
-const NOPHOTO_D = 'trinityone/nophoto:';     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
-const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier-2 media key wrapped per-member — its object keys ARE the member roster, so gate reads to effective members (else it's a world-readable membership list)
+const NAMEKEY_D = D.NAMEKEY;     // per-church name key envelope, wrapped per member — church/steward-signed
+const NAME_D = D.NAME;           // a MEMBER's own display name for one church, sealed under that key
+const CAREKEY_D = D.CAREKEY;     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
+const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
+const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
+const MEDIAKEY_D = D.MEDIAKEY;   // Tier-2 media key wrapped per-member — its object keys ARE the member roster, so gate reads to effective members (else it's a world-readable membership list)
 // (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable, falls to the default member rule)
-const JOINPOLICY_D = 'trinityone/joinpolicy:'; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
-const ADMITTED_D = 'trinityone/admitted:';   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
+const JOINPOLICY_D = D.JOINPOLICY; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
+const ADMITTED_D = D.ADMITTED;   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
 // RE-SEAT: a member lost their 12 words, so their old key is gone forever and they came back on a NEW one.
 // The church vouches that the two are the same person — d=reseat:<churchpub>, content {pairs:[{old,new,at}]}.
 // Nothing here recovers the old key (nobody has it); it only moves a member's SEAT — their name, their place
@@ -369,26 +374,26 @@ const ADMITTED_D = 'trinityone/admitted:';   // church-signed allowlist of appro
 // doesn't come back as a stranger. Old DMs and sealed care records stay unreadable, which is correct.
 // Church key or a CURRENT steward may write it (see accept()): an unlisted d-tag falls to the generic member
 // rule, and "any member may rewrite it" here would mean any member could seize another member's identity.
-const RESEAT_D = 'trinityone/reseat:';
-const STEWARDS_D = 'trinityone/stewards:';   // church-signed steward roster — d=stewards:<churchpub>, content {pubkeys:[…]}; delegates day-to-day church powers to those keys (revocable: owner re-signs without them). Owner-only to edit. See STEWARD-ROSTER-DESIGN.md.
-const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's REQUEST to a church — d=stewardreq:<churchpub>, authored by the requester (openly writable, like a join). The owner reviews + approves it into the roster (owner-only).
+const RESEAT_D = D.RESEAT;
+const STEWARDS_D = D.STEWARDS;   // church-signed steward roster — d=stewards:<churchpub>, content {pubkeys:[…]}; delegates day-to-day church powers to those keys (revocable: owner re-signs without them). Owner-only to edit. See STEWARD-ROSTER-DESIGN.md.
+const STEWARDREQ_D = D.STEWARDREQ; // a would-be steward's REQUEST to a church — d=stewardreq:<churchpub>, authored by the requester (openly writable, like a join). The owner reviews + approves it into the roster (owner-only).
 // Meal trains / practical-care module (optional, per-church). care: needs are church/steward/care-team-admin authored;
 // careslot: are member-signed offers to help; careskip: are RECIPIENT-only ("I don't need help that day"). See SPINE.md + src/steward-meals.src.js.
 // NOTE: 'trinityone/care:' is NOT a prefix of careslot:/careskip: — the colon makes them distinct, so startsWith() is unambiguous.
-const MEALS_SETTINGS_D = 'trinityone/meals-settings'; // church-signed config — {enabled, visibility, openedBy, adminGroupId} (single doc, no suffix)
-const NEED_D = 'trinityone/care:';        // a care need — d=care:<id> (church / steward / care-team admin; or any member when openedBy='member')
-const SLOT_D = 'trinityone/careslot:';    // a member's fill for one (need,date) — d=careslot:<careId>:<iso> (member-signed, addressable per author)
-const SKIP_D = 'trinityone/careskip:';    // recipient marks a day they don't need help — d=careskip:<careId>:<iso> (RECIPIENT-only)
-const AVAIL_D = 'trinityone/careavail:';  // a member's "I'm here to help" availability — d=careavail:<churchpub> (member-signed, one per member per church; non-minors only)
-const CAREREQ_D = 'trinityone/carereq:';  // a member's private "ask for help" request — d=carereq:<id>, ['church',cp]; member-signed, content sealed to the care team. Read-gated to care-team ONLY (like SAFE_D), never the whole church. The care team approves it into a NEED_D or opens a chat.
-const CARETEAM_D = 'trinityone/careteam:'; // church/steward-signed roster of care-team recipient pubkeys — d=careteam:<churchpub>, content {pubs:[hex,…]}. Public-ish (pubkeys only, no secrets) so a member can seal a carereq: to exactly the care team.
-const CAREREQSTATUS_D = 'trinityone/carereqstatus:'; // the care team's resolution of a request — d=carereqstatus:<id>, ['church',cp], ['p',requester]. Care-admin/steward/church-authored; read by the care team AND the p-tagged requester (so they see "approved"/"handled"). Clears the queue + tells the asker.
-const CARECHAT_D = 'trinityone/carechat:'; // a message in a request's shared care-team↔asker thread — d=carechat:<reqId>:<msgId>, ['church',cp], ['p',requester]. Content sealed to the care team + the asker; read-gated to the care team + the p-tagged asker (+ the author). Member-writable so the asker can reply; the per-member doc cap + client-side decryptability filtering bound spam.
+const MEALS_SETTINGS_D = D.MEALS_SETTINGS; // church-signed config — {enabled, visibility, openedBy, adminGroupId} (single doc, no suffix)
+const NEED_D = D.NEED;        // a care need — d=care:<id> (church / steward / care-team admin; or any member when openedBy='member')
+const SLOT_D = D.SLOT;    // a member's fill for one (need,date) — d=careslot:<careId>:<iso> (member-signed, addressable per author)
+const SKIP_D = D.SKIP;    // recipient marks a day they don't need help — d=careskip:<careId>:<iso> (RECIPIENT-only)
+const AVAIL_D = D.AVAIL;  // a member's "I'm here to help" availability — d=careavail:<churchpub> (member-signed, one per member per church; non-minors only)
+const CAREREQ_D = D.CAREREQ;  // a member's private "ask for help" request — d=carereq:<id>, ['church',cp]; member-signed, content sealed to the care team. Read-gated to care-team ONLY (like SAFE_D), never the whole church. The care team approves it into a NEED_D or opens a chat.
+const CARETEAM_D = D.CARETEAM; // church/steward-signed roster of care-team recipient pubkeys — d=careteam:<churchpub>, content {pubs:[hex,…]}. Public-ish (pubkeys only, no secrets) so a member can seal a carereq: to exactly the care team.
+const CAREREQSTATUS_D = D.CAREREQSTATUS; // the care team's resolution of a request — d=carereqstatus:<id>, ['church',cp], ['p',requester]. Care-admin/steward/church-authored; read by the care team AND the p-tagged requester (so they see "approved"/"handled"). Clears the queue + tells the asker.
+const CARECHAT_D = D.CARECHAT; // a message in a request's shared care-team↔asker thread — d=carechat:<reqId>:<msgId>, ['church',cp], ['p',requester]. Content sealed to the care team + the asker; read-gated to the care team + the p-tagged asker (+ the author). Member-writable so the asker can reply; the per-member doc cap + client-side decryptability filtering bound spam.
 // SAFETY CHECK ("mark as safe" — emergency roll-call after a raid/disaster). A check is one active doc per
 // church (church/steward/care-team authored); each member replies with their OWN response doc, whose content
 // is NIP-44-encrypted to the check's CREATOR (p-tagged) so even a seized relay can't read who's safe / in danger.
-const SAFETY_D = 'trinityone/safetycheck:';  // d=safetycheck:<churchpub> — the active check; gated to members (roster-style)
-const SAFE_D   = 'trinityone/safe:';         // d=safe:<churchpub> — a member's response; read only by self + the check creator + church/stewards
+const SAFETY_D = D.SAFETY;  // d=safetycheck:<churchpub> — the active check; gated to members (roster-style)
+const SAFE_D   = D.SAFE;         // d=safe:<churchpub> — a member's response; read only by self + the check creator + church/stewards
 function toHexPub(s) { if (!s) return null; s = String(s).trim(); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch { return null; } }
 // the relay can host MULTIPLE churches — each manages its own data, scoped by author. Configure via
 // CHURCH_NPUB (comma-separated) or relay/church.json ({npub} | {npubs:[…]} | {churches:[{npub}…]}).

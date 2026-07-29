@@ -169,6 +169,86 @@ export const UNDECLARED = Object.freeze({
   'trinityone/manna-':     'benevolence module (7 sub-types built from this stem). Church-authored, self-encrypted; no explicit relay rule — inherits the generic church-content path',
 });
 
+// ── THE NAMES THE RELAY GATES BY. ARCHITECTURE-AUDIT-2026-07-30, rec 2's deferred second half ────────────
+// scripts/gateway.mjs used to define all 50 of these itself, as its own `const GROUP_D = 'trinityone/group:'`
+// literals. That is the defect rec 2 was written about: a typo there is not a build error — it is a document
+// the relay gates under one name while a client publishes under another, and NOTHING FAILS LOUDLY.
+//
+// The spine now takes its vocabulary from here, through k(), which refuses anything this file has not
+// declared. A mistyped or undeclared name is now a THROW AT RELAY STARTUP, before it serves a request.
+//
+// WHAT THIS DELIBERATELY IS NOT: accept()/canRead() keep their own rules. The write/read/scope columns above
+// are a SUMMARY — the real rules carry dozens of special cases (single-writer seq on the finance journal,
+// cross-church group binding, recipient-only care skips, the guardreq content-vs-signer check). Deriving
+// authorization from a summary would mean rewriting the security spine out of a simplification: a far larger
+// and more dangerous change than the one this fixes. NAMES here; POLICY there.
+//
+// The strings appear twice — once as a DOC_TYPES key, once here — and k() is what makes that safe: the second
+// occurrence is CHECKED against the first at module load. Building DOC_TYPES out of these constants would
+// remove the duplication, but it means rewriting 61 keys where any slip silently changes a live d-tag.
+// Checked duplication now; single-occurrence is a later tidy-up that deserves its own test.
+const k = (s) => {
+  if (!(s in DOC_TYPES) && !(s in UNDECLARED)) {
+    throw new Error('trinity-doc-types: "' + s + '" is not a declared document type. Declare it here — with who '
+      + 'may write it, who may read it and how its owning church resolves — before the relay gates by it.');
+  }
+  return s;
+};
+
+export const D = Object.freeze({
+  GROUP:          k('trinityone/group:'),
+  FUND:           k('trinityone/fund:'),
+  MEMBER:         k('trinityone/member:'),
+  PLAN:           k('trinityone/plan:'),
+  DEVO:           k('trinityone/devotional:'),
+  ROTA:           k('trinityone/rota:'),
+  CATEGORY:       k('trinityone/category:'),
+  ROSTER:         k('trinityone/roster:'),
+  SERVICE:        k('trinityone/service:'),
+  EVENT:          k('trinityone/event:'),
+  REQUEST:        k('trinityone/request:'),
+  FIN_JOURNAL:    k('finance/journal:'),
+  ROOM:           k('trinityone/room:'),
+  BOOKING:        k('trinityone/booking:'),
+  RUNSHEET:       k('trinityone/runsheet:'),
+  RELAYS:         k('trinityone/relays'),
+  NETWORK:        k('trinityone/network:'),
+  BLOCKED:        k('trinityone/blocked:'),
+  PIN:            k('trinityone/pin:'),
+  PINSERMON:      k('trinityone/pinsermon:'),
+  HIDE:           k('trinityone/hidden:'),
+  MINORS:         k('trinityone/minors:'),
+  APPROVED:       k('trinityone/approved:'),
+  CLEARANCE:      k('trinityone/clearance:'),
+  GUARDIANS:      k('trinityone/guardians:'),
+  GUARDNOTICE:    k('trinityone/guardnotice:'),
+  RSVP:           k('trinityone/rsvp:'),
+  REQREPLY:       k('trinityone/reqreply:'),
+  UNAVAIL:        k('trinityone/unavail:'),
+  NAMEKEY:        k('trinityone/namekey:'),
+  NAME:           k('trinityone/name:'),
+  CAREKEY:        k('trinityone/carekey:'),
+  GUARDREQ:       k('trinityone/guardreq:'),
+  NOPHOTO:        k('trinityone/nophoto:'),
+  MEDIAKEY:       k('trinityone/mediakey:'),
+  JOINPOLICY:     k('trinityone/joinpolicy:'),
+  ADMITTED:       k('trinityone/admitted:'),
+  RESEAT:         k('trinityone/reseat:'),
+  STEWARDS:       k('trinityone/stewards:'),
+  STEWARDREQ:     k('trinityone/stewardreq:'),
+  MEALS_SETTINGS: k('trinityone/meals-settings'),
+  NEED:           k('trinityone/care:'),
+  SLOT:           k('trinityone/careslot:'),
+  SKIP:           k('trinityone/careskip:'),
+  AVAIL:          k('trinityone/careavail:'),
+  CAREREQ:        k('trinityone/carereq:'),
+  CARETEAM:       k('trinityone/careteam:'),
+  CAREREQSTATUS:  k('trinityone/carereqstatus:'),
+  CARECHAT:       k('trinityone/carechat:'),
+  SAFE:            k('trinityone/safe:'),
+  SAFETY:         k('trinityone/safetycheck:'),
+});
+
 export const ALL_PREFIXES = Object.freeze([...Object.keys(DOC_TYPES), ...Object.keys(UNDECLARED)]);
 
 // Look a d-tag up. Returns the declaration, or null for an unknown type — which is the answer that should

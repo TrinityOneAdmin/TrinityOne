@@ -46,6 +46,11 @@ function buildNonGitTree() {
   mkdirSync(join(dir, 'scripts'));
   copyFileSync(join(ROOT, 'scripts', 'gateway.mjs'), join(dir, 'scripts', 'gateway.mjs'));
   copyFileSync(join(ROOT, 'scripts', 'event-store.mjs'), join(dir, 'scripts', 'event-store.mjs'));
+  // gateway.mjs imports this at RUNTIME since the rec-2 wiring (2026-07-30) — the names it gates by come from
+  // the declared list. Without it the stand-in relay cannot start, and every assertion below would pass or
+  // fail for the wrong reason. All three real packaging paths ship it (git archive, strict bundle, desktop
+  // payload — checked); this harness is the only place that hand-picks files.
+  copyFileSync(join(ROOT, 'scripts', 'trinity-doc-types.mjs'), join(dir, 'scripts', 'trinity-doc-types.mjs'));
   symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'));
   writeFileSync(join(dir, 'version.txt'), 'sha: ' + '1'.repeat(40) + '\ndate: 2026-07-29T00:00:00+01:00\n');
   writeFileSync(join(dir, 'index.html'), '<!doctype html><title>stand-in</title>\n');
