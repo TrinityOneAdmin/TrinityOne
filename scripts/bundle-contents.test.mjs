@@ -32,7 +32,11 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const REF = 'HEAD';
 
 const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: ROOT, maxBuffer: 512 * 1024 * 1024, ...opts });
-const lines = (buf) => String(buf).split('\n').map(s => s.trim()).filter(Boolean).map(s => s.replace(/^\.\//, ''));
+// FILES only. tar lists directory entries too ('android/', and './' for the archive root, which the ./-strip
+// below turns into ''), and they carry no content — an allowlist that had to enumerate every intermediate
+// directory would be noise, and the empty string is not a path at all. AUDIT-2026-07-30 A5.
+const lines = (buf) => String(buf).split('\n').map(s => s.trim()).filter(Boolean)
+  .map(s => s.replace(/^\.\//, '')).filter(s => s && !s.endsWith('/'));
 
 // ── the two producers ────────────────────────────────────────────────────────────────────────────────────
 function rawArchiveListing() {
@@ -61,12 +65,66 @@ const NAMED = ['HANDOFF.md', 'AUDIT-BACKLOG.md', 'AUDIT-2026-07-26-RECOVERY.md',
   'deploy/systemd/trinity-gateway.service', 'deploy/systemd/trinity-relay.service',
   'ci/ios-simulator-smoke.job.yml'];
 
-// The property, not the list. A document added tomorrow is covered without anyone remembering to edit this.
+// ── ARCHITECTURE-AUDIT-2026-07-30 A5: an ALLOWLIST, because the denylist was the wrong polarity ───────────
+// This used to assert "no *.md, nothing under four named directories, and none of these named files". That is
+// a denylist, and it has the failure mode this repo has now hit three times: it can only ever catch the class
+// somebody already thought of. Its own sibling, no-internal-docs.test.mjs, guards the SERVED route with a
+// genuine allowlist (SERVE_OK) whose comment says "anything not covered here has to be justified before it
+// gets added — which is the point". The bundle route has the LARGER blast radius — it is a world-downloadable
+// tarball that every self-hoster and every relay self-update consumes — and it had the weaker rule.
+//
+// What the denylist missed, measured against the real 52 MB release bundle: 92 *.test.mjs files (52 of them
+// narrating audit findings by ID and date — the very content F2 removed the documents for), .github/
+// workflows, the Suite's Tauri build sources, and capacitor.config.json, which states in four lines that
+// every shipped Android build has webContentsDebuggingEnabled: true.
+//
+// So: state what a relay needs in order to RUN, by category and with a reason, and make everything else a
+// failure that someone has to justify. A new `notes/` directory, a stray key, an .env.example — none of them
+// needs to have been predicted.
+const BUNDLE_OK = (f) =>
+  // the three programs and everything they load
+  /^(app|src|vendor|assets|icons|modules)\//.test(f)
+  // the relay itself: gateway, event store, the updater, the build scripts a release host runs
+  || (/^scripts\//.test(f) && !/\.(test|probe)\.mjs$/.test(f))
+  // the relay's own app: control UI, installer, launchers, trust anchor — but not its desktop BUILD tree
+  || (/^relay-app\//.test(f) && !/^relay-app\/desktop\//.test(f))
+  // the served web surface at the repo root, plus the manifests the app fetches by name
+  || (!f.includes('/') && /\.(html|js|mjs|jsx|css|json|png|jpe?g|webp|avif|svg|ico|txt|webmanifest)$/i.test(f))
+  // named, extensionless or odd, each deliberate
+  || ['LICENSE', 'version.txt', '.gitignore', '.gitattributes', '.nojekyll'].includes(f)
+  || /^decks\/.*\.pdf$/.test(f)         // about.html links these
+  // The dev relay. Kept IN deliberately: package.json ships, and its "relay" and "dev" scripts point straight
+  // at this file, so dropping it would ship a manifest with dangling scripts. It is a toy NIP-01 relay's
+  // source, not a secret, and both extractors pass `--exclude='relay/*'` so it is never even unpacked.
+  || f === 'relay/dev-relay.mjs'
+  // Tracked despite android/ being gitignored, so it rides along in the archive. Nothing on the bundle path
+  // reads it — only an APK build from a git checkout does. Not sensitive (app id, permissions, allowBackup),
+  // so it is allowed rather than excluded; dropping it is a tidy-up, not a fix, and every exclusion is risk.
+  || f === 'android/app/src/main/AndroidManifest.xml';
+
+// Things that are never right ANYWHERE in the tarball, whatever else the rules say. Belt and braces: these
+// are also covered above, and pinning them separately means a widened allowlist cannot silently readmit them.
+const NEVER = [
+  [/\.md$/i, 'internal documentation'],
+  [/\.(test|probe)\.mjs$/, 'the test suite — 52 of these narrate audit findings by ID and date'],
+  [/^(docs|reference|deploy|ci)\//, 'a tree that describes the box rather than running it'],
+  [/^\.github\//, 'CI workflow definitions'],
+  [/^relay-app\/desktop\//, 'the Suite Tauri build tree'],
+  [/^capacitor\.config\.json$/, 'it states that shipped Android builds have remote WebView debugging on'],
+  [/\.(pem|key|p12|keystore|jks)$/i, 'key material'],
+  [/^\.env/, 'environment/secret files'],
+];
+
 function assertNoInternalDocs(listing, who) {
-  const md = listing.filter(f => f.toLowerCase().endsWith('.md'));
-  assert.deepEqual(md, [], who + ' ships internal markdown to anyone who curls it');
-  const dirs = listing.filter(f => /^(docs|reference|deploy|ci)\//.test(f));
-  assert.deepEqual(dirs, [], who + ' ships a tree that describes the box rather than running it');
+  for (const [re, why] of NEVER) {
+    const hit = listing.filter(f => re.test(f) && f !== 'relay-app/release-pubkey.pem');   // the PUBLIC trust anchor ships on purpose
+    assert.deepEqual(hit, [], who + ' ships ' + why);
+  }
+  const unexpected = listing.filter(f => !BUNDLE_OK(f)).sort();
+  assert.deepEqual(unexpected, [],
+    who + ' ships these, and nothing in BUNDLE_OK covers them. A relay needs the code that RUNS it; anything\n' +
+    '    else has to be justified here with a reason, or stop shipping. (This is the check that was a\n' +
+    '    denylist and therefore could not see the test suite, the CI workflows or capacitor.config.json.)');
   for (const f of NAMED) assert.ok(!listing.includes(f), who + ' still contains ' + f);
 }
 
@@ -102,7 +160,11 @@ test('the strict bundle the release host serves carries no internal documentatio
 test('the exclusion is committed, not just present on disk', () => {
   const committed = String(sh('git', ['show', REF + ':.gitattributes']));
   for (const pat of [/^docs\s+export-ignore/m, /^reference\s+export-ignore/m, /^\*\.md\s+export-ignore/m,
-    /^deploy\s+export-ignore/m, /^ci\s+export-ignore/m]) {
+    /^deploy\s+export-ignore/m, /^ci\s+export-ignore/m,
+    // A5
+    /^\*\.test\.mjs\s+export-ignore/m, /^\*\.probe\.mjs\s+export-ignore/m,
+    /^capacitor\.config\.json\s+export-ignore/m, /^\.github\s+export-ignore/m,
+    /^relay-app\/desktop\s+export-ignore/m]) {
     assert.match(committed, pat, 'the export-ignore rules are not in the archived tree, so nothing is excluded');
   }
 });

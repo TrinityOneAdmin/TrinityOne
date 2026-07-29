@@ -36,3 +36,33 @@ reference   export-ignore
 #   ci/      — build/CI job descriptors. Read by .github/workflows from a git checkout, never from a bundle.
 deploy      export-ignore
 ci          export-ignore
+
+# ── ARCHITECTURE-AUDIT-2026-07-30 A5 ───────────────────────────────────────────────────────────────────────
+# The rules above stopped the DOCUMENTS shipping. They did not stop the test suite shipping, and 52 of the 92
+# `*.test.mjs` files carry the same content the documents did: the audit finding IDs, what each hole was, when
+# it was introduced, and in several cases what is still only half fixed —
+#   AUDIT-2026-07-20 C2/E1 · 07-24 FINDINGS · 07-26 CRITICAL/S5 · 07-28 F1 F2 F3 F6 F7 F9 F10 F11 F12 F14 F15
+#   F18 F19 · 07-29 S1 S2
+# Withdrawing AUDIT-2026-07-28-READONLY.md while shipping 52 files that narrate F1-F19 is not a reduction in
+# what an attacker learns. A relay runs gateway.mjs; it has never needed the suite that tests it.
+#
+#   capacitor.config.json — states in four lines that every shipped Android build has
+#                           `webContentsDebuggingEnabled: true`. That is a KNOWN open item (it is on for pilot
+#                           diagnosis and must be off before go-live) and the bundle was advertising it. The
+#                           static handler already refuses this file for exactly this reason; the bundle was
+#                           undoing that.
+#   .github/              — workflow definitions. Read by GitHub from a checkout, never from a bundle.
+#   relay-app/desktop/    — the Suite's Tauri build tree (Cargo.toml, build.rs, main.rs). The control UI beside
+#                           it is deliberately public; its BUILD SOURCES are not part of that.
+#
+# NOT excluded, deliberately, and each is a decision rather than an oversight:
+#   package.json      — the relay's own manifest; bundle-contents' MUST_SHIP asserts it, and the box needs it.
+#   package-lock.json — left IN for now. It fingerprints every dependency version, and the static handler does
+#                       refuse to serve it — but relay-update.sh's comment names lockfile-pinned installs as a
+#                       planned follow-up, and that would need this file present in the bundle. Removing it is
+#                       the owner's call, not a side effect of widening a test.
+*.test.mjs             export-ignore
+*.probe.mjs            export-ignore
+capacitor.config.json  export-ignore
+.github                export-ignore
+relay-app/desktop      export-ignore
