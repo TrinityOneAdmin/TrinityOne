@@ -135,6 +135,72 @@ test('it records a manifest for next time', () => {
   } finally { r.cleanup(); }
 });
 
+// ── ARCHITECTURE-AUDIT-2026-07-30 A1: leftovers from BEFORE manifests existed ────────────────────────────
+// The reconcile above can only remove what a previous manifest recorded, and the manifest is seeded from the
+// current bundle — so a file installed before manifests existed and absent from the bundle now can never
+// appear in any manifest. Measured on a8 across a real update on 2026-07-30: eight files deleted from the
+// repo, still served, unchanged by the update. The *.md sweep cannot see them (they are .jsx/.html/.js/.png).
+//
+// The sweep that fixes it is scoped to directories the project owns and carries a sanity floor on the bundle
+// listing, so these tests need a REALISTIC bundle — under the floor the sweep is deliberately inert, which is
+// why every test above still behaves exactly as it did.
+const bigBundle = (extra = []) => [...Array.from({ length: 120 }, (_, i) => `vendor/lib-${i}.js`), 'app/app.js', 'scripts/gateway.mjs', ...extra];
+
+test('A1: a pre-manifest leftover is removed even with NO manifest', () => {
+  const installed = ['app/app.js', 'scripts/gateway.mjs',
+    'app/screens-onboarding.jsx', 'vendor/react.development.js', 'vendor/steward-finance.js',   // the real a8 leftovers
+    'landing-app-today.html', 'welcome-simple.html'];                                            // …and two at the ROOT
+  const r = runUpdate({ manifest: null, bundleFiles: bigBundle(), installed });
+  try {
+    for (const f of ['app/screens-onboarding.jsx', 'vendor/react.development.js', 'vendor/steward-finance.js']) {
+      assert.equal(r.alive(f), false, f + ' survived — this is the file class that is permanent on every relay today');
+    }
+    assert.match(r.log, /pre-manifest leftovers/, 'it removed them without saying so');
+    // The root is deliberately NOT swept: an operator's own files live there. These two stay, and the static
+    // denylist is what must cover them. Recorded so the limit is visible rather than assumed.
+    assert.equal(r.alive('landing-app-today.html'), true, 'the sweep reached the install ROOT — an operator’s own files live there');
+  } finally { r.cleanup(); }
+});
+
+test('A1: it still does not touch anything that is not ours', () => {
+  // Same guarantee as the reconcile, re-asserted for the wider sweep — this is the half that must hold.
+  const installed = ['app/app.js', 'scripts/gateway.mjs', 'docker-compose.yml', 'my-notes.txt',
+    'relay/admin.json', 'relay/custom.js', 'node_modules/dep.js'];
+  const r = runUpdate({ manifest: null, bundleFiles: bigBundle(), installed });
+  try {
+    assert.equal(r.alive('docker-compose.yml'), true, 'deleted a self-hoster’s own compose file');
+    assert.equal(r.alive('my-notes.txt'), true, 'deleted an operator’s own file');
+    assert.equal(r.alive('relay/admin.json'), true, 'deleted the admin token — the operator is locked out of their own relay');
+    assert.equal(r.alive('relay/custom.js'), true, 'the sweep reached inside relay/, which is the operator’s data');
+    assert.equal(r.alive('node_modules/dep.js'), true, 'pruned node_modules, which is not ours to prune');
+    assert.equal(r.alive('scripts/gateway.mjs'), true, 'deleted the relay itself');
+    assert.equal(r.alive('app/app.js'), true, 'deleted the served app');
+  } finally { r.cleanup(); }
+});
+
+test('A1: a church’s DOWNLOADED Bible packs are never swept', () => {
+  // modules/ is filled on demand at runtime, so a relay legitimately holds packs that were in no bundle.
+  // Sweeping there would delete a congregation's own downloads — the single most damaging thing this could do.
+  const installed = ['app/app.js', 'scripts/gateway.mjs', 'modules/kjv.mybible', 'modules/strongs-greek.json'];
+  const r = runUpdate({ manifest: null, bundleFiles: bigBundle(), installed });
+  try {
+    assert.equal(r.alive('modules/kjv.mybible'), true, 'deleted a Bible pack the church had downloaded');
+    assert.equal(r.alive('modules/strongs-greek.json'), true, 'deleted a downloaded lexicon');
+  } finally { r.cleanup(); }
+});
+
+test('A1: an implausibly short bundle listing sweeps NOTHING', () => {
+  // The failure that would matter: a partial read of the tarball concluding "the release ships almost
+  // nothing" and clearing app/ and vendor/ on every relay at once.
+  const installed = ['app/app.js', 'app/screens-onboarding.jsx', 'vendor/react.development.js', 'scripts/gateway.mjs'];
+  const r = runUpdate({ manifest: null, bundleFiles: ['app/app.js', 'scripts/gateway.mjs'], installed });
+  try {
+    assert.equal(r.alive('app/screens-onboarding.jsx'), true, 'swept on the strength of a two-file listing');
+    assert.equal(r.alive('vendor/react.development.js'), true, 'swept on the strength of a two-file listing');
+    assert.match(r.log, /too short to trust/, 'it skipped the sweep without saying why');
+  } finally { r.cleanup(); }
+});
+
 test('a corrupt bundle listing removes nothing', () => {
   // Fail safe: if the tarball cannot be listed we must not conclude "the release ships nothing" and delete
   // the entire install.

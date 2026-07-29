@@ -14,9 +14,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { request as httpRequest } from 'node:http';
 import { requireFreePort } from './test-ports.mjs';
 
@@ -169,6 +169,48 @@ test('the specific things found by that sweep stay gone', async () => {
   // …and the two that must NOT be caught by the widened rule.
   assert.equal(await get('/relay-app/install.sh'), 200, 'the self-host installer stopped being served — the documented one-liner is broken');
   assert.equal(await get('/relay-app/control.html'), 200, 'the relay control UI stopped being served');
+});
+
+// ── ARCHITECTURE-AUDIT-2026-07-30 A1: the universe this file enumerates ──────────────────────────────────
+// Every sweep above starts from `git ls-files`, which lists what is tracked NOW. A relay's disk is not that.
+// relay-update.sh unpacks OVER the install, so a box holds the union of every bundle it has ever installed —
+// and a file DELETED from the repo is, by construction, absent from `git ls-files`, so nothing above can even
+// ask about it. Measured on a8 on 2026-07-30: eight files deleted from the repo, still served, and unchanged
+// across a full update cycle.
+//
+// Testing that by requesting the paths would prove nothing HERE, because this checkout does not have them —
+// they would 404 for the wrong reason, which is the exact failure mode F14 was about. So the probes are
+// RECREATED on disk first, which is what a relay carrying an old bundle actually looks like.
+//
+// The withdrawn APP SOURCE half (.jsx/.html/.png) is deliberately NOT asserted 404 here: the static handler
+// does serve those, and the thing that removes them is the updater's leftover sweep, covered by
+// scripts/relay-update-reconcile.test.mjs. Splitting it that way keeps each test honest about which
+// mechanism it is actually proving.
+const DELETED = execSync('git log --diff-filter=D --name-only --pretty=format:', { cwd: ROOT, encoding: 'utf8' })
+  .split('\n').map(s => s.trim()).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+
+test('a file DELETED from the repo is still refused if its class must never be served', async () => {
+  assert.ok(DELETED.length > 5, 'git history reports almost no deletions (' + DELETED.length + ') — this check is not running');
+  // The classes the static handler must hold regardless of how the file got onto the box.
+  const mustRefuse = DELETED.filter(f => /\.md$/i.test(f) || /^(docs|reference|scripts|src|deploy|ci|relay)\//.test(f));
+  assert.ok(mustRefuse.length > 3, 'expected several deleted files in the never-serve classes; found ' + mustRefuse.length);
+  const made = [];
+  try {
+    for (const f of mustRefuse) {
+      const p = join(ROOT, f);
+      if (existsSync(p)) continue;                       // still present for some other reason — do not touch it
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, 'leftover from an older bundle — if you can read this over HTTP, the rule is gone');
+      made.push(p);
+    }
+    assert.ok(made.length > 0, 'could not stage any deleted-file probes, so this test proved nothing');
+    const served = [];
+    for (const f of mustRefuse) { if (await get('/' + f.split('/').map(encodeURIComponent).join('/')) === 200) served.push(f); }
+    assert.deepEqual(served, [],
+      'these files are DELETED from the repo, so no sweep that enumerates `git ls-files` can see them — and a\n' +
+      '    relay that installed an older bundle still has them on disk. The static rules are the only thing\n' +
+      '    standing between them and the world, and for these paths they did not hold');
+  } finally { for (const p of made) { try { rmSync(p, { force: true }); } catch {} } }
 });
 
 test('build files that describe the box are not served', async () => {

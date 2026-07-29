@@ -140,6 +140,42 @@ for d in docs reference deploy ci relay-app/desktop; do
   [ -d "$DIR/$d" ] && { rm -rf "${DIR:?}/$d" && swept=$((swept+1)); }
 done
 [ "$swept" -gt 0 ] && log "swept $swept internal doc/config path(s) that a relay must not hold"
+
+# ── ARCHITECTURE-AUDIT-2026-07-30 A1: leftovers from BEFORE manifests existed ──────────────────────────────
+# The manifest reconcile above can only remove what a PREVIOUS RUN recorded installing, and the manifest is
+# seeded from the current bundle. So a file installed before manifests existed and absent from the bundle now
+# can never appear in any manifest, and `comm -23` can never emit it. Those files are permanent.
+#
+# Not a theory. Predicted before a8 took an update on 2026-07-30 that this would hold, then measured after it
+# came back up — eight files deleted from the repo, still served, unchanged across a full update cycle:
+#   app/screens-onboarding.jsx  landing-app-today.html  stew-finance.jsx  welcome-simple.html
+#   vendor/react.development.js  vendor/react-dom.development.js  vendor/steward-finance.js
+#   welcome-app-today.png
+# Nothing dangerous in those eight — withdrawn app source and two React dev builds — but the NEXT file
+# withdrawn for a security reason behaves identically, and the *.md sweep above cannot see any of it.
+#
+# SCOPED HARD, because this deletes files on boxes nobody can log into:
+#   • only inside directories the PROJECT owns outright. Never the install root (a self-hoster's own
+#     docker-compose.yml lives there — the reason the earlier extension sweep was narrowed), never relay/,
+#     never node_modules/.
+#   • NOT modules/. Bible and lexicon packs are downloaded on demand, so a relay legitimately holds packs that
+#     were never in any bundle. Sweeping there would delete a church's own downloads.
+#   • a sanity floor on the bundle listing: if it looks implausibly short, something went wrong reading the
+#     tarball and the correct move is to delete NOTHING rather than to conclude the release ships nothing.
+if [ "$(wc -l < "$NEWLIST" 2>/dev/null || echo 0)" -gt 100 ]; then
+  stale=0
+  for d in app vendor src scripts icons assets; do
+    [ -d "$DIR/$d" ] || continue
+    while IFS= read -r f; do
+      rel="${f#"$DIR"/}"
+      case "$rel" in ''|relay/*|node_modules/*|*..*) continue;; esac
+      grep -qxF -- "$rel" "$NEWLIST" || { rm -f "$f" && stale=$((stale+1)); }
+    done < <(find "$DIR/$d" -type f 2>/dev/null)
+  done
+  [ "$stale" -gt 0 ] && log "removed $stale file(s) this release does not ship (pre-manifest leftovers)"
+else
+  log "bundle listing too short to trust — skipping the leftover sweep, nothing removed"
+fi
 true   # a zero count is a normal outcome, not a failure — do not leave it as the exit status
 # ── end reconcile+sweep ── (scripts/relay-update-reconcile.test.mjs lifts exactly this block)
 # also pull the latest APK(s) so the in-app auto-update DOWNLOAD stays in lockstep with the new web + manifest.
