@@ -67,7 +67,7 @@ const DEVICE_KEYS = [
   'trinityone.care.n.' + NPUB, 'trinityone.care.s.' + NPUB,
   // the eleven the prefix list never knew about
   'trinityone.admitted.' + CHURCH + '|' + MEMBER, 'trinityone.approvedToast.' + NPUB,
-  'trinityone.categories.' + CHURCH, 'trinityone.chatTabSeen.' + NPUB,
+  'trinityone.categories.' + CHURCH, 'trinityone.chatTabSeen.' + NPUB, 'trinityone.approvedToast.' + NPUB,
   'trinityone.devos.' + CHURCH, 'trinityone.devos.' + NPUB, 'trinityone.hb:' + NPUB,
   'trinityone.joinstate.' + NPUB, 'trinityone.msgtags.' + NPUB, 'trinityone.plans.' + CHURCH,
   // must SURVIVE
@@ -81,7 +81,7 @@ const DEVICE_KEYS = [
 test('the caches the device was still holding are wiped', () => {
   const left = runWipe(DEVICE_KEYS);
   // backedup.<own npub> is a deliberate keep — see its own test below.
-  const churchKeyed = left.filter(k => (k.includes(CHURCH) || k.includes(NPUB)) && !k.startsWith('trinityone.backedup.'));
+  const churchKeyed = left.filter(k => (k.includes(CHURCH) || k.includes(NPUB)) && !/^trinityone\.(backedup|approvedToast)\./.test(k));
   assert.deepEqual(churchKeyed, [],
     'these still name the congregation on a locked phone: ' + churchKeyed.join(', '));
 });
@@ -110,8 +110,17 @@ test('no key naming the congregation survives, including ones nobody listed', ()
   // NAME and no version of the prefix list covered them, because every new feature added one and nobody went
   // back. This is the same failure as the relay's served-file denylist.
   const left = runWipe(DEVICE_KEYS);
-  const named = left.filter(k => /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i.test(k) && !k.startsWith('trinityone.backedup.'));
+  const named = left.filter(k => /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i.test(k) && !/^trinityone\.(backedup|approvedToast)\./.test(k));
   assert.deepEqual(named, [], 'these still name the congregation on a locked phone: ' + named.join(', '));
+});
+
+test('the "you were accepted" marker is kept, or the app re-announces it', () => {
+  // Reported on a real phone minutes after the property-based wipe went in: unlocking produced a fresh
+  // "you have been accepted into the church" toast, because the marker saying we had already said it was
+  // wiped. It names a church that the KEPT followedChurches already names, so retaining it reveals nothing.
+  const left = runWipe(DEVICE_KEYS);
+  assert.ok(left.some(k => k.startsWith('trinityone.approvedToast.')),
+    'the member is told they were accepted into their church all over again on every unlock');
 });
 
 test('the seed-backup flag is kept, deliberately', () => {

@@ -1668,6 +1668,11 @@ window.Fellowship = {
     // no forensic gain.
     const doomed = (k) => !!k && k.startsWith('trinityone.') && !KEEP.has(k)
       && !k.startsWith('trinityone.mydata:') && !k.startsWith('trinityone.backedup.')
+      // approvedToast.<church> is the "we already told you you were accepted" marker. Wiping it makes the
+      // app re-announce the member's acceptance on the next unlock — reported on a real phone, 2026-07-29,
+      // immediately after the property-based wipe went in. It names a church the KEPT followedChurches
+      // already names, so retaining it reveals nothing new and stops a confusing repeat.
+      && !k.startsWith('trinityone.approvedToast.')
       && (PREFIXES.some(p => k.startsWith(p)) || IDENTIFIER.test(k));
     try {
       const kill = [];
