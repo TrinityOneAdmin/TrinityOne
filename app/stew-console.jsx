@@ -34,7 +34,14 @@ function ConsoleChrome({ children, bg = 'var(--paper)', showcase = false, url = 
 
 // ════════════════════════════ WIZARD ════════════════════════════
 // A collision-proof id for a wizard meeting row: Date.now() alone repeats within one synchronous loop.
-function _wizMeetingId() { return 'evt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+// Collision-free WITHIN A PROCESS, not merely improbable. These are replaceable docs keyed by this id, so two
+// meetings sharing one means the second silently DELETES the first. Date.now() is constant across rows created
+// in the same expression, and the five random base-36 characters are only ~60 million values — at 5,000 draws
+// the birthday odds of a collision are about one in five, which is exactly how often the test guarding this
+// was failing the release gate. A counter removes the chance rather than shrinking it. Kept as a property of
+// the function so it stays self-contained: this is a classic script sharing one global scope, and the test
+// lifts the function on its own. AUDIT-2026-07-29.
+function _wizMeetingId() { _wizMeetingId.n = (_wizMeetingId.n || 0) + 1; return 'evt' + Date.now().toString(36) + _wizMeetingId.n.toString(36) + Math.random().toString(36).slice(2, 7); }
 
 // editable text field for the wizard (the design-mock SkField is read-only)
 
