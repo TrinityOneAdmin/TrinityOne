@@ -85,6 +85,63 @@ tar -czf "$BACKUP" -C "$DIR" --exclude='./relay' --exclude='./node_modules' . 2>
 # SECURITY-AUDIT-2026-07-06 M10: --no-same-owner so the archive can't set arbitrary uid/gid on extracted
 # files (extract as root → files owned by root, the intended state; see the chown note below).
 tar -xzf "$TARBALL" -C "$DIR" --no-same-owner --exclude='relay/*' || { log "unpack failed"; exit 1; }
+
+# ── RECONCILE: a release that REMOVES a file must remove it here too. AUDIT-2026-07-29 S2 ──────────────────
+# The unpack above overlays and deletes NOTHING, so every relay served the union of every bundle it had ever
+# installed. Verified on a8 the day this was written: /vendor/babel.min.js and /app/app.jsx both returned 200
+# although the release it had just installed removes both. Three consequences: a file withdrawn for a SECURITY
+# reason stays reachable (this is why the internal documents kept being served after the 07-28 fix — that fix
+# stopped them shipping, and only the static denylist stopped them being served); you cannot tell what a relay
+# serves by reading the current release; and it accumulates silently with nothing reporting it.
+#
+# Deliberately SELF-LIMITING. This deletes only files THIS UPDATER INSTALLED ON A PREVIOUS RUN and which the
+# new bundle no longer contains — never an operator's file, never anything created at runtime, never anything
+# it has not seen itself put there. A blanket "remove whatever is not in the bundle" would be shorter and
+# would eventually delete something nobody expected, on a box we cannot log in to.
+#
+# First run after this ships: MANIFEST does not exist, so nothing is deleted and the manifest is written.
+# From the next update onwards it converges. Leftovers installed before manifests existed are NOT cleaned up
+# by this — see the explicit sweep below for the classes that must never be present at all.
+MANIFEST="$DIR/relay/installed-files.txt"
+NEWLIST="$(mktemp)"; trap 'rm -f "$TARBALL" "$SIGFILE" "$NEWLIST"' EXIT
+if tar -tzf "$TARBALL" 2>/dev/null | sed 's#^\./##' | grep -v '/$' | grep -v '^relay/' | sort -u > "$NEWLIST"; then
+  if [ -s "$MANIFEST" ]; then
+    removed=0
+    # in the OLD manifest and not in the new bundle → this release withdrew it
+    while IFS= read -r rel; do
+      case "$rel" in ''|relay/*|node_modules/*|*..*) continue;; esac
+      [ -f "$DIR/$rel" ] || continue
+      rm -f "$DIR/$rel" && removed=$((removed+1))
+    done < <(comm -23 "$MANIFEST" "$NEWLIST")
+    [ "$removed" -gt 0 ] && log "reconcile: removed $removed file(s) this release no longer ships"
+    true   # never let the count-is-zero case become this block's exit status
+  else
+    log "reconcile: no previous manifest — recording one, nothing removed this time"
+  fi
+  cp "$NEWLIST" "$MANIFEST" 2>/dev/null || true
+else
+  log "reconcile: could not list the bundle — skipping (nothing removed)"
+fi
+
+# ── and these classes must never be on a relay at all, manifest or no manifest ─────────────────────────────
+# Internal documentation and build/deploy descriptors. The bundle stopped carrying them on 2026-07-28, but
+# every relay that updated before then still has its copies on disk, and only the static denylist stands
+# between them and the world. Nothing under these paths is executed or served by a running relay, so removing
+# them cannot break one. relay/ and node_modules/ are excluded: the first is the operator's data, the second
+# is not ours to prune.
+# Only *.md by extension, and only OUR OWN directories by name. An earlier draft also swept *.yml/*.toml/*.rs
+# anywhere under the install — which would have deleted a self-hoster's own docker-compose.yml sitting beside
+# the code. Those file types only ever appeared inside ci/ and relay-app/desktop/, which the directory list
+# below removes wholesale, so the extension sweep bought nothing and risked someone else's file.
+swept=0
+while IFS= read -r f; do rm -f "$f" && swept=$((swept+1)); done < <(
+  find "$DIR" -path "$DIR/relay" -prune -o -path "$DIR/node_modules" -prune -o -type f -name '*.md' -print 2>/dev/null)
+for d in docs reference deploy ci relay-app/desktop; do
+  [ -d "$DIR/$d" ] && { rm -rf "${DIR:?}/$d" && swept=$((swept+1)); }
+done
+[ "$swept" -gt 0 ] && log "swept $swept internal doc/config path(s) that a relay must not hold"
+true   # a zero count is a normal outcome, not a failure — do not leave it as the exit status
+# ── end reconcile+sweep ── (scripts/relay-update-reconcile.test.mjs lifts exactly this block)
 # also pull the latest APK(s) so the in-app auto-update DOWNLOAD stays in lockstep with the new web + manifest.
 # (Previously a separate, easily-forgotten "Fetch latest APK" dashboard step → manifest said vN but the APK file
 #  lagged at vN-1, so members got no update or a stale one. One .update-request now deploys everything.)
