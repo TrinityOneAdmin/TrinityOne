@@ -1675,7 +1675,30 @@ function canRead(e, authed) {
     if (!mine.length) return !!authed && (CHURCH_PUBS.has(authed) || NETWORKS.has(authed) || MEMBER_CHURCHES.has(authed));
     return mine.some(cp => churchReader(authed, cp));
   }
-  if (e.kind !== 1) return true;
+  // NIP-65 relay list. Published by the CHURCH key only (steward.src.js publishRelayList; a delegated steward
+  // cannot), read by members to follow a church whose relay has moved. It advertises relay URLs and no PII, and
+  // a member who cannot read it cannot find their church — so it stays public, deliberately and by name.
+  if (e.kind === 10002) return true;
+  // ── AND THE TAIL IS CLOSED FOR EVERY OTHER KIND. AUDIT-2026-07-29 S1 ─────────────────────────────────────
+  // The block above closed the tail for the kinds it enumerated — 0, 5, 7 — and left `if (e.kind !== 1) return
+  // true` underneath, so the polarity was still default-ALLOW for anything not on that list. The kind-30078
+  // branch was inverted to default-DENY in July precisely because "a denylist cannot hold this line: every new
+  // feature is a new leak until someone remembers to edit it". That reasoning applies to KINDS as well, and
+  // was not carried across.
+  //
+  // Demonstrated against a real gateway, publishing as an ordinary member and reading back anonymously:
+  //     9802  NIP-84 highlight (a verse you marked)   -> served to a stranger
+  //     30000 NIP-51 people set ("praying for")       -> served to a stranger
+  //     10003 NIP-51 bookmarks                        -> served to a stranger
+  //     30078 church doc (the gated baseline)         -> correctly refused
+  // Not exploitable today: the shipped app publishes none of those. But reference/SPINE.md names all three as
+  // the intended home for user-owned data, and a "praying for" people set is a congregation's social graph.
+  //
+  // Reading only. accept() is deliberately NOT tightened alongside this: kind 5 (message deletion) has no
+  // explicit rule there and reaches its `return isMember` tail, so refusing unknown kinds on WRITE would stop
+  // members deleting their own messages. Storing a kind nobody serves costs a little disk and leaks nothing;
+  // the per-church ephemeral budget bounds it.
+  if (e.kind !== 1) return !!authed && authed === e.pubkey;   // default-deny — but your own events stay yours
   const g = gidOf(e);
   // SAFEGUARDING: an adults-only group (one the church has NOT marked child-safe) is served only to a reader
   // who has proved they are not a child. Gating on `authed && MINORS.has(authed)` alone would be theatre — a
