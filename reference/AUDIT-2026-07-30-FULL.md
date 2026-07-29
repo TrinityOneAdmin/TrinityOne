@@ -270,10 +270,28 @@ Two runs, the second 22× the first, both 8 churches:
 | Cross-church isolation | church 1: 4.5ms · church 8: 1.0ms | church 1: 5.0ms · church 8: 0.9ms |
 | Relay process / DB | — | ~101 MB RSS · 5.1 MB sqlite |
 
-**Nothing is stressed.** Write cost did not rise with the corpus — it fell slightly, which is within noise. The
-tag lookup grew from ~1.5ms to ~2.3ms while the corpus grew 22×, so it is genuinely indexed rather than
-scanning. One church's traffic does not slow another's reads: the eighth church, written last against the
-largest corpus, answered *faster* than the first.
+**Nothing is stressed at this scale.** Write cost did not rise with the corpus. One church's traffic does not
+slow another's reads: the eighth church, written last against the largest corpus, answered *faster* than the
+first.
+
+> ### ⚠ CORRECTION — I drew the wrong conclusion from these numbers
+>
+> I originally wrote that the tag lookup "is genuinely indexed rather than scanning" because it grew only
+> 1.5ms → 2.3ms while the corpus grew 22×. **That was wrong.** The performance pass measured at 200,000+ events
+> and found it linear; I re-tested it myself at 60,000 rows and it is unambiguous:
+>
+> ```
+> PLAN before ANALYZE:  SEARCH events USING INDEX idx_kind_created (kind=?)   ← whole kind-30078 partition
+>   20 lookups: 10.33 ms each
+> ANALYZE took 33 ms
+> PLAN after  ANALYZE:  SEARCH events USING INDEX idx_dtag (dtag=?)
+>   20 lookups: 0.16 ms each                                                  ← 65x faster
+> ```
+>
+> A linear scan of 7,715 rows costs ~1.3ms, which is exactly what my sim measured. **I mistook "fast at small
+> scale" for "indexed".** Every number in the table above is real; the inference from them was not. This is the
+> same defect this audit keeps finding — a measurement whose universe is too small to show the shape — and it
+> is why the load simulation needed a second, larger pass by someone who did not already have a conclusion.
 
 The 25–28ms first lookup in both runs is a cold-cache artefact, not scale: it appears at 47 events and again at
 967, then disappears.
@@ -289,7 +307,122 @@ steps are 10⁵–10⁶ events and many simultaneous sockets — the second is t
 something, given `MAX_SUBS_PER_CONN = 256` and a documented history of hitting per-connection subscription
 limits.
 
-_Performance subagent findings pending._
+## P1 — No `ANALYZE`, so every kind-narrowed query scans the whole partition — **VERIFIED (by me, independently)**
+
+`scripts/event-store.mjs:61-70` creates seven indexes including `idx_dtag`, and **SQLite never uses it**,
+because the schema has no statistics. It always picks `idx_kind_created` — which satisfies the
+`ORDER BY created_at DESC` without a sort — and ignores `dtag` and `pubkey` entirely.
+
+My own measurement is quoted in the correction box above: **10.33ms → 0.16ms after a 33ms `ANALYZE`.** The
+performance pass measured the same effect on a 204,800-event relay and found the cost perfectly linear at
+~0.83 µs/row:
+
+| kind-30078 rows | 10k | 50k | 100k | 200k | 400k |
+|---|---|---|---|---|---|
+| one-document `#d` lookup | 7.2ms | 42.9ms | 80.7ms | 165.1ms | **331.1ms** |
+
+On its live test relay: pinsermon lookup 79→1ms, own-docs 78→3ms, and the steward console's ten identical
+unions **2,500→978ms**.
+
+**This is the single cheapest fix in the entire audit.** One statement at `openStore()`, one-off cost measured
+at 33ms (227ms on the larger corpus), and it also resolves P2 below and a third of P6.
+
+**Fix direction:** `ANALYZE` at `openStore()`, and again after a bulk import. Optionally add `(dtag, created_at)`
+and `(pubkey, kind, created_at)` composites so the post-`ANALYZE` plan loses its `USE TEMP B-TREE FOR ORDER BY`.
+
+## P2 — `accept()` pays that scan on every MyData sync write — **CLAIMED (agent-verified, same root cause)**
+
+`gateway.mjs:1456` runs `store.query({kinds:[30078], authors:[pubkey], limit: MEMBER_DOC_CAP+1})` on the
+catch-all member-document path — so on **every one of the seven MyData documents** a member syncs (including
+`chatseen`, added today). Measured at 24ms with 23k docs, scaling to ~331ms at 400k, synchronously, blocking
+every other client. `ANALYZE` takes it to 0.04ms.
+
+## P3 — A five-member reconnect stalls the whole relay for ten seconds — **CLAIMED (agent-verified, measured)**
+
+The relay is single-threaded and every `store.query` is a synchronous SQLite scan, so REQ work head-of-line
+blocks everything — including the HTTP that serves the web app from the same process.
+
+| load | publish→OK latency |
+|---|---|
+| idle | 14.8ms median |
+| 200 idle clients / 2,400 subscriptions | 14.2ms median (flat) |
+| **5 members reconnect at once** (60 REQs) | **10,157ms** |
+| **20 members reconnect at once** (240 REQs) | **18,712ms** |
+
+And this is triggered constantly on a thin pipe: ~20 effects key on `connTick` (`app/app.jsx:514-554`), so one
+`visibilitychange` / `focus` / `online` / app-resume tears down and re-opens the whole ~15-subscription set.
+There is a 2.5s debounce but **no backoff**. A flapping 2G radio in a congregation of fifty is a self-inflicted
+denial of service.
+
+**Fix direction:** exponential backoff with jitter on `connTick`, re-subscribe incrementally, and bound
+per-REQ work by wall-clock rather than row count.
+
+## P4 — `importAll()` throws on any replaceable event and imports nothing — **CLAIMED (agent-verified, reproduced by the agent)**
+
+`event-store.mjs:283-290` opens `BEGIN`, then calls `put()`, which at `:112` opens its **own unconditional**
+`BEGIN` per replaceable event. Nested transactions are an error, and `put()`'s catch issues a bare `ROLLBACK`
+that discards the caller's outer transaction too.
+
+Live impact is bounded — the restore route uses per-event `put()` — but the legacy JSON→SQLite migration at
+`gateway.mjs:3353` is dead: it throws every boot, `renameSync` never runs, so an old relay's entire
+`relay-db.json` history silently never migrates, for ever.
+
+## P5 — The event store's own regression test never runs — **VERIFIED**
+
+`npm test` is `node --test scripts/*.test.mjs`. `scripts/test-event-store.mjs` does not match that glob, so it
+has never been in the suite — and it exits 1 on its first assertion, on P4. The suite's
+`scripts/event-store.test.mjs` never touches `importAll` or transactions.
+
+**That is how a green suite coexists with a broken store API** — the same shape as A6 and S7. Three instances
+in one day of a guard whose universe is smaller than its claim.
+
+## P6 — The console opens ~23 subscriptions, ~10 of them byte-identical — **CLAIMED (agent-verified)**
+
+The same two-filter union appears at **17 call sites** in `src/steward.src.js`, and one of them is instantiated
+seven more times. Measured: ten of those unions cost **2,500ms and 3,428 KB** — the same bytes fetched ten
+times. Two further subscriptions are unscoped across *every* church on the relay.
+`app/steward-root.jsx:68` already names the fix: *"The deeper fix is porting the member app's `_docsHub`."*
+
+## P7 — Cold start: ~2 MB and ~50 round trips before a usable church view — **CLAIMED (agent-measured against production, GETs only)**
+
+712 KB gzipped across 47 requests for first paint, plus a 321 KB `sql-wasm.wasm` the service worker installs
+that nothing references, plus ~1 MB of church data. At a realistic 20 kB/s that is roughly **100 seconds of
+transfer before latency** — against a product whose test is "does this work over a thin pipe in Tehran".
+
+**~88 KB of that first paint (12%) is the wallet and giving code, for a feature that is switched off**
+(`WALLET_ENABLED = false`, `givingOn = false`).
+
+Good news within it: production does **not** ship runtime Babel — the 660 KB `vendor/babel.min.js` is served
+but unreferenced, so the alarming repo-root figure is the dev shell, not what members get.
+
+## P8 — The member roster emit is uncoalesced; the identical bug was fixed on the console side — **CLAIMED (agent-verified by reading)**
+
+`src/fellowship.src.js:1842-1849` — a full spread + filter + sort + synchronous `JSON.stringify` to
+localStorage + `setState`, per incoming event. The `_coalesce` helper sits 1,700 lines above in the same file,
+~12 of this function's siblings use it, and the console's identical path was explicitly fixed with a comment
+naming the cost. One line.
+
+## Smaller — all CLAIMED
+
+Steward roster re-decrypts every sealed name on every emit (~40,000 ECDH attempts over a 30s load, no cache);
+MyData serialises the whole collection eight times per synced event and keeps an append-only tombstone array
+that is **re-uploaded on every edit**; the DM thread merge is O(n²) with no `limit` on any of its four filters;
+`saveProfiles` has no cap where both its siblings do.
+
+## What held up — performance
+
+Checked and genuinely well-bounded:
+
+- **Broadcast fan-out is flat** — publish→OK stayed 14–16ms from 0 to 200 clients / 2,400 subscriptions.
+- **The 64-subscription-cap incident is retired** — member steady state is ~15 subs against a cap of 256, all
+  three kind-0 batchers hold, and no per-member subscription exists anywhere.
+- **Per-church retention works** — `cull()` is 10.5ms at 133k events, and a chatty church genuinely cannot
+  evict a quiet one.
+- **`#church` filters are fast and flat** — 1.6ms for 500 rows regardless of corpus. It is the one dimension
+  with a working composite index.
+- **Static serving is right** — mtime-keyed gzip cache, weak ETag + 304, immutable `?v=<sha>` assets.
+- **Relay memory is modest** — 182 MB RSS at 204,800 events, ~913 bytes per event.
+- **Boot is not O(n²)** — the `_hydrating` guard works; 204,800 events and 10,000 members boot in ~12s.
 
 ---
 
@@ -427,19 +560,25 @@ Named deliberately, because a list of defects is not a basis for prioritising.
 Not severity — an order where each step is independently verifiable, and the cheap certain wins come before the
 expensive uncertain ones.
 
-1. **U1 (skip closes the restore door)** and **U2 (blank spinner)**. Both are small, both strand a real member
+1. **P1 — one `ANALYZE` at `openStore()`.** One statement, 33ms, and tag lookups go 65x faster. It also fixes
+   P2 and a third of P6. Nothing else in this document has anything like that ratio of payoff to risk.
+2. **U1 (skip closes the restore door)** and **U2 (blank spinner)**. Both are small, both strand a real member
    with no way out, and U1 undermines the recovery architecture that is otherwise the best thing in the product.
-2. **U4 / S6b — a PIN throttle in the member app.** The console's implementation is 10 lines and already
+3. **U4 / S6b — a PIN throttle in the member app.** The console's implementation is 10 lines and already
    written; copy it. Members are the seizure targets.
-3. **U5 — the four overclaims.** Text-only, and the honest wording already exists elsewhere in the app.
-4. **S7 — move the care/safety/open-group cases into the two-church test harness.** Do this *before* touching
+4. **U5 — the four overclaims.** Text-only, and the honest wording already exists elsewhere in the app.
+5. **S7 — move the care/safety/open-group cases into the two-church test harness.** Do this *before* touching
    `accept()`, so each rule change is proved to bite.
-5. **S1–S4 as one scoped-membership fix.** They share a root cause and a primitive (`memberIn`) that already
+6. **S1–S4 as one scoped-membership fix.** They share a root cause and a primitive (`memberIn`) that already
    exists. Fixing them separately is four chances to scope one wrong. Latent until a second church shares a
    relay — so this is "before the first shared relay", not "tonight".
-6. **S6 — move the console's church key to SecureStorage on native.** The member app's implementation is the
+7. **S6 — move the console's church key to SecureStorage on native.** The member app's implementation is the
    template.
-7. **S5 (ungrouped chat), U3 (the push promise), U6 (silent emptiness), U7, U8** as ordinary work.
+8. **P3 (reconnect backoff)** and **P8 (one-line coalesce)** — both client-side, both cheap.
+9. **P4/P5 (the store's broken `importAll` and its orphaned test)**, then **P7** (drop the switched-off wallet
+   code from first paint — 12% of the cold-start payload).
+10. **S5 (ungrouped chat), U3 (the push promise), U6 (silent emptiness), U7, U8**, and the structural work:
+    a tag index (P-2 class) and a console `_docsHub` (P6).
 
 ## What this pass says overall
 
