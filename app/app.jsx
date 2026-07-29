@@ -29,7 +29,15 @@ const READ_FONTS = {
 const SETTINGS_DEFAULTS = { dark: false, accent: 'clay', readScale: 1 };
 const WALLET_ENABLED = false;   // pilot: the in-app self-custodial wallet (balance/add/withdraw) is parked — members give from their own external wallet. Flip to true when the wallet is intentionally in scope.
 function lsGet(key, fallback){ try{ const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }catch(e){ return fallback; } }
-function lsSet(key, val){ try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
+// A LOCKED PHONE MUST NOT WRITE THE CHURCH BACK TO DISK. AUDIT-2026-07-29, found on a device: the
+// locked-boot wipe ran correctly and the caches reappeared within seconds, because the subscriptions behind
+// these callbacks keep running while locked and re-persist through here. The engine's own caches are guarded
+// at their six write points; this is the same rule for the app's, at the one place they all pass through.
+// Any key naming a church or a member is refused while there is no signing key on the phone — everything
+// else (reader settings, the church list, the member's own data) writes exactly as before.
+const _IDENT_KEY = /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i;
+function lsCanWrite(key){ try{ return !_IDENT_KEY.test(String(key)) || !!(window.Fellowship && window.Fellowship.myPubkey); }catch(e){ return true; } }
+function lsSet(key, val){ if(!lsCanWrite(key)) return; try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
 // perf #10: merge a delivered kind-0 church profile into the church list, returning the SAME array reference when
 // nothing actually changed. The old callbacks did `cs.map(...)` unconditionally → a fresh array on every profile
 // re-delivery (incl. per-relay + reconnect), which re-ran the ~9 church-doc subscription effects keyed on `churches`
@@ -665,7 +673,7 @@ function App() {
     if (!np || !(F && F.announceMembership)) return;
     let last = 0; try { last = Number(localStorage.getItem('trinityone.hb:' + np) || 0); } catch {}
     if (Date.now() - last < 12 * 3600 * 1000) return;
-    const beat = () => { F.announceMembership(np); try { localStorage.setItem('trinityone.hb:' + np, String(Date.now())); } catch {} };
+    const beat = () => { F.announceMembership(np); if (lsCanWrite('trinityone.hb:' + np)) { try { localStorage.setItem('trinityone.hb:' + np, String(Date.now())); } catch {} } };
     if (F.ready && F.ready.then) F.ready.then(beat).catch(() => {}); else beat();
   }, [activeChurch]);
   const pendingFollowRef = React.useRef(null);   // S2: a follow link opened before onboarding — defer the join+announce until the wizard completes (consent-first)
@@ -1013,7 +1021,7 @@ function App() {
       setJoinState({ ...s, loaded: true });
       // Cache this church's LAST-KNOWN real join state, so an offline reopen can show the TRUTH (pending stays
       // pending, admitted stays admitted) instead of a hardcoded "you're in".
-      try { localStorage.setItem('trinityone.joinstate.' + activeChurch, JSON.stringify({ approval: !!s.approval, isAdmitted: !!s.isAdmitted, isPending: !!s.isPending })); } catch (e) {}
+      lsSet('trinityone.joinstate.' + activeChurch, { approval: !!s.approval, isAdmitted: !!s.isAdmitted, isPending: !!s.isPending });
     });
     // OFFLINE FALLBACK: if the relay never answers (offline / hostile network / relay down), don't spin forever —
     // and DON'T pretend the member is admitted (the old fallback hardcoded isAdmitted:true, so a brand-new member

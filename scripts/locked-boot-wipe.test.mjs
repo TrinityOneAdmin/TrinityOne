@@ -67,19 +67,21 @@ const DEVICE_KEYS = [
   'trinityone.care.n.' + NPUB, 'trinityone.care.s.' + NPUB,
   // the eleven the prefix list never knew about
   'trinityone.admitted.' + CHURCH + '|' + MEMBER, 'trinityone.approvedToast.' + NPUB,
-  'trinityone.backedup.' + NPUB, 'trinityone.categories.' + CHURCH, 'trinityone.chatTabSeen.' + NPUB,
+  'trinityone.categories.' + CHURCH, 'trinityone.chatTabSeen.' + NPUB,
   'trinityone.devos.' + CHURCH, 'trinityone.devos.' + NPUB, 'trinityone.hb:' + NPUB,
   'trinityone.joinstate.' + NPUB, 'trinityone.msgtags.' + NPUB, 'trinityone.plans.' + CHURCH,
   // must SURVIVE
   'trinityone.followedChurches', 'trinityone.activeChurch',
   'trinityone.outbox', 'trinityone.mydata:data/journal', 'trinityone.mydata:data/notes',
   'trinityone.readerScale', 'trinityone.settings', 'trinityone.nostr.mnemonic.enc',
+  'trinityone.backedup.' + NPUB,   // names the MEMBER, not the church — see the test below
   'trinityone.bible.translation', 'trinityone.reading.position',
 ];
 
 test('the caches the device was still holding are wiped', () => {
   const left = runWipe(DEVICE_KEYS);
-  const churchKeyed = left.filter(k => k.includes(CHURCH) || k.includes(NPUB));
+  // backedup.<own npub> is a deliberate keep — see its own test below.
+  const churchKeyed = left.filter(k => (k.includes(CHURCH) || k.includes(NPUB)) && !k.startsWith('trinityone.backedup.'));
   assert.deepEqual(churchKeyed, [],
     'these still name the congregation on a locked phone: ' + churchKeyed.join(', '));
 });
@@ -108,8 +110,16 @@ test('no key naming the congregation survives, including ones nobody listed', ()
   // NAME and no version of the prefix list covered them, because every new feature added one and nobody went
   // back. This is the same failure as the relay's served-file denylist.
   const left = runWipe(DEVICE_KEYS);
-  const named = left.filter(k => /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i.test(k));
+  const named = left.filter(k => /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i.test(k) && !k.startsWith('trinityone.backedup.'));
   assert.deepEqual(named, [], 'these still name the congregation on a locked phone: ' + named.join(', '));
+});
+
+test('the seed-backup flag is kept, deliberately', () => {
+  // It carries the member's OWN npub, not the congregation's, and their key is already on this device. Wiping
+  // it costs a re-nag to back up the seed after every lock, for no forensic gain. Stated, not silent.
+  const left = runWipe(DEVICE_KEYS);
+  assert.ok(left.some(k => k.startsWith('trinityone.backedup.')),
+    'wiping the backup flag makes the app ask the member to write down their words again after every lock');
 });
 
 test('the church list is KEPT, and the comment says so', () => {

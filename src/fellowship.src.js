@@ -1663,8 +1663,11 @@ window.Fellowship = {
     // point of the lock screen.
     const KEEP = new Set(['trinityone.followedChurches', 'trinityone.activeChurch',
       'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc']);
+    // backedup.<own npub> names the MEMBER, not the congregation, and their own key is on this device
+    // anyway. Wiping it makes the app re-nag for a seed backup after every lock, which is a real cost for
+    // no forensic gain.
     const doomed = (k) => !!k && k.startsWith('trinityone.') && !KEEP.has(k)
-      && !k.startsWith('trinityone.mydata:')
+      && !k.startsWith('trinityone.mydata:') && !k.startsWith('trinityone.backedup.')
       && (PREFIXES.some(p => k.startsWith(p)) || IDENTIFIER.test(k));
     try {
       const kill = [];
