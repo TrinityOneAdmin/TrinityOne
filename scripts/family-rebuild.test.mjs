@@ -39,8 +39,13 @@ test('it ignores anything that is not a real child key', () => {
 });
 
 test('and it actually runs after an identity arrives', () => {
-  assert.match(SRC, /for \(const hub of _docsHubs\.values\(\)\) _rebuildFamily\(hub\.cp\)/,
-    'nothing calls the rebuild, so it can never repair a wiped phone');
+  // AUDIT-2026-07-28 F11. This used to assert that the CALL SITE TEXT existed inside deriveFromIdentity —
+  // and it was green while that call was inert on every path (empty _docsHubs at a cold boot; socket closed
+  // by reconnectAll on unlock). A string match cannot see either. The call now hangs off a hub that has
+  // actually answered; whether it RETURNS A CHILD is proved by running it against a real relay in
+  // scripts/family-rebuild-runs.test.mjs, which is where this assertion's real weight now lives.
+  assert.match(SRC, /if \(sk && !hub\.familyRebuilt\)[\s\S]{0,200}_rebuildFamily\(hub\.cp\)/,
+    'nothing calls the rebuild from a live, keyed socket, so it can never repair a wiped phone');
   assert.match(V, /_rebuildFamily/, 'the rebuild is missing from the shipped bundle');
 });
 

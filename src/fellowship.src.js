@@ -1090,6 +1090,11 @@ function _docsHubOpen(hub) {
     },
     oneose() {
       _hubEosed(hub); _docsHubSaveSoon(hub);
+      // F11: rebuild the parent's children HERE. This fires on a socket that has just answered us, and only
+      // once we hold a signing key — so it survives the unlock reconnect that used to kill it, and it works
+      // at a cold boot, where the old call site ran before any hub existed. Once per hub per connection;
+      // reconnectAll clears the flag so a fresh authenticated socket tries again.
+      if (sk && !hub.familyRebuilt) { hub.familyRebuilt = true; try { _rebuildFamily(hub.cp); } catch (err) {} }
       for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(); } catch (err) { console.error(err); } }
     },
   });
@@ -1258,8 +1263,12 @@ async function deriveFromIdentity() {
     const mine = window.Fellowship.myProfile || {};
     if (pub && (!mine.av && !mine.picture)) window.Fellowship.requestProfiles([pub]);
   } catch (e) {}
-  // …and the children, wiped by the same locked boot and rebuildable from our own guardian requests.
-  try { for (const hub of _docsHubs.values()) _rebuildFamily(hub.cp); } catch (e) {}
+  // …and the children. NOT rebuilt here any more. AUDIT-2026-07-28 F11: this loop was inert on every path.
+  // At a cold boot _docsHubs is still EMPTY (hubs open once the app knows its church, which is after this
+  // runs), so it iterated nothing. On unlock the hubs do exist — and sixteen lines below, reconnectAll()
+  // calls pool.close() on every relay socket, which is exactly what _rebuildFamily's subscription is riding,
+  // so its REQ died before EOSE. The rebuild now hangs off each hub's own EOSE instead (see _docsHubOpen),
+  // where the socket demonstrably works and the signing key demonstrably exists.
   // …and the name key. Left out of both recovery hooks, it was the one key with no way back: the docs hub uses
   // a persisted since-cursor, and a name key is published once at church setup, so it does not re-arrive. On any
   // launch where the hub cache was warm and the signing key derived a moment late, the ring stayed empty for the
@@ -1300,7 +1309,7 @@ function reconnectAll() {
   _authRefetchArmed = false;   // a new connection will auth again → re-arm the post-auth re-fetch
   _relayAuthedAt = 0;          // F12: and it has proved nothing yet, so no gated read is authoritative until it does
   // drop every church-doc hub's live sub so it re-opens fresh (buffer + cursor stay warm in memory)
-  for (const hub of _docsHubs.values()) { const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }
+  for (const hub of _docsHubs.values()) { hub.familyRebuilt = false; const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }   // F11: re-arm the family rebuild for the new socket
   // Shared subscriptions ride the same sockets, so they die with them. Drop the registry too, or the next
   // subscriber joins a dead entry and is handed a stale `last` instead of a fresh REQ — which is what made
   // Watch's "taking a while — Retry" button do nothing while another screen held the same stream.
@@ -2560,7 +2569,12 @@ window.Fellowship = {
   },
   // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
   myChildren(churchNpub) {
-    const list = _loadChildren();
+    // F11: a REBUILT link carries no name. The guardian request stopped carrying the child's name in the
+    // clear (AUDIT-2026-07-27, correctly — it was readable by the whole church), so the rebuild has nothing
+    // to store and the family screen rendered a blank row. The parent is a member of the same church, so
+    // the child's sealed name resolves through exactly the same map every other member's does; fall back to
+    // the deterministic handle when it has not arrived yet, rather than showing nothing.
+    const list = _loadChildren().map(c => (c && !c.name && c.child) ? { ...c, name: (displayFor(c.child) || {}).name || '' } : c);
     if (!churchNpub) return list;
     const cp = toPub(churchNpub); return cp ? list.filter(c => c.churchPub === cp) : list;
   },

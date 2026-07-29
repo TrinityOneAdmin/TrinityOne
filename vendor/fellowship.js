@@ -6912,6 +6912,13 @@
       oneose() {
         _hubEosed(hub);
         _docsHubSaveSoon(hub);
+        if (sk && !hub.familyRebuilt) {
+          hub.familyRebuilt = true;
+          try {
+            _rebuildFamily(hub.cp);
+          } catch (err) {
+          }
+        }
         for (const h of [...hub.handlers]) {
           try {
             h.oneose && h.oneose();
@@ -7160,10 +7167,6 @@
       if (pub && (!mine.av && !mine.picture)) window.Fellowship.requestProfiles([pub]);
     } catch (e) {
     }
-    try {
-      for (const hub of _docsHubs.values()) _rebuildFamily(hub.cp);
-    } catch (e) {
-    }
     for (const hub of _docsHubs.values()) {
       for (const e of hub.buf.values()) {
         const d = _dtag(e);
@@ -7217,6 +7220,7 @@
     _authRefetchArmed = false;
     _relayAuthedAt = 0;
     for (const hub of _docsHubs.values()) {
+      hub.familyRebuilt = false;
       const c = hub.closer;
       hub.closer = null;
       if (c) {
@@ -8940,7 +8944,7 @@
     },
     // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
     myChildren(churchNpub) {
-      const list = _loadChildren();
+      const list = _loadChildren().map((c) => c && !c.name && c.child ? { ...c, name: (displayFor(c.child) || {}).name || "" } : c);
       if (!churchNpub) return list;
       const cp = toPub(churchNpub);
       return cp ? list.filter((c) => c.churchPub === cp) : list;
