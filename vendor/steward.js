@@ -11386,6 +11386,7 @@ zoo`.split("\n");
     async setPin(pin) {
       const seed = currentMnemonic || lsGet(KEY_LS);
       if (!seed || !pin) return false;
+      if (String(pin).length < 6) return false;
       const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
       lsSet(ENC_LS, JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));

@@ -742,6 +742,15 @@ window.Steward = {
   async setPin(pin) {                              // encrypt the current seed at rest; remove the plaintext copy
     const seed = currentMnemonic || lsGet(KEY_LS);
     if (!seed || !pin) return false;
+    // AUDIT-2026-07-28 F18. THE FLOOR LIVES HERE, not in the screens. There was no length check at all, and
+    // the two screens that call this disagreed: the forced first-run gate demanded six, the Settings →
+    // Security dialog demanded four and said so. So a steward pushed through the six-character gate could
+    // afterwards change their PIN to four characters and it SUCCEEDED. This PIN is the only secret over the
+    // church key at rest — the key the gate itself describes as signing "as the whole church — if it leaks,
+    // an attacker can impersonate the church to every member". Enforced in the engine so a third screen
+    // added later inherits it rather than having to remember. (The member app's identity.src.js has had this
+    // since audit #5; the console engine never did.)
+    if (String(pin).length < 6) return false;
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
     lsSet(ENC_LS, JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));   // M11: v2 blob carries its iteration count

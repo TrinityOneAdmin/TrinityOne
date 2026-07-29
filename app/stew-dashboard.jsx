@@ -4850,7 +4850,9 @@ function PinModal({ action, onClose }) {
       if (ok) onClose(true); else setErr('That PIN isn’t right.');
       return;
     }
-    if (pin.length < 4) { setErr('Use at least 4 digits — a longer PIN or passphrase is safer.'); return; }
+    // F18: the same six the forced gate and the engine require. Four was accepted here and by the engine,
+    // so the church key could be re-encrypted under a weaker PIN from Settings after setup.
+    if (pin.length < 6) { setErr('Use at least 6 characters. Adding letters makes it much harder to guess.'); return; }
     if (pin !== pin2) { setErr('They don’t match.'); return; }
     setBusy(true);
     const ok = await window.Steward.setPin(pin);
