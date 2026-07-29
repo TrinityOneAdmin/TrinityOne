@@ -2416,6 +2416,31 @@ function serveStatic(req, res) {
       createReadStream(b.tgz).on('error', () => { try { res.destroy(); } catch {} }).pipe(res);
       return;
     }
+    // ARCHITECTURE-AUDIT-2026-07-30 A4. ASK BEFORE PROMISING. The 200 below used to be written before the
+    // `git archive` spawn, so a host that could not produce a bundle had already claimed success by the time
+    // it found out — and all it could do was destroy the socket, which through a tunnel arrives as a clean,
+    // EMPTY, successful response. Measured on a8: 200 with 0 bytes, three polls, /status healthy throughout.
+    // An installed relay is unpacked from a tarball, so it has no .git and this was its normal answer.
+    //
+    // That is indistinguishable from a zero-byte release to the documented installer: relay-app/install.sh
+    // fetches with `curl -f`, which only fails on an error STATUS. It does fail safe one step later (tar
+    // exits 2 on an empty archive) but reports "couldn't unpack the code bundle" — pointing the operator at
+    // the file instead of at the machine.
+    //
+    // The right shape was already four lines below, in /relay-app/bundle.sig, which has always refused
+    // honestly. Same file, same question, adjacent routes — one honest, one not. This is the "applied here
+    // and not to its neighbour" class scripts/trinity-rules.mjs exists for, sitting in the release path.
+    //
+    // Deliberately a cheap probe rather than buffering the archive: a release host must keep STREAMING (the
+    // bundle is ~50 MB and every relay self-update pulls it), so the only thing established up front is
+    // whether a source checkout exists at all. spawnSync is fine on this route — ensureSignedBundle above
+    // already shells out synchronously on the same path, and this is a rare, cacheable request.
+    const canArchive = spawnSync('git', ['-C', ROOT, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { encoding: 'utf8' });
+    if (canArchive.status !== 0) {
+      res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+      res.end('no bundle (this host has no release key and no source checkout, so it does not publish releases — fetch it from the release host)');
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="trinityone.tar.gz"' });
     const git = spawn('git', ['-C', ROOT, 'archive', '--format=tar.gz', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] });
     git.stdout.pipe(res);
