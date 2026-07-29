@@ -24,6 +24,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const F = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const CP = 'c'.repeat(64);
@@ -115,6 +116,6 @@ test('and something re-runs the seal once we have authenticated', async () => {
 test('a new connection has proved nothing', async () => {
   const at = F.indexOf('function reconnectAll');
   assert.notEqual(at, -1, 'reconnectAll is gone — re-anchor this test');
-  assert.match(F.slice(at, at + 900), /_relayAuthedAt = 0/,
+  assert.match(fnBody(F, at), /_relayAuthedAt = 0/,
     'the authenticated-at stamp survives a reconnect, so a fresh unauthenticated socket inherits the old proof');
 });

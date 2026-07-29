@@ -15,6 +15,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const SRC = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8');
 const BUNDLE = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
@@ -114,7 +115,7 @@ test('a handler that declares nothing still gets the FULL replay (opt-in, not op
   // (safeguarding, join, message tags, care needs, care availability) must keep receiving everything.
   const at = BUNDLE.indexOf('function _onChurchDocs(');
   assert.notEqual(at, -1, '_onChurchDocs missing from the shipped bundle');
-  const chunk = BUNDLE.slice(at, at + 1600);
+  const chunk = fnBody(BUNDLE, at);
   assert.match(chunk, /Array\.isArray\(h\.want\) && h\.want\.length/, 'the want check must be guarded so an undeclared handler falls through');
   assert.match(chunk, /else pool0 = \[\.\.\.hub\.buf\.values\(\)\]/, 'the full-corpus fallback is missing — undeclared handlers would replay nothing');
 });

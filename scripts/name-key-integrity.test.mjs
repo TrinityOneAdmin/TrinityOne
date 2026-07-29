@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44v2 } from 'nostr-tools/nip44';
+import { fnBody } from './test-slice.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -489,6 +490,6 @@ test('the directory opt-out survives a locked boot too', () => {
   // `hidden` is published, so it was always recoverable — it simply was not recovered, so a lock silently
   // made a member who had opted OUT of the directory visible again.
   const at = FELLOWSHIP.indexOf('function _recoverOwnProfile');
-  const fn = FELLOWSHIP.slice(at, at + 900);
+  const fn = fnBody(FELLOWSHIP, at);
   assert.match(fn, /hidden/, 'a member who opted out of the directory is made visible again by a lock');
 });

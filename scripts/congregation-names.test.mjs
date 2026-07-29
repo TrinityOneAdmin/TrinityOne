@@ -19,6 +19,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { requireFreePort } from './test-ports.mjs';
+import { fnBody } from './test-slice.mjs';
 
 const PORT = 8900;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -163,7 +164,7 @@ test('the member app fans one name out rather than making the caller remember ev
   const F = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
   assert.match(F, /syncSealedNames/, 'there is no fan-out — a member joining a second church would drift into two names');
   const at = F.indexOf('async syncSealedNames');
-  const body = F.slice(at, at + 900);
+  const body = fnBody(F, at);
   assert.match(body, /myProfile \|\| \{\}\)\.name/, 'the fan-out must use the member’s ONE name, not a per-church one');
   // Keyed on the name AND the key it was sealed under. On the name alone, the re-seal that exists to heal a
   // rotation found the same name and skipped, leaving it sealed under a key nobody holds. AUDIT-2026-07-27.
@@ -197,14 +198,14 @@ test('the console mints and maintains the name key', () => {
   assert.notEqual(at, -1, 'the key-distributor loop moved — re-anchor this test');
   // The steward roster is passed too: without it a delegated console is not a recipient of the envelope it
   // is meant to maintain, which is how it ended up holding an empty ring and wiping the church's names.
-  assert.match(DASH.slice(at, at + 900), /ensureNameKeyForMembers\(memberPubs, stewardRoster\)/,
+  assert.match(fnBody(DASH, at), /ensureNameKeyForMembers\(memberPubs, stewardRoster\)/,
     'nothing mints a name key, so every seal in the member app silently does nothing');
 });
 
 test('blocking a member rotates the name key too', () => {
   const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const at = DASH.indexOf('const block = (pk)');
-  const body = DASH.slice(at, at + 3000);
+  const body = fnBody(DASH, at);
   assert.match(body, /ensureNameKeyForMembers\([^)]*\{\s*rotate:\s*true\s*\}/,
     'a blocked member keeps the key and can still read the congregation’s names — the one thing this stops');
 });

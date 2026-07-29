@@ -28,6 +28,7 @@ import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
+import { fnBody } from './test-slice.mjs';
 
 const PORT = 8974;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -218,7 +219,7 @@ test('the wizard calls the self-healing version, not the one-shot', () => {
   const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const at = D.indexOf('const saveName = async () =>');
   assert.notEqual(at, -1, 'the wizard name step is gone — re-anchor this test');
-  const body = D.slice(at, at + 700);
+  const body = fnBody(D, at);
   assert.match(body, /ensureJoinPolicy/, 'the wizard still fires the one-shot setJoinPolicy, which the relay refuses');
   assert.doesNotMatch(body, /setJoinPolicy\(true\)/, 'the one-shot is still there');
   assert.match(D, /registerWithRelay[\s\S]{0,400}?ensureJoinPolicy/,

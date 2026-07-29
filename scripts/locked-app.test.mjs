@@ -13,6 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const APP = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
 const TODAY = readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8');
@@ -21,7 +22,7 @@ test('a locked app has no church in context at all', () => {
   const at = APP.indexOf('church: commLocked ?');
   assert.notEqual(at, -1,
     'ctx.church is no longer nulled while locked — every church-derived screen reads it, so the church name comes back');
-  assert.match(APP.slice(at, at + 120), /commLocked \? null/, 'locked must yield null, not a fallback church');
+  assert.match(fnBody(APP, at), /commLocked \? null/, 'locked must yield null, not a fallback church');
 });
 
 test('the serving card cannot render without a church', () => {

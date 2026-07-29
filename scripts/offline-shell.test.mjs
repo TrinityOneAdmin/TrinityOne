@@ -12,6 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const SW = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
 const APP = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
@@ -26,14 +27,14 @@ test('the precache is derived from index.html, not hand-maintained', () => {
 
 test('install caches whatever the page actually references', () => {
   const at = SW.indexOf("addEventListener('install'");
-  const body = SW.slice(at, at + 400);
+  const body = fnBody(SW, at);
   assert.match(body, /shellUrls\(\)/, 'install must use the derived list');
   assert.match(body, /catch/, 'one 404 must not fail the whole install');
 });
 
 test('a navigation always falls back to the cached shell', () => {
   const at = SW.indexOf('if (isShell)');
-  const body = SW.slice(at, at + 400);
+  const body = fnBody(SW, at);
   assert.match(body, /caches\.match\('\.\/index\.html'\)/,
     'without this a reload with the server down renders the browser’s error page instead of the app');
 });

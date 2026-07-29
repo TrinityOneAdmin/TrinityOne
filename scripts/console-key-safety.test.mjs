@@ -9,6 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
@@ -69,6 +70,6 @@ test('DashMembers actually has the groups it rotates', () => {
   // A silent `typeof groups === "undefined"` would make the loop above a no-op that still matches every regex.
   const i = DASH.indexOf('function DashMembers()');
   assert.notEqual(i, -1);
-  assert.match(DASH.slice(i, i + 400), /const groups = window\.useStewardGroups/,
+  assert.match(fnBody(DASH, i), /const groups = window\.useStewardGroups/,
     'block() iterates `groups`, so DashMembers must actually subscribe to them');
 });
