@@ -11925,7 +11925,6 @@ zoo`.split("\n"));
   var import_qrcode_generator = __toESM(require_qrcode());
   var STORE_KEY = "trinityone.nostr.mnemonic";
   var ENC_KEY = "trinityone.nostr.mnemonic.enc";
-  var HANDLE_POOL = ["Cedar", "River", "Sparrow", "Olive", "Wren", "Maple", "Reed", "Dove", "Ash", "Linden", "Heron", "Bramble"];
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
   var memMnemonic = null;
   var webPersisted = false;
@@ -12032,7 +12031,13 @@ zoo`.split("\n"));
     return {
       pubkey: pubHex,
       npub: npubEncode(pubHex),
-      handle: "Anonymous " + HANDLE_POOL[h % HANDLE_POOL.length],
+      // NO AUTO-GENERATED PSEUDONYM (2026-07-30, owner's call). This was "Anonymous " + a word from a pool, so a
+      // member who had chosen nothing still appeared to have picked a name — which removed any reason to set a
+      // real one and made anonymity the default posture. In a church the direction is the opposite: real names
+      // encouraged, anonymity available and explicit. Empty means "not chosen"; the UI says so and offers to fix
+      // it, rather than inventing an identity on the member's behalf. Their avatar (symbol + colour, hashed off
+      // this same key) still tells them apart. See UNNAMED in src/fellowship.src.js.
+      handle: "",
       color: COLORS[(h >>> 8) % COLORS.length]
     };
   }

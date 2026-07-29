@@ -486,13 +486,28 @@ function loadRelays() {
   // be seen. Fall back to the shared canonical pool so the app always has somewhere to publish + read.
   return (DEFAULT_RELAYS.length ? DEFAULT_RELAYS : CANONICAL_RELAYS).slice();
 }
-const HANDLE_POOL = ['Cedar', 'River', 'Sparrow', 'Olive', 'Wren', 'Maple', 'Reed', 'Dove', 'Ash', 'Linden', 'Heron', 'Bramble'];
+// NO AUTO-GENERATED PSEUDONYM. 2026-07-30, owner's call.
+//
+// This used to be `HANDLE_POOL = ['Cedar','River','Sparrow',…]` and every unnamed key was displayed as
+// "Anonymous River" — a name nobody chose, that looked deliberate. Two things wrong with it in a CHURCH:
+// it removed any reason to set a real name (the default already looked like one), and it made anonymity the
+// product's default posture rather than an option someone takes. TrinityOne's direction is real names
+// encouraged, anonymity available and explicit.
+//
+// What replaces it is NOT a blank. A blank is the silent-failure class: a chat row with no author reads as
+// broken, not as unnamed. Unnamed people are shown as "Member" — honest, obviously not a chosen name — and
+// they stay TELLABLE APART by their avatar, which is already deterministic per pubkey (AV_SYMBOLS + COLORS,
+// hashed off the key). So the distinguishability the pseudonym provided is kept; only the fake name goes.
+//
+// displayFor() now also returns `named`, so a caller can ask "has this person chosen a name?" instead of
+// inferring it from `name === handle` — which was the old idiom and only worked while the fallback WAS a name.
+const UNNAMED = 'Member';
 const COLORS = ['#5E8C6A', '#C2913A', '#C25A38', '#5360D6', '#1F9488', '#C24B7A'];
 
 function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
 function profile(pub) {
   const h = hashStr(pub || '');
-  return { pubkey: pub, handle: 'Anonymous ' + HANDLE_POOL[h % HANDLE_POOL.length], color: COLORS[(h >>> 8) % COLORS.length] };
+  return { pubkey: pub, handle: '', color: COLORS[(h >>> 8) % COLORS.length] };
 }
 
 const pool = new SimplePool();
@@ -1269,8 +1284,12 @@ function displayFor(pubkey) {
   const base = profile(pubkey);
   const p = profiles[pubkey];
   const av = _avSuppressPhoto(pubkey, (p && p.av) || { kind: 'symbol', color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || '') % AV_SYMBOLS.length] });
-  const handle = (p && p.name) || base.handle;
-  return { pubkey, handle, name: handle, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '' };
+  // `named` is the honest question — "has this person chosen a name?" — and it must not be inferred from
+  // `name === handle`, which is what callers used to do and which only held while the fallback was itself a
+  // name. handle/name stay populated (never blank: an author-less chat row reads as broken, not as unnamed).
+  const chosen = (p && p.name) || '';
+  const handle = chosen || UNNAMED;
+  return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '' };
 }
 
 async function deriveFromIdentity() {

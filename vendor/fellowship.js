@@ -6267,7 +6267,7 @@
     }
     return (DEFAULT_RELAYS.length ? DEFAULT_RELAYS : CANONICAL_RELAYS).slice();
   }
-  var HANDLE_POOL = ["Cedar", "River", "Sparrow", "Olive", "Wren", "Maple", "Reed", "Dove", "Ash", "Linden", "Heron", "Bramble"];
+  var UNNAMED = "Member";
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
   function hashStr(s) {
     let h = 0;
@@ -6276,7 +6276,7 @@
   }
   function profile(pub2) {
     const h = hashStr(pub2 || "");
-    return { pubkey: pub2, handle: "Anonymous " + HANDLE_POOL[h % HANDLE_POOL.length], color: COLORS[(h >>> 8) % COLORS.length] };
+    return { pubkey: pub2, handle: "", color: COLORS[(h >>> 8) % COLORS.length] };
   }
   var pool = new SimplePool();
   var sk = null;
@@ -7195,8 +7195,9 @@
     const base = profile(pubkey);
     const p = profiles[pubkey];
     const av = _avSuppressPhoto(pubkey, p && p.av || { kind: "symbol", color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] });
-    const handle = p && p.name || base.handle;
-    return { pubkey, handle, name: handle, color: av.color || base.color, av, picture: p && p.picture, nip05: p && p.nip05 || "" };
+    const chosen = p && p.name || "";
+    const handle = chosen || UNNAMED;
+    return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: p && p.nip05 || "" };
   }
   async function deriveFromIdentity() {
     const wasKeyless = !sk;

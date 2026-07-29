@@ -25,7 +25,6 @@ const STORE_KEY = 'trinityone.nostr.mnemonic';
 // above is removed), so without the PIN the key can't load — the church community is unreachable and
 // the app presents as a plain offline Bible reader (plausible deniability). OFF by default.
 const ENC_KEY = 'trinityone.nostr.mnemonic.enc';
-const HANDLE_POOL = ['Cedar', 'River', 'Sparrow', 'Olive', 'Wren', 'Maple', 'Reed', 'Dove', 'Ash', 'Linden', 'Heron', 'Bramble'];
 const COLORS = ['#5E8C6A', '#C2913A', '#C25A38', '#5360D6', '#1F9488', '#C24B7A'];
 
 let memMnemonic = null;   // in-memory fallback (private mode / localStorage unavailable)
@@ -127,7 +126,13 @@ function profileFromPub(pubHex) {
   return {
     pubkey: pubHex,
     npub: npubEncode(pubHex),
-    handle: 'Anonymous ' + HANDLE_POOL[h % HANDLE_POOL.length],
+    // NO AUTO-GENERATED PSEUDONYM (2026-07-30, owner's call). This was "Anonymous " + a word from a pool, so a
+    // member who had chosen nothing still appeared to have picked a name — which removed any reason to set a
+    // real one and made anonymity the default posture. In a church the direction is the opposite: real names
+    // encouraged, anonymity available and explicit. Empty means "not chosen"; the UI says so and offers to fix
+    // it, rather than inventing an identity on the member's behalf. Their avatar (symbol + colour, hashed off
+    // this same key) still tells them apart. See UNNAMED in src/fellowship.src.js.
+    handle: '',
     color: COLORS[(h >>> 8) % COLORS.length],
   };
 }

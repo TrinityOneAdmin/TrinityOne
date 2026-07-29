@@ -798,10 +798,12 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
   const curName = (identity && identity.name && identity.name.trim()) || identity?.handle || 'your current identity';
 
   const create = async () => {
-    const pool = D.HANDLE_POOL;
     // REAL: mint a fresh key on the device, then publish the chosen name/mark to it
     const ID = window.TrinityIdentity, FS = window.Fellowship;
-    let npub = genNpub(), handle = 'Anonymous ' + pool[Math.floor(Math.random() * pool.length)];
+    // No invented pseudonym here either (2026-07-30). This sheet mints a BRAND-NEW key, so it was the one
+    // place that still handed a member an "Anonymous <word>" they never chose. '' means unnamed, and the UI
+    // asks for a name instead of pretending one exists.
+    let npub = genNpub(), handle = '';
     try {
       if (ID && ID.regenerate) { await ID.regenerate(); if (ID.current) { npub = ID.current.npub || npub; handle = ID.current.handle || handle; } }
       if (FS && FS.setProfile && (name.trim() || av)) { await FS.ready; await FS.setProfile({ name: name.trim(), av }); }

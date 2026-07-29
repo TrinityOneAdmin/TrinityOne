@@ -19,7 +19,11 @@ function useIdentity() {
   return (window.TrinityIdentity && window.TrinityIdentity.current) || window.TrinityData.CHAT_IDENTITY;
 }
 // the current user's chosen display name (kind-0) or the anonymous handle
-function myName(id) { return (window.Fellowship && window.Fellowship.myProfile && window.Fellowship.myProfile.name) || id.handle; }
+// The CHOSEN name, or '' — no invented pseudonym behind it (2026-07-30). hasName() is the honest question;
+// it used to be asked as `myName(id) === id.handle`, which only worked while the fallback was itself a name.
+function myChosenName(id) { return ((window.Fellowship && window.Fellowship.myProfile && window.Fellowship.myProfile.name) || '').trim(); }
+function hasName(id) { return !!myChosenName(id); }
+function myName(id) { return myChosenName(id) || 'No name set'; }
 // the current user's avatar (chosen symbol/monogram, or a deterministic default)
 function myAvatar(id) {
   const FS = window.Fellowship;
@@ -141,7 +145,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{myName(id)}</div>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 4, background: 'var(--clay-soft)', color: 'var(--clay-ink)', padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 700 }}>
-                <Icon name="shield" size={12} /> {myName(id) === id.handle ? 'Anonymous member' : 'TrinityOne member'}</div>
+                <Icon name="shield" size={12} /> {hasName(id) ? 'TrinityOne member' : 'No name set'}</div>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
@@ -160,7 +164,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 16 }}>
           {rowBtn('book', 'Help & guides', 'Simple guides — read aloud if you like', () => { onClose(); ctx.openHelp('index'); }, 'var(--clay)')}
-          {rowBtn('pen', 'Display name', myName(id) === id.handle ? 'Choose a name your church sees' : myName(id), () => setPane('profile'))}
+          {rowBtn('pen', 'Display name', hasName(id) ? myChosenName(id) : 'Choose a name your church sees', () => setPane('profile'))}
           {rowBtn('key', 'Recovery phrase', 'Back up your 12 words — your only way to restore', () => setPane('recovery'))}
           {rowBtn('refresh', 'Restore an identity', 'Paste a 12-word phrase from another device', () => setPane('restore'))}
           {rowBtn('qr', 'Invite a member', 'Share a link to join your church', startInvite, 'var(--clay)')}
@@ -189,7 +193,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
       {pane === 'profile' && <React.Fragment>
         <Header title="Name & mark" back />
         <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '2px 0 16px' }}>
-          Pick a name and a mark your church sees instead of an anonymous handle. You stay anonymous — no email or phone, just a name on your key. Leave the name blank to go back to <b style={{ color: 'var(--ink)' }}>{id.handle}</b>.
+          Pick a name and a mark your church sees. Your church is people who know you — a real name helps them. There is still no email and no phone number, just a name on your key. Leave it blank and your church simply sees <b style={{ color: 'var(--ink)' }}>Member</b>.
         </p>
         <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' }}>DISPLAY NAME</div>
         <input value={nameInput} onChange={e => setNameInput(e.target.value)} maxLength={40} placeholder="e.g. Maria from Tuesday group"
