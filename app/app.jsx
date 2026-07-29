@@ -1765,6 +1765,9 @@ function App() {
               onFollowed={() => { setChurchSwitcher(false); toast('Now following — loading church…'); }} />
 
             <Toast msg={toastMsg} />
+            {/* A2: the member app's only "that didn't work" surface. Self-contained — it listens for
+                trinity-feature-failed itself, so nothing else here has to know about it. */}
+            <FeatureTrouble />
           </React.Fragment>
         )}
 

@@ -6889,7 +6889,7 @@
             try {
               h.onroster && h.onroster();
             } catch (err) {
-              console.error(err);
+              _featureFailed("steward-roster refresh", d, err);
             }
           }
           return;
@@ -6909,6 +6909,7 @@
                 try {
                   h.onevent(e2, d2);
                 } catch (err) {
+                  _featureFailed("care-key replay", d2, err);
                 }
               }
             }
@@ -6917,6 +6918,7 @@
             try {
               h.onroster && h.onroster();
             } catch (err) {
+              _featureFailed("roster refresh", d, err);
             }
           }
           return;
@@ -6925,7 +6927,7 @@
           try {
             h.onevent(e, d);
           } catch (err) {
-            console.error(err);
+            _featureFailed("live update", d, err);
           }
         }
       },
@@ -6937,13 +6939,14 @@
           try {
             _rebuildFamily(hub.cp);
           } catch (err) {
+            _featureFailed("family rebuild", "", err);
           }
         }
         for (const h of [...hub.handlers]) {
           try {
             h.oneose && h.oneose();
           } catch (err) {
-            console.error(err);
+            _featureFailed("load complete", "", err);
           }
         }
       }
@@ -6954,6 +6957,28 @@
       } catch {
       }
     };
+  }
+  var _FAILURES = [];
+  function _featureFailed(where, dtag, err) {
+    try {
+      console.error("[trinityone] " + where + " failed on " + (dtag || "(no d-tag)"), err);
+    } catch (e) {
+    }
+    const rec = {
+      at: Date.now(),
+      where,
+      doc: String(dtag || ""),
+      message: err && (err.message || String(err)) || "unknown error"
+    };
+    try {
+      _FAILURES.push(rec);
+      while (_FAILURES.length > 50) _FAILURES.shift();
+    } catch (e) {
+    }
+    try {
+      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("trinity-feature-failed", { detail: rec }));
+    } catch (e) {
+    }
   }
   function _onChurchDocs(cp, h) {
     const hub = _docsHub(cp);
@@ -6976,14 +7001,14 @@
       try {
         h.onevent(e, d);
       } catch (err) {
-        console.error(err);
+        _featureFailed("initial replay", d, err);
       }
     }
     if (hub.eosed && h.oneose) {
       try {
         h.oneose();
       } catch (err) {
-        console.error(err);
+        _featureFailed("load complete", "", err);
       }
     }
     let off = false;
@@ -7395,6 +7420,10 @@
   }
   window.Fellowship = {
     relays: loadRelays(),
+    // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
+    // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
+    // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".
+    recentFailures: () => _FAILURES.slice(),
     refetchChurchDocs,
     // force church-doc hubs to re-fetch on app resume (updates without a full restart)
     CANONICAL_RELAY,

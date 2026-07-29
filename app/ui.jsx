@@ -446,4 +446,46 @@ function Toast({ msg }) {
   );
 }
 
-Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast });
+// ── Something didn't load ──
+// ARCHITECTURE-AUDIT-2026-07-30 A2. The steward console has had a failure banner for a while; the member app
+// had no way to report a failure at all, so a handler that threw produced an EMPTY screen rather than a
+// broken one — "this church has no groups" and "that code crashed" looked identical. That is how the
+// member-restore bug survived for its whole life.
+//
+// Deliberately NOT the technical message. A member cannot act on "TypeError: x is undefined", and on the
+// connections this product is built for a scary string is worse than useless. They get one plain sentence and
+// something to try; the detail stays in window.Fellowship.recentFailures() for whoever is holding the phone
+// with a debugger. Auto-clears, and dismissible — it must never sit on top of the app permanently.
+//
+// Separate from Toast on purpose: Toast draws a tick, and a tick over a failure is a lie.
+function FeatureTrouble() {
+  const [show, setShow] = React.useState(false);
+  React.useEffect(() => {
+    let t = null;
+    const onFail = () => {
+      setShow(true);
+      clearTimeout(t);
+      t = setTimeout(() => setShow(false), 12000);
+    };
+    window.addEventListener('trinity-feature-failed', onFail);
+    return () => { clearTimeout(t); window.removeEventListener('trinity-feature-failed', onFail); };
+  }, []);
+  if (!show) return null;
+  return (
+    <div role="status" aria-live="polite" style={{
+      position: 'absolute', bottom: 92, left: 16, right: 16, marginInline: 'auto', maxWidth: 'calc(100% - 32px)',
+      zIndex: 61, background: 'var(--clay-soft, #f7ece2)', color: 'var(--ink)',
+      border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)',
+      padding: '11px 14px', borderRadius: 14, fontSize: 13, fontWeight: 600, lineHeight: 1.4,
+      fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow-lg)',
+      display: 'flex', alignItems: 'flex-start', gap: 9,
+    }}>
+      <Icon name="bolt" size={16} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+      <span style={{ flex: 1 }}>Some of your church information didn’t load. Pull down to refresh, or try again shortly.</span>
+      <button onClick={() => setShow(false)} aria-label="Dismiss"
+        style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--ink-3)', fontWeight: 800, fontSize: 15, lineHeight: 1, flexShrink: 0 }}>×</button>
+    </div>
+  );
+}
+
+Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast, FeatureTrouble });

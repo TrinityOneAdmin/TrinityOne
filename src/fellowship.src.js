@@ -1074,7 +1074,7 @@ function _docsHubOpen(hub) {
         // be the church or a CURRENT roster steward, so an envelope that arrives before the roster does is
         // dropped and never retried. AUDIT-2026-07-27.
         for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(GROUPKEY_D)) _ingestGroupKey(cp, e2); else if (d2 === CAREKEY_D + cp) _ingestCareKey(cp, e2); else if (d2 === NAMEKEY_D + cp) { _ingestNameKey(cp, e2); _replaySealedNames(cp, hub); } }
-        for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { console.error(err); } } return;
+        for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { _featureFailed('steward-roster refresh', d, err); } } return;
       }
       if (d === ADMITTED_D + cp) _noteAdmitted(cp, e.content);   // just approved? re-announce + re-fetch once
       if (d === RESEAT_D + cp) _noteReseat(cp, e);          // a member came back on a new key — stop showing the old one
@@ -1085,11 +1085,11 @@ function _docsHubOpen(hub) {
       // through onevent so they re-parse WITH the key now present (mirrors the L7 group-key replay above).
       if (d === CAREKEY_D + cp) {
         _ingestCareKey(cp, e);
-        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(CARE_D)) { for (const h of [...hub.handlers]) { try { h.onevent(e2, d2); } catch (err) {} } } }
-        for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) {} }
+        for (const e2 of hub.buf.values()) { const d2 = _dtag(e2); if (d2.startsWith(CARE_D)) { for (const h of [...hub.handlers]) { try { h.onevent(e2, d2); } catch (err) { _featureFailed('care-key replay', d2, err); } } } }
+        for (const h of [...hub.handlers]) { try { h.onroster && h.onroster(); } catch (err) { _featureFailed('roster refresh', d, err); } }
         return;
       }
-      for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { console.error(err); } }
+      for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { _featureFailed('live update', d, err); } }
     },
     oneose() {
       _hubEosed(hub); _docsHubSaveSoon(hub);
@@ -1097,12 +1097,39 @@ function _docsHubOpen(hub) {
       // once we hold a signing key — so it survives the unlock reconnect that used to kill it, and it works
       // at a cold boot, where the old call site ran before any hub existed. Once per hub per connection;
       // reconnectAll clears the flag so a fresh authenticated socket tries again.
-      if (sk && !hub.familyRebuilt) { hub.familyRebuilt = true; try { _rebuildFamily(hub.cp); } catch (err) {} }
-      for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(); } catch (err) { console.error(err); } }
+      if (sk && !hub.familyRebuilt) { hub.familyRebuilt = true; try { _rebuildFamily(hub.cp); } catch (err) { _featureFailed('family rebuild', '', err); } }
+      for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(); } catch (err) { _featureFailed('load complete', '', err); } }
     },
   });
   hub.closer = () => { try { sub.close(); } catch {} };
 }
+// ── THE MEMBER APP'S FAILURE CHANNEL. ARCHITECTURE-AUDIT-2026-07-30 A2 ───────────────────────────────────
+// The console has three ways to say "that did not work" (steward-write-blocked ×4, steward-publish-error,
+// steward-publish-ok) wired to a banner. The member app had NONE: all five events it dispatched were
+// data-update notifications, so of the three programs the one running on twenty people's phones was the only
+// one that could not report a failure at all.
+//
+// That is the architectural root of this project's worst failure class — looks normal, shows nothing. A throw
+// inside a handler below was caught, logged to a console THAT DOES NOT EXIST ON A PHONE, and the loop carried
+// on. The feature then yielded an empty result rather than a broken one, so it read as "this church has no
+// groups" instead of "this code threw". Exactly how the member-restore bug survived for its entire life, and
+// the same shape is on record against family rebuild and the blank-names failure.
+//
+// Deliberately small: one funnel, still logging exactly as before, plus a bounded in-memory ring (readable on
+// a device with no console via window.Fellowship.recentFailures()) and one event any surface can listen to.
+// It changes no control flow — a handler that throws is still isolated and the others still run.
+const _FAILURES = [];
+function _featureFailed(where, dtag, err) {
+  try { console.error('[trinityone] ' + where + ' failed on ' + (dtag || '(no d-tag)'), err); } catch (e) {}
+  const rec = {
+    at: Date.now(), where, doc: String(dtag || ''),
+    message: (err && (err.message || String(err))) || 'unknown error',
+  };
+  try { _FAILURES.push(rec); while (_FAILURES.length > 50) _FAILURES.shift(); } catch (e) {}
+  // Never let the reporter become the fault: a listener that throws must not break the handler loop.
+  try { if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('trinity-feature-failed', { detail: rec })); } catch (e) {}
+}
+
 // register a feature on a church's shared docs bus. h = { onevent(e, d), onroster?(), oneose?() }.
 // Replays the buffered corpus synchronously, then delivers live events. Sticky-EOSE stays in each
 // handler: oneose fires on the relay's EOSE (and immediately on a late registration if the initial
@@ -1123,9 +1150,9 @@ function _onChurchDocs(cp, h) {
   for (const e of replay) {
     const d = _dtag(e);
     if (d === 'trinityone/stewards:' + cp || d.startsWith(GROUPKEY_D)) continue;   // hub-level docs, already absorbed
-    try { h.onevent(e, d); } catch (err) { console.error(err); }
+    try { h.onevent(e, d); } catch (err) { _featureFailed('initial replay', d, err); }
   }
-  if (hub.eosed && h.oneose) { try { h.oneose(); } catch (err) { console.error(err); } }
+  if (hub.eosed && h.oneose) { try { h.oneose(); } catch (err) { _featureFailed('load complete', '', err); } }
   let off = false;
   return () => {
     if (off) return; off = true;
@@ -1475,6 +1502,10 @@ if (typeof window !== 'undefined') {
 
 window.Fellowship = {
   relays: loadRelays(),
+  // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
+  // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
+  // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".
+  recentFailures: () => _FAILURES.slice(),
   refetchChurchDocs,   // force church-doc hubs to re-fetch on app resume (updates without a full restart)
   CANONICAL_RELAY,
   CANONICAL_RELAYS,
