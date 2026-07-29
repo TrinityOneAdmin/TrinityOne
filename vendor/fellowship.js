@@ -7760,7 +7760,8 @@
         "trinityone.outbox.failed",
         "trinityone.nostr.mnemonic.enc"
       ]);
-      const doomed = (k) => !!k && k.startsWith("trinityone.") && !KEEP.has(k) && !k.startsWith("trinityone.mydata:") && !k.startsWith("trinityone.backedup.") && !k.startsWith("trinityone.approvedToast.") && (PREFIXES.some((p) => k.startsWith(p)) || IDENTIFIER.test(k));
+      const FORCE_WIPE = /* @__PURE__ */ new Set(["trinityone.mydata:data/chatseen"]);
+      const doomed = (k) => !!k && k.startsWith("trinityone.") && !KEEP.has(k) && (FORCE_WIPE.has(k) || !k.startsWith("trinityone.mydata:") && !k.startsWith("trinityone.backedup.") && !k.startsWith("trinityone.approvedToast.") && (PREFIXES.some((p) => k.startsWith(p)) || IDENTIFIER.test(k)));
       try {
         const kill = [];
         for (let i3 = 0; i3 < localStorage.length; i3++) {

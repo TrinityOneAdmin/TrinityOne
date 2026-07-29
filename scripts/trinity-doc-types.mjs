@@ -141,6 +141,12 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/journal':       { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey',   note: 'not finance/journal: — a member\'s private journal, unrelated' },
   'trinityone/prayer':        { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey' },
   'trinityone/settings':      { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey',   note: 'C1: carried plansFollowed, which binds a pubkey to a specific congregation' },
+  // F17, 2026-07-30. Which messages this member has already read: {groupSlug: unixSeconds}. Added so the marks
+  // survive a locked-boot wipe — they are deleted from the device on lock (the slugs name the church's groups)
+  // and restored from here on unlock. Same shape and policy as the five above: member writes, author-only
+  // reads, no church tag, NIP-44 sealed to themselves. It names GROUPS, so it is the most church-revealing of
+  // the MyData set — author-only is doing real work here, not just tidiness.
+  'trinityone/chatseen':      { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey',   note: 'F17: unread marks, keyed by group slug — restored after a locked-boot wipe' },
 });
 
 // Types the CLIENTS use that the relay has no explicit rule for. They fall through to generic rules, which

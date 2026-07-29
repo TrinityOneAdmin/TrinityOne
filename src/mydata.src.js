@@ -61,6 +61,17 @@ function NostrBackend(cache) {
     'data/journal':    { d: 'trinityone/journal',    priv: true  },
     'data/prayer':     { d: 'trinityone/prayer',     priv: true  },
     'settings':        { d: 'trinityone/settings',   priv: true  },
+    // F17 (AUDIT-2026-07-28), fixed 2026-07-30. Which messages you have already read — {groupId: unixSeconds},
+    // about 20 bytes per group. It lived ONLY in localStorage under trinityone.chatSeen, and the locked-boot
+    // wipe deletes it, so setting a PIN made every conversation read as unread again for ever, with nothing
+    // able to restore it.
+    //
+    // Synced here so it can come BACK after an unlock. It is NOT made wipe-exempt like notes/journal: the map
+    // is keyed by group SLUG ('prayer', 'youth', 'life'), and the wipe also clears the cached group documents
+    // — so keeping this on the device would hand a seized locked phone the church's group names, which is
+    // precisely what that wipe exists to prevent. Wiped locally, restored from the relay. See the explicit
+    // carve-out in clearCommunityCache (src/fellowship.src.js).
+    'data/chatseen':   { d: 'trinityone/chatseen',  priv: true  },
   };
   var D_TO_KEY = {};
   Object.keys(SYNC).forEach(function (k) { D_TO_KEY[SYNC[k].d] = k; });
@@ -142,11 +153,20 @@ function NostrBackend(cache) {
       if (!remoteSame) schedulePublish(key);
       return localChanged;
     }
+    // MAP-SHAPED payload (as opposed to the list shape above). The wire field stays named `settings` for
+    // backwards compatibility — every already-published map doc on every relay uses it — but the CACHE KEY is
+    // now the key we were actually passed.
+    //
+    // It used to be hardcoded to the literal 'settings' and ignored `key`, which was invisible while
+    // `settings` was the only map-shaped doc. The moment a second one existed (chatseen, 2026-07-30) its
+    // remote copy would have been merged into SETTINGS and the doc it belonged to would never have restored —
+    // silently, because reconcile returns a boolean and nothing downstream compares keys. Found before
+    // shipping the second one, by reading this branch rather than trusting it.
     if (payload && payload.settings) {
-      var cur = cache.getDoc('settings') || {};
+      var cur = cache.getDoc(key) || {};
       var next = Object.assign({}, payload.settings, cur); // local wins (never lose a local pref)
-      cache.putDoc('settings', next);
-      if (JSON.stringify(next) !== JSON.stringify(payload.settings)) schedulePublish('settings');
+      cache.putDoc(key, next);
+      if (JSON.stringify(next) !== JSON.stringify(payload.settings)) schedulePublish(key);
       return JSON.stringify(next) !== JSON.stringify(cur);
     }
     return false;
@@ -295,6 +315,16 @@ function MyDataStore(backend) {
     clear: function (type) { write(type, []); },
 
     // ---- app settings (a single key/value doc) ----
+    // Named-document access, for member data that is NOT one of the SCHEMA list types. Added for the chat
+    // unread marks (F17, 2026-07-30): they need the backend's encrypted publish + restore, but they are a MAP
+    // rather than a list of {id, ts} items, so none of put/remove/setVisibility above fits them.
+    //
+    // It MUST go through `backend`, not the local cache: backend.putDoc is what schedules the encrypted
+    // publish. Writing to localStorage directly would keep working on the device and quietly sync nothing —
+    // which is precisely the trap this passthrough exists to close (caught before shipping, by checking
+    // whether the store actually exposed these rather than assuming it did).
+    getDoc: function (key) { return backend.getDoc(key); },
+    putDoc: function (key, value) { backend.putDoc(key, value); emit(key); },
     settings: {
       all: function () { return backend.getDoc('settings') || {}; },
       get: function (k, fb) { var s = backend.getDoc('settings') || {}; return Object.prototype.hasOwnProperty.call(s, k) ? s[k] : fb; },

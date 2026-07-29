@@ -1737,14 +1737,26 @@ window.Fellowship = {
     // backedup.<own npub> names the MEMBER, not the congregation, and their own key is on this device
     // anyway. Wiping it makes the app re-nag for a seed backup after every lock, which is a real cost for
     // no forensic gain.
-    const doomed = (k) => !!k && k.startsWith('trinityone.') && !KEEP.has(k)
-      && !k.startsWith('trinityone.mydata:') && !k.startsWith('trinityone.backedup.')
+    // ALWAYS WIPED, whatever the rules below would say. F17's fix (2026-07-30) syncs the unread marks through
+    // the mydata namespace so an unlock can restore them from the relay — but that namespace is deliberately
+    // wipe-EXEMPT, and this map is keyed by group SLUG ('prayer', 'youth'), while this same wipe clears the
+    // cached group documents. Leaving it would hand a seized locked phone the church's group names, which is
+    // exactly what this function exists to prevent.
+    //
+    // It needs its own set rather than a condition bolted onto the chain below, for two reasons I got wrong on
+    // the first attempt: a `k !== …` clause makes a key EXEMPT (the opposite of wiping it), and even inverted
+    // it would never fire, because this key matches no PREFIX and carries no pubkey for IDENTIFIER to find.
+    // MyData.startSync restores it, and its anti-clobber guard only republishes when a local copy exists — so
+    // wiping here cannot destroy the backup. Declared as trinityone/chatseen in scripts/trinity-doc-types.mjs.
+    const FORCE_WIPE = new Set(['trinityone.mydata:data/chatseen']);
+    const doomed = (k) => !!k && k.startsWith('trinityone.') && !KEEP.has(k) && (FORCE_WIPE.has(k) || (
+      !k.startsWith('trinityone.mydata:') && !k.startsWith('trinityone.backedup.')
       // approvedToast.<church> is the "we already told you you were accepted" marker. Wiping it makes the
       // app re-announce the member's acceptance on the next unlock — reported on a real phone, 2026-07-29,
       // immediately after the property-based wipe went in. It names a church the KEPT followedChurches
       // already names, so retaining it reveals nothing new and stops a confusing repeat.
       && !k.startsWith('trinityone.approvedToast.')
-      && (PREFIXES.some(p => k.startsWith(p)) || IDENTIFIER.test(k));
+      && (PREFIXES.some(p => k.startsWith(p)) || IDENTIFIER.test(k))));
     try {
       const kill = [];
       for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (doomed(k)) kill.push(k); }

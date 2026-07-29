@@ -21,6 +21,24 @@ function useIdentity() {
 // the current user's chosen display name (kind-0) or the anonymous handle
 // The CHOSEN name, or '' — no invented pseudonym behind it (2026-07-30). hasName() is the honest question;
 // it used to be asked as `myName(id) === id.handle`, which only worked while the fallback was itself a name.
+// F17 (AUDIT-2026-07-28), fixed 2026-07-30. The unread marks used to live at plain `trinityone.chatSeen`,
+// which the locked-boot wipe deletes with nothing able to restore it — so setting a PIN made every conversation
+// read as unread again, permanently. They now live in the mydata namespace, which MyData syncs to the relay
+// (encrypted, self-sealed) and restores on unlock. Still WIPED locally: the map is keyed by group slug
+// ('prayer', 'youth') and the same wipe clears the cached group docs, so keeping it would hand a seized locked
+// phone the church's group names. See FORCE_WIPE in src/fellowship.src.js.
+//
+// Read/written in ONE place each so the location is stated once. window.MyData may not exist yet on a cold
+// first paint, so both fall back to the bare localStorage key rather than throwing.
+const CHATSEEN_KEY = 'data/chatseen';
+function readChatSeen() {
+  try { if (window.MyData && window.MyData.getDoc) { const d = window.MyData.getDoc(CHATSEEN_KEY); if (d && typeof d === 'object') return d; } } catch (e) {}
+  return lsGet('trinityone.mydata:' + CHATSEEN_KEY, {}) || {};
+}
+function writeChatSeen(map) {
+  try { if (window.MyData && window.MyData.putDoc) { window.MyData.putDoc(CHATSEEN_KEY, map); return; } } catch (e) {}
+  lsSet('trinityone.mydata:' + CHATSEEN_KEY, map);
+}
 function myChosenName(id) { return ((window.Fellowship && window.Fellowship.myProfile && window.Fellowship.myProfile.name) || '').trim(); }
 function hasName(id) { return !!myChosenName(id); }
 function myName(id) { return myChosenName(id) || 'No name set'; }
@@ -322,7 +340,7 @@ function ChatScreen({ ctx }) {
   useCE(() => {
     if (!live) return;
     const ids = churchGroups.map(g => g.id);
-    const seen = lsGet('trinityone.chatSeen', {});
+    const seen = readChatSeen();
     const unsub = window.Fellowship.subscribeGroups(ids, (gid, e) => {
       msgBuf.current.unshift({ gid, e });        // buffer for search
       if (msgBuf.current.length > 400) msgBuf.current.length = 400;
@@ -340,8 +358,8 @@ function ChatScreen({ ctx }) {
   }, [groupIdsKey]);   // re-subscribe when the group set changes (church switch or real groups load)
 
   const openGroup = (g) => {
-    const seen = lsGet('trinityone.chatSeen', {});
-    seen[g.id] = Math.floor(Date.now() / 1000); lsSet('trinityone.chatSeen', seen);
+    const seen = readChatSeen();
+    seen[g.id] = Math.floor(Date.now() / 1000); writeChatSeen(seen);
     setUnread(prev => ({ ...prev, [g.id]: 0 }));
     ctx.openGroup(g);
   };
