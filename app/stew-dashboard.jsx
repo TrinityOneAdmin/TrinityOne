@@ -3236,7 +3236,22 @@ function DashMembers() {
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
   const photosAllowed = !(church.features && church.features.memberPhotos === false);   // member photos on by default; church can opt out
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
-  const blockedSet = new Set(blockedList);
+  // ARCHITECTURE-AUDIT-2026-07-30 A3. NORMALISE ON THE WAY IN AND ON LOOKUP — the same shape already proved
+  // correct at the top of this file (`notBlocked`, ~line 240), and the same rule scripts/trinity-rules.mjs
+  // holds for photo suppression. This set was built raw, and its two most important readers then disagreed
+  // about how to query it:
+  //     block()  line ~3353   !blockedSet.has(p)                          raw set, RAW key
+  //     block()  line ~3381   !blockedSet.has(String(p||'').toLowerCase())  raw set, LOWER-CASED key
+  // Whatever the intended rule was, those express different ones. The second is the dangerous side: it feeds
+  // `recips` for publishGroupKey({rotate:true}), so a blocked member missed by that lookup would have been
+  // handed the FRESHLY ROTATED key to the encrypted group they were just removed from — the exact outcome the
+  // comment block below it exists to prevent ("a blocked person's phone carried on decrypting every future
+  // message in every encrypted group — forever", AUDIT-2026-07-27).
+  // NOT currently reachable: every writer of this list passes a roster pubkey, which comes from a
+  // signature-verified relay event and is therefore lower-case hex, and there is no npub→hex conversion in
+  // this file. That was equally true of photo suppression until a second way in was added.
+  const blockedSet = new Set((blockedList || []).map(p => String(p || '').toLowerCase()));
+  const isBlocked = (pk) => blockedSet.has(String(pk || '').toLowerCase());
   // safeguarding: who's a child, and which adults are cleared to contact youth (mirrors the church's cleared-worker list)
   const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], nophoto: [] };
   const minorsSet = new Set(sg.minors || []);
@@ -3330,7 +3345,7 @@ function DashMembers() {
   const mIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
   const mRosterLoaded = !window.stewardStreamLoaded
     || (window.stewardStreamLoaded('subscribeAdmitted', mIdv) && window.stewardStreamLoaded('subscribeBlocked', mIdv));
-  const pendingJoins = (joinApproval && mRosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)) : [];
+  const pendingJoins = (joinApproval && mRosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !isBlocked(m.pubkey)) : [];
   const pendingSet = new Set(pendingJoins.map(m => m.pubkey));
   const admitMember = (pk) => window.Steward.setAdmitted([...admittedList, pk]);
   const [copied, setCopied] = React.useState('');
@@ -3350,7 +3365,7 @@ function DashMembers() {
     setConfirmBlock(null);
     window.Steward.setBlocked([...blockedList, pk]);
     try {
-      const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !blockedSet.has(p));
+      const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
       if (window.Steward.rotateCareKey) window.Steward.rotateCareKey(remaining, stewardRoster || []);
       if (window.Steward.rotateMediaKey) window.Steward.rotateMediaKey(remaining);   // same for encrypted sermons
       // and the NAME key: a blocked member keeping it could still read the congregation's names, which is the
@@ -3378,7 +3393,7 @@ function DashMembers() {
         if (!g || !g.encrypted) continue;
         const wasIn = g.visibility === 'invite' ? (g.members || []).includes(pk) : true;   // an open group includes everyone
         if (!wasIn) continue;
-        const recips = (g.visibility === 'invite' ? (g.members || []).filter(p => p !== pk && !blockedSet.has(String(p || '').toLowerCase())) : remaining);
+        const recips = (g.visibility === 'invite' ? (g.members || []).filter(p => p !== pk && !isBlocked(p)) : remaining);
         if (window.Steward.publishGroupKey) window.Steward.publishGroupKey(g.id, recips, { rotate: true });
         if (g.visibility === 'invite' && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
       }
@@ -3400,8 +3415,8 @@ function DashMembers() {
   const INACTIVE_DAYS = 90;
   const cutoff = Math.floor(Date.now() / 1000) - INACTIVE_DAYS * 86400;
   const seen = (m) => Math.max(m.lastTs || 0, m.joined || 0);
-  const activeM = members.filter(m => seen(m) >= cutoff && !blockedSet.has(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
-  const inactiveM = members.filter(m => seen(m) < cutoff && !blockedSet.has(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
+  const activeM = members.filter(m => seen(m) >= cutoff && !isBlocked(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
+  const inactiveM = members.filter(m => seen(m) < cutoff && !isBlocked(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
   const chatting = activeM.filter(m => m.count > 0).length;
   const memberRow = (m, inactive) => {
     const named = !!m.name;
