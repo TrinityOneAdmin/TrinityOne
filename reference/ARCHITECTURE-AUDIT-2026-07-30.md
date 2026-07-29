@@ -362,9 +362,28 @@ But it dies with "couldn't unpack the code bundle", which points at the tarball 
 `/relay-app/install.sh` **is** served from that domain (200, 13,096 bytes) — so the documented path leads
 someone all the way to a misleading error.
 
-**Net: the entire published self-hosting route is non-functional on the advertised domain right now.** For a
-product whose premise is that a church holds its own relay, and with a pilot onboarding, that is a
-product-blocking defect. It is not a security hole — nothing leaks, nothing half-installs.
+**SEVERITY CORRECTED DOWN — the owner challenged my first reading and was right.** I originally wrote that
+"the entire published self-hosting route is non-functional" and called it product-blocking. That overstated
+it. Measured afterwards:
+
+- **The primary self-host route is the desktop Suite app, and it is healthy.** All three installers download
+  from the GitHub release: `…windows-x64-setup.exe` 51,955,429 B · `…macos-arm64.dmg` 75,306,463 B ·
+  `…linux-x86_64.AppImage` 154,155,512 B, all HTTP 200.
+- **`welcome-churches.html` presents the Suite first and the one-liner as a demoted fallback**, inside a
+  collapsed `<details>` panel labelled "Run it yourself — one line, then finish in your browser". The card
+  above it says "Managed by us, or the desktop Relay app — your call" and "no command line".
+
+So this is **not** the headline promise failing. It is a secondary, opt-in path.
+
+**It is still a live defect, though, and not a stale link.** The one-liner sits on a page that is reachable
+on both domains (`trinityone.church` and `app.trinityone.church`, both 200), is linked from seven other served
+pages (`welcome`, `why`, `features`, `downloads`, `about`, `migrate`, `install-anywhere`), and ships with a
+**Copy button** next to it. It is a working, copyable instruction that leads to a broken install — chosen by
+exactly the more technical self-hoster who is least likely to assume the fault is theirs.
+
+Revised severity: **a broken secondary route plus a fail-open HTTP handler**, not a product blocker. The
+handler is the part that should still be fixed regardless of which route the docs favour — a route that
+reports success while delivering nothing is wrong independently of how many people walk it.
 
 **Relay self-update is unaffected**, and it is worth saying so explicitly: `relay-update.sh` pulls from
 `$ORIGIN`, which for a8 is the funnel, which serves the real 52 MB bundle. That is why this has been invisible
@@ -555,9 +574,10 @@ _Recorded deliberately. A finding list with no denominator reads as if everythin
 _Not a bare severity list — an order that keeps each step independently verifiable. Every item below is
 dev-box verifiable; none needs the phone. Do not batch them: a batch that ships together cannot be bisected._
 
-1. **A4 — the empty-200 bundle route.** Live, reproduced, and it breaks the product's headline capability
-   (a church self-hosting) on the domain the docs point at. Independent of everything else, one curl to
-   verify, and the correct shape is already written four lines below the bug.
+1. **A4 — the empty-200 bundle route.** Live, reproduced, independent of everything else, one curl to verify,
+   and the correct shape is already written four lines below the bug. Ranked first for cheapness and
+   certainty, **not** for severity — see the correction in A4: the Suite is the primary self-host route and
+   is healthy, so this is a broken secondary path, not a product blocker.
 2. **A6 — widen the registry's extraction before anything is wired to it.** Test-and-declaration only, no
    runtime change. Do this *before* any spine work, because wiring to a registry missing ten live types would
    make things worse. Ten types to declare, and the answer for each is readable out of `accept()`/`canRead()`.
