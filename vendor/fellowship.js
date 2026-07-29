@@ -7658,10 +7658,25 @@
       window.Fellowship.churchPub = toPub(npubOrHex);
       return window.Fellowship.churchPub;
     },
-    // Community-PIN forensic hygiene: wipe every localStorage cache that would reveal church membership
-    // or leak cached community content (profiles, member rosters, group/category lists, doc + member
-    // hubs, chat-seen markers, family links). Called on lock and at a locked boot. Bible/study/reading
-    // caches are deliberately left untouched — the app must still work as an offline Bible reader.
+    // Community-PIN forensic hygiene: wipe the cached community CONTENT a locked phone should not be holding —
+    // profiles, member rosters, group/category lists, doc + member hubs, chat-seen markers, family links, the
+    // serving/rota caches and the care module's cached needs, slots, skips and settings. Called on lock and at
+    // a locked boot. Bible/study/reading caches are deliberately untouched — the app must still work as an
+    // offline Bible reader.
+    //
+    // AUDIT-2026-07-28 F8. This comment used to claim it wiped "every localStorage cache that would reveal
+    // church membership", and that was not true in two ways. `trinityone.serv.*` (events, rotas, rosters,
+    // RSVPs, replies, runsheets) and `trinityone.care.*` (needs, slots, skips — pastoral, sometimes medical)
+    // survived it, each with the church's npub in the key NAME. Those are now wiped: every one of them
+    // re-fetches from the relay after unlock, so nothing is lost by dropping them.
+    //
+    // WHAT DELIBERATELY REMAINS, stated plainly rather than claimed away: `trinityone.followedChurches` and
+    // `trinityone.activeChurch`. They name the congregation, and a locked phone still gives that away. They are
+    // kept because NOTHING rebuilds them on unlock — only a 12-word restore reconstructs the church list from
+    // member: documents — so wiping them would strand a member with no way back into their own church. That is
+    // a real limit on the hygiene claim, not an oversight, and ARCHITECTURE.md already says the PIN "is not
+    // plausible deniability" for exactly this reason. Encrypting them at rest under the PIN is the fix that
+    // would close it properly; it is not this change.
     clearCommunityCache() {
       const PREFIXES = [
         "trinityone.profile",
@@ -7672,7 +7687,9 @@
         "trinityone.groups.",
         "trinityone.cats.",
         "trinityone.chatSeen",
-        "trinityone.family"
+        "trinityone.family",
+        "trinityone.serv.",
+        "trinityone.care."
       ];
       try {
         const kill = [];

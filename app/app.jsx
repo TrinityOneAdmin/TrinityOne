@@ -394,9 +394,26 @@ function App() {
     const t = setInterval(() => { refreshLock(); if (++n >= 20) clearInterval(t); }, 400);
     return () => { clearInterval(t); window.removeEventListener('trinity-identity', h); window.removeEventListener('trinity-identity-lock', h); window.removeEventListener('trinity-profiles', h); };
   }, []);
-  // forensic hygiene: at a locked boot, wipe any community caches left on disk from a previous session
-  // (Fellowship is loaded by the time this React effect runs, so the load-order gap in identity.js is safe).
-  useAE(() => { if (commLocked && window.Fellowship && window.Fellowship.clearCommunityCache) { try { window.Fellowship.clearCommunityCache(); } catch (e) {} } }, []);
+  // forensic hygiene: at a locked boot, wipe any community caches left on disk from a previous session.
+  //
+  // AUDIT-2026-07-28 F7. This ran ONCE on mount with an empty dependency list, so it read the FIRST-RENDER
+  // value of commLocked — the very sample the effect above exists because it is unreliable ("this is the one
+  // that catches a module that finished loading after we first looked, which is exactly the case that shipped
+  // the app open with no identity"). The lock GATE was fixed to re-check for eight seconds; the wipe beside it
+  // was left reading the initial guess, so on the one boot it was written for it did not run at all.
+  //
+  // Confirmed on a real locked boot (Pixel, 2026-07-29): trinityone.memhub / .members / .membercount /
+  // .docshub for the church were all still on disk after the app had settled at the PIN screen.
+  //
+  // Keyed on commLocked now, and re-armed when it clears, so a mid-session lock wipes too — that is the same
+  // path clearCommunityCache's own _k0Seen.clear() was added for.
+  const wipedForLock = useAR(false);
+  useAE(() => {
+    if (!commLocked) { wipedForLock.current = false; return; }   // unlocked → arm again for the next lock
+    if (wipedForLock.current) return;
+    wipedForLock.current = true;
+    if (window.Fellowship && window.Fellowship.clearCommunityCache) { try { window.Fellowship.clearCommunityCache(); } catch (e) {} }
+  }, [commLocked]);
   // the in-app wallet is the member's, always-on (rides on their key) — boot it once so the balance is
   // ready everywhere (profile hub, Giving tab), independent of any church's giving switch.
   useAE(() => { if (WALLET_ENABLED && window.TrinityWallet) window.TrinityWallet.init().catch(() => {}); }, []);
