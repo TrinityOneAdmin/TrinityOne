@@ -7691,11 +7691,20 @@
         "trinityone.serv.",
         "trinityone.care."
       ];
+      const IDENTIFIER = /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i;
+      const KEEP = /* @__PURE__ */ new Set([
+        "trinityone.followedChurches",
+        "trinityone.activeChurch",
+        "trinityone.outbox",
+        "trinityone.outbox.failed",
+        "trinityone.nostr.mnemonic.enc"
+      ]);
+      const doomed = (k) => !!k && k.startsWith("trinityone.") && !KEEP.has(k) && !k.startsWith("trinityone.mydata:") && (PREFIXES.some((p) => k.startsWith(p)) || IDENTIFIER.test(k));
       try {
         const kill = [];
         for (let i3 = 0; i3 < localStorage.length; i3++) {
           const k = localStorage.key(i3);
-          if (k && PREFIXES.some((p) => k.startsWith(p))) kill.push(k);
+          if (doomed(k)) kill.push(k);
         }
         kill.forEach((k) => {
           try {

@@ -56,14 +56,25 @@ function runWipe(keys) {
 // Exactly the keys read off the locked Pixel.
 const CHURCH = '41bbaebf3d474b722b6195b48304dd3308e733221ce0341b339d93770f9e9a27';
 const NPUB = 'npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr';
+const MEMBER = '314effe0c2f8bf132ca62cc73cb4c759d20bb35f398f83b20dc17f828bf6ac77';
+// Read off the locked Pixel on 2026-07-29 — not invented. Eleven of these named the congregation and no
+// version of the prefix list covered them; that is the finding.
 const DEVICE_KEYS = [
   'trinityone.memhub.' + CHURCH, 'trinityone.members.' + CHURCH,
   'trinityone.membercount.' + CHURCH, 'trinityone.docshub.' + CHURCH,
   'trinityone.serv.reqs.' + NPUB, 'trinityone.serv.events.' + NPUB, 'trinityone.serv.rosters.' + NPUB,
   'trinityone.serv.rotas.' + NPUB, 'trinityone.serv.rsvps.' + NPUB, 'trinityone.serv.runsheets.' + NPUB,
   'trinityone.care.n.' + NPUB, 'trinityone.care.s.' + NPUB,
+  // the eleven the prefix list never knew about
+  'trinityone.admitted.' + CHURCH + '|' + MEMBER, 'trinityone.approvedToast.' + NPUB,
+  'trinityone.backedup.' + NPUB, 'trinityone.categories.' + CHURCH, 'trinityone.chatTabSeen.' + NPUB,
+  'trinityone.devos.' + CHURCH, 'trinityone.devos.' + NPUB, 'trinityone.hb:' + NPUB,
+  'trinityone.joinstate.' + NPUB, 'trinityone.msgtags.' + NPUB, 'trinityone.plans.' + CHURCH,
+  // must SURVIVE
   'trinityone.followedChurches', 'trinityone.activeChurch',
-  'trinityone.bible.translation', 'trinityone.reading.position',   // must SURVIVE — offline Bible still works
+  'trinityone.outbox', 'trinityone.mydata:data/journal', 'trinityone.mydata:data/notes',
+  'trinityone.readerScale', 'trinityone.settings', 'trinityone.nostr.mnemonic.enc',
+  'trinityone.bible.translation', 'trinityone.reading.position',
 ];
 
 test('the caches the device was still holding are wiped', () => {
@@ -80,12 +91,25 @@ test('the serving and care caches go too', () => {
   assert.deepEqual(left.filter(k => k.startsWith('trinityone.care.')), [], 'care needs and slots survive a lock');
 });
 
-test('the Bible still works offline afterwards', () => {
-  // Over-wiping is the other way to get this wrong: the whole point of the lock screen is that the app
-  // remains a Bible reader.
+test('the Bible, the member’s own writing and their unsent messages all survive', () => {
+  // Over-wiping is the other way to get this wrong. The lock screen's whole purpose is that the app remains
+  // a Bible reader; the journal and notes are the MEMBER's, not the church's; and the outbox holds messages
+  // they wrote that have not been delivered — losing those is data loss dressed up as hygiene.
   const left = runWipe(DEVICE_KEYS);
-  assert.ok(left.includes('trinityone.bible.translation'), 'the wipe took the Bible settings with it');
-  assert.ok(left.includes('trinityone.reading.position'), 'the wipe took the reading position');
+  for (const k of ['trinityone.bible.translation', 'trinityone.reading.position', 'trinityone.readerScale',
+    'trinityone.settings', 'trinityone.nostr.mnemonic.enc', 'trinityone.outbox',
+    'trinityone.mydata:data/journal', 'trinityone.mydata:data/notes']) {
+    assert.ok(left.includes(k), 'the wipe destroyed ' + k);
+  }
+});
+
+test('no key naming the congregation survives, including ones nobody listed', () => {
+  // The property, not the list. Eleven caches on the real device carried the church or the member in the key
+  // NAME and no version of the prefix list covered them, because every new feature added one and nobody went
+  // back. This is the same failure as the relay's served-file denylist.
+  const left = runWipe(DEVICE_KEYS);
+  const named = left.filter(k => /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i.test(k));
+  assert.deepEqual(named, [], 'these still name the congregation on a locked phone: ' + named.join(', '));
 });
 
 test('the church list is KEPT, and the comment says so', () => {

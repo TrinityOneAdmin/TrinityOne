@@ -1629,12 +1629,33 @@ window.Fellowship = {
   // plausible deniability" for exactly this reason. Encrypting them at rest under the PIN is the fix that
   // would close it properly; it is not this change.
   clearCommunityCache() {
+    // A HAND-MAINTAINED LIST IS WHAT FAILED. Dumping localStorage off a real locked phone (Pixel,
+    // 2026-07-29) found ELEVEN more caches naming the congregation that no version of this list covered:
+    // admitted.<church>|<member>, categories.<church>, devos.<church>, plans.<church>, joinstate.<npub>,
+    // msgtags.<npub>, chatTabSeen.<npub>, approvedToast.<npub>, hb:<npub>, backedup.<npub>. Every feature
+    // added since this function was written brought a new one, and nobody edited the list — the same shape
+    // as the relay's served-file denylist, which leaked for the same reason.
+    //
+    // So the rule is now a PROPERTY: any trinityone.* key whose NAME carries a church or member identifier
+    // goes, whether or not anyone remembered it, plus the prefixes for the caches that carry no id in the
+    // name. A cache added tomorrow is covered by construction.
     const PREFIXES = ['trinityone.profile', 'trinityone.members.', 'trinityone.membercount.',
       'trinityone.docshub.', 'trinityone.memhub.', 'trinityone.groups.', 'trinityone.cats.',
       'trinityone.chatSeen', 'trinityone.family', 'trinityone.serv.', 'trinityone.care.'];
+    const IDENTIFIER = /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i;   // an npub or a hex pubkey in the KEY
+    // Kept on purpose. followedChurches/activeChurch: nothing rebuilds them on unlock, so wiping strands the
+    // member outside their own church (see the note above). outbox: unsent messages the member wrote — losing
+    // them is data loss, not hygiene. mydata/notes/journal/highlights: the member's OWN writing, not the
+    // church's. The Bible, reader and settings caches keep the offline reader working, which is the whole
+    // point of the lock screen.
+    const KEEP = new Set(['trinityone.followedChurches', 'trinityone.activeChurch',
+      'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc']);
+    const doomed = (k) => !!k && k.startsWith('trinityone.') && !KEEP.has(k)
+      && !k.startsWith('trinityone.mydata:')
+      && (PREFIXES.some(p => k.startsWith(p)) || IDENTIFIER.test(k));
     try {
       const kill = [];
-      for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && PREFIXES.some(p => k.startsWith(p))) kill.push(k); }
+      for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (doomed(k)) kill.push(k); }
       kill.forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
       // drop in-memory caches too, so nothing repaints from RAM before the next fetch
       for (const k of Object.keys(profiles)) delete profiles[k];

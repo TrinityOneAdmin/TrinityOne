@@ -411,8 +411,24 @@ function App() {
   useAE(() => {
     if (!commLocked) { wipedForLock.current = false; return; }   // unlocked → arm again for the next lock
     if (wipedForLock.current) return;
-    wipedForLock.current = true;
-    if (window.Fellowship && window.Fellowship.clearCommunityCache) { try { window.Fellowship.clearCommunityCache(); } catch (e) {} }
+    // RETRY UNTIL THE ENGINE IS THERE, and mark it done only when it actually ran. My first version set the
+    // flag before checking window.Fellowship, so a run that arrived before vendor/fellowship.js finished
+    // loading recorded itself as "wiped" and never tried again — and keying on commLocked makes that EARLIER
+    // render more likely, not less. The device caught it: 11 church-keyed caches still on disk at a locked
+    // boot. Returning without the flag is not enough either, because commLocked does not change again, so
+    // this effect would never re-fire. Hence a bounded poll.
+    let stopped = false;
+    const attempt = () => {
+      if (stopped || wipedForLock.current) return true;
+      if (!(window.Fellowship && window.Fellowship.clearCommunityCache)) return false;
+      wipedForLock.current = true;
+      try { window.Fellowship.clearCommunityCache(); } catch (e) {}
+      return true;
+    };
+    if (attempt()) return;
+    const t = setInterval(() => { if (attempt()) clearInterval(t); }, 300);
+    const give = setTimeout(() => clearInterval(t), 20000);
+    return () => { stopped = true; clearInterval(t); clearTimeout(give); };
   }, [commLocked]);
   // the in-app wallet is the member's, always-on (rides on their key) — boot it once so the balance is
   // ready everywhere (profile hub, Giving tab), independent of any church's giving switch.
