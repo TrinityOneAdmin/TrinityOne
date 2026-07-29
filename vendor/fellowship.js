@@ -6376,8 +6376,10 @@
     if (c && typeof c === "object") Object.assign(profiles, c);
   } catch {
   }
+  var _mayCache = () => !!sk;
   var _profSaveT = null;
   function saveProfiles() {
+    if (!_mayCache()) return;
     if (_profSaveT) return;
     _profSaveT = setTimeout(() => {
       _profSaveT = null;
@@ -6398,6 +6400,7 @@
     }
   }
   function saveMembersCache(cp, list) {
+    if (!_mayCache()) return;
     try {
       localStorage.setItem(MEMBERS_KEY + cp, JSON.stringify(list.slice(0, 500)));
     } catch {
@@ -6408,6 +6411,7 @@
     return Number.isFinite(n) ? n : null;
   }
   function saveCountCache(cp, n) {
+    if (!_mayCache()) return;
     try {
       localStorage.setItem(MEMBERCOUNT_KEY + cp, String(n));
     } catch {
@@ -6422,6 +6426,7 @@
     }
   }
   function saveDocCache(prefix, cp, list) {
+    if (!_mayCache()) return;
     try {
       localStorage.setItem("trinityone." + prefix + "." + cp, JSON.stringify(list.slice(0, 300)));
     } catch {
@@ -6741,6 +6746,7 @@
     sl.set(key, e);
   }
   function _docsHubSaveNow(hub) {
+    if (!_mayCache()) return;
     if (hub.saveT) {
       clearTimeout(hub.saveT);
       hub.saveT = null;
@@ -6982,6 +6988,7 @@
   }
   var _memHubs = /* @__PURE__ */ new Map();
   function _memHubSaveNow(hub) {
+    if (!_mayCache()) return;
     if (hub.saveT) {
       clearTimeout(hub.saveT);
       hub.saveT = null;

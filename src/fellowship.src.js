@@ -641,8 +641,19 @@ const PROFILES_KEY = 'trinityone.profiles'; // cache of OTHER people's resolved 
 // chat while showing correctly in the steward console, which resolves profiles by another path.
 const _k0Seen = new Set();
 try { const c = JSON.parse(localStorage.getItem(PROFILES_KEY) || '{}'); if (c && typeof c === 'object') Object.assign(profiles, c); } catch {}
+// DO NOT WRITE THE CHURCH TO DISK WHEN THERE IS NO KEY ON THIS PHONE.
+// AUDIT-2026-07-29, found on a device. The locked-boot wipe now runs, and the caches came straight back: a
+// locked app still subscribes to the church's PUBLIC documents, and every hub re-persisted itself moments
+// later. Measured on the Pixel — 24 identifying keys before, wipe runs and removes 11, and 9 are rewritten
+// within seconds of the same boot. Wiping while still writing is theatre.
+//
+// `sk` is the honest signal: no signing key means locked, or keyless, and in neither case should this device
+// be recording which congregation it belongs to. Caching resumes the moment the key is derived. (Reading the
+// caches is untouched — a member who unlocks still gets their instant paint.)
+const _mayCache = () => !!sk;
 let _profSaveT = null;
 function saveProfiles() {
+  if (!_mayCache()) return;
   if (_profSaveT) return;
   _profSaveT = setTimeout(() => { _profSaveT = null; try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)); } catch {} }, 800);
 }
@@ -652,13 +663,13 @@ function saveProfiles() {
 const MEMBERS_KEY = 'trinityone.members.';        // + churchPubHex -> JSON array of member objects
 const MEMBERCOUNT_KEY = 'trinityone.membercount.'; // + churchPubHex -> number
 function loadMembersCache(cp) { try { const a = JSON.parse(localStorage.getItem(MEMBERS_KEY + cp) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
-function saveMembersCache(cp, list) { try { localStorage.setItem(MEMBERS_KEY + cp, JSON.stringify(list.slice(0, 500))); } catch {} }
+function saveMembersCache(cp, list) { if (!_mayCache()) return; try { localStorage.setItem(MEMBERS_KEY + cp, JSON.stringify(list.slice(0, 500))); } catch {} }
 function loadCountCache(cp) { const n = parseInt(localStorage.getItem(MEMBERCOUNT_KEY + cp) || '', 10); return Number.isFinite(n) ? n : null; }
-function saveCountCache(cp, n) { try { localStorage.setItem(MEMBERCOUNT_KEY + cp, String(n)); } catch {} }
+function saveCountCache(cp, n) { if (!_mayCache()) return; try { localStorage.setItem(MEMBERCOUNT_KEY + cp, String(n)); } catch {} }
 // generic per-church doc cache (groups / plans / devotionals): paint the last-known set instantly on
 // load, then refresh live. `prefix` namespaces the kind of doc.
 function loadDocCache(prefix, cp) { try { const a = JSON.parse(localStorage.getItem('trinityone.' + prefix + '.' + cp) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
-function saveDocCache(prefix, cp, list) { try { localStorage.setItem('trinityone.' + prefix + '.' + cp, JSON.stringify(list.slice(0, 300))); } catch {} }
+function saveDocCache(prefix, cp, list) { if (!_mayCache()) return; try { localStorage.setItem('trinityone.' + prefix + '.' + cp, JSON.stringify(list.slice(0, 300))); } catch {} }
 
 // ── client-side roster trust (security M2) ──────────────────────────────────────────────────────────
 // The church's "voice" = the church key + its CURRENT signed roster. We verify this in the apps (not just
@@ -984,6 +995,7 @@ function _hubBufSet(hub, key, e) {
   sl.set(key, e);
 }
 function _docsHubSaveNow(hub) {
+  if (!_mayCache()) return;
   if (hub.saveT) { clearTimeout(hub.saveT); hub.saveT = null; }
   if (!hub.dirty) return;
   hub.dirty = false;
@@ -1135,6 +1147,7 @@ function refetchChurchDocs() {
 // over-count across cursor overlaps/full re-syncs; they're only ever used as "has posted" + lastTs.
 const _memHubs = new Map();   // churchPubHex -> hub
 function _memHubSaveNow(hub) {
+  if (!_mayCache()) return;
   if (hub.saveT) { clearTimeout(hub.saveT); hub.saveT = null; }
   if (!hub.dirty) return;
   hub.dirty = false;
