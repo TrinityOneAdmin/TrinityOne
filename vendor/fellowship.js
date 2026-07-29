@@ -7212,6 +7212,7 @@
     } catch {
     }
   }
+  var _evtSeq = 0;
   window.addEventListener("trinity-identity", () => {
     deriveFromIdentity().catch(() => {
     });
@@ -9959,7 +9960,7 @@
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !groupId) return null;
-      const id = ev.id || "evt" + Date.now() + Math.random().toString(36).slice(2, 6);
+      const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 6);
       const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/event:" + id], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
       try {

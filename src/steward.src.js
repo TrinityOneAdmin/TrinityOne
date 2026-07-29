@@ -705,6 +705,14 @@ function _one(filters, ms = 4000) {
   });
 }
 
+// Sequence for locally-minted event ids. Date.now() is identical across ids minted in one tick, so
+// uniqueness rested on the random tail alone — 36^4 for the member app, 36^5 for the console. Measured:
+// negligible at the scale these are actually used (0.004% for a dozen ids in one tick), but 2.6% for a
+// 300-id batch, and these are REPLACEABLE docs, so a collision silently DELETES the earlier event. A counter
+// removes the possibility rather than shrinking it. Same fix as _wizMeetingId, whose test drew 5000 ids and
+// was failing the release gate one run in five. AUDIT-2026-07-29 S5.
+let _evtSeq = 0;
+
 window.Steward = {
   pubkey: null, npub: null, hasKey: false,
 
@@ -2577,7 +2585,7 @@ window.Steward = {
   // asPub (optional) publishes the event AS an owned network instead of the church — network-wide event.
   publishEvent(ev, asPub) {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
-    const id = ev.id || ('evt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7));   // Date.now() alone collides for rows published in one loop — replaceable docs, so a collision DELETES the first
+    const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7));   // Date.now() alone collides for rows published in one loop — replaceable docs, so a collision DELETES the first
     const groupId = ev.groupId || '';
     const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null) });
     const tags = [['d', EVENT_D + id], ['t', NET]];

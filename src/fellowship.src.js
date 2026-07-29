@@ -1297,6 +1297,14 @@ async function init() {
 }
 // keep the signing key in step with identity regeneration / restore (deriveFromIdentity self-heals the
 // keyless→keyed reconnection, so a fresh join / restore re-auths its already-open sockets automatically)
+// Sequence for locally-minted event ids. Date.now() is identical across ids minted in one tick, so
+// uniqueness rested on the random tail alone — 36^4 for the member app, 36^5 for the console. Measured:
+// negligible at the scale these are actually used (0.004% for a dozen ids in one tick), but 2.6% for a
+// 300-id batch, and these are REPLACEABLE docs, so a collision silently DELETES the earlier event. A counter
+// removes the possibility rather than shrinking it. Same fix as _wizMeetingId, whose test drew 5000 ids and
+// was failing the release gate one run in five. AUDIT-2026-07-29 S5.
+let _evtSeq = 0;
+
 window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch(() => {}); });
 
 // UNLOCK RECOVERY (PIN feature): on a PIN-locked boot the signing key does not exist yet, so any relay
@@ -3144,7 +3152,7 @@ window.Fellowship = {
   async publishGroupEvent(churchNpub, groupId, ev) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !groupId) return null;
-    const id = ev.id || ('evt' + Date.now() + Math.random().toString(36).slice(2, 6));
+    const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 6));
     const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/event:' + id], ['t', NET], ['t', groupId], ['p', cp]], content }, sk);
     try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] publishGroupEvent failed', e); return null; }

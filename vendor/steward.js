@@ -11339,6 +11339,7 @@ zoo`.split("\n");
       setTimeout(finish, ms);
     });
   }
+  var _evtSeq = 0;
   window.Steward = {
     pubkey: null,
     npub: null,
@@ -13970,7 +13971,7 @@ zoo`.split("\n");
     publishEvent(ev, asPub) {
       const signer = skFor(asPub);
       if (!signer) return Promise.resolve(null);
-      const id = ev.id || "evt" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
       const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null });
       const tags = [["d", EVENT_D + id], ["t", NET]];
