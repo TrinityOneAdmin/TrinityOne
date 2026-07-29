@@ -527,6 +527,42 @@ because the test asks the question the fix was shaped by.**
 
 ---
 
+### A7 — The welcome screen shows a logo that is not the app's logo
+
+**VERIFIED on device** (Oppo CPH2477, build 189, first-launch wizard). Owner-reported during the device pass,
+then pinned to the exact asset.
+
+`app/identity.jsx:316` renders `icons/halo.svg` as the mark on the very first screen a new member ever sees:
+
+```
+icons/halo.svg          ONE continuous 270° arc, gold dot at the TOP (where the arc starts)
+icons/icon-512.png      a BROKEN ring — three arc segments with gaps — gold dot in the CENTRE
+ (the real launcher icon, and what the phone's home screen shows)
+```
+
+They are different marks, not different renderings of one mark. So a member taps an icon showing a segmented
+ring with a centred dot, and lands on a welcome screen showing a continuous arc with a dot at the top.
+
+Wider than the one screen: `icons/halo.svg` is also the `<link rel="icon">` favicon on `welcome.html`,
+`why.html`, `features.html`, `welcome-churches.html`, `install-anywhere.html` and `verify-a-child.html` — so
+the browser tab of every marketing page carries the wrong mark too. `icons/steward-halo.svg` is the same
+simplified shape on a dark ground, so the console has the same mismatch against `icons/steward-192.png`.
+
+There is a comment at `app/identity.jsx:312` explaining that this image was *deliberately* changed to
+`halo.svg` from "a generic waving hand, which said nothing and matched nothing" — so this was a real
+improvement that stopped one step short: it replaced a wrong image with a nearly-right one.
+
+**Cosmetic, not security** — no functional impact, nothing leaks. It is in this document because the first
+screen of a first launch is the highest-leverage screen in the product, and because the fix is asset-only.
+
+**Fix direction (not applied).** Either export an SVG that matches `icon-512.png` (segmented ring, centred
+dot) and replace `icons/halo.svg` + `icons/steward-halo.svg`, or point the welcome screen and the favicons at
+the existing PNG. The first is better — an SVG stays crisp — and it fixes all seven surfaces at once, since
+they all reference the same file. Worth a test asserting the welcome mark and the launcher icon are the same
+artwork, or it drifts again.
+
+---
+
 ## What I could not break
 
 _Recorded deliberately. A finding list with no denominator reads as if everything is broken._
