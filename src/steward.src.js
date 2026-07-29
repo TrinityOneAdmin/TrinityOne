@@ -20,6 +20,9 @@ import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/ni
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 import qrcode from 'qrcode-generator';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
+// Rules the member app has to agree with, written once. See scripts/trinity-rules.mjs.
+// ARCHITECTURE-2026-07-29.
+import { pubSet, isPhotoSuppressed } from '../scripts/trinity-rules.mjs';
 
 // ---- backup encryption: seal an export to the CHURCH KEY, so only the church private key can open it ----
 // Hybrid ECIES: a throwaway ephemeral key does an ECDH (via NIP-44's key agreement) with the church PUBLIC
@@ -561,7 +564,7 @@ pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('
 // members list — the exact screen where someone would be moderating an image of a child, with a button
 // beside it promising the opposite. Module-level and fed by subscribeSafeguard, mirroring the member app.
 let _noPhoto = new Set();
-const _applyNoPhotoList = (list) => { _noPhoto = new Set((list || []).map(x => String(x || '').toLowerCase())); };
+const _applyNoPhotoList = (list) => { _noPhoto = pubSet(list); };   // shared normalisation — scripts/trinity-rules.mjs
 let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
 let _nameKeyDocKeys = null;   // the recipient map of the envelope we last SAW — null means "we have not looked"
 let _nameKeyChecked = false;  // the namekey subscription has ANSWERED (event or EOSE) for the active identity
@@ -1832,10 +1835,7 @@ window.Steward = {
   // for safeguarding still drew — on the one screen where a steward would be moderating an image of a child,
   // while the button beside it promised "your church sees their symbol/initial". Kept as a module-level set
   // fed by subscribeSafeguard, deliberately the same shape as the member app's, so the two cannot drift.
-  photoSuppressed(memberPub) {
-    const h = String(memberPub || '').toLowerCase();
-    return !!h && _noPhoto.has(h);
-  },
+  photoSuppressed(memberPub) { return isPhotoSuppressed(memberPub, _noPhoto); },
   subscribeSafeguard(onLists) {   // onLists({ minors:[…], approved:[…], nophoto:[…] })
     let minors = [], approved = [], nophoto = [];
     // NEWEST WINS, per document. These are three separate replaceable docs riding one subscription, so they

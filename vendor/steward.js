@@ -10533,6 +10533,21 @@ zoo`.split("\n");
     return files;
   }
 
+  // scripts/trinity-rules.mjs
+  var normPub = (p) => String(p == null ? "" : p).trim().toLowerCase();
+  function pubSet(list) {
+    const s = /* @__PURE__ */ new Set();
+    for (const p of Array.isArray(list) ? list : []) {
+      const h = normPub(p);
+      if (h) s.add(h);
+    }
+    return s;
+  }
+  function isPhotoSuppressed(pubkey, suppressed) {
+    const h = normPub(pubkey);
+    return !!h && !!suppressed && suppressed.has(h);
+  }
+
   // src/steward.src.js
   async function _sealToChurch(bytes, churchPubHex, fmt) {
     if (!(globalThis.crypto && globalThis.crypto.subtle)) throw new Error("This browser can\u2019t encrypt \u2014 turn encryption off to export, or use the app.");
@@ -11192,7 +11207,7 @@ zoo`.split("\n");
   };
   var _noPhoto = /* @__PURE__ */ new Set();
   var _applyNoPhotoList = (list) => {
-    _noPhoto = new Set((list || []).map((x) => String(x || "").toLowerCase()));
+    _noPhoto = pubSet(list);
   };
   var _nameKeyRing = [];
   var _nameKeyDocKeys = null;
@@ -12938,8 +12953,7 @@ zoo`.split("\n");
     // while the button beside it promised "your church sees their symbol/initial". Kept as a module-level set
     // fed by subscribeSafeguard, deliberately the same shape as the member app's, so the two cannot drift.
     photoSuppressed(memberPub) {
-      const h = String(memberPub || "").toLowerCase();
-      return !!h && _noPhoto.has(h);
+      return isPhotoSuppressed(memberPub, _noPhoto);
     },
     subscribeSafeguard(onLists) {
       let minors = [], approved = [], nophoto = [];

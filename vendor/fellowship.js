@@ -5737,6 +5737,26 @@
     return key.slice(1, 33);
   }
 
+  // scripts/trinity-rules.mjs
+  var normPub = (p) => String(p == null ? "" : p).trim().toLowerCase();
+  function pubSet(list) {
+    const s = /* @__PURE__ */ new Set();
+    for (const p of Array.isArray(list) ? list : []) {
+      const h = normPub(p);
+      if (h) s.add(h);
+    }
+    return s;
+  }
+  function isPhotoSuppressed(pubkey, suppressed) {
+    const h = normPub(pubkey);
+    return !!h && !!suppressed && suppressed.has(h);
+  }
+  function suppressPhotoAv(pubkey, av, suppressed, symbolFor) {
+    if (!av || av.kind !== "photo") return av;
+    if (!isPhotoSuppressed(pubkey, suppressed)) return av;
+    return { kind: "symbol", color: av.color, symbol: av.symbol || (symbolFor ? symbolFor(pubkey) : void 0) };
+  }
+
   // src/fellowship.src.js
   var _dmEncrypt = (sk2, peerPub, text) => encrypt(text, getConversationKey(sk2, peerPub));
   var _dmDecrypt = async (sk2, peerPub, ct) => {
@@ -7144,8 +7164,7 @@
   var AV_SYMBOLS = ["halo", "dove", "fish", "flame", "vine", "wheat", "anchor", "crook", "chalice", "olive", "mountain", "well", "star"];
   var _noPhoto = /* @__PURE__ */ new Set();
   function _avSuppressPhoto(pubkey, av) {
-    if (av && av.kind === "photo" && _noPhoto.has(pubkey)) return { kind: "symbol", color: av.color, symbol: av.symbol || AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] };
-    return av;
+    return suppressPhotoAv(pubkey, av, _noPhoto, (pk) => AV_SYMBOLS[hashStr(pk || "") % AV_SYMBOLS.length]);
   }
   function displayFor(pubkey) {
     const base = profile(pubkey);
@@ -8805,7 +8824,7 @@
       let clr = null;
       let _clrTs = 0;
       const emit = () => {
-        _noPhoto = new Set(nophoto);
+        _noPhoto = pubSet(nophoto);
         const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
         const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
         onLists({ minors, approved, guardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });

@@ -9,6 +9,9 @@ import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } f
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
+// Rules the console has to agree with, written once. See scripts/trinity-rules.mjs — the two copies of photo
+// suppression had already drifted apart on case handling. ARCHITECTURE-2026-07-29.
+import { pubSet, suppressPhotoAv } from '../scripts/trinity-rules.mjs';
 
 // DM crypto (Finding 5): SEND with NIP-44 (modern, authenticated, versioned padding) — NIP-04 is deprecated
 // (malleable, no MAC in older impls, no padding). DECRYPT tries NIP-44 first, then falls back to NIP-04 so
@@ -1230,8 +1233,9 @@ const AV_SYMBOLS = ['halo', 'dove', 'fish', 'flame', 'vine', 'wheat', 'anchor', 
 // church's clients won't *show* the photo — they fall back to the member's symbol/initial.
 let _noPhoto = new Set();
 function _avSuppressPhoto(pubkey, av) {
-  if (av && av.kind === 'photo' && _noPhoto.has(pubkey)) return { kind: 'symbol', color: av.color, symbol: av.symbol || AV_SYMBOLS[hashStr(pubkey || '') % AV_SYMBOLS.length] };
-  return av;
+  // The rule itself now lives in scripts/trinity-rules.mjs so the console cannot disagree with it. The symbol
+  // table stays here because it is this app's, not a shared rule.
+  return suppressPhotoAv(pubkey, av, _noPhoto, (pk) => AV_SYMBOLS[hashStr(pk || '') % AV_SYMBOLS.length]);
 }
 // resolved display = kind-0 name/avatar if known, else a deterministic anonymous handle + symbol
 function displayFor(pubkey) {
@@ -2471,7 +2475,7 @@ window.Fellowship = {
     let clr = null;   // { minor, cleared } from my own sealed doc, or null if none has arrived
     let _clrTs = 0;
     const emit = () => {
-      _noPhoto = new Set(nophoto);
+      _noPhoto = pubSet(nophoto);   // normalised on the way in — see scripts/trinity-rules.mjs
       const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
       const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
       onLists({ minors, approved, guardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
