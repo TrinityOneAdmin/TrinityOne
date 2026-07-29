@@ -426,8 +426,23 @@ function StewardForcedPin() {
     if ((pin || '').length < 6) { setErr('Use at least 6 characters.'); return; }
     if (pin !== pin2) { setErr('The two entries don’t match.'); return; }
     setBusy(true); setErr('');
-    const ok = await window.Steward.setPin(pin);
-    if (!ok) { setBusy(false); setErr('Setting the PIN failed — try again.'); setPin(''); setPin2(''); return; }
+    // AUDIT-2026-07-28 F19. This await had no try/catch, and `busy` disables the only button on the screen.
+    // setPin does real work that can throw — crypto.subtle.encrypt, key derivation, and a localStorage write
+    // that fails on a full quota — and this gate is deliberately inescapable: no cancel, no back, the console
+    // renders nothing else until a PIN exists. So ONE rejection left the steward staring at a permanently
+    // disabled "Setting…" button with no way forward and no way out, and nothing said why. Reset the button
+    // on every path, and say what actually happened.
+    let ok = false, why = '';
+    try { ok = await window.Steward.setPin(pin); }
+    catch (e) { why = (e && e.message) ? ' (' + String(e.message).slice(0, 80) + ')' : ''; }
+    if (!ok) {
+      setBusy(false);
+      setErr(why
+        ? 'Something went wrong setting the PIN' + why + '. Try again, or reload this page.'
+        : 'That PIN wasn’t accepted — use at least 6 characters, then try again.');
+      setPin(''); setPin2('');
+      return;
+    }
     // success: window.Steward.needsPin becomes false, the steward-needs-pin event fires, StewardRoot re-renders into the console.
   };
   return (
