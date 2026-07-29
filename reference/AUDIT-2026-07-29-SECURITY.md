@@ -1,6 +1,42 @@
 # Security audit — 2026-07-29
 
-One pass, security only. Findings only: nothing here has been changed.
+One pass, security only.
+
+**Status after the fixing session that followed** (each its own commit, each proved by running the code
+before and after, and each with the controls green in BOTH directions):
+
+| | Finding | Outcome |
+|---|---|---|
+| S1 | Read gate fell open for unruled event kinds | **FIXED** — default-deny, `5e2b6fa` |
+| S2 | Relay served every file it had ever been shipped | **FIXED** — self-limiting reconcile, `4cf91f7` |
+| S3 | Join announced a self-hosted device to the central host | **FIXED** — church relay asked first, `8b72316` |
+| S5 | Two more colliding id generators | **FIXED**, and my own severity claim corrected downward, `be4ffac` |
+| S4 | Relay-name directory can be flooded | **NOT FIXED — accepted**, see below |
+| S6 | A member can age out their own church's chat | **NOT FIXED — accepted**, see below |
+
+### Why S4 and S6 were not fixed
+
+Both are abuse-with-a-remedy rather than holes, and every fix I could design for them carries more risk
+than the finding.
+
+**S4.** The obvious mitigation is a per-IP rate limit on the unauthenticated merge. Every relay of interest
+sits behind a Cloudflare tunnel or a Tailscale funnel, so all gossip arrives from ONE address — a per-IP limit
+would throttle legitimate convergence and leave an attacker, who can come from anywhere, unaffected. The
+alternative, evicting by liveness rather than claim time, needs a liveness signal the directory does not have.
+Meanwhile the failure is fail-CLOSED (a name resolves to nothing, never to an attacker's relay), self-healing
+on the owner's next gossip tick, and degrades an optional convenience. Revisit if relay names become
+load-bearing.
+
+**S6.** A per-member ephemeral cap would silently drop messages from a legitimately talkative member, which is
+a worse and much more likely failure than the abuse it prevents. The member must already be admitted, the
+church's structured records (calendar, groups, finance) are untouched, and the steward can block them. The
+existing remedy is proportionate.
+
+Both stay on the record here rather than being quietly dropped.
+
+---
+
+Findings as originally written follow. Nothing in this section was changed after the fact.
 
 Labels follow the convention of the 07-28 audit, because it worked:
 
