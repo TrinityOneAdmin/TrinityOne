@@ -307,7 +307,14 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
     <div style={{ position: 'absolute', inset: 0, zIndex: 71, background: 'var(--paper)', display: 'flex', flexDirection: 'column', animation: 'trinityFade .3s ease both' }}>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', alignItems: 'center', padding: '32px 22px 18px' }}>
         <div style={{ maxWidth: 440, margin: '0 auto', width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}><Icon name="hand" size={28} /></div></div>
+          {/* The FIRST thing anyone sees of TrinityOne, so it is the actual mark — the same halo the launcher
+              icon shows, so the app they just tapped and the screen that greets them are recognisably one
+              thing. It was a generic waving hand, which said nothing and matched nothing. icons/halo.svg
+              ships in the APK (sync-web.sh copies icons/) and is same-origin, so the strict CSP is fine with
+              it. Requested by the owner, 2026-07-29. */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+            <img src="icons/halo.svg" alt="TrinityOne" width="62" height="62" style={{ width: 62, height: 62, display: 'block' }} />
+          </div>
           <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Welcome to TrinityOne</h1>
           <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 22px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
             Have you used TrinityOne before, on this phone or another one?
