@@ -1,5 +1,13 @@
+<!-- TrinityOne mark. ARCHITECTURE-AUDIT-2026-07-30 A7: this file used to be a SINGLE 270 arc with
+     the dot at the TOP, which is not the app icon. The real mark — assets/icon-foreground.png and
+     icons/icon-512.png, what a phone shows on its home screen — is a BROKEN ring of three arcs with
+     the dot CENTRED. Geometry measured off that PNG, not eyeballed: centreline r=184.2, stroke 34.5,
+     three 17 gaps at 120 spacing, dot r=34. Rendered and diffed against it at 1.5% (antialiasing).
+     Member app. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <rect width="512" height="512" rx="112" fill="#C25A38"/>
-  <path d="M 256 140 A 116 116 0 1 1 140 256" fill="none" stroke="#F4EEE2" stroke-width="34" stroke-linecap="round"/>
-  <circle cx="256" cy="140" r="30" fill="#E0B860"/>
+  <path d="M 416.5 346.3 A 184.2 184.2 0 0 1 159.4 412.8" fill="none" stroke="#F4EEE2" stroke-width="34" stroke-linecap="round"/>
+  <path d="M 97.5 349.9 A 184.2 184.2 0 0 1 168.5 93.9" fill="none" stroke="#F4EEE2" stroke-width="34" stroke-linecap="round"/>
+  <path d="M 254.0 71.8 A 184.2 184.2 0 0 1 440.1 261.3" fill="none" stroke="#F4EEE2" stroke-width="34" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="34" fill="#E0B860"/>
 </svg>
