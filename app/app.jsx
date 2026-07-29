@@ -632,11 +632,37 @@ function App() {
       // go dead. The invite also carries the relay's STABLE directory name — resolve it against the shared
       // directory to the relay's CURRENT url so an old QR still works after a restart. Best-effort + additive;
       // L5 still enforced (must resolve to wss://).
+      // AUDIT-2026-07-29 S3. This asked app.trinityone.church, hardcoded, and nothing else. For a SELF-HOSTED
+      // congregation that is the one request that undoes self-hosting: joining from a printed slip told the
+      // central host that this device exists, that it is joining now, and which relay it is looking for — at
+      // the single most sensitive moment there is. The whole point of a church running its own box is that no
+      // central party sees its people.
+      //
+      // /relay-names/resolve/ is public on EVERY relay and the directory is gossiped between them, so the
+      // church's own relay can answer this perfectly well. Ask the relay the invite already names FIRST, and
+      // fall back to the shared directory only if that fails (an invite may carry a name and no URL, or the
+      // self-hosted box may be down at that moment).
+      //
+      // No new trust: the invite's ?relay= is added directly two lines above, so preferring it as a resolver
+      // grants it nothing it did not already have, and L5 (must resolve to wss://) still applies to whatever
+      // comes back.
       const nmm = String(raw || '').match(/[?&]relayname=([^&\s]+)/);
       if (nmm && F && F.addRelay) { try {
         const name = decodeURIComponent(nmm[1]).toLowerCase().replace(/[^a-z0-9-]/g, '');
-        if (name) fetch('https://app.trinityone.church/relay-names/resolve/' + encodeURIComponent(name), { cache: 'no-store' })
-          .then(r => r.ok ? r.json() : null).then(j => { const u = j && j.url; if (u && /^wss:\/\//i.test(u)) F.addRelay(u); }).catch(() => {});
+        const hosts = [];
+        try { const v = rm && decodeURIComponent(rm[1]); if (v && /^wss:\/\//i.test(v)) hosts.push(v.replace(/^wss:\/\//i, 'https://').replace(/\/relay\/?$/i, '')); } catch (e) {}
+        hosts.push('https://app.trinityone.church');   // last resort, not first choice
+        if (name) (async () => {
+          for (const h of hosts) {
+            try {
+              const r = await fetch(h + '/relay-names/resolve/' + encodeURIComponent(name), { cache: 'no-store' });
+              if (!r.ok) continue;
+              const j = await r.json();
+              const u = j && j.url;
+              if (u && /^wss:\/\//i.test(u)) { F.addRelay(u); return; }   // resolved — ask nobody else
+            } catch (e) {}
+          }
+        })();
       } catch (e) {} }
     }
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
