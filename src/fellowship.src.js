@@ -519,10 +519,23 @@ let _needAuth = true;
 // connection, so the relay already knows their pubkey; auth only additionally exposes a pure lurker. For an
 // underground church, not leaking the roster to anonymous clients outweighs a joined member proving they're a
 // member to their own church's relay. (Child safety was always enforced server-side regardless of this flag.)
+// AUDIT-2026-07-28 F12. When did we last prove who we are to a relay? 0 = never on this connection.
+// Needed because an EOSE IS NOT EVIDENCE OF ABSENCE. The comment directly below spells out that the church
+// docs hub fetches and EOSEs BEFORE the auth round-trip finishes on a fresh boot — so "the relay answered and
+// had no name key" and "the relay would not tell us, because we had not proved we are a member" are the same
+// bytes. syncSealedNames treated that as "this church has no key" and republished an ADMITTED member's name
+// sealed to the church key alone, making them Anonymous to their entire congregation. Reproduced by running
+// the shipped function: ring empty + EOSE seen + unauthenticated -> 1 publish.
+//
+// A timestamp rather than a boolean, deliberately: `hub.eosed` is set once and NEVER reset, including across
+// the post-auth refetch, so a boolean would still be satisfied by the pre-auth EOSE. The question that
+// actually matters is whether the relay answered us AFTER it knew who we were.
+let _relayAuthedAt = 0;
 pool.automaticallyAuth = () => async (authEvent) => {
   if (!_needAuth) throw new Error('nip42: auth declined — no gated resource for this member');
   if (!sk) { try { await window.Fellowship.ready; } catch {} }
   if (!sk) throw new Error('no key');
+  _relayAuthedAt = Date.now();
   _armAuthRefetch();   // once we auth, re-fetch the gated docs that were withheld before we proved membership
   return finalizeEvent(authEvent, sk);
 };
@@ -538,7 +551,16 @@ function _armAuthRefetch() {
   if (_authRefetchArmed) return;
   _authRefetchArmed = true;
   if (_authRefetchT) clearTimeout(_authRefetchT);
-  _authRefetchT = setTimeout(() => { _authRefetchT = null; try { refetchChurchDocs(); } catch (e) {} }, 1300);
+  _authRefetchT = setTimeout(() => {
+    _authRefetchT = null;
+    try { refetchChurchDocs(); } catch (e) {}
+    // F12: syncSealedNames now refuses to act on a pre-auth answer, and it is only triggered by setProfile or
+    // by a name key arriving — neither of which happens for a member awaiting approval, whose church has no
+    // key for them BY DESIGN. Without this re-run, requiring auth would re-create the bug it replaced: a
+    // pending member showing on the steward's console as "Anon", which is the one screen where their name is
+    // how you decide whether to admit them. Fires after the refetch's own EOSE has had time to land.
+    setTimeout(() => { try { window.Fellowship.syncSealedNames(); } catch (e) {} }, 2500);
+  }, 1300);
 }
 // FEDERATION Phase 2 — enforcement probe. Before ADOPTING a relay a church declares in its signed NIP-65
 // list, confirm the relay actually applies TrinityOne's membership/safeguarding policy by reading its
@@ -696,7 +718,10 @@ const _hubSince = (hub) => { const nowS = Math.floor(Date.now() / 1000); hub.pen
 // except `msgs++`/lastTs for the People directory. The docs still get their periodic full sync (they're small,
 // replaceable, and a missed update matters); kind-1 only ever needs the incremental window.
 const _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
-const _hubEosed = (hub) => { hub.eosed = true; if (hub.pendingFull) { hub.pendingFull = false; hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; } };
+// F12: record WHEN the relay answered, not merely that it did — an EOSE from before we authenticated has to
+// be distinguishable from one after, and `eosed` is set once and never reset (including across the post-auth
+// refetch), so a boolean cannot tell them apart.
+const _hubEosed = (hub) => { hub.eosed = true; hub.eosedAt = Date.now(); if (hub.pendingFull) { hub.pendingFull = false; hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; } };
 
 // ── docs hub: the church's kind-30078 corpus (groups, plans, devotionals, serving, care, …) ──
 // APPROVAL RECOVERY. A church with approval on withholds its whole corpus from a member until a steward
@@ -1260,6 +1285,7 @@ window.addEventListener('trinity-identity', () => { deriveFromIdentity().catch((
 // authenticated reconnections. Only fires on a real keyless→keyed transition, so a no-PIN boot never churns.
 function reconnectAll() {
   _authRefetchArmed = false;   // a new connection will auth again → re-arm the post-auth re-fetch
+  _relayAuthedAt = 0;          // F12: and it has proved nothing yet, so no gated read is authoritative until it does
   // drop every church-doc hub's live sub so it re-opens fresh (buffer + cursor stay warm in memory)
   for (const hub of _docsHubs.values()) { const c = hub.closer; hub.closer = null; if (c) { try { c(); } catch (e) {} } }
   // Shared subscriptions ride the same sockets, so they die with them. Drop the registry too, or the next
@@ -1865,7 +1891,15 @@ window.Fellowship = {
       const ring = _nameKeys.get(cp) || [];
       if (!ring.length) {
         const hub = _docsHubs.get(cp);
-        if (!hub || !hub.eosed) continue;   // we have not heard back yet — say nothing rather than downgrade
+        // AUDIT-2026-07-28 F12. `hub.eosed` alone is NOT evidence the church has no name key. The namekey
+        // document is served only to an authenticated reader, and this hub routinely EOSEs BEFORE the NIP-42
+        // round-trip lands on a fresh boot — the comment on pool.automaticallyAuth says so explicitly. So an
+        // unauthenticated read and a genuinely keyless church are byte-identical, and taking the church-key
+        // branch on that made an ADMITTED member Anonymous to their whole congregation. Exactly the rule the
+        // same commit applied correctly to the clearance back-fill, three functions away, and not here.
+        // eosedAt vs _relayAuthedAt, not booleans: hub.eosed is set once and never reset, so it survives the
+        // post-auth refetch and a boolean would still be satisfied by the stale pre-auth answer.
+        if (!hub || !hub.eosedAt || !_relayAuthedAt || hub.eosedAt < _relayAuthedAt) continue;
       }
       const stamp = nm + '|' + _ringId(cp);
       if (_sealedMine.get(cp) === stamp) continue;              // same name AND same key — nothing to redo

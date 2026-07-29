@@ -6262,6 +6262,7 @@
   var sk = null;
   var pub = null;
   var _needAuth = true;
+  var _relayAuthedAt = 0;
   pool.automaticallyAuth = () => async (authEvent) => {
     if (!_needAuth) throw new Error("nip42: auth declined \u2014 no gated resource for this member");
     if (!sk) {
@@ -6271,6 +6272,7 @@
       }
     }
     if (!sk) throw new Error("no key");
+    _relayAuthedAt = Date.now();
     _armAuthRefetch();
     return finalizeEvent2(authEvent, sk);
   };
@@ -6286,6 +6288,12 @@
         refetchChurchDocs();
       } catch (e) {
       }
+      setTimeout(() => {
+        try {
+          window.Fellowship.syncSealedNames();
+        } catch (e) {
+        }
+      }, 2500);
     }, 1300);
   }
   var _relayInfoCache = /* @__PURE__ */ new Map();
@@ -6473,6 +6481,7 @@
   var _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
   var _hubEosed = (hub) => {
     hub.eosed = true;
+    hub.eosedAt = Date.now();
     if (hub.pendingFull) {
       hub.pendingFull = false;
       hub.fullAt = Math.floor(Date.now() / 1e3);
@@ -7199,6 +7208,7 @@
   });
   function reconnectAll() {
     _authRefetchArmed = false;
+    _relayAuthedAt = 0;
     for (const hub of _docsHubs.values()) {
       const c = hub.closer;
       hub.closer = null;
@@ -8035,7 +8045,7 @@
         const ring = _nameKeys.get(cp) || [];
         if (!ring.length) {
           const hub = _docsHubs.get(cp);
-          if (!hub || !hub.eosed) continue;
+          if (!hub || !hub.eosedAt || !_relayAuthedAt || hub.eosedAt < _relayAuthedAt) continue;
         }
         const stamp = nm + "|" + _ringId(cp);
         if (_sealedMine.get(cp) === stamp) continue;
