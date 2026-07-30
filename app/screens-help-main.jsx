@@ -8,19 +8,53 @@ function BackupWalkthrough({ onClose, onComplete, ctx, fs = 1 }) {
   const [checkN, setCheckN] = useHm(0);
   const [picked, setPicked] = useHm(null);
   const options = useHmR(null);
+  const [unavailable, setUnavailable] = useHm('');   // '' = still loading · 'locked' · 'error'
 
   useHmE(() => {
     let live = true;
-    const set = (arr) => { if (!live) return; setWords(arr); if (arr.length) setCheckN(1 + Math.floor(Math.random() * arr.length)); };
+    // AUDIT-2026-07-30 U2. `setCheckN` was guarded by `arr.length`, so an EMPTY phrase left checkN at 0 while
+    // the render gate below required it — a permanent spinner. exportMnemonic() resolves empty for any member
+    // with a PIN who has not unlocked this session (secureGet returns null while locked), so that was the
+    // ordinary case, not an edge one. `unavailable` now separates "still loading" from "there is nothing to
+    // show, and here is why".
+    const set = (arr) => {
+      if (!live) return;
+      setWords(arr);
+      if (arr.length) setCheckN(1 + Math.floor(Math.random() * arr.length));
+      else setUnavailable('locked');
+    };
     const ID = window.TrinityIdentity;
-    if (ID && ID.exportMnemonic) ID.exportMnemonic().then(m => set(m ? m.split(' ') : [])); else set([]);
+    // ...and no .catch() meant a REJECTION left words null for ever — the same spinner by a second route. Its
+    // twin at app/identity-extras.jsx:128 has always had one.
+    if (ID && ID.exportMnemonic) ID.exportMnemonic().then(m => set(m ? m.split(' ') : [])).catch(() => { if (live) setUnavailable('error'); });
+    else set([]);
     return () => { live = false; };
   }, []);
 
+  // U2: the close control renders ABOVE this gate, always. It used to sit ~20 lines below it, so the loading
+  // state had no way out at all — and on the web there is no hardware Back to fall back on.
   if (!words || !checkN) {
     return (
-      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--paper)' }}>
-        <div style={{ width: 26, height: 26, borderRadius: 999, border: '3px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', padding: '50px 16px 6px' }}>
+          <IconBtn name="x" onClick={onClose} />
+        </div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 28px', textAlign: 'center' }}>
+          {!unavailable ? (
+            <div style={{ width: 26, height: 26, borderRadius: 999, border: '3px solid var(--clay-soft)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+          ) : (
+            <React.Fragment>
+              <Icon name="shield" size={30} color="var(--clay)" />
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, margin: '14px 0 8px' }}>Unlock first</div>
+              <div style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
+                {unavailable === 'locked'
+                  ? 'Your account is locked with a PIN, so your 12 words can’t be read yet. Close this, unlock the app, then come back — the words are still safe.'
+                  : 'We couldn’t read your 12 words just now. Close this and try again in a moment.'}
+              </div>
+              <button onClick={onClose} style={{ marginTop: 20, padding: '13px 22px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'var(--clay)', color: '#fff', fontWeight: 700, fontSize: 15, fontFamily: 'var(--font-ui)' }}>Close</button>
+            </React.Fragment>
+          )}
+        </div>
       </div>
     );
   }
