@@ -744,6 +744,11 @@ const MEALS_OPEN_MEMBER = new Set(); // churchpubs whose meals-settings allow AN
 // than derived from an identity.
 const CARE_SKIPHASH = new Map();     // careId -> hex sha256 of that need's skip token
 const CARE_RECIPIENT = new Map();    // careId -> recipient pubkey — LEGACY (v1 cleartext needs) only
+// AUDIT-2026-07-30 S2/S2b: careId -> the church that first opened that need. `care:<id>` is a relay-GLOBAL id,
+// exactly like `group:<id>` and `roster:<id>` were before AUDIT-2026-07-24 gave them idOwnerOk() — and the two
+// maps above are keyed by the BARE id, so the last church to write one owned the entry. This is what a slot fill
+// and a skip are scoped against; it mirrors GROUP_CHURCH.
+const CARE_CHURCH = new Map();       // careId -> owning church pubkey
 // is `pub` a current steward of church `cp`? (empty/no roster => false => behaviour identical to pre-roster)
 const stewardOf = (pub, cp) => { const s = STEWARDS_BY.get(cp); return !!(cp && s && s.has(pub)); };
 // M2: a delegated leader/care-admin grant is only honoured while the steward who authored it is STILL a
@@ -1237,7 +1242,11 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(NEED_D)) {   // a care need (already passed accept(): church/steward/care-admin/allowed-member) — record its recipient for careskip gating
     const id = d.slice(NEED_D.length);
-    if (removed) { CARE_RECIPIENT.delete(id); CARE_SKIPHASH.delete(id); return; }
+    // AUDIT-2026-07-30 S2: enforced HERE as well as in accept(), for the same reason ROSTER_D is — a forgery
+    // already on disk must not win on rehydrate, when accept() is not in the path at all.
+    { if (!idOwnerOk(CARE_CHURCH.get(id), e)) return; }
+    if (removed) { CARE_RECIPIENT.delete(id); CARE_SKIPHASH.delete(id); CARE_CHURCH.delete(id); return; }
+    { const owner = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : ''); if (owner) CARE_CHURCH.set(id, owner); }
     // Opaque skip-token hashes in clear TAGS. v3 = one PER DAY: ['skiphash', <iso>, <hash>]; v2 = a single
     // whole-need ['skiphash', <hash>] (kept so a need published before the redesign still skips); v1 carried
     // the recipient pubkey in cleartext content (CARE_RECIPIENT, below).
@@ -1402,6 +1411,12 @@ function accept(e) {
     // Meal trains / Care module (optional, per-church) — must precede the generic member fallback:
     if (d === MEALS_SETTINGS_D) return isLeader || stewardOf(e.pubkey, namedChurch(e));   // enable/configure the module: church or rostered steward
     if (d.startsWith(NEED_D)) {                                 // open / edit / close a care need
+      // AUDIT-2026-07-30 S2: `care:<id>` is a relay-GLOBAL id and the rule below resolves the owning church from
+      // the EVENT, so a co-tenant church naming ITSELF satisfied `e.pubkey === cp` and could republish another
+      // congregation's care id. note() then overwrote CARE_SKIPHASH for that bare id, and the genuine recipient's
+      // own correct per-day token stopped matching — nobody brings food, and they cannot fix it, silently. Same
+      // guard group: and roster: were given in AUDIT-2026-07-24 C1/C2.
+      if (!idOwnerOk(CARE_CHURCH.get(d.slice(NEED_D.length)), e)) return false;
       const cp = namedChurch(e) || (isChurch ? e.pubkey : '');
       // B-2: was `isLeader ||`, which an untagged event from any church's network key satisfied for EVERY
       // church — a forged care need in someone else's congregation. Require a resolved owning church.
@@ -1412,7 +1427,14 @@ function accept(e) {
       // beside it were already scoped to `cp`; these two were not.
       return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && effMemberOf(e.pubkey, cp) && !minorOf(e.pubkey, cp)));
     }
-    if (d.startsWith(SLOT_D)) return isMember;                  // fill a slot: any member offers help (the event is keyed by their own pubkey, so they can't forge another member's)
+    // fill a slot: any member OF THE NEED'S OWN CHURCH offers help (keyed by their own pubkey, so they cannot
+    // forge another member's).
+    // AUDIT-2026-07-30 S2b: this was the relay-wide `isMember`, so a member of any co-tenant church could sign up
+    // to help with this congregation's need — the care team then sees a name they cannot place against a day that
+    // now looks covered, so nobody else volunteers for it. Scope to the church that opened the need.
+    // Unknown care id keeps the previous behaviour: CARE_CHURCH is populated from the need document, so a slot
+    // for a need this relay has never seen is one no care team is looking at (same reasoning as the open group).
+    if (d.startsWith(SLOT_D)) { const owner = CARE_CHURCH.get(d.slice(SLOT_D.length).split(':')[0]); return owner ? churchWriter(e.pubkey, owner) : isMember; }
     if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": the RECIPIENT, or a steward/care-team blocking a date on their behalf (recipient may not be on the app)
       const parts = d.slice(SKIP_D.length).split(':');
       const careId = parts[0], date = parts[1] || '';

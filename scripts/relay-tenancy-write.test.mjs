@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { createHash } from 'node:crypto';
 import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8857;
@@ -31,7 +32,7 @@ const MEALS_SETTINGS_D = 'trinityone/meals-settings', CAREREQ_D = 'trinityone/ca
 // every church's members, so six write rules ask "a member of anything?" where they mean "a member of THIS
 // church". canRead() was hoisted onto a scoped helper (effMemberOf/churchReader) and the write side was not.
 const MINORS_D = 'trinityone/minors:', AVAIL_D = 'trinityone/careavail:', SAFE_D = 'trinityone/safe:';
-const NEED_D = 'trinityone/care:';
+const NEED_D = 'trinityone/care:', SLOT_D = 'trinityone/careslot:', SKIP_D = 'trinityone/careskip:';
 const NETWORK_D = 'trinityone/network:';
 const OPEN_GID = 'grpA-prayer-open', OPEN_GID_B = 'grpB-prayer-open';
 const now = () => Math.floor(Date.now() / 1000);
@@ -218,6 +219,61 @@ test('S4b: a member of another church CANNOT join this church’s here-to-help r
   const attack = await publish(pub, doc(bob, AVAIL_D + A.pub, { free: true }, [['church', A.pub]]));
   assert.equal(attack[0], false,
     'a member of church B appears in church A’s volunteer register. Same unscoped `isMember` as S1/S4.');
+});
+
+// ── S2 + care slots. The audit ranked S2 CLAIMED and said "reproduce before fixing", so this is that. ─────
+//
+// The care id is relay-GLOBAL, like `group:` and `roster:` were before AUDIT-2026-07-24 C1/C2 gave them
+// idOwnerOk(). note() records CARE_SKIPHASH and CARE_RECIPIENT keyed by the BARE id, so whichever church wrote
+// last owns the in-memory entry — the two addressable events do not replace each other (different authors), but
+// the MAP has room for only one.
+//
+// The per-day sha256(token) scheme exists so that ONLY the recipient can say "I don't need help on the 14th",
+// without the relay ever learning who they are. Overwrite the hash and the genuine recipient's correct token
+// stops matching: nobody brings food, and they cannot fix it. Silently, since a refused write has no failure
+// channel in the member app.
+const SKIP_DAY = '2026-08-14';
+const TOKEN = 'the-real-recipients-token';
+const hash = (s) => createHash('sha256').update(String(s)).digest('hex');
+const skip = (who, careId, day, tok, at = now()) => finalizeEvent({ kind: 30078, created_at: at,
+  tags: [['d', SKIP_D + careId + ':' + day], ['t', 'trinityone'], ['skiptok', tok], ['church', A.pub]], content: '{}' }, who.sk);
+
+test('S2: a co-tenant church CANNOT hijack a care need’s skip tokens', async () => {
+  // A opens a need whose per-day skip token is known only to the recipient.
+  assert.equal((await publish(pub, doc(A, NEED_D + 'careX', { title: 'meals for the Hs' },
+    [['church', A.pub], ['skiphash', SKIP_DAY, hash(TOKEN)]])))[0], true);
+  await sleep(200);
+  assert.equal((await publish(pub, skip(carol, 'careX', SKIP_DAY, TOKEN)))[0], true,
+    'CONTROL: presenting the correct per-day token skips that day');
+
+  // B republishes the SAME care id, naming itself, with a token of its own. accept()'s NEED_D rule resolved the
+  // owning church from the EVENT, so B naming B satisfied `e.pubkey === cp` and this used to be ACCEPTED — that
+  // is the hole. It must now be refused at the door, before note() can overwrite the map.
+  const hijack = await publish(pub, doc(B, NEED_D + 'careX', { title: 'hijacked' },
+    [['church', B.pub], ['skiphash', SKIP_DAY, hash('bs-token')]], now() + 30));
+  assert.equal(hijack[0], false,
+    'a co-tenant church republished another congregation’s care id. `care:<id>` is relay-global and the rule ' +
+    'resolves the owning church from the event, so naming yourself was enough.');
+  await sleep(200);
+
+  const genuine = await publish(pub, skip(carol, 'careX', SKIP_DAY, TOKEN, now() + 60));
+  assert.equal(genuine[0], true,
+    'after a co-tenant church republished this care id, the genuine recipient’s own correct token no longer ' +
+    'skips their day. CARE_SKIPHASH is keyed by the bare care id with no idOwnerOk() guard, so the last writer ' +
+    'wins — the same relay-global id hole closed for group: and roster: in AUDIT-2026-07-24.');
+});
+
+test('S2b: a member of another church CANNOT fill a slot on this church’s care need', async () => {
+  // `careslot:<careId>:<date>` ended on the relay-wide isMember. The audit flagged it under S4 as "same unscoped
+  // shape at :1420". Scoping it needs the need's owning church, which is what the CARE_CHURCH map is for.
+  assert.equal((await publish(pub, doc(A, NEED_D + 'careY', { title: 'lifts to hospital' }, [['church', A.pub]])))[0], true);
+  await sleep(200);
+  assert.equal((await publish(pub, doc(carol, SLOT_D + 'careY:' + SKIP_DAY, { bringing: 'a casserole' }, [['church', A.pub]])))[0], true,
+    'CONTROL: a member of A can offer to help with A’s need');
+  const attack = await publish(pub, doc(bob, SLOT_D + 'careY:' + SKIP_DAY, { bringing: 'nothing' }, [['church', A.pub]]));
+  assert.equal(attack[0], false,
+    'a member of church B signed up to help with church A’s care need. The care team sees a name they cannot ' +
+    'place against a day that now looks covered, so nobody else volunteers for it.');
 });
 
 // ── OVER-TIGHTENING CONTROLS. These pass TODAY and must still pass after the scoping fix. ─────────────────
