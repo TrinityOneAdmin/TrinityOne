@@ -68,6 +68,45 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // drop the now-redundant single-column indexes (the composite's leading column serves the same lookups) so writes
   // don't maintain duplicate b-trees. Idempotent + safe: composites above already cover kind/pubkey/church equality.
   db.exec(`DROP INDEX IF EXISTS idx_kind; DROP INDEX IF EXISTS idx_pubkey; DROP INDEX IF EXISTS idx_church;`);
+  // GIVE THE PLANNER STATISTICS, or it ignores half the indexes above. AUDIT-2026-07-30 P1.
+  //
+  // Without sqlite_stat1 SQLite plans from a heuristic, and for `WHERE kind IN (?) AND dtag IN (?) ORDER BY
+  // created_at DESC` it always chose idx_kind_created — the one index that satisfies the ORDER BY without a
+  // sort — and ignored idx_dtag entirely. So the most common read in the product, a single church document by
+  // d-tag, scanned the WHOLE kind-30078 partition. Measured, linear at ~0.83us/row:
+  //
+  //     10k rows 7.2ms · 50k 42.9ms · 100k 80.7ms · 200k 165.1ms · 400k 331.1ms
+  //     with statistics: 0.16ms at 60k, and the plan becomes SEARCH … USING INDEX idx_dtag
+  //
+  // It also removes the same scan from accept()'s per-member-document cap check, which runs on every one of the
+  // seven documents MyData syncs.
+  //
+  // Cheap: 31ms at 54k rows, 227ms at 205k — against a boot that already takes ~12s at that size.
+  //
+  // TWO PLACES, because one is not enough and my first attempt got this wrong. ANALYZE here runs against
+  // whatever is already on disk, which is right for every RESTART of a real relay — but a BRAND-NEW database is
+  // empty at this point, so analysing it gathers nothing and the relay would keep the bad plan until its next
+  // start. So there is also a one-shot re-analyse once enough rows exist (see maybeAnalyze below). The test
+  // asserts the resulting PLAN rather than the presence of the call, which is how the empty-table hole showed up.
+  //
+  // WRAPPED, because ANALYZE WRITES sqlite_stat1 and can therefore fail: a read-only mount, a
+  // permission-restricted data dir, a database another process holds. A relay that refuses to boot because it
+  // could not gather statistics would be a far worse bug than the slow query this fixes. Pinned by a test.
+  let analyzed = false, putsSinceAnalyze = 0;
+  const runAnalyze = () => {
+    try { db.exec('ANALYZE'); analyzed = true; return true; }
+    catch (e) { console.warn('[event-store] ANALYZE skipped (' + ((e && e.message) || e) + ') — queries will be slower but the relay is fine'); return false; }
+  };
+  // Only meaningful if there is something to measure; an empty table yields no statistics at all.
+  try { if (db.prepare('SELECT 1 FROM events LIMIT 1').get()) runAnalyze(); } catch {}
+  // A fresh database fills up AFTER open. Re-analyse once, when the corpus is big enough for the planner's
+  // choice to matter — below ~500 rows every plan is fast anyway, so this cannot cost a small relay anything.
+  const maybeAnalyze = () => {
+    if (analyzed) return;
+    if (++putsSinceAnalyze < 500) return;
+    putsSinceAnalyze = 0;
+    runAnalyze();
+  };
 
   const qByRepl = db.prepare('SELECT id, created_at FROM events WHERE repl = ?');
   const qById   = db.prepare('SELECT 1 FROM events WHERE id = ?');
@@ -115,9 +154,11 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
         ins.run(e.id, e.pubkey, e.kind, e.created_at || 0, dtagOf(e), ch, rk, 1, JSON.stringify(e));
         db.exec('COMMIT');
       } catch (err) { try { db.exec('ROLLBACK'); } catch {} throw err; }
+      maybeAnalyze();   // P1: a fresh DB is empty at open, so the statistics have to be gathered once it fills
       return 'stored';
     }
     ins.run(e.id, e.pubkey, e.kind, e.created_at || 0, dtagOf(e), ch, rk, 0, JSON.stringify(e));
+    maybeAnalyze();
     return 'stored';
   }
 
