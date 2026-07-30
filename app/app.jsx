@@ -597,7 +597,11 @@ function App() {
     // Fellowship fires this after a PIN unlock: it has dropped the stale (anonymous) relay sockets, so we
     // must re-run the church subscriptions to reopen them — now authenticated with the just-derived key.
     // NOT onOnline: a PIN unlock has already torn every socket down, so this must never be debounced away.
-    const onReconnectNeeded = () => { sched.force(); refetch(); };
+    // force() already runs the bump callback, which refetches. Calling refetch() again here doubled the
+    // church-doc fetch at the exact moment every subscription is being rebuilt — measured on device (a single
+    // unlock produced two refetches). Harmless but backwards, on the one path that is already the most
+    // expensive thing the app does.
+    const onReconnectNeeded = () => { sched.force(); };
     window.addEventListener('trinity-reconnect', onReconnectNeeded);
     // Native resume: web visibilitychange/focus are unreliable in the Android WebView, so RETURNING to a
     // backgrounded app often didn't re-subscribe — a steward's change (chat tags, groups, care) then never

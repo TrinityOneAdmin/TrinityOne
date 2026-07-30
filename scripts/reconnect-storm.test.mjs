@@ -187,6 +187,11 @@ test('every reconnect signal in app.jsx is wired to the RIGHT path', () => {
     'trinity-reconnect is no longer on its own handler. If it shares the advisory path, a member who unlocks ' +
     'within the debounce window is left on an app whose sockets are all closed and never reopened.');
   const handler = effect.slice(effect.indexOf('const onReconnectNeeded'), effect.indexOf('const onReconnectNeeded') + 200);
+  // force() already runs the bump callback, which refetches. A second refetch here doubles the church-doc
+  // fetch on the most expensive path in the app — observed on device as two refetches for one unlock.
+  assert.doesNotMatch(handler, /refetch\(\)/,
+    'the trinity-reconnect handler refetches on top of force(), which already does. That is double work at the ' +
+    'moment every subscription is being rebuilt.');
   assert.match(handler, /sched\.force\(\)/,
     'the trinity-reconnect handler no longer calls force(). Any debounced path can swallow it, and a swallowed ' +
     'rebuild after reconnectAll() is a silently dead app.');
