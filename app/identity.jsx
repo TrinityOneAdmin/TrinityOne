@@ -2,7 +2,13 @@
 const { useState: useId, useEffect: useIdE } = React;
 
 // ════════ First-run identity moment ════════
-function IdentityOnboarding({ open, identity, onSave, onSkip }) {
+// `initialRestore` opens straight into the restore route, so the SAME flow can be reached from settings rather
+// than existing only inside first-run onboarding. AUDIT-2026-07-30 U1: "Skip setup for now" writes
+// trinityone.onboarded, app.jsx gates this wizard on that flag, and typing 12 words lived ONLY here — so one
+// tap on a grey link permanently closed the only door back into an existing account, while two other screens
+// went on telling the member to "restore your 12-word phrase". The other restore pane (NostrSheet) has never
+// had a caller at all; see the note at the top of this file.
+function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore }) {
   const D = window.TrinityData;
   const [step, setStep] = useId(0);   // 0 name, 1 back up the 12 words, 2 confirm a couple
   const [name, setName] = useId('');
@@ -25,7 +31,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   // member who changed phones had no way in at all — while the wizard told them the 12 words were the only way
   // back. AUDIT 2026-07-26. Same shape as the console's: paste the phrase, validate, re-derive, then ask the
   // relay what this identity already is.
-  const [restoring, setRestoring] = useId(false);
+  const [restoring, setRestoring] = useId(!!initialRestore);
   const [rPhrase, setRPhrase] = useId('');
   const [rBusy, setRBusy] = useId('');
   const [rErr, setRErr] = useId('');
@@ -1120,6 +1126,9 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <Group>
           <Row icon="shield" label="Recovery key — your 12 words" sub="Your account’s master key. Restores you on any phone — write it on paper, keep it safe." accent="var(--sage)" onClick={() => ctx.openRecovery()} />
           <Row icon="swap" label="Move to a new phone" sub="Carry this account across by scanning — nothing to write down or type." accent="var(--clay)" onClick={() => ctx.openMovePhone()} />
+          {/* U1: restore needs a PERMANENT home. It used to exist only inside the first-run wizard, which
+              "Skip setup for now" hides for ever. Same flow, same church-can-vouch fallback — just reachable. */}
+          <Row icon="refresh" label="Bring an account back" sub="Moving from another phone, or reinstalled? Restore with your 12 words." accent="var(--sage)" onClick={() => ctx.openRestore()} />
           <Row icon="key" label="Your account ID" sub={identity.npub.slice(0, 24) + '…'} accent="var(--gold)" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(identity.npub).catch(() => {}); ctx.toast('Your account ID copied'); }} />
         </Group>
 
