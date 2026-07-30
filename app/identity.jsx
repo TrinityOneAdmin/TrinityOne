@@ -743,19 +743,59 @@ window.IdentityOnboarding = IdentityOnboarding;
 // yet. The identity is encrypted at rest (setPin dropped the plaintext), so a lost/borrowed/taken phone is
 // inert here. "Read the Bible" is an escape that needs no identity (so a forgotten PIN never bricks the phone
 // — the church, messages and identity stay locked, only the offline Bible opens).
+// AUDIT-2026-07-30 U4 / S6b. This gate accepted UNLIMITED INSTANT GUESSES: no counter, no delay, no lockout.
+// The steward console has had a persisted escalating cooldown all along (app/steward-root.jsx) — so the two apps
+// had opposite protections, and the wrong way round. There are twenty members and one steward, and it is
+// members' phones that get taken; this product's threat model is seizure, not remote attack. A 6-character PIN
+// with unlimited instant tries is minutes of work for whoever is holding the phone.
+//
+// Ported from the console rather than reinvented, including the shape that matters: PERSISTED, so it survives an
+// app restart. An in-memory counter stops nobody — force-quit and it is gone. And clearCommunityCache (the
+// locked-boot wipe) deliberately does NOT clear this key, or an attacker would reset the cooldown by relocking.
+// Pinned by a test.
+const PIN_GUARD_KEY = 'trinityone.pinguard';
+const readPinGuard = () => { try { return JSON.parse(localStorage.getItem(PIN_GUARD_KEY) || '{}') || {}; } catch { return {}; } };
+
 function PinUnlockGate({ onUnlocked, onReadBible }) {
   const [pin, setPin] = useId('');
   const [err, setErr] = useId('');
   const [busy, setBusy] = useId(false);
   const [forgot, setForgot] = useId(false);
+  const [waitLeft, setWaitLeft] = useId(() => { const g = readPinGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
+  // tick the countdown down so the member can see it clear, rather than tapping a dead button
+  useIdE(() => {
+    if (waitLeft <= 0) return;
+    const t = setInterval(() => {
+      const g = readPinGuard();
+      const left = Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000));
+      setWaitLeft(left);
+      if (left <= 0) { setErr(''); clearInterval(t); }
+    }, 500);
+    return () => clearInterval(t);
+  }, [waitLeft > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const GUARD_KEY = PIN_GUARD_KEY;
   const tryUnlock = async () => {
     if (!pin || busy) return;
+    const g0 = readPinGuard();
+    if ((g0.until || 0) > Date.now()) { setErr('Too many tries — wait a moment.'); return; }
     setBusy(true); setErr('');
     const ID = window.TrinityIdentity;
     let ok = false; try { ok = ID && ID.unlock ? await ID.unlock(pin) : false; } catch (e) { ok = false; }
     setBusy(false);
-    if (ok) { try { window.dispatchEvent(new CustomEvent('trinity-identity-lock')); } catch (e) {} onUnlocked && onUnlocked(); }
-    else { setErr('Wrong PIN. Try again.'); setPin(''); }
+    if (ok) {
+      // A member who mistyped four times and then got it right must not stay one miss from a lockout.
+      try { localStorage.removeItem(GUARD_KEY); } catch (e) {}
+      try { window.dispatchEvent(new CustomEvent('trinity-identity-lock')); } catch (e) {} onUnlocked && onUnlocked();
+      return;
+    }
+    // Four free tries — a member mistyping is not an attacker. Then 30s, doubling, capped at 1h. Same numbers as
+    // the console, deliberately: two different lockout curves in one product is a support problem.
+    const fails = (g0.fails || 0) + 1;
+    const until = fails >= 5 ? Date.now() + Math.min(30 * Math.pow(2, fails - 5), 3600) * 1000 : 0;
+    try { localStorage.setItem(GUARD_KEY, JSON.stringify({ fails, until })); } catch (e) {}
+    setPin('');
+    if (until > Date.now()) { setWaitLeft(Math.ceil((until - Date.now()) / 1000)); setErr('Too many tries — locked for a moment. You can still read the Bible.'); }
+    else setErr('Wrong PIN. Try again.' + (fails >= 3 ? ' (' + fails + ' tries)' : ''));
   };
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'var(--paper)', display: 'flex', flexDirection: 'column',
@@ -766,7 +806,9 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
       <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
         placeholder="PIN" style={{ width: 'min(320px, 100%)', boxSizing: 'border-box', height: 54, textAlign: 'center', letterSpacing: '.3em', border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', fontSize: 20, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
-      <button onClick={tryUnlock} disabled={!pin || busy} style={{ width: 'min(320px, 100%)', marginTop: 18, padding: 15, borderRadius: 14, border: 'none', cursor: (!pin || busy) ? 'default' : 'pointer', background: (!pin || busy) ? 'var(--surface-2)' : 'var(--clay)', color: (!pin || busy) ? 'var(--ink-3)' : '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{busy ? 'Unlocking…' : 'Unlock'}</button>
+      {/* U4: the button must SHOW the cooldown. Leaving it enabled during a lockout means tapping it does
+          nothing visible — the silent-failure class this codebase keeps being bitten by — so it counts down. */}
+      <button onClick={tryUnlock} disabled={!pin || busy || waitLeft > 0} style={{ width: 'min(320px, 100%)', marginTop: 18, padding: 15, borderRadius: 14, border: 'none', cursor: (!pin || busy || waitLeft > 0) ? 'default' : 'pointer', background: (!pin || busy || waitLeft > 0) ? 'var(--surface-2)' : 'var(--clay)', color: (!pin || busy || waitLeft > 0) ? 'var(--ink-3)' : '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{waitLeft > 0 ? 'Wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
       <button onClick={() => onReadBible && onReadBible()} style={{ marginTop: 16, background: 'none', border: 'none', color: 'var(--ink-2)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Read the Bible without unlocking →</button>
       <button onClick={() => setForgot(f => !f)} style={{ marginTop: 6, background: 'none', border: 'none', color: 'var(--ink-3)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Forgot your PIN?</button>
       {forgot ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: '10px auto 0', maxWidth: 300, lineHeight: 1.5 }}>Your PIN can’t be reset — not even by us. If you’ve forgotten it, reinstall the app and restore your account with your 12 words.</div> : null}
