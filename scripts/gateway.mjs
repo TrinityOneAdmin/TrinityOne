@@ -1400,12 +1400,21 @@ function accept(e) {
     }
     if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
-      if (isMember) return true;                               // a known member asking to help: always
+      // AUDIT-2026-07-30, the sixth of the unscoped write rules. `isMember` is relay-wide, so a member of ANY
+      // co-tenant church took the uncapped path into this church's console — and the anti-flood cap below
+      // deliberately does not count members, so being a member of somewhere else bypassed it entirely.
+      // Scoped: a member OF THIS CHURCH still always gets through; anyone else falls to the capped stranger path
+      // below, which is exactly where an outsider volunteering to steward belongs. Not a lockout — the request
+      // is still possible, just counted.
+      if (churchWriter(e.pubkey, d.slice(STEWARDREQ_D.length))) return true;   // a known member of THAT church asking to help: always
       if (store.query({ kinds: [30078], authors: [e.pubkey], '#d': [d], limit: 1 }).length) return true;   // updating their own pending request
       // P5: bounded scan + early break — was an unbounded limit:1_000_000 fetch on every stranger request
       // (a cheap-request → full-table-scan amplifier). Mirror the M6 kind-0 fix: cap the rows and stop at the cap.
       let pend = 0;
-      for (const x of store.query({ kinds: [30078], '#d': [d], limit: STEWARDREQ_CAP + MEMBERS.size + 8 })) { if (!MEMBERS.has(x.pubkey) && ++pend >= STEWARDREQ_CAP) break; }
+      // Counted against the cap unless they are a member OF THIS CHURCH — the relay-wide MEMBERS union here was
+      // the same hole as above: a pending request from any co-tenant church's member was exempt from the count.
+      const _reqCp = d.slice(STEWARDREQ_D.length);
+      for (const x of store.query({ kinds: [30078], '#d': [d], limit: STEWARDREQ_CAP + MEMBERS.size + 8 })) { if (!effMemberOf(x.pubkey, _reqCp) && ++pend >= STEWARDREQ_CAP) break; }
       return pend < STEWARDREQ_CAP;
     }
     // Meal trains / Care module (optional, per-church) — must precede the generic member fallback:

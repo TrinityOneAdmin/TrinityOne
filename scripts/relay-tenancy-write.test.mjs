@@ -15,7 +15,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
@@ -274,6 +274,31 @@ test('S2b: a member of another church CANNOT fill a slot on this church’s care
   assert.equal(attack[0], false,
     'a member of church B signed up to help with church A’s care need. The care team sees a name they cannot ' +
     'place against a day that now looks covered, so nobody else volunteers for it.');
+});
+
+// The sixth unscoped rule. Low harm on its own — the church owner must still approve a request — but it is the
+// same root cause, and the anti-flood cap deliberately does NOT count members, so being a member of somewhere
+// else bought an exemption from it. Scoping is not a lockout: an outsider may still ask, they are just counted.
+test('a member of another church is not EXEMPT from the steward-request flood cap', async () => {
+  const STEWARDREQ_D = 'trinityone/stewardreq:';
+  // Both are allowed to ask. The difference is which path they take — uncapped, or counted.
+  assert.equal((await publish(pub, doc(carol, STEWARDREQ_D + A.pub, { note: 'I would like to help' })))[0], true,
+    'a member of A can no longer offer to steward A — that is a lockout, not a fix');
+  assert.equal((await publish(pub, doc(bob, STEWARDREQ_D + A.pub, { note: 'me too' })))[0], true,
+    'an outsider may still ask to steward; they are counted against the cap, not refused');
+  // The invariant is the EXEMPTION, and it is only observable through the cap. Assert the rule reads the scoped
+  // predicate rather than the relay-wide union — stated plainly as a source assertion, because filling a 50-deep
+  // cap over a websocket to prove it would add ~50s to the suite for one bit of information.
+  const src = readFileSync(new URL('./gateway.mjs', import.meta.url), 'utf8');
+  const at = src.indexOf('if (d.startsWith(STEWARDREQ_D))');
+  assert.notEqual(at, -1, 're-anchor: the steward-request rule moved');
+  const rule = src.slice(at, src.indexOf('\n    }', at));
+  assert.match(rule, /churchWriter\(e\.pubkey, d\.slice\(STEWARDREQ_D\.length\)\)/,
+    'the uncapped path is still gated on the relay-wide isMember, so a member of any co-tenant church skips ' +
+    'straight into this church’s console');
+  assert.doesNotMatch(rule, /!MEMBERS\.has\(x\.pubkey\)/,
+    'the flood cap still exempts the relay-wide member union, so pending requests from other churches’ members ' +
+    'are not counted');
 });
 
 // ── OVER-TIGHTENING CONTROLS. These pass TODAY and must still pass after the scoping fix. ─────────────────
