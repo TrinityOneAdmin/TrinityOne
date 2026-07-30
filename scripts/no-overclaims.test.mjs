@@ -83,6 +83,34 @@ test('marketing does not claim messages are encrypted while groups default to pl
     'features.html still lists "Group rooms and private, encrypted messages" — the group rooms are not encrypted');
 });
 
+test('the waiting-for-approval screen does not tell a member to close the app', () => {
+  // AUDIT-2026-07-30 U3. The code facts, asserted first so this test dies honestly if push ever ships:
+  const REM = read('app/reminders.jsx');
+  assert.match(code(REM), /if \(isNative\(\)\) return;/,
+    'native push registration is no longer skipped — if the APK can receive push now, the promise can come back');
+  const cats = code(REM).match(/const cats = \{[^}]*\}/);
+  assert.ok(cats, 're-anchor: the push categories moved');
+  assert.doesNotMatch(cats[0], /approv/i,
+    'an approval category exists now — if the relay can push an approval, this screen may promise it again');
+  // …and the promise itself must be gone. "so you can close the app" is the harmful half: it is an instruction,
+  // on the most anxious screen a newcomer sees, that guarantees they miss the thing they are waiting for.
+  assert.doesNotMatch(code(CHAT), /close the app until then/,
+    'the waiting-for-approval screen still tells the member they can close the app. The APK gets no push, so ' +
+    'the only approval signal is an in-session toast — closing the app is precisely how to miss it.');
+  assert.doesNotMatch(code(CHAT), /we’ll let you know the moment you’re approved/,
+    'the screen still promises a notification the APK cannot receive');
+});
+
+test('…and it still tells them what WILL happen, rather than going silent', () => {
+  // Over-correction check: deleting the reassurance would leave a newcomer staring at "Waiting for approval"
+  // with no idea whether to wait, retry, or give up. The fix is honesty, not absence.
+  const at = code(CHAT).indexOf('has been sent');
+  assert.notEqual(at, -1, 're-anchor: the pending-approval copy moved');
+  const para = code(CHAT).slice(at, at + 400);
+  assert.match(para, /within a day|Leave this open|check back/,
+    'the pending screen no longer says what to expect. A member who is told nothing assumes it is broken.');
+});
+
 test('the honest wording that already existed is still there', () => {
   // These sentences are the source material for every fix above. Losing them would be the real regression.
   assert.match(EXTRAS, /can still tell that you use TrinityOne and which church you belong to/,

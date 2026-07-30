@@ -480,7 +480,13 @@ function ChatScreen({ ctx }) {
         <div style={{ textAlign: 'center', padding: '40px 24px', animation: 'trinityFade .4s ease both' }}>
           <div style={{ width: 76, height: 76, borderRadius: 22, margin: '0 auto 18px', background: 'color-mix(in oklab, var(--gold) 16%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a6717' }}><Icon name="shield" size={38} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, marginBottom: 10 }}>Waiting for approval</div>
-          <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 340, margin: '0 auto' }}>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been sent. A steward will let you in shortly — <b>we’ll let you know the moment you’re approved</b>, so you can close the app until then.</p>
+          {/* AUDIT-2026-07-30 U3: this used to promise "we’ll let you know the moment you’re approved, so you can
+              close the app until then". The APK receives no push at all — reminders.jsx registerPush() returns
+              early on native, and its categories are dm/announce/serving with no approval type — so following
+              that instruction GUARANTEED the member missed the event. It is the most anxious screen a newcomer
+              sees, and it was giving them the one instruction that could not work. Honest wording until push
+              ships (it is built and device-verified on a branch); then this can promise it again and mean it. */}
+          <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 340, margin: '0 auto' }}>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been sent. A steward usually lets people in within a day. <b>Leave this open and you’ll see it happen</b> — or check back here later, and there’s nothing to do in the meantime.</p>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 20, padding: '10px 16px', borderRadius: 999, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, transparent)', color: '#8a6717', fontWeight: 700, fontSize: 13.5 }}>
             <span style={{ width: 8, height: 8, borderRadius: 999, background: '#c2913a' }} /> Pending steward approval
           </div>
