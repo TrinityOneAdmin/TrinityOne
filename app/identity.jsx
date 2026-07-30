@@ -2,7 +2,13 @@
 const { useState: useId, useEffect: useIdE } = React;
 
 // ════════ First-run identity moment ════════
-function IdentityOnboarding({ open, identity, onSave, onSkip }) {
+// `initialRestore` opens straight into the restore route, so the SAME flow can be reached from settings rather
+// than existing only inside first-run onboarding. AUDIT-2026-07-30 U1: "Skip setup for now" writes
+// trinityone.onboarded, app.jsx gates this wizard on that flag, and typing 12 words lived ONLY here — so one
+// tap on a grey link permanently closed the only door back into an existing account, while two other screens
+// went on telling the member to "restore your 12-word phrase". The other restore pane (NostrSheet) has never
+// had a caller at all; see the note at the top of this file.
+function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore }) {
   const D = window.TrinityData;
   const [step, setStep] = useId(0);   // 0 name, 1 back up the 12 words, 2 confirm a couple
   const [name, setName] = useId('');
@@ -25,7 +31,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
   // member who changed phones had no way in at all — while the wizard told them the 12 words were the only way
   // back. AUDIT 2026-07-26. Same shape as the console's: paste the phrase, validate, re-derive, then ask the
   // relay what this identity already is.
-  const [restoring, setRestoring] = useId(false);
+  const [restoring, setRestoring] = useId(!!initialRestore);
   const [rPhrase, setRPhrase] = useId('');
   const [rBusy, setRBusy] = useId('');
   const [rErr, setRErr] = useId('');
@@ -698,7 +704,13 @@ function IdentityOnboarding({ open, identity, onSave, onSkip }) {
       <div style={{ padding: '60px 22px 12px', maxWidth: 480, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}><div style={{ width: 62, height: 62, borderRadius: 18, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}><Icon name="shield" size={28} /></div></div>
         <h1 style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700, margin: '0 0 10px', letterSpacing: '-.4px' }}>Lock this phone with a PIN</h1>
-        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Without a PIN, <b>anyone who picks up your phone can read your messages and act as you</b>. With one, a lost, borrowed, or taken phone is just a locked box — your account can’t be opened without it. <b>We strongly recommend setting one.</b></p>
+        <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>Without a PIN, <b>anyone who picks up your phone can read your messages and act as you</b>. With one, your account can’t be opened and your messages can’t be read without it. <b>We strongly recommend setting one.</b></p>
+        {/* U5: this used to say a taken phone is "just a locked box". It is not — clearCommunityCache keeps the
+            church list on purpose (wiping it strands the member), so someone examining the device can still tell
+            which congregation you belong to. That matters under seizure, which is this product's threat model.
+            The honest sentence already existed at app/identity-extras.jsx:283; this is it, on the screen with
+            reach. Say what it does AND what it does not — not less. */}
+        <p style={{ textAlign: 'center', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>It is not invisibility: someone who examines this phone properly can still tell you use TrinityOne, and which church you follow. What the PIN protects is your account and your messages.</p>
         <input type="password" value={pin} onChange={e => { setPinVal(e.target.value); setPinErr(''); }} autoFocus placeholder="At least 6 — digits are fine"
           style={{ width: '100%', boxSizing: 'border-box', height: 52, marginBottom: 12, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
         <input type="password" value={pin2} onChange={e => { setPin2(e.target.value); setPinErr(''); }} placeholder="Type it again to confirm"
@@ -737,19 +749,59 @@ window.IdentityOnboarding = IdentityOnboarding;
 // yet. The identity is encrypted at rest (setPin dropped the plaintext), so a lost/borrowed/taken phone is
 // inert here. "Read the Bible" is an escape that needs no identity (so a forgotten PIN never bricks the phone
 // — the church, messages and identity stay locked, only the offline Bible opens).
+// AUDIT-2026-07-30 U4 / S6b. This gate accepted UNLIMITED INSTANT GUESSES: no counter, no delay, no lockout.
+// The steward console has had a persisted escalating cooldown all along (app/steward-root.jsx) — so the two apps
+// had opposite protections, and the wrong way round. There are twenty members and one steward, and it is
+// members' phones that get taken; this product's threat model is seizure, not remote attack. A 6-character PIN
+// with unlimited instant tries is minutes of work for whoever is holding the phone.
+//
+// Ported from the console rather than reinvented, including the shape that matters: PERSISTED, so it survives an
+// app restart. An in-memory counter stops nobody — force-quit and it is gone. And clearCommunityCache (the
+// locked-boot wipe) deliberately does NOT clear this key, or an attacker would reset the cooldown by relocking.
+// Pinned by a test.
+const PIN_GUARD_KEY = 'trinityone.pinguard';
+const readPinGuard = () => { try { return JSON.parse(localStorage.getItem(PIN_GUARD_KEY) || '{}') || {}; } catch { return {}; } };
+
 function PinUnlockGate({ onUnlocked, onReadBible }) {
   const [pin, setPin] = useId('');
   const [err, setErr] = useId('');
   const [busy, setBusy] = useId(false);
   const [forgot, setForgot] = useId(false);
+  const [waitLeft, setWaitLeft] = useId(() => { const g = readPinGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
+  // tick the countdown down so the member can see it clear, rather than tapping a dead button
+  useIdE(() => {
+    if (waitLeft <= 0) return;
+    const t = setInterval(() => {
+      const g = readPinGuard();
+      const left = Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000));
+      setWaitLeft(left);
+      if (left <= 0) { setErr(''); clearInterval(t); }
+    }, 500);
+    return () => clearInterval(t);
+  }, [waitLeft > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const GUARD_KEY = PIN_GUARD_KEY;
   const tryUnlock = async () => {
     if (!pin || busy) return;
+    const g0 = readPinGuard();
+    if ((g0.until || 0) > Date.now()) { setErr('Too many tries — wait a moment.'); return; }
     setBusy(true); setErr('');
     const ID = window.TrinityIdentity;
     let ok = false; try { ok = ID && ID.unlock ? await ID.unlock(pin) : false; } catch (e) { ok = false; }
     setBusy(false);
-    if (ok) { try { window.dispatchEvent(new CustomEvent('trinity-identity-lock')); } catch (e) {} onUnlocked && onUnlocked(); }
-    else { setErr('Wrong PIN. Try again.'); setPin(''); }
+    if (ok) {
+      // A member who mistyped four times and then got it right must not stay one miss from a lockout.
+      try { localStorage.removeItem(GUARD_KEY); } catch (e) {}
+      try { window.dispatchEvent(new CustomEvent('trinity-identity-lock')); } catch (e) {} onUnlocked && onUnlocked();
+      return;
+    }
+    // Four free tries — a member mistyping is not an attacker. Then 30s, doubling, capped at 1h. Same numbers as
+    // the console, deliberately: two different lockout curves in one product is a support problem.
+    const fails = (g0.fails || 0) + 1;
+    const until = fails >= 5 ? Date.now() + Math.min(30 * Math.pow(2, fails - 5), 3600) * 1000 : 0;
+    try { localStorage.setItem(GUARD_KEY, JSON.stringify({ fails, until })); } catch (e) {}
+    setPin('');
+    if (until > Date.now()) { setWaitLeft(Math.ceil((until - Date.now()) / 1000)); setErr('Too many tries — locked for a moment. You can still read the Bible.'); }
+    else setErr('Wrong PIN. Try again.' + (fails >= 3 ? ' (' + fails + ' tries)' : ''));
   };
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'var(--paper)', display: 'flex', flexDirection: 'column',
@@ -760,7 +812,9 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
       <input type="password" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
         placeholder="PIN" style={{ width: 'min(320px, 100%)', boxSizing: 'border-box', height: 54, textAlign: 'center', letterSpacing: '.3em', border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', fontSize: 20, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 12 }}>{err}</div> : null}
-      <button onClick={tryUnlock} disabled={!pin || busy} style={{ width: 'min(320px, 100%)', marginTop: 18, padding: 15, borderRadius: 14, border: 'none', cursor: (!pin || busy) ? 'default' : 'pointer', background: (!pin || busy) ? 'var(--surface-2)' : 'var(--clay)', color: (!pin || busy) ? 'var(--ink-3)' : '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{busy ? 'Unlocking…' : 'Unlock'}</button>
+      {/* U4: the button must SHOW the cooldown. Leaving it enabled during a lockout means tapping it does
+          nothing visible — the silent-failure class this codebase keeps being bitten by — so it counts down. */}
+      <button onClick={tryUnlock} disabled={!pin || busy || waitLeft > 0} style={{ width: 'min(320px, 100%)', marginTop: 18, padding: 15, borderRadius: 14, border: 'none', cursor: (!pin || busy || waitLeft > 0) ? 'default' : 'pointer', background: (!pin || busy || waitLeft > 0) ? 'var(--surface-2)' : 'var(--clay)', color: (!pin || busy || waitLeft > 0) ? 'var(--ink-3)' : '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{waitLeft > 0 ? 'Wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
       <button onClick={() => onReadBible && onReadBible()} style={{ marginTop: 16, background: 'none', border: 'none', color: 'var(--ink-2)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Read the Bible without unlocking →</button>
       <button onClick={() => setForgot(f => !f)} style={{ marginTop: 6, background: 'none', border: 'none', color: 'var(--ink-3)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Forgot your PIN?</button>
       {forgot ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: '10px auto 0', maxWidth: 300, lineHeight: 1.5 }}>Your PIN can’t be reset — not even by us. If you’ve forgotten it, reinstall the app and restore your account with your 12 words.</div> : null}
@@ -1120,6 +1174,9 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <Group>
           <Row icon="shield" label="Recovery key — your 12 words" sub="Your account’s master key. Restores you on any phone — write it on paper, keep it safe." accent="var(--sage)" onClick={() => ctx.openRecovery()} />
           <Row icon="swap" label="Move to a new phone" sub="Carry this account across by scanning — nothing to write down or type." accent="var(--clay)" onClick={() => ctx.openMovePhone()} />
+          {/* U1: restore needs a PERMANENT home. It used to exist only inside the first-run wizard, which
+              "Skip setup for now" hides for ever. Same flow, same church-can-vouch fallback — just reachable. */}
+          <Row icon="refresh" label="Bring an account back" sub="Moving from another phone, or reinstalled? Restore with your 12 words." accent="var(--sage)" onClick={() => ctx.openRestore()} />
           <Row icon="key" label="Your account ID" sub={identity.npub.slice(0, 24) + '…'} accent="var(--gold)" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(identity.npub).catch(() => {}); ctx.toast('Your account ID copied'); }} />
         </Group>
 

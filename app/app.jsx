@@ -1448,6 +1448,9 @@ function App() {
     openShareApp: () => setIdSheet('shareapp'),
     openRelays: () => setIdSheet('relays'),
     openMovePhone: () => setIdSheet('movephone'),
+    // U1: restore has a permanent home now. It used to live ONLY inside the first-run wizard, which
+    // "Skip setup for now" hides for ever by writing trinityone.onboarded.
+    openRestore: () => setIdSheet('restore'),
     openWallet: () => { if (WALLET_ENABLED) setWalletSheet(true); },
     openNewIdentity: () => setNewId(true),
     // library drill-ins
@@ -1814,6 +1817,12 @@ function App() {
         {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity}
           onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }}
           onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }} /> : null}
+        {/* U1: the SAME restore flow, opened from settings rather than only from first-run. Deliberately its
+            OWN handlers: this member is already set up, so it must not re-write trinityone.onboarded or
+            re-prompt them to follow a church — it just closes when they are done. */}
+        {idSheet === 'restore' ? <IdentityOnboarding open={true} identity={identity} initialRestore
+          onSave={(p) => { saveIdentity(p); setIdSheet(null); }}
+          onSkip={() => setIdSheet(null)} /> : null}
       </PhoneFrame>
     </div>
   );

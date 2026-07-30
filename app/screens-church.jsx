@@ -208,7 +208,7 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
       <div style={{ display: 'flex', gap: 9, padding: 13, borderRadius: 14, background: 'color-mix(in oklab, var(--sage) 11%, var(--surface))',
         border: '1px solid color-mix(in oklab, var(--sage) 28%, transparent)', marginTop: 16 }}>
         <Icon name="shield" size={18} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Following only subscribes you to that church’s signed posts. You’re in control — no account, and no phone number or email is ever shared.</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>Following tells this church you’ve joined, so a steward can welcome you — and subscribes you to their posts. You’re in control: no account, and no phone number or email is ever shared.</div>
       </div>
     </div>
   );
