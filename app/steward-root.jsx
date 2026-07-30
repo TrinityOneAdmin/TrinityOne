@@ -494,6 +494,7 @@ function StewardUnlock() {
   const [busy, setBusy] = useSt(false);
   const [err, setErr] = useSt('');
   const [waitLeft, setWaitLeft] = useSt(() => { const g = readGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
+  const [lostKey, setLostKey] = useSt(false);   // the device-bound key is gone — offer the way out, not a retry loop
   useStE(() => { if (waitLeft <= 0) return; const t = setInterval(() => { const g = readGuard(); const left = Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); setWaitLeft(left); if (left <= 0) { setErr(''); clearInterval(t); } }, 500); return () => clearInterval(t); }, [waitLeft > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
   const submit = async () => {
     if (!pin || busy) return;
@@ -509,7 +510,9 @@ function StewardUnlock() {
     // it must not count towards the lockout.
     if (window.Steward.deviceKeyLost) {
       setBusy(false); setPin('');
-      setErr('This computer no longer recognises the stored key — it was cleared, or this is a different browser. Your passphrase is fine. Use “I have my 12 words” to bring the church key back.');
+      setLostKey(true);
+      setErr('This computer no longer recognises the stored key — it was cleared, or this is a different browser. Your passphrase is fine; nothing is wrong with it. Use “Restore this church” below and enter your 12 words.');
+      setBusy(false); setPin('');
       return;
     }
     const fails = (g0.fails || 0) + 1;
@@ -531,6 +534,19 @@ function StewardUnlock() {
           style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)', opacity: blocked ? .6 : 1 }} />
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}{blocked ? ' (' + waitLeft + 's)' : ''}</div> : null}
         <button onClick={submit} disabled={!pin || busy || blocked} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || busy || blocked) ? .5 : 1 }}>{blocked ? 'Locked — wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
+        {/* AUDIT-2026-07-30. The lost-device-key message used to say 'Use "I have my 12 words"' — a control that
+            exists only in the MEMBER app. The console's equivalent is called "Restore a church" and lives on
+            StewardWelcome, which steward-root.jsx renders ONLY when no key blob exists. So while locked, the
+            unlock screen was the only thing on screen and this message pointed at a button that could not be
+            reached from it. A steward with their 12 words on paper and a perfectly intact church had no way
+            back except clearing site data by hand, which nothing told them.
+            Shown only in that state, so the ordinary locked screen keeps its single obvious action. */}
+        {lostKey ? (
+          <button onClick={() => { try { localStorage.removeItem('trinityone.steward.church-key.enc'); } catch (e) {} location.reload(); }}
+            className="sk-btn sk-btn--ghost" style={{ width: '100%', justifyContent: 'center', padding: '11px 16px', fontSize: 13.5, marginTop: 10 }}>
+            Restore this church with my 12 words
+          </button>
+        ) : null}
       </div>
     </div>
   );

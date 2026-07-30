@@ -102,16 +102,25 @@ test('LOSING THE BROWSER PROFILE IS REPORTED, NOT MISTAKEN FOR A WRONG PASSPHRAS
     'never offered.');
 });
 
-test('unlock() and verifyPin() surface that state instead of returning a bare false', () => {
-  // The distinction is worthless if the callers throw it away.
+test('unlock() and verifyPin() surface that state, and CLEAR it on the next attempt', () => {
+  // This used to grep for the identifiers in a 700-char window and never look at the order. It was green while
+  // the flag was a LATCH — set once, never reset — so after recovering in place an ordinary typo reported
+  // "your passphrase is fine, this computer no longer recognises the key", and the caller's early return also
+  // skipped the failed-attempt counter, silently disabling the escalating lockout for the rest of the session.
   for (const fn of ['unlock', 'verifyPin']) {
     const at = BUNDLE.indexOf('async ' + fn + '(pin)');
     assert.notEqual(at, -1, 're-anchor: ' + fn + ' moved');
-    const body = BUNDLE.slice(at, at + 700);
-    assert.match(body, /deviceKeyMissing/,
-      fn + '() no longer distinguishes a lost device key from a wrong passphrase, so the UI cannot explain ' +
-      'the one situation the steward needs told about.');
-    assert.match(body, /deviceKeyLost/, fn + '() detects the condition but does not expose it for the UI');
+    const body = BUNDLE.slice(at, at + 900);
+    const cleared = body.indexOf('deviceKeyLost = false');
+    const set = body.indexOf('deviceKeyLost = true');
+    assert.notEqual(cleared, -1,
+      fn + '() never clears deviceKeyLost, so it latches: once one eviction sets it, every later WRONG ' +
+      'passphrase is reported as a lost device key and the attempt counter is skipped.');
+    assert.notEqual(set, -1, fn + '() no longer sets deviceKeyLost, so the UI cannot explain the one state it exists for');
+    assert.ok(cleared < set,
+      fn + '() clears the flag AFTER setting it, or in the wrong branch — it must be reset at the top so it ' +
+      'describes THIS attempt rather than any previous one.');
+    assert.match(body, /deviceKeyMissing/, fn + '() no longer distinguishes a lost device key from a wrong passphrase');
   }
 });
 
@@ -140,10 +149,18 @@ test('the write path read-checks before trusting the wrap', () => {
   assert.notEqual(at, -1, 're-anchor: encBlobWrite moved');
   const body = BUNDLE.slice(at, at + 1400);
   assert.match(body, /_devWrap\.wrap\(/, 'the web path no longer binds the blob to the browser');
-  assert.match(body, /_devWrap\.unwrap\(/,
-    'the wrapped blob is stored without reading it back. A wrap we cannot reverse would lock the steward out ' +
-    'on their next visit, and they would have no idea why.');
-  assert.match(body, /_isNative\(\)/, 'the wrap is being applied on native too, layering over a working Keystore path');
+  // These three used to be vacuous, and an audit proved it by sabotage: deleting the `if (!_isNative())` guard
+  // and deleting the read-back comparison BOTH left all of them green. `_isNative()` matched the pre-existing
+  // native branch on encBlobWrite's second line, 43 characters in — nothing to do with the wrap at all.
+  // Anchored on the wrap's own block now, and on the comparison rather than the mere mention of unwrap.
+  const wrapAt = body.indexOf('_devWrap.wrap(');
+  const wrapBlock = body.slice(Math.max(0, wrapAt - 400), wrapAt + 500);
+  assert.match(wrapBlock, /!_isNative\(\)/,
+    'the wrap is no longer behind a !_isNative() guard, so it layers over the native Keystore path that was ' +
+    'verified on a device — buying nothing and risking the thing that works.');
+  assert.match(wrapBlock, /back === str/,
+    'the wrapped blob is stored without COMPARING the read-back. A wrap we cannot reverse would lock the ' +
+    'steward out on their next visit with no idea why — and merely calling unwrap() does not check that.');
 });
 
 test('THE DEVICE KEY IS GENERATED NON-EXTRACTABLE — the crux of the whole design', () => {
@@ -176,20 +193,71 @@ test('…and it is stored, not re-derived — a fresh key each boot would lock t
     'reported rather than silently replaced with a new one that cannot open anything.');
 });
 
-test('the UI explains a lost device key instead of blaming the passphrase', () => {
-  // The engine distinguishing the state is useless if the screen still says "Wrong PIN". This is the one
-  // moment where a steward could conclude they have lost their church, when in fact they only need their
-  // 12 words — so the message must name the cause AND the way out.
+test('THE STEWARD HAS A WAY OUT ON THAT SCREEN, not just a message', () => {
+  // The critical audit finding. The message used to say 'Use "I have my 12 words"' — a control that exists
+  // only in the MEMBER app (app/identity.jsx). The console's equivalent is called "Restore a church" and lives
+  // on StewardWelcome, which steward-root.jsx renders ONLY when no key blob exists. While locked, StewardUnlock
+  // is the whole screen. So a steward holding their 12 words on paper, with an intact church, was told to press
+  // a button that was not there and could not be reached — their only real escape being to clear site data by
+  // hand, which nothing mentioned.
+  //
+  // A message is not a way out. This asserts the AFFORDANCE exists on the locked screen, and that the words
+  // match a control the steward can actually see.
   const ROOT = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8');
-  const at = ROOT.indexOf('const ok = await window.Steward.unlock(pin);');
-  assert.notEqual(at, -1, 're-anchor: the unlock handler moved');
-  const body = ROOT.slice(at, at + 1400);
-  assert.match(body, /deviceKeyLost/,
-    'the unlock screen still reports a lost device key as a wrong passphrase. The steward would retry for ever ' +
-    'and never be told to restore from their 12 words.');
-  assert.match(body, /12 words/, 'the message does not offer the way out');
-  const branch = body.slice(body.indexOf('deviceKeyLost'));
+  const at = ROOT.indexOf('function StewardUnlock');
+  assert.notEqual(at, -1, 're-anchor: StewardUnlock moved');
+  const screen = ROOT.slice(at, ROOT.indexOf('\nfunction ', at + 10));
+
+  assert.match(screen, /deviceKeyLost/, 'the unlock screen no longer detects the lost-device-key state');
+  assert.match(screen, /setLostKey\(true\)/, 'the state is detected but never recorded for the render');
+  assert.match(screen, /lostKey \?/, 'nothing on the locked screen changes when the device key is gone');
+  assert.match(screen, /Restore this church with my 12 words/,
+    'there is no restore control on the locked screen. The message alone is a dead end — this is the one ' +
+    'moment the feature exists for, and the steward cannot act on it.');
+  // and the message must name what they can actually press
+  assert.doesNotMatch(screen, /Use “I have my 12 words”/,
+    'the message still names a control from the member app that does not exist in the console.');
+
+  const branch = screen.slice(screen.indexOf('deviceKeyLost'));
   assert.ok(branch.indexOf('return;') !== -1 && branch.indexOf('return;') < branch.indexOf('const fails'),
     'the lost-device-key branch falls through into the failed-attempt counter. It is not a wrong guess, so it ' +
     'must not push the steward towards a lockout.');
+});
+
+test('a broken IndexedDB store is rebuilt, not swallowed for ever', () => {
+  // A failed createObjectStore still COMMITS the upgrade at version 1 with no store. Every later transaction
+  // then throws, _deviceKey returns null, and because the version was hardcoded the upgrade never ran again —
+  // so the console either silently protected nothing, or was permanently locked out of an already-wrapped
+  // blob. Confirmed reachable by the audit, which hit it by accident.
+  const at = BUNDLE.indexOf('async function _idb(');
+  assert.notEqual(at, -1, 're-anchor: _idb moved or is no longer async');
+  const body = BUNDLE.slice(at, at + 700);
+  assert.match(body, /objectStoreNames\.contains\(DEV_STORE\)/,
+    '_idb no longer checks the object store actually exists. An upgrade that failed to create it commits ' +
+    'anyway, and every later transaction throws for ever.');
+  assert.match(body, /version \|\| 1\) \+ 1|\+ 1/,
+    'there is no version bump, so a database stuck without its store can never be repaired — the version is ' +
+    'the only thing that triggers another upgrade.');
+  // Asserted as the GUARD'S PRESENCE, not the absence of a try/catch. The absence form is brittle — sabotage
+  // put the swallowing version back and this test stayed green, because a regex for "no try/catch here" is
+  // defeated by any reformatting the bundler happens to do.
+  const up = BUNDLE.slice(BUNDLE.indexOf('function _openIdb('), BUNDLE.indexOf('function _openIdb(') + 600);
+  assert.match(up, /onupgradeneeded[\s\S]{0,220}objectStoreNames\.contains\(DEV_STORE\)/,
+    'the upgrade handler no longer checks whether the store already exists before creating it, and its failure ' +
+    'is swallowed — which commits the upgrade with NO object store and, because the version is fixed, can ' +
+    'never repair itself.');
+});
+
+test('the browser is asked to keep the key rather than treat it as disposable', () => {
+  // Best-effort storage can be evicted under pressure and by some clear-site-data paths. The asymmetric case —
+  // the encrypted blob survives, the device key does not — is the one that strands a steward. Recoverable from
+  // the 12 words, but it should not happen because the browser tidied up.
+  const at = BUNDLE.indexOf('async function _deviceKey(');
+  const body = BUNDLE.slice(at, at + 1100);
+  assert.match(body, /navigator\.storage[\s\S]{0,40}persist\(\)/,
+    'nothing asks for persistent storage, so the device key is evictable. Ask BEFORE minting the key the ' +
+    'browser is then expected to keep.');
+  assert.ok(body.indexOf('persist()') < body.indexOf('generateKey'),
+    'persistence is requested after the key is generated — ask first, so the key it is asked to keep is ' +
+    'covered from the moment it exists.');
 });

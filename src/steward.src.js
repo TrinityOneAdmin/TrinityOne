@@ -696,13 +696,27 @@ async function _secureStore() { const m = await import('@aparajita/capacitor-sec
 // Applied to the WEB path only. Native already has Keystore (verified on device), and layering a second scheme
 // over a working one buys nothing and risks the thing that works.
 const DEV_DB = 'trinityone-steward', DEV_STORE = 'devkey', DEV_ID = 'church-wrap-v1';
-function _idb() {
+// AUDIT-2026-07-30: a swallowed createObjectStore failure USED TO BE PERMANENT. The upgrade still commits at
+// version 1 with no object store, every later transaction throws NotFoundError, _deviceKey catches it and
+// returns null — and because the version is hardcoded, onupgradeneeded never fires again, so there is no
+// self-repair. The console then either silently protects nothing, or (if a wrapped blob already exists) is
+// locked out for ever. Now: verify the store is really there, and reopen at a higher version to rebuild it.
+function _openIdb(version) {
   return new Promise((res, rej) => {
-    let r; try { r = indexedDB.open(DEV_DB, 1); } catch (e) { return rej(e); }
-    r.onupgradeneeded = () => { try { r.result.createObjectStore(DEV_STORE); } catch (e) {} };
+    let r; try { r = version ? indexedDB.open(DEV_DB, version) : indexedDB.open(DEV_DB); } catch (e) { return rej(e); }
+    r.onupgradeneeded = () => { const db = r.result; if (!db.objectStoreNames.contains(DEV_STORE)) db.createObjectStore(DEV_STORE); };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error || new Error('indexeddb open failed'));
   });
+}
+async function _idb() {
+  let db = await _openIdb();
+  if (db.objectStoreNames.contains(DEV_STORE)) return db;
+  const next = (db.version || 1) + 1;   // rebuild: a version bump is the ONLY way to get another upgrade
+  try { db.close(); } catch (e) {}
+  db = await _openIdb(next);
+  if (!db.objectStoreNames.contains(DEV_STORE)) throw new Error('indexeddb store missing after rebuild');
+  return db;
 }
 function _idbTx(db, mode, fn) {
   return new Promise((res, rej) => {
@@ -721,6 +735,11 @@ async function _deviceKey(create) {
     const found = await _idbTx(db, 'readonly', (st) => st.get(DEV_ID));
     if (found) return found;
     if (!create) return null;
+    // Ask the browser NOT to evict this origin before minting the key it will be asked to keep. Best-effort
+    // storage is subject to eviction under pressure and to some "clear site data" paths, and the asymmetric
+    // case — blob survives, key does not — is the one that strands a steward. Losing it is recoverable from
+    // the 12 words, but it should not happen because the browser tidied up.
+    try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) {}
     const k = await window.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
     await _idbTx(db, 'readwrite', (st) => st.put(k, DEV_ID));
     // read it back: a key we cannot fetch again is a key that would lock the steward out on the next boot
@@ -967,6 +986,11 @@ window.Steward = {
   async unlock(pin) {                              // decrypt into memory (does NOT re-write the plaintext)
     // A device-bound blob this browser can no longer open is NOT a wrong passphrase, and saying so would send
     // the steward round the "try again" loop for ever. Surfaced as a distinct state the UI explains.
+    // AUDIT-2026-07-30: cleared FIRST. It used to be set once and never reset, so after recovering in place a
+    // simple typo reported "this computer no longer recognises the stored key — your passphrase is fine",
+    // sending the steward off to re-restore a key that was never broken. Worse, the caller returns before the
+    // failed-attempt counter, so the escalating lockout stayed disabled for the rest of the session.
+    window.Steward.deviceKeyLost = false;
     let raw;
     try { raw = await encBlobRaw(); }
     catch (e) { if (e && e.deviceKeyMissing) { window.Steward.deviceKeyLost = true; return false; } throw e; }
@@ -987,6 +1011,7 @@ window.Steward = {
   },
   // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).
   async verifyPin(pin) {
+    window.Steward.deviceKeyLost = false;   // see unlock(): reports THIS attempt, never latches
     let raw;
     try { raw = await encBlobRaw(); }
     catch (e) { if (e && e.deviceKeyMissing) { window.Steward.deviceKeyLost = true; return false; } throw e; }

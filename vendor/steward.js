@@ -12344,23 +12344,33 @@ zoo`.split("\n");
   var DEV_DB = "trinityone-steward";
   var DEV_STORE = "devkey";
   var DEV_ID = "church-wrap-v1";
-  function _idb() {
+  function _openIdb(version) {
     return new Promise((res, rej) => {
       let r;
       try {
-        r = indexedDB.open(DEV_DB, 1);
+        r = version ? indexedDB.open(DEV_DB, version) : indexedDB.open(DEV_DB);
       } catch (e) {
         return rej(e);
       }
       r.onupgradeneeded = () => {
-        try {
-          r.result.createObjectStore(DEV_STORE);
-        } catch (e) {
-        }
+        const db = r.result;
+        if (!db.objectStoreNames.contains(DEV_STORE)) db.createObjectStore(DEV_STORE);
       };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error || new Error("indexeddb open failed"));
     });
+  }
+  async function _idb() {
+    let db = await _openIdb();
+    if (db.objectStoreNames.contains(DEV_STORE)) return db;
+    const next = (db.version || 1) + 1;
+    try {
+      db.close();
+    } catch (e) {
+    }
+    db = await _openIdb(next);
+    if (!db.objectStoreNames.contains(DEV_STORE)) throw new Error("indexeddb store missing after rebuild");
+    return db;
   }
   function _idbTx(db, mode, fn) {
     return new Promise((res, rej) => {
@@ -12377,6 +12387,10 @@ zoo`.split("\n");
       const found = await _idbTx(db, "readonly", (st) => st.get(DEV_ID));
       if (found) return found;
       if (!create) return null;
+      try {
+        if (navigator.storage && navigator.storage.persist) await navigator.storage.persist();
+      } catch (e) {
+      }
       const k = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
       await _idbTx(db, "readwrite", (st) => st.put(k, DEV_ID));
       const back = await _idbTx(db, "readonly", (st) => st.get(DEV_ID));
@@ -12644,6 +12658,7 @@ zoo`.split("\n");
       return true;
     },
     async unlock(pin) {
+      window.Steward.deviceKeyLost = false;
       let raw;
       try {
         raw = await encBlobRaw();
@@ -12678,6 +12693,7 @@ zoo`.split("\n");
     },
     // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).
     async verifyPin(pin) {
+      window.Steward.deviceKeyLost = false;
       let raw;
       try {
         raw = await encBlobRaw();
