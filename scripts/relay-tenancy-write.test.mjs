@@ -31,6 +31,7 @@ const MEALS_SETTINGS_D = 'trinityone/meals-settings', CAREREQ_D = 'trinityone/ca
 // every church's members, so six write rules ask "a member of anything?" where they mean "a member of THIS
 // church". canRead() was hoisted onto a scoped helper (effMemberOf/churchReader) and the write side was not.
 const MINORS_D = 'trinityone/minors:', AVAIL_D = 'trinityone/careavail:', SAFE_D = 'trinityone/safe:';
+const NEED_D = 'trinityone/care:';
 const NETWORK_D = 'trinityone/network:';
 const OPEN_GID = 'grpA-prayer-open', OPEN_GID_B = 'grpB-prayer-open';
 const now = () => Math.floor(Date.now() / 1000);
@@ -44,13 +45,22 @@ const bob = K();   // a member of B ONLY — never joined A. The whole point of 
 // of THIS church?", never "which church is this person's?" — two very different rules, and only one is right.
 const dual = K();   // a member of BOTH A and B — every scoped rule must keep letting them write to EITHER
 const netA = K();   // a network A declared. Church-level authority over A, and none at all over B.
+// A PLAIN member of A: on no roster, holding no delegated authority. S3b needs one, because `mallory` is added to
+// A's care team by an earlier test in this file, and careAdmin() then short-circuits the NEED_D rule before the
+// minors check is ever reached — so the case passed while the bug was still live. Caught by sabotage.
+const carol = K();
 const GID = 'grpA-private-leadership', TEAM = 'teamA-care';
 let relay, dataDir, pub;
 
 async function waitReady(ms = 15000) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { const r = await fetch(`http://127.0.0.1:${PORT}/status`); if (r.ok) return; } catch {} await sleep(150); } throw new Error('relay not ready'); }
 const connect = () => new Promise((res, rej) => { const ws = new WebSocket(WS_URL); ws.on('open', () => res(ws)); ws.on('error', rej); });
 const publish = (ws, evt) => new Promise((res) => { const on = d => { const m = JSON.parse(d); if (m[0] === 'OK' && m[1] === evt.id) { ws.off('message', on); res([m[2], m[3] || '']); } }; ws.on('message', on); ws.send(JSON.stringify(['EVENT', evt])); });
-const doc = (who, d, content, extra = []) => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', d], ['t', 'trinityone'], ...extra], content: JSON.stringify(content) }, who.sk);
+// `at` exists because addressable docs supersede by created_at, and on a TIE the LOWEST EVENT ID wins
+// (event-store.mjs:138, NIP-01). `now()` has one-second resolution, so two tests rewriting the SAME d-tag inside
+// one second are decided by a coin flip on random key material — S3 and S3b both rewrite `minors:<B>`, and the
+// suite failed roughly one run in two until this was passed explicitly. A flaky security test is worse than none:
+// it trains you to re-run instead of to read. The 15-minute future tolerance makes a small bump safe.
+const doc = (who, d, content, extra = [], at = now()) => finalizeEvent({ kind: 30078, created_at: at, tags: [['d', d], ['t', 'trinityone'], ...extra], content: JSON.stringify(content) }, who.sk);
 // a group message carries ['t', <groupId>] alongside ['t','trinityone'] — that is what gidOf() reads
 const chat = (who, gid, text) => finalizeEvent({ kind: 1, created_at: now(), tags: [['t', 'trinityone'], ['t', gid]], content: text }, who.sk);
 
@@ -95,6 +105,7 @@ before(async () => {
   assert.equal((await publish(pub, doc(dual, MEMBER_D + B.pub, { joined: now() })))[0], true, 'dual must be able to join B as well');
   assert.equal((await publish(pub, doc(B, GROUP_D + OPEN_GID_B, { name: 'Prayer', kind: 'group' }, [['church', B.pub]])))[0], true);
   assert.equal((await publish(pub, doc(A, NETWORK_D + netA.pub, { joined: now() }, [['church', A.pub]])))[0], true, 'A must be able to declare a network');
+  assert.equal((await publish(pub, doc(carol, MEMBER_D + A.pub, { joined: now() })))[0], true, 'carol must be able to join A');
   await sleep(150);
 });
 after(() => { try { pub && pub.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
@@ -149,7 +160,7 @@ test('S1: a member of another church CANNOT post into this church’s open group
     'broadcast groups and for invite-only groups; the ordinary open group was not brought along.');
 });
 
-test('S3: a co-tenant church CANNOT mark another church’s adult as a minor', { todo: 'reproduction for the accept() scoping fix — fails today' }, async () => {
+test('S3: a co-tenant church CANNOT mark another church’s adult as a minor', async () => {
   const before = await publish(pub, doc(mallory, AVAIL_D + A.pub, { free: true }, [['church', A.pub]]));
   assert.equal(before[0], true, 'CONTROL: an adult of A can register as available before B interferes');
   // church B lists an adult of church A — who has never joined B — in B's own minors list
@@ -162,7 +173,38 @@ test('S3: a co-tenant church CANNOT mark another church’s adult as a minor', {
     'this reason (REVIEW-2026-07-20 B4) and these two call sites were not. A targeted, silent denial of service.');
 });
 
-test('S4: a member of another church CANNOT answer this church’s emergency safety check', { todo: 'reproduction for the accept() scoping fix — fails today' }, async () => {
+// S3b — the OTHER relay-wide MINORS call site. The audit named two (gateway.mjs :1409 NEED_D and :1433
+// AVAIL_D); the S3 case above only covers AVAIL_D, so this pins the one a test would otherwise miss. Being
+// wrongly marked a child here does not just hide you from a volunteer list — it stops you OPENING A CARE NEED,
+// which is how a member asks for help.
+test('S3b: a co-tenant’s minor marking cannot stop an adult opening a care need in their OWN church', async () => {
+  // A allows members to open their own needs. The NEED_D rule reads MEALS_OPEN_MEMBER, which is populated when
+  // this settings document is INDEXED — not when the OK comes back — so poll for the effect instead of sleeping a
+  // guessed interval. One run of this test went red on a 150ms sleep: the control need was refused because the
+  // setting had not landed yet, which reads as "the fix does not work" when nothing was wrong with the fix.
+  assert.equal((await publish(pub, doc(A, MEALS_SETTINGS_D, { enabled: true, adminGroupId: TEAM, openedBy: 'member' })))[0], true);
+  let settingsLive = false;
+  for (let i = 0; i < 40 && !settingsLive; i++) {
+    await sleep(100);
+    settingsLive = (await publish(pub, doc(carol, NEED_D + 'needA0', { title: 'probe' }, [['church', A.pub]])))[0];
+  }
+  assert.ok(settingsLive, 'openedBy:member never took effect, so this test cannot prove anything');
+  // carol, not mallory: mallory is on A's care team by this point, and careAdmin() would satisfy the rule before
+  // the minors check ran — the case would pass with the bug still live. Sabotage caught exactly that.
+  assert.equal((await publish(pub, doc(carol, NEED_D + 'needA1', { title: 'meals' }, [['church', A.pub]])))[0], true,
+    'control: an ordinary adult member of A can open a care need in A');
+  // …and church B, which carol has never joined, marks her a child. Explicitly LATER than S3's write to the same
+  // d-tag: same-second addressable writes tie-break on the lowest event id, which is random.
+  assert.equal((await publish(pub, doc(B, MINORS_D + B.pub, { pubkeys: [carol.pub] }, [['church', B.pub]], now() + 30)))[0], true);
+  await sleep(200);
+  const after = await publish(pub, doc(carol, NEED_D + 'needA2', { title: 'meals again' }, [['church', A.pub]]));
+  assert.equal(after[0], true,
+    'a marking made by a church this person has never joined stopped them asking their OWN church for help. ' +
+    'accept() consults the relay-wide MINORS union at the NEED_D rule; whether someone is a child is a judgement ' +
+    'only their own church makes, as safeguardAllows() and the kind-1 child-safe check already do.');
+});
+
+test('S4: a member of another church CANNOT answer this church’s emergency safety check', async () => {
   const control = await publish(pub, doc(alice, SAFE_D + A.pub, { state: 'safe' }));
   assert.equal(control[0], true, 'CONTROL: a real member of A must still be able to mark themselves safe');
   const attack = await publish(pub, doc(bob, SAFE_D + A.pub, { state: 'safe' }));
@@ -172,7 +214,7 @@ test('S4: a member of another church CANNOT answer this church’s emergency saf
     'NIP-44 conversation key is symmetric, so the forgery DECRYPTS AND DISPLAYS as a genuine "safe".');
 });
 
-test('S4b: a member of another church CANNOT join this church’s here-to-help register', { todo: 'reproduction for the accept() scoping fix — fails today' }, async () => {
+test('S4b: a member of another church CANNOT join this church’s here-to-help register', async () => {
   const attack = await publish(pub, doc(bob, AVAIL_D + A.pub, { free: true }, [['church', A.pub]]));
   assert.equal(attack[0], false,
     'a member of church B appears in church A’s volunteer register. Same unscoped `isMember` as S1/S4.');

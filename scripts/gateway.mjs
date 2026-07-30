@@ -1406,7 +1406,11 @@ function accept(e) {
       // B-2: was `isLeader ||`, which an untagged event from any church's network key satisfied for EVERY
       // church — a forged care need in someone else's congregation. Require a resolved owning church.
       // church / steward / care-team admin; or any NON-minor member when the church allows member-opened needs (children never open needs)
-      return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && isMember && !MINORS.has(e.pubkey)));
+      // AUDIT-2026-07-30 S3/S3b: the member clause was `isMember && !MINORS.has(...)` — both relay-wide. A member
+      // of any co-tenant church could open a need in this congregation, and any co-tenant church's child marking
+      // stopped a named adult ASKING THEIR OWN CHURCH FOR HELP. The church/network/steward/care-admin clauses
+      // beside it were already scoped to `cp`; these two were not.
+      return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp) || (MEALS_OPEN_MEMBER.has(cp) && effMemberOf(e.pubkey, cp) && !minorOf(e.pubkey, cp)));
     }
     if (d.startsWith(SLOT_D)) return isMember;                  // fill a slot: any member offers help (the event is keyed by their own pubkey, so they can't forge another member's)
     if (d.startsWith(SKIP_D)) {                                 // mark a day "I don't need help": the RECIPIENT, or a steward/care-team blocking a date on their behalf (recipient may not be on the app)
@@ -1426,9 +1430,21 @@ function accept(e) {
       // already applied to NEED_D: resolve the owning church and scope to it.
       return !!careId && (tokOk || e.pubkey === CARE_RECIPIENT.get(careId) || (!!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp))));
     }
-    if (d.startsWith(AVAIL_D)) return isMember && !MINORS.has(e.pubkey);   // "I'm here to help": any non-minor member (keyed by own pubkey; minors excluded — being listed would invite contact from anyone in need)
+    // "I'm here to help": any non-minor member of THAT church (keyed by own pubkey; minors excluded — being
+    // listed would invite contact from anyone in need).
+    // AUDIT-2026-07-30 S4b + S3: both halves were relay-wide. `isMember` let a member of any co-tenant church
+    // appear in this congregation's volunteer register, and `MINORS` let any co-tenant church's child marking
+    // remove a named adult from their OWN church's register — a targeted, silent denial of service with nothing
+    // on screen to explain it. The church is right there in the d-tag; ask about that one.
+    if (d.startsWith(AVAIL_D)) { const cp = d.slice(AVAIL_D.length); return CHURCH_PUBS.has(cp) && churchWriter(e.pubkey, cp) && !minorOf(e.pubkey, cp); }
     if (d.startsWith(SAFETY_D)) { const cp = d.slice(SAFETY_D.length); return CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }   // start/close a safety check: church, steward, or care-team admin
-    if (d.startsWith(SAFE_D)) { const cp = d.slice(SAFE_D.length); return CHURCH_PUBS.has(cp) && isMember; }   // mark yourself safe / needing help: any member (minors included — safety matters most)
+    // mark yourself safe / needing help: any member OF THAT CHURCH (minors included — safety matters most).
+    // AUDIT-2026-07-30 S4: this was `CHURCH_PUBS.has(cp) && isMember`, relay-wide, and it is the worst place on
+    // the box for it. The safety check is the post-emergency roll-call. subscribeSafetyResponses keys results by
+    // responder pubkey with no roster filter, and the NIP-44 conversation key is symmetric, so an outsider
+    // sealing to the check creator's public key produces a response that DECRYPTS AND DISPLAYS as a genuine
+    // "safe" — a steward counting heads after a raid could be counting a stranger.
+    if (d.startsWith(SAFE_D)) { const cp = d.slice(SAFE_D.length); return CHURCH_PUBS.has(cp) && churchWriter(e.pubkey, cp); }
     // the care team's RESOLUTION of a request (approved / declined / handled) — d=carereqstatus:<id>. Only the
     // church / a steward / a care-team admin may resolve a request; never the requester (they withdraw instead).
     if (d.startsWith(CAREREQSTATUS_D)) { const cp = namedChurch(e); return !!cp && (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardOf(e.pubkey, cp) || careAdmin(e.pubkey, cp)); }
@@ -1532,6 +1548,15 @@ function effMemberOf(who, cp) {
 // its current stewards, or an effective member.
 function churchReader(authed, cp) {
   return !!authed && !!cp && (authed === cp || networkOf(authed, cp) || stewardOf(authed, cp) || effMemberOf(authed, cp));
+}
+// AUDIT-2026-07-30 S3: is `pub` a child ACCORDING TO CHURCH cp? Whether someone is a child is a judgement only
+// their own church makes — the relay-wide MINORS union is every church's list merged, so consulting it lets any
+// co-tenant church silence a named person everywhere on the box. safeguardAllows() and the kind-1 child-safe
+// check were already scoped for exactly this reason (REVIEW-2026-07-20 B4); hoisted here so the remaining call
+// sites cannot drift back onto the union.
+function minorOf(pub, cp) {
+  const m = cp && MINORS_BY.get(cp);
+  return !!(m && m.has(pub));
 }
 // AUDIT-2026-07-30 S1-S4: the WRITE-side question, for accept(). The set of principals who may act for a church
 // is the same on both sides, so this DELEGATES rather than restating the rule — two copies of an authorization
