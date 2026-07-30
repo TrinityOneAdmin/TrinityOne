@@ -481,7 +481,7 @@ Also `app/identity.jsx:766` — "Forgot your PIN?" advises "reinstall the app an
 12 words". For anyone who skipped the seed backup that is account destruction, stated as help, with no warning
 and no "ask your church" route — even though the restore flow has an excellent one at `:465-502`.
 
-## U5 — Copy that overclaims — **VERIFIED by reading, four places**
+## U5 — Copy that overclaims — **VERIFIED by reading, three places**
 
 Overclaiming is treated as a defect in this product, so these are findings rather than nitpicks.
 
@@ -490,7 +490,12 @@ Overclaiming is treated as a defect in this product, so these are findings rathe
 | `app/identity.jsx:701` (onboarding PIN) | a taken phone is "just a locked box" | the wipe deliberately keeps `followedChurches`/`activeChurch` (`src/fellowship.src.js:1735`) |
 | `app/screens-church.jsx:211` (join screen) | following "only subscribes you" | `followChurch` calls `announceMembership` — it **publishes** an identifying document (`app/app.jsx:612`) |
 | `about.html:229`, `features.html:219` | "Group rooms and private, encrypted messages" | new groups default **unencrypted** (`app/stew-dashboard.jsx:1728`); the app itself says so honestly at `app/screens-chat.jsx:1181` |
-| `welcome.html:408`, `about.html:225` | "Nothing is held by a big company" | the default is a shared relay TrinityOne operates; self-hosting is a capability, not the default |
+
+**WITHDRAWN, 2026-07-31.** A fourth item was listed here — *"Nothing is held by a big company"*
+(`welcome.html:408`, `about.html:225`) — on the grounds that the default relay is one TrinityOne operates. The
+owner corrected it: TrinityOne is not a big company, so the sentence is true. The audit read it as a claim
+about where data sits; it is a claim about who stands behind the product. Removed rather than softened. The
+encryption overclaim above is a separate matter and still stands.
 
 The honest retraction already exists and is well written (`app/identity-extras.jsx:283`,
 `app/help-data.jsx:332`). The fix is to move that text onto the screens with reach, not to weaken it.
