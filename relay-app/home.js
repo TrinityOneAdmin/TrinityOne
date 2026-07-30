@@ -17,10 +17,17 @@
   // target="_blank" is a no-op in the desktop webview, so route the click through the local relay, which CAN
   // open the host's browser. Fall back to copying the link if that ever fails (e.g. run in a plain browser).
   function copyFallback(url) {
-    try { navigator.clipboard.writeText(url); } catch (e) {}
-    if (dl) dl.textContent = '✓ Link copied';
-    var t = upd.querySelector('.txt');
-    if (t) t.innerHTML = '<b>Link copied.</b> Open your web browser (e.g. Brave) and paste it to download the update.';
+    // It used to say "✓ Link copied" whether or not anything was copied — navigator.clipboard is UNDEFINED
+    // outside a secure context, which is exactly where this panel runs, so the operator was told the link was
+    // on their clipboard when it was not. Claiming a thing happened when it did not is worse than silence.
+    // RelayCopy falls back to execCommand, and if that fails too it shows the URL for manual copying.
+    window.RelayCopy.copyWithFeedback(url, dl, 'Download link').then(function (ok) {
+      if (dl) dl.textContent = ok ? '✓ Link copied' : 'Copy the link above';
+      var t = upd.querySelector('.txt');
+      if (t) t.innerHTML = ok
+        ? '<b>Link copied.</b> Open your web browser (e.g. Brave) and paste it to download the update.'
+        : '<b>Copy the link shown.</b> Open your web browser (e.g. Brave) and paste it to download the update.';
+    });
   }
   if (dl) dl.addEventListener('click', function (e) {
     e.preventDefault();

@@ -5,6 +5,10 @@
   // public base: the Funnel URL once it's up (set by the wizard), else ?public=…, else this origin
   let publicBase = qs.get('public') || location.origin;
   const copyMap = { wss: '', console: '' };
+
+  // Clipboard handling lives in copy.js so control.js and home.js cannot drift apart.
+  const { copyText, flashCopied, showCopyFallback, copyWithFeedback } = window.RelayCopy;
+
   function reachInfo() {
     const wssUrl = publicBase.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:') + '/relay';
     const consoleUrl = publicBase + '/steward.html';
@@ -24,7 +28,7 @@
   // webview. Prefer going back (preserves the console's state); fall back to navigating there fresh.
   document.getElementById('openConsole').onclick = () => { if (history.length > 1) { history.back(); } else { location.href = '/relay-app/home.html'; } };   // fall back to the launcher (neutral) — not the full-suite console, which contradicts a "Relay only" choice
   document.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
-    try { await navigator.clipboard.writeText(copyMap[b.dataset.copy]); b.textContent = 'Copied'; setTimeout(()=>b.textContent='Copy', 1400); } catch(e){}
+    await copyWithFeedback(copyMap[b.dataset.copy], b, b.dataset.copy === 'wss' ? 'Relay address' : 'Console link');
   });
   refreshReach();
 
@@ -99,7 +103,7 @@
         '<div class="cr-main">' +
           '<div class="cr-top">' + (c.name ? '<span class="cr-name">' + esc(c.name) + '</span>' : '<span class="cr-name unnamed">Unnamed church</span>') + src + '</div>' +
           '<div class="cr-npub"><span class="mono cr-key">' + esc(c.npub) + '</span>' +
-            '<button class="iconbtn" data-copyurl="' + esc(c.npub) + '" aria-label="Copy this church’s key" title="Copy key">' + COPY_SVG + '</button></div>' +
+            '<button class="iconbtn" data-copyurl="' + esc(c.npub) + '" data-copylabel="This church’s key" aria-label="Copy this church’s key" title="Copy key">' + COPY_SVG + '</button></div>' +
           (rowCounts(c) ? '<div class="cr-counts">' + esc(rowCounts(c)) + '</div>' : '') +
         '</div>' +
         '<div class="cr-action"><button class="btn btn-ghost btn-sm cr-remove" data-rm="' + i + '">Remove…</button></div>' +
@@ -422,7 +426,9 @@
   // wire any [data-copyurl] Copy button inside a freshly-rendered container (used instead of inline onclick,
   // which the strict CSP blocks). Mirrors gpCopy's behaviour (copy + "Copied" flash).
   function wireCopyUrls(root) {
-    (root || document).querySelectorAll('[data-copyurl]').forEach(b => { b.onclick = () => gpCopy(b.dataset.copyurl, b); });
+    (root || document).querySelectorAll('[data-copyurl]').forEach(b => {
+      b.onclick = () => copyWithFeedback(b.dataset.copyurl, b, b.getAttribute('data-copylabel') || 'Copy');
+    });
   }
   async function claimRelayName() {
     const inp = document.getElementById('relayNameIn'); const msg = document.getElementById('relayNameMsg');
@@ -603,7 +609,9 @@
   let tsBusy = false;       // pause polling while an action is mid-flight (so it can't clobber the view)
   let cfHold = false;       // freeze the 4s refresh while a Go-public attempt runs OR its error+log is on screen
   let lastAuthUrl = '';     // the login link from `tailscale up`, until the node reports connected
-  const gpCopy = (t, b) => { navigator.clipboard.writeText(t).then(()=>{ b.textContent='Copied'; setTimeout(()=>b.textContent='Copy',1400); }).catch(()=>{}); };
+  // kept as a thin alias: several call sites and window.gpCopy already refer to it. All copying now goes
+  // through copyWithFeedback, so a failure is visible instead of silent.
+  const gpCopy = (t, b) => { copyWithFeedback(t, b); };
   window.gpTick = gpTick; window.gpCopy = gpCopy;
 
   // The tunnel card is one card with many states. Each renders as a tone card (a coloured left rule +
