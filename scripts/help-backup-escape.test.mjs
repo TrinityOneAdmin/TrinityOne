@@ -1,20 +1,35 @@
 // A loading screen must always be escapable. Run: node --test scripts/help-backup-escape.test.mjs
 //
 // AUDIT-2026-07-30 U2. Help → "Back up your recovery phrase" could show a bare spinning ring, with no text and
-// no close button, for ever. TWO independent routes into it, and neither is exotic:
+// no close button, for ever. TWO routes into it:
 //
-//   1. `set(arr)` did `setWords(arr); if (arr.length) setCheckN(…)`. For an EMPTY array — which is what
-//      `exportMnemonic()` resolves to for any member with a PIN who has not unlocked this session, because
-//      secureGet() returns null while locked — `words` becomes `[]` but `checkN` stays 0. The guard is
-//      `if (!words || !checkN)`, so it stays true permanently.
+//   1. `set(arr)` did `setWords(arr); if (arr.length) setCheckN(…)`. For an EMPTY phrase — `exportMnemonic()` is
+//      just `secureGet()` (vendor/identity.js:12174), which returns null whenever the secret is not readable —
+//      `words` becomes `[]` but `checkN` stays 0. The guard is `if (!words || !checkN)`, so it stays true
+//      permanently.
 //   2. `ID.exportMnemonic().then(…)` had no `.catch()`. On a rejection neither setter runs, `words` stays null,
 //      same permanent spinner. Its twin at app/identity-extras.jsx:128 does have one.
 //
 // And the close button lived ~20 lines BELOW the early return, so it never rendered. Hardware Back escapes on
 // Android; nothing on screen said so, and there is no Back on the web.
 //
-// Reachable from the Help index's "Begin backup" call to action, so this is the screen a member is sent to
-// precisely when they are trying to do the one thing that makes their account recoverable.
+// REACHABILITY, corrected after device testing on 2026-07-30 (build 191, Oppo). The original write-up of route 1
+// said "any member with a PIN who has not unlocked this session", and that is WRONG — it overstates it, and a
+// green test guarding a scenario that cannot happen is the same class of error as a green test over a live bug.
+// What was actually measured on hardware:
+//
+//   • `exportMnemonic()` while locked resolves to **null**, not `[]` — so the normalisation at the call site
+//     (`m ? m.split(' ') : []`) is what turns the real value into the empty case this test drives. Verified.
+//   • but a locked member CANNOT REACH this screen. A locked boot renders the PIN gate, and the only way past it
+//     without the PIN is "Read the Bible without unlocking", which confines the app to the Bible reader — no You
+//     tab, no Help, and a banner saying "Your account is locked — Bible only". Verified on device.
+//   • and there is no idle auto-lock (app/app.jsx:391-404 only re-reads the lock on identity events), so the app
+//     cannot re-lock underneath a member who is already inside Help. Verified by reading the only lock triggers.
+//
+// So route 1 is a latent defect, not a live one: it needs secureGet() to fail for a reason other than the PIN —
+// a Keystore error, a missing entry, a platform without SecureStorage. Route 2 and the missing close button are
+// live regardless. The fix is kept in full, because the screen must not be able to trap anyone by ANY route, and
+// the happy path was re-verified on device (12 words render, X present throughout).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
