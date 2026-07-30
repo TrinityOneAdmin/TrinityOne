@@ -139,7 +139,7 @@ test('the OWNING church can still edit its own group and roster (the guard is no
 // Each case carries a CONTROL that must stay ACCEPT. Scoping too tightly would silently disable genuine
 // members, which is worse than the finding.
 
-test('S1: a member of another church CANNOT post into this church’s open group', { todo: 'reproduction for the accept() scoping fix — fails today' }, async () => {
+test('S1: a member of another church CANNOT post into this church’s open group', async () => {
   const control = await publish(pub, chat(alice, OPEN_GID, 'CONTROL: a real member of A'));
   assert.equal(control[0], true, 'a genuine member of A must still be able to post — if this fails the fix is a lockout');
   const attack = await publish(pub, chat(bob, OPEN_GID, 'INJECTED by a member of church B'));
@@ -237,7 +237,7 @@ test('CONTROL: a church can still post in its own group, and so can a network it
 //
 // So S1's fix must scope the AUTHORITY as well as the membership: resolve the group's owning church and ask the
 // scoped question of it, rather than trusting a relay-wide leader flag computed before the group is known.
-test('S1b: a network declared by A has NO authority in B’s group', { todo: 'reproduction found by the over-tightening controls — fails today' }, async () => {
+test('S1b: a network declared by A has NO authority in B’s group', async () => {
   const attack = await publish(pub, chat(netA, OPEN_GID_B, 'A’s network posts into B'));
   assert.equal(attack[0], false,
     'a key that church A declared as its network can post into church B’s group. Network authority must be ' +

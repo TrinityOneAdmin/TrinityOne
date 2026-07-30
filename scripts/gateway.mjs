@@ -1481,6 +1481,24 @@ function accept(e) {
     // congregation's adult rooms — caught on the live box, where an adult member could not post. Whether
     // someone is a child is a judgement only their own church makes, exactly as safeguardAllows() already does.
     if (g && !GROUP_CHILDSAFE.has(g)) { const gcp = GROUP_CHURCH.get(g); const m = gcp && MINORS_BY.get(gcp); if (m && m.has(e.pubkey)) return false; }
+    // AUDIT-2026-07-30 S1/S1b: the ORDINARY OPEN GROUP — the one every congregation actually talks in — ended on
+    // the relay-wide `isMember`, so a member of ANY church on the box could put arbitrary text and links into
+    // another church's chat, delivered to its members as ordinary chat. The identical hole was closed for
+    // broadcast groups (:1466) and invite-only groups (:1473, AUDIT-2026-07-24); this branch was not brought
+    // along. S1b: `isLeader` folds in NETWORKS relay-wide for an event that names no church, and a kind-1
+    // message scopes by GROUP and never names one — so A's declared network could post into B's group too.
+    //
+    // Ask the scoped question of the group's OWNING church. churchWriter() takes one church, which is what makes
+    // multi-church belonging work: someone in three congregations passes for all three, because they are an
+    // effective member of each. Never "which church is this person's?".
+    //
+    // Unknown group → keep the previous behaviour rather than refusing. GROUP_CHURCH is populated from the
+    // group's own document, so every group a congregation actually reads from is known here; a group this relay
+    // has never seen the document for is one nobody is subscribed to. Default-denying instead would turn a
+    // wiped relay (scripts/relay-reset.sh) into a total chat outage until the console republished every group —
+    // an outage risk taken on for no reachable attack. The siblings above refuse because a broadcast or
+    // invite-only group is defined BY that document; an open group needs no such grant.
+    if (g) { const gcp = GROUP_CHURCH.get(g); if (gcp) return churchWriter(e.pubkey, gcp); }
     return isMember;
   }
   if (k === 4) {   // NIP-04 direct message — safeguarding gate
@@ -1514,6 +1532,18 @@ function effMemberOf(who, cp) {
 // its current stewards, or an effective member.
 function churchReader(authed, cp) {
   return !!authed && !!cp && (authed === cp || networkOf(authed, cp) || stewardOf(authed, cp) || effMemberOf(authed, cp));
+}
+// AUDIT-2026-07-30 S1-S4: the WRITE-side question, for accept(). The set of principals who may act for a church
+// is the same on both sides, so this DELEGATES rather than restating the rule — two copies of an authorization
+// predicate is how the shared-rules module had already drifted by the time it was written (commit e26accf). The
+// separate name exists because `churchReader` at a write site reads as a mistake; if read and write authority
+// ever genuinely diverge, split it THEN, with a test for each side.
+//
+// The one thing this must never become is "which church does this person belong to?" — belonging is not
+// exclusive. A person may be a member of several churches and of a church network, so the question is always
+// asked of ONE named church: they pass for the churches they belong to and fail for the rest.
+function churchWriter(pub, cp) {
+  return churchReader(pub, cp);
 }
 function canRead(e, authed) {
   if (e.kind === 4) {
