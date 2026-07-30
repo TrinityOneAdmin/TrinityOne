@@ -53,31 +53,46 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
     assert.ok(depth === 0, name + ': braces did not balance — re-anchor this test');
     return BUNDLE.slice(at, i + 1);
   };
-  // _secureStore() is the ONE seam that is replaced rather than lifted: it exists only to load the Capacitor
-  // module, and esbuild inlines that into `Promise.resolve().then(() => (init_esm(), esm_exports))`, which cannot
-  // resolve outside a browser. Everything the tests actually exercise — encBlobWrite/Raw/Remove and the
-  // migration — is the shipped bundle's own code, lifted verbatim.
-  //
-  // The first version tried to lift _secureStore too and rewrite its import by string match. The match silently
-  // failed against the bundle, so every secure call threw a ReferenceError that the REAL try/catch swallowed into
-  // the localStorage fallback — the tests were exercising the fallback while claiming to test the Keystore path.
-  // Caught only because the fake hardware store came back empty.
-  const parts = ['_encIsMarker', 'encBlobRaw', 'encBlobWrite', 'encBlobRemove', 'migrateEncToSecure']
-    .map(lift).join(';\n');
+  const parts = ['_secureStore', '_encIsMarker', 'encBlobRaw', 'encBlobWrite', 'encBlobRemove', 'migrateEncToSecure']
+    .map(lift).join(';\n')
+    // Replace ONLY the module load. esbuild inlines the dynamic import as
+    // `Promise.resolve().then(() => (init_esm(), esm_exports))`, which cannot resolve outside a browser — so
+    // this hands back the stub module instead. _secureStore()'s OWN body still runs, which is the point: the
+    // device bug lived in what that function RETURNS across an async boundary, and a version of this file that
+    // injected _secureStore as a seam could never have seen it.
+    .replace('Promise.resolve().then(() => (init_esm(), esm_exports))', 'Promise.resolve({ SecureStorage: __SECURE__ })');
   const store = { ...secure };
   const calls = { set: 0, get: 0, remove: 0 };
-  const SecureStorage = {
+  // A CAPACITOR-SHAPED stub, not a plain object. window.Capacitor.Plugins.SecureStorage is a PROXY that turns
+  // every property access into a native call, so touching `.then` on it asks Android for a method named "then".
+  // A plain-object stub hides that completely — which is exactly how the first version of this file passed while
+  // the shipped code hung for ever on a real phone:
+  //
+  //     Uncaught (in promise) Error: "SecureStorage.then()" is not implemented on android
+  //
+  // `_secureStore()` was an async function RETURNING the proxy, and the await machinery probes any returned
+  // value for `.then`. The plugin answered, the call failed, and setPin never settled. Modelling the proxy here
+  // is what makes that reproducible off-device.
+  const impl = {
     set: async (k, v) => { calls.set++; if (secure.__failSet) throw new Error('keystore unavailable'); store[k] = secure.__writeGarbage ? 'CORRUPTED' : v; },
     get: async (k) => { calls.get++; if (secure.__failGet) throw new Error('keystore unavailable'); return store[k] === undefined ? null : store[k]; },
     remove: async (k) => { calls.remove++; delete store[k]; },
   };
+  const SecureStorage = new Proxy(impl, {
+    get(t, prop) {
+      if (prop in t) return t[prop];
+      if (typeof prop === 'symbol') return undefined;
+      // Anything else — including `then` — is a native method that does not exist on Android.
+      return () => { throw new Error('"SecureStorage.' + String(prop) + '()" is not implemented on android'); };
+    },
+  });
   const lsData = { ...ls };
   const localStorage = { getItem: (k) => (k in lsData ? lsData[k] : null), setItem: (k, v) => { lsData[k] = String(v); }, removeItem: (k) => { delete lsData[k]; } };
   const src = parts;
   const KEY = 'trinityone.steward.church-key.enc';
-  const fn = new Function('_secureStore', 'localStorage', 'lsGet', 'lsSet', '_isNative', 'console', 'ENC_LS',
+  const fn = new Function('__SECURE__', 'localStorage', 'lsGet', 'lsSet', '_isNative', 'console', 'ENC_LS',
     src + '\nreturn { encBlobRaw, encBlobWrite, encBlobRemove, migrateEncToSecure, _encIsMarker };');
-  const api = fn(async () => SecureStorage, localStorage, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v),
+  const api = fn(SecureStorage, localStorage, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v),
     () => nativeMode, { warn() {}, log() {} }, KEY);
   return { ...api, lsData, store, calls, KEY };
 }

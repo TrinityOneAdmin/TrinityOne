@@ -661,13 +661,22 @@ function setKey(mnemonic) {
 // church's key — a far worse outcome than the exposure being fixed.
 const ENC_LS = 'trinityone.steward.church-key.enc';
 const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } };
-async function _secureStore() { const m = await import('@aparajita/capacitor-secure-storage'); return m.SecureStorage; }
+// NEVER return the Capacitor plugin object itself from an async function. `Capacitor.Plugins.SecureStorage` is a
+// PROXY: every property access becomes a native call, so when the await machinery probes the returned value for
+// `.then` — which it does for anything a promise resolves to — the proxy forwards `then` to Android. Found on a
+// real phone, where setPin() simply never settled and nothing was written:
+//
+//     Uncaught (in promise) Error: "SecureStorage.then()" is not implemented on android
+//
+// The member app is immune only by accident of shape: identity.src.js destructures inside each async function and
+// never returns the plugin. Wrapping it in a plain object gives an await-safe value with the same convenience.
+async function _secureStore() { const m = await import('@aparajita/capacitor-secure-storage'); return { S: m.SecureStorage }; }
 // the blob STRING ({v,it,salt,iv,ct}), from wherever it actually lives, or '' if there is none
 async function encBlobRaw() {
   const raw = lsGet(ENC_LS);
   if (!raw) return '';
   if (!_encIsMarker(raw)) return raw;                       // web/desktop, or a native install not yet migrated
-  try { const S = await _secureStore(); const s = await S.get(ENC_LS); if (s) return String(s); }
+  try { const { S } = await _secureStore(); const s = await S.get(ENC_LS); if (s) return String(s); }
   catch (e) { console.warn('[steward] secure key get failed', e); }
   return '';   // marker present but the store would not give it up — unlock() surfaces this as a failed unlock
 }
@@ -675,7 +684,7 @@ async function encBlobRaw() {
 async function encBlobWrite(str) {
   if (_isNative()) {
     try {
-      const S = await _secureStore();
+      const { S } = await _secureStore();
       await S.set(ENC_LS, str);
       const v = await S.get(ENC_LS);
       if (v != null && String(v) === str) { lsSet(ENC_LS, JSON.stringify({ native: 1 })); return true; }   // marker ONLY after read-back
@@ -688,7 +697,7 @@ async function encBlobWrite(str) {
 async function encBlobRemove() {
   try { localStorage.removeItem(ENC_LS); } catch {}
   if (!_isNative()) return;
-  try { const S = await _secureStore(); await S.remove(ENC_LS); } catch (e) { console.warn('[steward] secure key remove failed', e); }
+  try { const { S } = await _secureStore(); await S.remove(ENC_LS); } catch (e) { console.warn('[steward] secure key remove failed', e); }
 }
 // One-time move of an EXISTING native install's blob out of localStorage. Deliberately does nothing unless the
 // read-back matches, so a device whose Keystore misbehaves simply stays as it was rather than losing the key.

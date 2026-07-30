@@ -12339,14 +12339,14 @@ zoo`.split("\n");
   };
   async function _secureStore() {
     const m = await Promise.resolve().then(() => (init_esm(), esm_exports));
-    return m.SecureStorage;
+    return { S: m.SecureStorage };
   }
   async function encBlobRaw() {
     const raw = lsGet(ENC_LS);
     if (!raw) return "";
     if (!_encIsMarker(raw)) return raw;
     try {
-      const S = await _secureStore();
+      const { S } = await _secureStore();
       const s = await S.get(ENC_LS);
       if (s) return String(s);
     } catch (e) {
@@ -12357,7 +12357,7 @@ zoo`.split("\n");
   async function encBlobWrite(str) {
     if (_isNative()) {
       try {
-        const S = await _secureStore();
+        const { S } = await _secureStore();
         await S.set(ENC_LS, str);
         const v = await S.get(ENC_LS);
         if (v != null && String(v) === str) {
@@ -12379,7 +12379,7 @@ zoo`.split("\n");
     }
     if (!_isNative()) return;
     try {
-      const S = await _secureStore();
+      const { S } = await _secureStore();
       await S.remove(ENC_LS);
     } catch (e) {
       console.warn("[steward] secure key remove failed", e);
