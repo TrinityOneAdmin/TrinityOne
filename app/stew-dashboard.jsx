@@ -365,7 +365,7 @@ function StewSetupWizard({ church, onDone, onTab, onInvite, onNewPost }) {
     // the maths and wrong about the product: it demanded a passphrase on the set screen while the unlock
     // screen still offered a numeric keypad, and locked the owner out of the account he had just made.
     // Revisit strength AND the keyboard together, or not at all. AUDIT-2026-07-28.
-    if ((pinA || '').length < 6) { setPinErr('Use at least 6 characters.'); return; }
+    if ((pinA || '').length < 8) { setPinErr('Use at least 8 characters — a generated password, or four random words.'); return; }
     if (pinA !== pinB) { setPinErr('The two entries don’t match.'); return; }
     setPinBusy(true); setPinErr('');
     let ok = false; try { ok = await window.Steward.setPin(pinA); } catch (e) { ok = false; }
@@ -4867,7 +4867,9 @@ function PinModal({ action, onClose }) {
     }
     // F18: the same six the forced gate and the engine require. Four was accepted here and by the engine,
     // so the church key could be re-encrypted under a weaker PIN from Settings after setup.
-    if (pin.length < 6) { setErr('Use at least 6 characters. Adding letters makes it much harder to guess.'); return; }
+    // AUDIT-2026-07-30: matched to the engine's new floor. A screen that promises LESS than the engine
+    // enforces produces "couldn't set it" with no reason — the drift console-pin-floor.test.mjs exists to catch.
+    if (pin.length < 8) { setErr('Use at least 8 characters. A password manager can generate one; four random words also works well.'); return; }
     if (pin !== pin2) { setErr('They don’t match.'); return; }
     setBusy(true);
     const ok = await window.Steward.setPin(pin);

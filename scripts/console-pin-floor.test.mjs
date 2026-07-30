@@ -16,6 +16,21 @@
 // "signs as the whole church — if it leaks, an attacker can impersonate the church to every member".
 //
 // Fixed in the ENGINE, so every caller inherits it, rather than in the two screens that happen to exist today.
+//
+// AUDIT-2026-07-30: the floor moved 6 -> 8 for STEWARDS, by the owner's decision. The arithmetic, at PBKDF2-600k
+// and ~17k guesses/sec on one high-end GPU against a COPIED blob (where this screen's lockout does not apply):
+//
+//     6 digits                1e6 combinations          ~30 seconds
+//     8 chars, full set       6.1e15 combinations       ~5,700 years
+//
+// Two deliberate non-rules, both asserted below, because getting them wrong is worse than the old floor:
+//   • NO composition requirement. "Must contain a digit" yields `Church01` — compliant, and dead in the first
+//     few million guesses — while REJECTING `correct horse battery staple`, which is genuinely strong.
+//   • SPACES ARE ALLOWED, so a passphrase actually works. A length rule that silently trims or rejects spaces
+//     would send every steward back to a short password.
+//
+// And the floor is on SETTING a secret, never on verifying one — existing 6-character blobs must keep
+// unlocking, or raising the bar would lock stewards out of their own church.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -60,7 +75,7 @@ function loadSetPin() {
 test('CONTROL: a proper PIN is accepted and does encrypt the seed', async () => {
   // If this fails every refusal below is meaningless, because setPin would be refusing everything.
   const { setPin, store } = loadSetPin();
-  assert.equal(await setPin('123456'), true, 'a six-character PIN was refused — the TEST is broken, or the floor is too high');
+  assert.equal(await setPin('Xq7$mB2r'), true, 'an eight-character secret was refused — the TEST is broken, or the floor is too high');
   assert.ok(store.e, 'nothing was written, so nothing was encrypted');
   assert.ok(!store.k, 'the plaintext seed was left behind next to the encrypted one');
 });
@@ -77,6 +92,7 @@ test('a four-character PIN is refused by the engine', async () => {
 test('and so is five, and empty', async () => {
   const { setPin } = loadSetPin();
   assert.equal(await setPin('12345'), false, 'five characters is under the stated floor and was accepted');
+  assert.equal(await setPin('1234567'), false, 'seven characters is under the floor and was accepted');
   assert.equal(await setPin(''), false);
   assert.equal(await setPin(null), false);
 });
@@ -88,8 +104,41 @@ test('every screen states the same minimum', () => {
   assert.notEqual(at, -1, 'PinModal is gone — re-anchor this test');
   const modal = DASH.slice(at, at + 2600);
   assert.doesNotMatch(modal, /pin\.length < 4/, 'the Change-PIN dialog still lets a four-character PIN through to an engine that refuses it');
-  assert.match(modal, /pin\.length < 6/, 'the Change-PIN dialog does not enforce the same minimum as the engine');
+  assert.match(modal, /pin\.length < 8/, 'the Change-PIN dialog does not enforce the same minimum as the engine');
   assert.doesNotMatch(modal, /at least 4 digits/, 'the dialog still tells the steward four is enough');
   const gate = ROOTJSX.slice(ROOTJSX.indexOf('function StewardForcedPin'), ROOTJSX.indexOf('window.StewardForcedPin'));
-  assert.match(gate, /length < 6/, 'the forced gate no longer states six');
+  assert.match(gate, /length < 8/, 'the forced gate no longer states eight');
+  assert.doesNotMatch(ROOTJSX, /At least 6 — digits are fine/,
+    'a screen still invites six digits — the exact secret this change exists to stop, and the one an attacker ' +
+    'clears in about half a minute from a copied file');
+});
+
+test('a PASSPHRASE is accepted — spaces and all', async () => {
+  // The whole point of a length-only rule. If this fails, stewards are pushed back to short passwords by a
+  // guard that was meant to make them stronger.
+  const { setPin, store } = loadSetPin();
+  assert.equal(await setPin('correct horse battery staple'), true,
+    'a four-word passphrase was refused. Length is the only rule, so spaces must pass — a composition check ' +
+    'that rejects this while accepting `Church01` has the security backwards.');
+  assert.ok(store.e, 'it reported success without writing the encrypted blob');
+});
+
+test('no composition rule sneaks in', async () => {
+  // `Church01` is what "must contain a digit" produces. It is exactly 8, so the floor lets it through — that is
+  // accepted deliberately, and the SCREENS steer away from it. What must NOT happen is the reverse: a rule that
+  // demands digits or symbols and thereby rejects letters-only secrets that are far stronger.
+  const { setPin } = loadSetPin();
+  assert.equal(await setPin('abcdefghijklmnop'), true,
+    'a sixteen-character letters-only secret was refused, so a composition rule has crept in. It would reject ' +
+    'real passphrases while admitting Church01.');
+});
+
+test('the floor applies to SETTING, never to unlocking', () => {
+  // An existing steward with a six-character PIN must not be locked out of their own church by this change.
+  // verifyPin/unlock read the blob and decrypt; neither may consult a length rule.
+  const un = S.slice(S.indexOf('async unlock(pin) {'), S.indexOf('async unlock(pin) {') + 900);
+  assert.doesNotMatch(un, /length < \d/, 'unlock() now enforces a length floor — every steward on a shorter ' +
+    'secret would be permanently locked out, which is a far worse outcome than the weak secret being fixed');
+  const vp = S.slice(S.indexOf('async verifyPin(pin) {'), S.indexOf('async verifyPin(pin) {') + 700);
+  assert.doesNotMatch(vp, /length < \d/, 'verifyPin() now enforces a length floor — see above');
 });

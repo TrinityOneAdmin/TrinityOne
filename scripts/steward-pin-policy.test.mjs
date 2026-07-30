@@ -35,12 +35,23 @@ test('the PIN step cannot be skipped', () => {
 test('the PIN has a real minimum, matched by the keyboard', () => {
   // Was 'digits alone are refused, and a phrase is asked for'. Reverted 2026-07-28: the stricter rule
   // demanded a passphrase on the set screen while the unlock screen still offered a numeric keypad, which
-  // locked the owner out of the account he had just created — and a PIN cannot be reset. Six with digits
-  // allowed, and the keyboards must never contradict it again (see scripts/pin-keyboard.test.mjs).
+  // locked the owner out of the account he had just created — and a PIN cannot be reset. The guard left behind
+  // was `doesNotMatch(fn, /length < 8/)` — literally "do not raise this to 8 without the keyboard to match it".
+  //
+  // AUDIT-2026-07-30: raised to 8 for STEWARDS by the owner's decision, and the keyboard WAS checked first —
+  // no steward PIN field sets inputMode at all, so every one of them gets the ordinary text keyboard. The
+  // console's only numeric field is a pairing code (placeholder "0000"), which is not a password field.
+  //
+  // The guard is now stated as the thing it actually protects — a minimum, AND a keyboard that can type it —
+  // instead of a number that must never appear. A rule phrased as "never 8" cannot survive a deliberate change
+  // to 8; a rule phrased as "whatever the minimum, the keys must exist" survives every future change.
   const at = wizard.indexOf('const savePin');
   const fn = wizard.slice(at, at + 900);
-  assert.match(fn, /length < 6/, 'the wizard minimum is gone');
-  assert.doesNotMatch(fn, /length < 8/, 'the strict rule is back without the keyboard to match it');
+  assert.match(fn, /length < 8/, 'the wizard minimum is gone');
+  const numericPassword = /inputMode=["']numeric["'][^>]*type=["']password["']|type=["']password["'][^>]*inputMode=["']numeric["']/;
+  assert.doesNotMatch(wizard, numericPassword,
+    'a password field forces the numeric keypad. The minimum now allows letters, so a keypad without them ' +
+    'locks out anyone who set one — the 2026-07-28 incident, exactly.');
 });
 
 test('a new church requires approval to join', () => {

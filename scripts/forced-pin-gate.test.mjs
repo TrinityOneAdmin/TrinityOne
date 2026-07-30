@@ -11,6 +11,8 @@
 // This runs the shipped submit() against a setPin that throws, and asserts the screen recovers.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+// AUDIT-2026-07-30: the steward floor moved 6 -> 8, so the six-character literal these scenarios used as a
+// VALID secret is now correctly refused. Swapped for an eight-character one; the scenarios are unchanged.
 import { readFileSync } from 'node:fs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -50,13 +52,13 @@ function loadSubmit({ setPin: impl }) {
 
 test('CONTROL: a good PIN goes through and the button is released', async () => {
   const { run } = loadSubmit({ setPin: async () => true });
-  const s = await run('123456', '123456');
+  const s = await run('Xq7$mB2r', 'Xq7$mB2r');
   assert.equal(s.err, '', 'a successful PIN produced an error message');
 });
 
 test('a PIN the engine refuses leaves the screen usable', async () => {
   const { run } = loadSubmit({ setPin: async () => false });
-  const s = await run('123456', '123456');
+  const s = await run('Xq7$mB2r', 'Xq7$mB2r');
   assert.equal(s.busy, false, 'the button stays disabled after a refusal — the steward cannot try again');
   assert.match(s.err, /\S/, 'nothing told the steward why');
 });
@@ -65,7 +67,7 @@ test('a THROWN error does not brick the gate', async () => {
   // The finding. crypto.subtle, key derivation and localStorage can all throw here, and this screen has no
   // cancel and no back — a stuck button is the end of the road for that console.
   const { run } = loadSubmit({ setPin: async () => { throw new Error('QuotaExceededError'); } });
-  const s = await run('123456', '123456');
+  const s = await run('Xq7$mB2r', 'Xq7$mB2r');
   assert.equal(s.busy, false,
     'an exception left "Setting…" disabled for ever — no cancel, no back, and the console renders nothing else');
   assert.match(s.err, /\S/, 'the steward is staring at a dead button with no message at all');
@@ -73,7 +75,7 @@ test('a THROWN error does not brick the gate', async () => {
 
 test('and the message says what happened, not just that it failed', async () => {
   const { run } = loadSubmit({ setPin: async () => { throw new Error('QuotaExceededError'); } });
-  const s = await run('123456', '123456');
+  const s = await run('Xq7$mB2r', 'Xq7$mB2r');
   assert.match(s.err, /QuotaExceeded/i, 'the real reason is swallowed, so nobody can act on it or report it');
   assert.match(s.err, /again|reload/i, 'the message must say what to do next');
 });
@@ -83,13 +85,13 @@ test('the gate still refuses a short PIN before calling the engine', async () =>
   const { run } = loadSubmit({ setPin: async () => { called = true; return true; } });
   const s = await run('12345', '12345');
   assert.equal(called, false, 'a five-character PIN reached the engine');
-  assert.match(s.err, /6/, 'the refusal must state the minimum');
+  assert.match(s.err, /8/, 'the refusal must state the minimum');
 });
 
 test('mismatched entries are caught', async () => {
   let called = false;
   const { run } = loadSubmit({ setPin: async () => { called = true; return true; } });
-  const s = await run('123456', '123457');
+  const s = await run('Xq7$mB2r', 'Xq7$mB2s');
   assert.equal(called, false, 'a mistyped confirmation was accepted — the steward locks themselves out');
   assert.match(s.err, /match/i);
 });

@@ -40,8 +40,12 @@ test('the strength rule and the keyboard agree', () => {
   // cannot be reset. Change these two together or not at all.
   const dash = readFileSync(new URL('stew-dashboard.jsx', dir), 'utf8');
   const root = readFileSync(new URL('steward-root.jsx', dir), 'utf8');
-  assert.match(dash, /length < 6\) \{ setPinErr/, 'the wizard minimum changed — check the keyboard still matches');
-  assert.match(root, /length < 6\) \{ setErr/, 'the forced gate minimum changed — check the keyboard still matches');
+  // AUDIT-2026-07-30: the steward floor moved 6 -> 8 and the screens now ask for a generated password or a
+  // four-word passphrase. This canary did its job — it stopped the change until the keyboard was re-checked.
+  // It WAS re-checked: no steward PIN field sets inputMode at all, so they get the ordinary text keyboard. The
+  // only numeric field in the console is a pairing code (placeholder "0000"), which is not a password field.
+  assert.match(dash, /length < 8\) \{ setPinErr/, 'the wizard minimum changed — check the keyboard still matches');
+  assert.match(root, /length < 8\) \{ setErr/, 'the forced gate minimum changed — check the keyboard still matches');
   for (const [name, src] of [['stew-dashboard.jsx', dash], ['steward-root.jsx', root], ['identity.jsx', readFileSync(new URL('identity.jsx', dir), 'utf8')]]) {
     assert.doesNotMatch(src, /inputMode=["']numeric["'][^\n]*type=["']password["']|type=["']password["'][^\n]*inputMode=["']numeric["']/,
       name + ' has a password field pinned to the numeric keypad — anyone holding a passphrase cannot unlock');

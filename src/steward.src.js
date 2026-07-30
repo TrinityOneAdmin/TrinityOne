@@ -826,7 +826,21 @@ window.Steward = {
     // an attacker can impersonate the church to every member". Enforced in the engine so a third screen
     // added later inherits it rather than having to remember. (The member app's identity.src.js has had this
     // since audit #5; the console engine never did.)
-    if (String(pin).length < 6) return false;
+    // AUDIT-2026-07-30. Raised 6 -> 8 for STEWARDS only. The arithmetic, at PBKDF2-600k and ~17k guesses/sec on
+    // one high-end GPU: six digits is a million combinations — about half a minute. Eight characters drawn from
+    // the full printable set is ~6.1 quadrillion, which is ~6 billion times more work.
+    //
+    // Deliberately NO composition rule (no "must contain a digit"). Such rules push people to `Church01`, which
+    // is compliant and dies in the first few million guesses, while REJECTING `correct horse battery staple`,
+    // which is genuinely strong. Length is the only rule; the screens do the steering. Spaces are allowed
+    // precisely so a passphrase works.
+    //
+    // Members stay at 6. They are throttled, their seed is in the OS hardware store on native, and they do not
+    // hold the church key — the asymmetry is the point, not an oversight.
+    //
+    // Existing 6-character blobs still UNLOCK: this gate is on SETTING a secret, not on verifying one, so no
+    // steward is locked out of their own church by an upgrade. They are prompted, not forced.
+    if (String(pin).length < 8) return false;
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
     // S6: goes to the hardware store on native, localStorage on web. Awaited, so needsPin is only cleared
