@@ -27,11 +27,17 @@ const PORT = 8857;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const MEMBER_D = 'trinityone/member:', GROUP_D = 'trinityone/group:', ROSTER_D = 'trinityone/roster:';
 const MEALS_SETTINGS_D = 'trinityone/meals-settings', CAREREQ_D = 'trinityone/carereq:';
+// AUDIT-2026-07-30 S1/S3/S4, item 6 of the fix plan. accept() builds ONE relay-wide `isMember` over the union of
+// every church's members, so six write rules ask "a member of anything?" where they mean "a member of THIS
+// church". canRead() was hoisted onto a scoped helper (effMemberOf/churchReader) and the write side was not.
+const MINORS_D = 'trinityone/minors:', AVAIL_D = 'trinityone/careavail:', SAFE_D = 'trinityone/safe:';
+const OPEN_GID = 'grpA-prayer-open';
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
 
 const A = K(), B = K(), alice = K(), mallory = K();   // A = victim church, B = co-tenant attacker church
+const bob = K();   // a member of B ONLY — never joined A. The whole point of the cross-tenant cases.
 const GID = 'grpA-private-leadership', TEAM = 'teamA-care';
 let relay, dataDir, pub;
 
@@ -72,6 +78,11 @@ before(async () => {
   await sleep(150);
   assert.equal((await publish(pub, chat(alice, GID, 'MEETING AT THE FARMHOUSE 9PM')))[0], true, 'a member of the private group can post');
   assert.equal((await publish(pub, doc(alice, CAREREQ_D + 'r1', { keys: {}, enc: 'SEALED' }, [['church', A.pub]])))[0], true);
+  // …and the pieces the cross-tenant cases need: a member of B, and A's ORDINARY open group. The invite-only
+  // group above was already guarded (AUDIT-2026-07-24); the OPEN group — the one a congregation actually talks
+  // in — was never brought along.
+  assert.equal((await publish(pub, doc(bob, MEMBER_D + B.pub, { joined: now() })))[0], true, 'bob must be able to join his OWN church');
+  assert.equal((await publish(pub, doc(A, GROUP_D + OPEN_GID, { name: 'Prayer', kind: 'group' }, [['church', A.pub]])))[0], true);
   await sleep(150);
 });
 after(() => { try { pub && pub.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
@@ -99,4 +110,58 @@ test('the hijack does not grant care-admin: A’s sealed help request stays priv
 test('the OWNING church can still edit its own group and roster (the guard is not a lockout)', async () => {
   assert.equal((await publish(pub, doc(A, GROUP_D + GID, { name: 'Leadership team', visibility: 'invite', members: [alice.pub, mallory.pub] })))[0], true);
   assert.equal((await publish(pub, doc(A, ROSTER_D + TEAM, { people: [{ pub: alice.pub }, { pub: mallory.pub }] })))[0], true);
+});
+
+
+// ── AUDIT-2026-07-30 S1/S3/S4 — cross-tenant WRITES. Item 6 of the fix plan. ──────────────────────────────
+//
+// These are marked `todo` DELIBERATELY, and that is the point of this commit: they document a reproduction that
+// FAILS against today's code. A todo test runs and reports without breaking the suite, so the repro is committed
+// and visible instead of living in a session. Removing `todo` is the FIRST step of the scoping fix — each rule
+// change then has a case that is proved to bite before the rule is touched.
+//
+// Latent, not live: a8 hosts ONE church with self-registration locked (gateway.mjs:2585 refuses when
+// `!community && CHURCH_PUBS.size`). They go live the day a second church shares a box, or "Offer to host" is
+// switched on — which is a deliberate product direction, so this is "before the first shared relay".
+//
+// Each case carries a CONTROL that must stay ACCEPT. Scoping too tightly would silently disable genuine
+// members, which is worse than the finding.
+
+test('S1: a member of another church CANNOT post into this church’s open group', { todo: 'reproduction for the accept() scoping fix — fails today' }, async () => {
+  const control = await publish(pub, chat(alice, OPEN_GID, 'CONTROL: a real member of A'));
+  assert.equal(control[0], true, 'a genuine member of A must still be able to post — if this fails the fix is a lockout');
+  const attack = await publish(pub, chat(bob, OPEN_GID, 'INJECTED by a member of church B'));
+  assert.equal(attack[0], false,
+    'a member of church B posted into church A’s group chat, and it is delivered to A’s members as ordinary ' +
+    'chat. gateway.mjs’s kind-1 tail ends `return isMember`, which is relay-wide. The same hole was closed for ' +
+    'broadcast groups and for invite-only groups; the ordinary open group was not brought along.');
+});
+
+test('S3: a co-tenant church CANNOT mark another church’s adult as a minor', { todo: 'reproduction for the accept() scoping fix — fails today' }, async () => {
+  const before = await publish(pub, doc(mallory, AVAIL_D + A.pub, { free: true }, [['church', A.pub]]));
+  assert.equal(before[0], true, 'CONTROL: an adult of A can register as available before B interferes');
+  // church B lists an adult of church A — who has never joined B — in B's own minors list
+  assert.equal((await publish(pub, doc(B, MINORS_D + B.pub, { pubkeys: [mallory.pub] })))[0], true);
+  await sleep(200);
+  const after = await publish(pub, doc(mallory, AVAIL_D + A.pub, { free: true }, [['church', A.pub]]));
+  assert.equal(after[0], true,
+    'after church B listed them, an adult of church A can no longer register as available to help their OWN ' +
+    'church. accept() consults the relay-wide MINORS union; safeguardAllows() was scoped per-church for exactly ' +
+    'this reason (REVIEW-2026-07-20 B4) and these two call sites were not. A targeted, silent denial of service.');
+});
+
+test('S4: a member of another church CANNOT answer this church’s emergency safety check', { todo: 'reproduction for the accept() scoping fix — fails today' }, async () => {
+  const control = await publish(pub, doc(alice, SAFE_D + A.pub, { state: 'safe' }));
+  assert.equal(control[0], true, 'CONTROL: a real member of A must still be able to mark themselves safe');
+  const attack = await publish(pub, doc(bob, SAFE_D + A.pub, { state: 'safe' }));
+  assert.equal(attack[0], false,
+    'a member of church B answered church A’s safety roll-call. This is the post-emergency head count — the ' +
+    'highest-stakes moment in the product — and subscribeSafetyResponses applies no roster filter, while the ' +
+    'NIP-44 conversation key is symmetric, so the forgery DECRYPTS AND DISPLAYS as a genuine "safe".');
+});
+
+test('S4b: a member of another church CANNOT join this church’s here-to-help register', { todo: 'reproduction for the accept() scoping fix — fails today' }, async () => {
+  const attack = await publish(pub, doc(bob, AVAIL_D + A.pub, { free: true }, [['church', A.pub]]));
+  assert.equal(attack[0], false,
+    'a member of church B appears in church A’s volunteer register. Same unscoped `isMember` as S1/S4.');
 });
