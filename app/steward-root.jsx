@@ -502,6 +502,16 @@ function StewardUnlock() {
     setBusy(true); setErr('');
     const ok = await window.Steward.unlock(pin);   // fires steward-key on success → StewardRoot re-renders
     if (ok) { try { localStorage.removeItem(GUARD_KEY); } catch {} return; }
+    // AUDIT-2026-07-30. The stored key is bound to THIS browser (a key it can use but never read). If that
+    // browser profile is gone — reinstalled, site data cleared, a different machine — the blob cannot be
+    // opened by any passphrase. Saying "wrong PIN" there would send the steward round the retry loop for ever
+    // while the real answer (restore from your 12 words) is never offered. It is also not a failed attempt, so
+    // it must not count towards the lockout.
+    if (window.Steward.deviceKeyLost) {
+      setBusy(false); setPin('');
+      setErr('This computer no longer recognises the stored key — it was cleared, or this is a different browser. Your passphrase is fine. Use “I have my 12 words” to bring the church key back.');
+      return;
+    }
     const fails = (g0.fails || 0) + 1;
     const until = fails >= 5 ? Date.now() + Math.min(30 * Math.pow(2, fails - 5), 3600) * 1000 : 0;   // 30s,60s,120s… cap 1h from the 5th miss
     try { localStorage.setItem(GUARD_KEY, JSON.stringify({ fails, until })); } catch {}

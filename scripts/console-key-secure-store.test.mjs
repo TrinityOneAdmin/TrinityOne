@@ -90,9 +90,13 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
   const localStorage = { getItem: (k) => (k in lsData ? lsData[k] : null), setItem: (k, v) => { lsData[k] = String(v); }, removeItem: (k) => { delete lsData[k]; } };
   const src = parts;
   const KEY = 'trinityone.steward.church-key.enc';
-  const fn = new Function('__SECURE__', 'localStorage', 'lsGet', 'lsSet', '_isNative', 'console', 'ENC_LS',
+  // AUDIT-2026-07-30: encBlobWrite now also asks _devWrap to bind the blob to this browser on the WEB path.
+  // Injected here as a PASS-THROUGH so these tests keep testing what they are about — where the ciphertext
+  // lands and whether it can be lost. The wrap has its own file, console-device-bound-key.test.mjs.
+  const devWrap = { wrap: async () => null, unwrap: async (x) => x, isWrapped: () => false };
+  const fn = new Function('_devWrap', '__SECURE__', 'localStorage', 'lsGet', 'lsSet', '_isNative', 'console', 'ENC_LS',
     src + '\nreturn { encBlobRaw, encBlobWrite, encBlobRemove, migrateEncToSecure, _encIsMarker };');
-  const api = fn(SecureStorage, localStorage, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v),
+  const api = fn(devWrap, SecureStorage, localStorage, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v),
     () => nativeMode, { warn() {}, log() {} }, KEY);
   return { ...api, lsData, store, calls, KEY };
 }
@@ -132,12 +136,17 @@ test('a hardware store that throws is survived the same way', async () => {
   assert.equal(h.lsData[h.KEY], BLOB, 'a throwing Keystore lost the key instead of falling back to localStorage');
 });
 
-test('web/desktop is unchanged — the blob stays in localStorage and nothing is asked of a store that is not there', async () => {
+test('web/desktop still persists its key, and never reaches for a native store', async () => {
+  // This used to assert the stored value was the BARE blob. That is no longer true and must not be forced
+  // back: on the web the blob is now bound to the browser (console-device-bound-key.test.mjs). What still
+  // matters here — and is what this file is for — is that the key is persisted, is readable again, and that a
+  // browser build never calls a native secure store. The wrap is injected as a pass-through above, so this
+  // asserts the SHAPE of the web path rather than the wrapping itself.
   const h = harness({ nativeMode: false });
   assert.equal(await h.encBlobWrite(BLOB), true);
-  assert.equal(h.lsData[h.KEY], BLOB, 'the desktop console no longer persists its key at all');
+  assert.ok(h.lsData[h.KEY], 'the desktop console no longer persists its key at all');
   assert.equal(h.calls.set, 0, 'the browser build reached for a native secure store');
-  assert.equal(await h.encBlobRaw(), BLOB);
+  assert.equal(await h.encBlobRaw(), BLOB, 'the desktop console cannot read its own key back');
 });
 
 test('an existing native install migrates once, and only on a verified read-back', async () => {
@@ -175,7 +184,7 @@ test('a marker whose blob cannot be fetched is a FAILED unlock, not an open door
   const un = BUNDLE.match(/async unlock\(pin\) \{[\s\S]*?\n {4}\}/);
   assert.ok(un, 're-anchor: unlock() moved');
   // matched in two parts: the bundler reflows this onto separate lines
-  assert.match(un[0], /const raw = await encBlobRaw\(\);/, 'unlock() no longer reads through encBlobRaw()');
+  assert.match(un[0], /raw = await encBlobRaw\(\);/, 'unlock() no longer reads through encBlobRaw()');
   assert.match(un[0], /if \(!raw\) return lsGet\(ENC_LS\) \? false : true;/,
     'unlock() no longer distinguishes "no PIN is set" from "a PIN is set but the hardware store would not ' +
     'open". Treating the second as the first unlocks the console for anyone holding the phone.');

@@ -12341,10 +12341,105 @@ zoo`.split("\n");
     const m = await Promise.resolve().then(() => (init_esm(), esm_exports));
     return { S: m.SecureStorage };
   }
+  var DEV_DB = "trinityone-steward";
+  var DEV_STORE = "devkey";
+  var DEV_ID = "church-wrap-v1";
+  function _idb() {
+    return new Promise((res, rej) => {
+      let r;
+      try {
+        r = indexedDB.open(DEV_DB, 1);
+      } catch (e) {
+        return rej(e);
+      }
+      r.onupgradeneeded = () => {
+        try {
+          r.result.createObjectStore(DEV_STORE);
+        } catch (e) {
+        }
+      };
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error || new Error("indexeddb open failed"));
+    });
+  }
+  function _idbTx(db, mode, fn) {
+    return new Promise((res, rej) => {
+      const tx = db.transaction(DEV_STORE, mode);
+      const req = fn(tx.objectStore(DEV_STORE));
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error || new Error("indexeddb request failed"));
+    });
+  }
+  async function _deviceKey(create) {
+    try {
+      if (typeof indexedDB === "undefined" || !window.crypto || !window.crypto.subtle) return null;
+      const db = await _idb();
+      const found = await _idbTx(db, "readonly", (st) => st.get(DEV_ID));
+      if (found) return found;
+      if (!create) return null;
+      const k = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+      await _idbTx(db, "readwrite", (st) => st.put(k, DEV_ID));
+      const back = await _idbTx(db, "readonly", (st) => st.get(DEV_ID));
+      return back || null;
+    } catch (e) {
+      console.warn("[steward] device key unavailable", e);
+      return null;
+    }
+  }
+  function makeDeviceWrap(opts) {
+    const o = opts || {};
+    const getKey = o.getKey || _deviceKey;
+    const subtle = o.subtle || typeof window !== "undefined" && window.crypto && window.crypto.subtle;
+    const rand = o.randomBytes || ((n) => window.crypto.getRandomValues(new Uint8Array(n)));
+    const isWrapped = (raw) => {
+      try {
+        const j = JSON.parse(raw);
+        return !!(j && j.dev === 1 && j.ct && j.iv);
+      } catch {
+        return false;
+      }
+    };
+    return {
+      isWrapped,
+      // returns the wrapped string, or NULL meaning "this platform cannot, store it as before"
+      async wrap(str) {
+        try {
+          const key = await getKey(true);
+          if (!key || !subtle) return null;
+          const iv = rand(12);
+          const ct = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(str)));
+          return JSON.stringify({ dev: 1, iv: b64e(iv), ct: b64e(ct) });
+        } catch (e) {
+          console.warn("[steward] device wrap failed", e);
+          return null;
+        }
+      },
+      // returns the inner blob, or throws with .deviceKeyMissing so the caller can say WHY rather than "wrong PIN"
+      async unwrap(outer) {
+        if (!isWrapped(outer)) return outer;
+        const key = await getKey(false);
+        if (!key || !subtle) {
+          const e = new Error("device key missing");
+          e.deviceKeyMissing = true;
+          throw e;
+        }
+        const j = JSON.parse(outer);
+        try {
+          const pt = await subtle.decrypt({ name: "AES-GCM", iv: b64d(j.iv) }, key, b64d(j.ct));
+          return new TextDecoder().decode(pt);
+        } catch (err2) {
+          const e = new Error("device key does not match");
+          e.deviceKeyMissing = true;
+          throw e;
+        }
+      }
+    };
+  }
+  var _devWrap = makeDeviceWrap();
   async function encBlobRaw() {
     const raw = lsGet(ENC_LS);
     if (!raw) return "";
-    if (!_encIsMarker(raw)) return raw;
+    if (!_encIsMarker(raw)) return await _devWrap.unwrap(raw);
     try {
       const { S } = await _secureStore();
       const s = await S.get(ENC_LS);
@@ -12367,6 +12462,18 @@ zoo`.split("\n");
         console.warn("[steward] secure key read-back mismatch \u2014 keeping the localStorage copy");
       } catch (e) {
         console.warn("[steward] secure key set failed \u2014 keeping the localStorage copy", e);
+      }
+    }
+    if (!_isNative()) {
+      const wrapped = await _devWrap.wrap(str);
+      if (wrapped) {
+        lsSet(ENC_LS, wrapped);
+        try {
+          const back = await _devWrap.unwrap(lsGet(ENC_LS));
+          if (back === str) return true;
+        } catch (e) {
+        }
+        console.warn("[steward] device-wrapped blob did not read back \u2014 storing unwrapped");
       }
     }
     lsSet(ENC_LS, str);
@@ -12537,7 +12644,16 @@ zoo`.split("\n");
       return true;
     },
     async unlock(pin) {
-      const raw = await encBlobRaw();
+      let raw;
+      try {
+        raw = await encBlobRaw();
+      } catch (e) {
+        if (e && e.deviceKeyMissing) {
+          window.Steward.deviceKeyLost = true;
+          return false;
+        }
+        throw e;
+      }
       if (!raw) return lsGet(ENC_LS) ? false : true;
       try {
         const o = JSON.parse(raw);
@@ -12562,7 +12678,16 @@ zoo`.split("\n");
     },
     // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).
     async verifyPin(pin) {
-      const raw = await encBlobRaw();
+      let raw;
+      try {
+        raw = await encBlobRaw();
+      } catch (e) {
+        if (e && e.deviceKeyMissing) {
+          window.Steward.deviceKeyLost = true;
+          return false;
+        }
+        throw e;
+      }
       if (!raw) return false;
       try {
         const o = JSON.parse(raw);
