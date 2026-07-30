@@ -638,9 +638,67 @@ function setKey(mnemonic) {
 //     needsPin=true, so the user is immediately forced to set a new PIN before doing anything.
 //   • UI side: steward-root.jsx renders <StewardForcedPin /> whenever window.Steward.needsPin
 //     is true, blocking every other surface.
-// Native (Capacitor) SecureStorage migration is queued as a follow-up commit — async-init refactor.
 // ──
+// AUDIT-2026-07-30 S6. The member app closed this in M12; the console did not, and the comment that used to sit
+// here said the native migration was "queued as a follow-up — async-init refactor". That refactor turned out not
+// to be needed: every reader of the blob's CONTENT (unlock, verifyPin) is already async, and every synchronous
+// use is only a PRESENCE check. So the member app's marker split drops straight in —
+//
+//     localStorage holds the full blob (web/desktop, and legacy native) OR a bare {native:1} MARKER;
+//     on native the ciphertext itself lives in the OS hardware store (Keystore/Keychain).
+//
+// Why it matters more here than anywhere else: this is the CHURCH key. The gate's own words are that it signs
+// "as the whole church — if it leaks, an attacker can impersonate the church to every member". In plain
+// localStorage the encrypted blob is a file, and a file can be copied in seconds and then attacked OFFLINE at
+// any speed, with none of the PIN screen's throttling in the way. In the hardware store the ciphertext cannot
+// be read off a forensic image at all; an attacker has to come back to the device.
+//
+// What this does NOT do, so nobody reads more into it than is there: it protects a seized, powered-off phone.
+// It does nothing about a phone seized unlocked, or a steward compelled to enter the PIN.
+//
+// SAFETY RULE for everything below: the localStorage copy is never dropped until the hardware store has been
+// written AND READ BACK matching. A silent Keystore no-op that we "trusted" would orphan the only copy of a
+// church's key — a far worse outcome than the exposure being fixed.
 const ENC_LS = 'trinityone.steward.church-key.enc';
+const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } };
+async function _secureStore() { const m = await import('@aparajita/capacitor-secure-storage'); return m.SecureStorage; }
+// the blob STRING ({v,it,salt,iv,ct}), from wherever it actually lives, or '' if there is none
+async function encBlobRaw() {
+  const raw = lsGet(ENC_LS);
+  if (!raw) return '';
+  if (!_encIsMarker(raw)) return raw;                       // web/desktop, or a native install not yet migrated
+  try { const S = await _secureStore(); const s = await S.get(ENC_LS); if (s) return String(s); }
+  catch (e) { console.warn('[steward] secure key get failed', e); }
+  return '';   // marker present but the store would not give it up — unlock() surfaces this as a failed unlock
+}
+// write the blob. Returns true only if it durably landed somewhere it can be read back.
+async function encBlobWrite(str) {
+  if (_isNative()) {
+    try {
+      const S = await _secureStore();
+      await S.set(ENC_LS, str);
+      const v = await S.get(ENC_LS);
+      if (v != null && String(v) === str) { lsSet(ENC_LS, JSON.stringify({ native: 1 })); return true; }   // marker ONLY after read-back
+      console.warn('[steward] secure key read-back mismatch — keeping the localStorage copy');
+    } catch (e) { console.warn('[steward] secure key set failed — keeping the localStorage copy', e); }
+  }
+  lsSet(ENC_LS, str);   // web/desktop, or native fallback when the hardware store is unavailable
+  return true;
+}
+async function encBlobRemove() {
+  try { localStorage.removeItem(ENC_LS); } catch {}
+  if (!_isNative()) return;
+  try { const S = await _secureStore(); await S.remove(ENC_LS); } catch (e) { console.warn('[steward] secure key remove failed', e); }
+}
+// One-time move of an EXISTING native install's blob out of localStorage. Deliberately does nothing unless the
+// read-back matches, so a device whose Keystore misbehaves simply stays as it was rather than losing the key.
+async function migrateEncToSecure() {
+  if (!_isNative()) return false;
+  const raw = lsGet(ENC_LS);
+  if (!raw || _encIsMarker(raw)) return false;              // nothing to move, or already moved
+  const ok = await encBlobWrite(raw);                       // writes the marker itself once read-back matches
+  return ok && _encIsMarker(lsGet(ENC_LS));
+}
 let needsPin = false;
 function _setNeedsPin(v) {
   v = !!v;
@@ -745,7 +803,14 @@ window.Steward = {
       // atomically replace KEY_LS with ENC_LS.
       setKey(m); _setNeedsPin(true); window.Steward.locked = false; return true;
     }
-    if (lsGet(ENC_LS)) { window.Steward.locked = true; return false; }   // PIN-locked — needs unlock(), no key in memory
+    if (lsGet(ENC_LS)) {
+      // S6: fire-and-forget the one-time move into the hardware store. Deliberately NOT awaited — init() is
+      // synchronous and the lock state below does not depend on WHERE the blob lives, only that one exists.
+      // migrateEncToSecure() is a no-op unless it can read the blob back out, so the worst case is that this
+      // device simply stays as it was and tries again next boot.
+      migrateEncToSecure();
+      window.Steward.locked = true; return false;   // PIN-locked — needs unlock(), no key in memory
+    }
     return false;
   },
   // ---- PIN lock API ----
@@ -764,13 +829,15 @@ window.Steward = {
     if (String(pin).length < 6) return false;
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
-    lsSet(ENC_LS, JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));   // M11: v2 blob carries its iteration count
+    // S6: goes to the hardware store on native, localStorage on web. Awaited, so needsPin is only cleared
+    // once the ciphertext is durably somewhere — the plaintext KEY_LS removal below depends on that.
+    await encBlobWrite(JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));   // M11: v2 blob carries its iteration count
     try { localStorage.removeItem(KEY_LS); } catch {}
     _setNeedsPin(false);   // SECURITY-AUDIT-2026-06-25 Critical-2: encrypted form now persisted; clear the force flag
     return true;
   },
   async unlock(pin) {                              // decrypt into memory (does NOT re-write the plaintext)
-    const raw = lsGet(ENC_LS); if (!raw) return true;
+    const raw = await encBlobRaw(); if (!raw) return lsGet(ENC_LS) ? false : true;   // S6: a marker we cannot open is a FAILED unlock, not an open door
     try {
       const o = JSON.parse(raw);
       const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
@@ -787,7 +854,7 @@ window.Steward = {
   },
   // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).
   async verifyPin(pin) {
-    const raw = lsGet(ENC_LS); if (!raw) return false;
+    const raw = await encBlobRaw(); if (!raw) return false;
     try {
       const o = JSON.parse(raw);
       await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct));
@@ -802,7 +869,7 @@ window.Steward = {
   async removeLock(pin) {
     if (!currentMnemonic) return false;
     if (lsGet(ENC_LS) && !(await window.Steward.verifyPin(pin))) return false;   // wrong/empty PIN → refuse
-    try { localStorage.removeItem(ENC_LS); } catch {}
+    await encBlobRemove();   // S6: localStorage AND the hardware store, or the next boot finds an orphan blob
     window.Steward.locked = false;
     _setNeedsPin(true);   // force an immediate re-PIN
     return true;
@@ -996,7 +1063,11 @@ window.Steward = {
     // SECURITY-AUDIT-2026-06-25 Critical-2: restore does NOT persist plaintext. The seed lives in
     // memory only; needsPin forces the forced PIN modal before the steward can act. Any existing
     // PIN-encrypted blob on this device is wiped (it belonged to a different key).
-    setKey(m); try { localStorage.removeItem(KEY_LS); localStorage.removeItem(ENC_LS); } catch (e) {}
+    // S6: encBlobRemove() clears the hardware store too. Without it the PREVIOUS key's ciphertext would sit
+    // in Keystore after a restore — the exact at-rest exposure this change exists to close, left behind by the
+    // one operation whose comment promises the old blob is wiped.
+    setKey(m); try { localStorage.removeItem(KEY_LS); } catch (e) {}
+    encBlobRemove();
     _setNeedsPin(true);
     // fire steward-key so the first-run welcome advances to the console (createKey does this too)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
@@ -1078,11 +1149,15 @@ window.Steward = {
   },
   // remove the church key from THIS device (completing a handoff, or stepping away). The church lives on
   // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
+  // Returns a promise so a caller CAN await the hardware-store half; the localStorage half is cleared
+  // synchronously first, so every existing synchronous caller behaves exactly as before.
   removeKey() {
-    try { localStorage.removeItem(KEY_LS); localStorage.removeItem(ENC_LS); } catch {}
+    try { localStorage.removeItem(KEY_LS); } catch {}
+    const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false; window.Steward.locked = false;
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
+    return done;
     return true;
   },
 

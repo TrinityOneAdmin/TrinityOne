@@ -44,6 +44,12 @@ function loadSetPin() {
     deriveAes: async () => await crypto.subtle.importKey('raw', new Uint8Array(32), 'AES-GCM', false, ['encrypt']),
     b64e: (u8) => Buffer.from(u8).toString('base64'),
     _setNeedsPin: () => {},   // the real one clears the forced-PIN gate; irrelevant to the length rule
+    // AUDIT-2026-07-30 S6: setPin no longer writes the blob with lsSet directly — it goes through
+    // encBlobWrite(), which on native puts the ciphertext in the OS hardware store and leaves only a marker in
+    // localStorage. This test is about the PIN LENGTH FLOOR, not about where the blob lands, so the seam is
+    // stubbed to the localStorage behaviour the assertions below already expect. Where it lands is covered by
+    // scripts/console-key-secure-store.test.mjs, which drives the real thing.
+    encBlobWrite: async (str) => { store['e'] = str; return true; },
     crypto, TextEncoder, Uint8Array, JSON,
   };
   const args = Object.keys(scope);

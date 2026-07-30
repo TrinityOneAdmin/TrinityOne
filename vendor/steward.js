@@ -6,8 +6,15 @@
   var __getProtoOf = Object.getPrototypeOf;
   var __hasOwnProp = Object.prototype.hasOwnProperty;
   var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __esm = (fn, res) => function __init() {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  };
   var __commonJS = (cb, mod2) => function __require() {
     return mod2 || (0, cb[__getOwnPropNames(cb)[0]])((mod2 = { exports: {} }).exports, mod2), mod2.exports;
+  };
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
   };
   var __copyProps = (to, from, except, desc) => {
     if (from && typeof from === "object" || typeof from === "function") {
@@ -1431,9 +1438,9 @@
           var _base64 = "";
           var _this = {};
           var writeEncoded = function(b) {
-            _base64 += String.fromCharCode(encode(b & 63));
+            _base64 += String.fromCharCode(encode2(b & 63));
           };
-          var encode = function(n) {
+          var encode2 = function(n) {
             if (n < 0) {
             } else if (n < 26) {
               return 65 + n;
@@ -1497,14 +1504,14 @@
               } else if (c.match(/^\s$/)) {
                 continue;
               }
-              _buffer = _buffer << 6 | decode2(c.charCodeAt(0));
+              _buffer = _buffer << 6 | decode3(c.charCodeAt(0));
               _buflen += 6;
             }
             var n = _buffer >>> _buflen - 8 & 255;
             _buflen -= 8;
             return n;
           };
-          var decode2 = function(c) {
+          var decode3 = function(c) {
             if (65 <= c && c <= 90) {
               return c - 65;
             } else if (97 <= c && c <= 122) {
@@ -1710,6 +1717,1058 @@
         }
       })(function() {
         return qrcode2;
+      });
+    }
+  });
+
+  // node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js
+  var createCapacitorPlatforms, initPlatforms, CapacitorPlatforms, addPlatform, setPlatform, ExceptionCode, CapacitorException, getPlatformId, createCapacitor, initCapacitorGlobal, Capacitor, registerPlugin, Plugins, WebPlugin, encode, decode2, CapacitorCookiesPluginWeb, CapacitorCookies, readBlobAsBase64, normalizeHttpHeaders, buildUrlParams, buildRequestInit, CapacitorHttpPluginWeb, CapacitorHttp;
+  var init_dist = __esm({
+    "node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js"() {
+      createCapacitorPlatforms = (win) => {
+        const defaultPlatformMap = /* @__PURE__ */ new Map();
+        defaultPlatformMap.set("web", { name: "web" });
+        const capPlatforms = win.CapacitorPlatforms || {
+          currentPlatform: { name: "web" },
+          platforms: defaultPlatformMap
+        };
+        const addPlatform2 = (name, platform) => {
+          capPlatforms.platforms.set(name, platform);
+        };
+        const setPlatform2 = (name) => {
+          if (capPlatforms.platforms.has(name)) {
+            capPlatforms.currentPlatform = capPlatforms.platforms.get(name);
+          }
+        };
+        capPlatforms.addPlatform = addPlatform2;
+        capPlatforms.setPlatform = setPlatform2;
+        return capPlatforms;
+      };
+      initPlatforms = (win) => win.CapacitorPlatforms = createCapacitorPlatforms(win);
+      CapacitorPlatforms = /* @__PURE__ */ initPlatforms(typeof globalThis !== "undefined" ? globalThis : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : typeof global !== "undefined" ? global : {});
+      addPlatform = CapacitorPlatforms.addPlatform;
+      setPlatform = CapacitorPlatforms.setPlatform;
+      (function(ExceptionCode2) {
+        ExceptionCode2["Unimplemented"] = "UNIMPLEMENTED";
+        ExceptionCode2["Unavailable"] = "UNAVAILABLE";
+      })(ExceptionCode || (ExceptionCode = {}));
+      CapacitorException = class extends Error {
+        constructor(message, code, data) {
+          super(message);
+          this.message = message;
+          this.code = code;
+          this.data = data;
+        }
+      };
+      getPlatformId = (win) => {
+        var _a2, _b2;
+        if (win === null || win === void 0 ? void 0 : win.androidBridge) {
+          return "android";
+        } else if ((_b2 = (_a2 = win === null || win === void 0 ? void 0 : win.webkit) === null || _a2 === void 0 ? void 0 : _a2.messageHandlers) === null || _b2 === void 0 ? void 0 : _b2.bridge) {
+          return "ios";
+        } else {
+          return "web";
+        }
+      };
+      createCapacitor = (win) => {
+        var _a2, _b2, _c, _d, _e;
+        const capCustomPlatform = win.CapacitorCustomPlatform || null;
+        const cap = win.Capacitor || {};
+        const Plugins2 = cap.Plugins = cap.Plugins || {};
+        const capPlatforms = win.CapacitorPlatforms;
+        const defaultGetPlatform = () => {
+          return capCustomPlatform !== null ? capCustomPlatform.name : getPlatformId(win);
+        };
+        const getPlatform = ((_a2 = capPlatforms === null || capPlatforms === void 0 ? void 0 : capPlatforms.currentPlatform) === null || _a2 === void 0 ? void 0 : _a2.getPlatform) || defaultGetPlatform;
+        const defaultIsNativePlatform = () => getPlatform() !== "web";
+        const isNativePlatform = ((_b2 = capPlatforms === null || capPlatforms === void 0 ? void 0 : capPlatforms.currentPlatform) === null || _b2 === void 0 ? void 0 : _b2.isNativePlatform) || defaultIsNativePlatform;
+        const defaultIsPluginAvailable = (pluginName) => {
+          const plugin = registeredPlugins.get(pluginName);
+          if (plugin === null || plugin === void 0 ? void 0 : plugin.platforms.has(getPlatform())) {
+            return true;
+          }
+          if (getPluginHeader(pluginName)) {
+            return true;
+          }
+          return false;
+        };
+        const isPluginAvailable = ((_c = capPlatforms === null || capPlatforms === void 0 ? void 0 : capPlatforms.currentPlatform) === null || _c === void 0 ? void 0 : _c.isPluginAvailable) || defaultIsPluginAvailable;
+        const defaultGetPluginHeader = (pluginName) => {
+          var _a3;
+          return (_a3 = cap.PluginHeaders) === null || _a3 === void 0 ? void 0 : _a3.find((h) => h.name === pluginName);
+        };
+        const getPluginHeader = ((_d = capPlatforms === null || capPlatforms === void 0 ? void 0 : capPlatforms.currentPlatform) === null || _d === void 0 ? void 0 : _d.getPluginHeader) || defaultGetPluginHeader;
+        const handleError = (err2) => win.console.error(err2);
+        const pluginMethodNoop = (_target, prop, pluginName) => {
+          return Promise.reject(`${pluginName} does not have an implementation of "${prop}".`);
+        };
+        const registeredPlugins = /* @__PURE__ */ new Map();
+        const defaultRegisterPlugin = (pluginName, jsImplementations = {}) => {
+          const registeredPlugin = registeredPlugins.get(pluginName);
+          if (registeredPlugin) {
+            console.warn(`Capacitor plugin "${pluginName}" already registered. Cannot register plugins twice.`);
+            return registeredPlugin.proxy;
+          }
+          const platform = getPlatform();
+          const pluginHeader = getPluginHeader(pluginName);
+          let jsImplementation;
+          const loadPluginImplementation = async () => {
+            if (!jsImplementation && platform in jsImplementations) {
+              jsImplementation = typeof jsImplementations[platform] === "function" ? jsImplementation = await jsImplementations[platform]() : jsImplementation = jsImplementations[platform];
+            } else if (capCustomPlatform !== null && !jsImplementation && "web" in jsImplementations) {
+              jsImplementation = typeof jsImplementations["web"] === "function" ? jsImplementation = await jsImplementations["web"]() : jsImplementation = jsImplementations["web"];
+            }
+            return jsImplementation;
+          };
+          const createPluginMethod = (impl, prop) => {
+            var _a3, _b3;
+            if (pluginHeader) {
+              const methodHeader = pluginHeader === null || pluginHeader === void 0 ? void 0 : pluginHeader.methods.find((m) => prop === m.name);
+              if (methodHeader) {
+                if (methodHeader.rtype === "promise") {
+                  return (options) => cap.nativePromise(pluginName, prop.toString(), options);
+                } else {
+                  return (options, callback) => cap.nativeCallback(pluginName, prop.toString(), options, callback);
+                }
+              } else if (impl) {
+                return (_a3 = impl[prop]) === null || _a3 === void 0 ? void 0 : _a3.bind(impl);
+              }
+            } else if (impl) {
+              return (_b3 = impl[prop]) === null || _b3 === void 0 ? void 0 : _b3.bind(impl);
+            } else {
+              throw new CapacitorException(`"${pluginName}" plugin is not implemented on ${platform}`, ExceptionCode.Unimplemented);
+            }
+          };
+          const createPluginMethodWrapper = (prop) => {
+            let remove;
+            const wrapper = (...args) => {
+              const p = loadPluginImplementation().then((impl) => {
+                const fn = createPluginMethod(impl, prop);
+                if (fn) {
+                  const p2 = fn(...args);
+                  remove = p2 === null || p2 === void 0 ? void 0 : p2.remove;
+                  return p2;
+                } else {
+                  throw new CapacitorException(`"${pluginName}.${prop}()" is not implemented on ${platform}`, ExceptionCode.Unimplemented);
+                }
+              });
+              if (prop === "addListener") {
+                p.remove = async () => remove();
+              }
+              return p;
+            };
+            wrapper.toString = () => `${prop.toString()}() { [capacitor code] }`;
+            Object.defineProperty(wrapper, "name", {
+              value: prop,
+              writable: false,
+              configurable: false
+            });
+            return wrapper;
+          };
+          const addListener = createPluginMethodWrapper("addListener");
+          const removeListener = createPluginMethodWrapper("removeListener");
+          const addListenerNative = (eventName, callback) => {
+            const call = addListener({ eventName }, callback);
+            const remove = async () => {
+              const callbackId = await call;
+              removeListener({
+                eventName,
+                callbackId
+              }, callback);
+            };
+            const p = new Promise((resolve) => call.then(() => resolve({ remove })));
+            p.remove = async () => {
+              console.warn(`Using addListener() without 'await' is deprecated.`);
+              await remove();
+            };
+            return p;
+          };
+          const proxy2 = new Proxy({}, {
+            get(_, prop) {
+              switch (prop) {
+                // https://github.com/facebook/react/issues/20030
+                case "$$typeof":
+                  return void 0;
+                case "toJSON":
+                  return () => ({});
+                case "addListener":
+                  return pluginHeader ? addListenerNative : addListener;
+                case "removeListener":
+                  return removeListener;
+                default:
+                  return createPluginMethodWrapper(prop);
+              }
+            }
+          });
+          Plugins2[pluginName] = proxy2;
+          registeredPlugins.set(pluginName, {
+            name: pluginName,
+            proxy: proxy2,
+            platforms: /* @__PURE__ */ new Set([
+              ...Object.keys(jsImplementations),
+              ...pluginHeader ? [platform] : []
+            ])
+          });
+          return proxy2;
+        };
+        const registerPlugin2 = ((_e = capPlatforms === null || capPlatforms === void 0 ? void 0 : capPlatforms.currentPlatform) === null || _e === void 0 ? void 0 : _e.registerPlugin) || defaultRegisterPlugin;
+        if (!cap.convertFileSrc) {
+          cap.convertFileSrc = (filePath) => filePath;
+        }
+        cap.getPlatform = getPlatform;
+        cap.handleError = handleError;
+        cap.isNativePlatform = isNativePlatform;
+        cap.isPluginAvailable = isPluginAvailable;
+        cap.pluginMethodNoop = pluginMethodNoop;
+        cap.registerPlugin = registerPlugin2;
+        cap.Exception = CapacitorException;
+        cap.DEBUG = !!cap.DEBUG;
+        cap.isLoggingEnabled = !!cap.isLoggingEnabled;
+        cap.platform = cap.getPlatform();
+        cap.isNative = cap.isNativePlatform();
+        return cap;
+      };
+      initCapacitorGlobal = (win) => win.Capacitor = createCapacitor(win);
+      Capacitor = /* @__PURE__ */ initCapacitorGlobal(typeof globalThis !== "undefined" ? globalThis : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : typeof global !== "undefined" ? global : {});
+      registerPlugin = Capacitor.registerPlugin;
+      Plugins = Capacitor.Plugins;
+      WebPlugin = class {
+        constructor(config) {
+          this.listeners = {};
+          this.windowListeners = {};
+          if (config) {
+            console.warn(`Capacitor WebPlugin "${config.name}" config object was deprecated in v3 and will be removed in v4.`);
+            this.config = config;
+          }
+        }
+        addListener(eventName, listenerFunc) {
+          const listeners = this.listeners[eventName];
+          if (!listeners) {
+            this.listeners[eventName] = [];
+          }
+          this.listeners[eventName].push(listenerFunc);
+          const windowListener = this.windowListeners[eventName];
+          if (windowListener && !windowListener.registered) {
+            this.addWindowListener(windowListener);
+          }
+          const remove = async () => this.removeListener(eventName, listenerFunc);
+          const p = Promise.resolve({ remove });
+          Object.defineProperty(p, "remove", {
+            value: async () => {
+              console.warn(`Using addListener() without 'await' is deprecated.`);
+              await remove();
+            }
+          });
+          return p;
+        }
+        async removeAllListeners() {
+          this.listeners = {};
+          for (const listener in this.windowListeners) {
+            this.removeWindowListener(this.windowListeners[listener]);
+          }
+          this.windowListeners = {};
+        }
+        notifyListeners(eventName, data) {
+          const listeners = this.listeners[eventName];
+          if (listeners) {
+            listeners.forEach((listener) => listener(data));
+          }
+        }
+        hasListeners(eventName) {
+          return !!this.listeners[eventName].length;
+        }
+        registerWindowListener(windowEventName, pluginEventName) {
+          this.windowListeners[pluginEventName] = {
+            registered: false,
+            windowEventName,
+            pluginEventName,
+            handler: (event) => {
+              this.notifyListeners(pluginEventName, event);
+            }
+          };
+        }
+        unimplemented(msg = "not implemented") {
+          return new Capacitor.Exception(msg, ExceptionCode.Unimplemented);
+        }
+        unavailable(msg = "not available") {
+          return new Capacitor.Exception(msg, ExceptionCode.Unavailable);
+        }
+        async removeListener(eventName, listenerFunc) {
+          const listeners = this.listeners[eventName];
+          if (!listeners) {
+            return;
+          }
+          const index = listeners.indexOf(listenerFunc);
+          this.listeners[eventName].splice(index, 1);
+          if (!this.listeners[eventName].length) {
+            this.removeWindowListener(this.windowListeners[eventName]);
+          }
+        }
+        addWindowListener(handle) {
+          window.addEventListener(handle.windowEventName, handle.handler);
+          handle.registered = true;
+        }
+        removeWindowListener(handle) {
+          if (!handle) {
+            return;
+          }
+          window.removeEventListener(handle.windowEventName, handle.handler);
+          handle.registered = false;
+        }
+      };
+      encode = (str) => encodeURIComponent(str).replace(/%(2[346B]|5E|60|7C)/g, decodeURIComponent).replace(/[()]/g, escape);
+      decode2 = (str) => str.replace(/(%[\dA-F]{2})+/gi, decodeURIComponent);
+      CapacitorCookiesPluginWeb = class extends WebPlugin {
+        async getCookies() {
+          const cookies = document.cookie;
+          const cookieMap = {};
+          cookies.split(";").forEach((cookie) => {
+            if (cookie.length <= 0)
+              return;
+            let [key, value] = cookie.replace(/=/, "CAP_COOKIE").split("CAP_COOKIE");
+            key = decode2(key).trim();
+            value = decode2(value).trim();
+            cookieMap[key] = value;
+          });
+          return cookieMap;
+        }
+        async setCookie(options) {
+          try {
+            const encodedKey = encode(options.key);
+            const encodedValue = encode(options.value);
+            const expires = `; expires=${(options.expires || "").replace("expires=", "")}`;
+            const path = (options.path || "/").replace("path=", "");
+            const domain = options.url != null && options.url.length > 0 ? `domain=${options.url}` : "";
+            document.cookie = `${encodedKey}=${encodedValue || ""}${expires}; path=${path}; ${domain};`;
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        }
+        async deleteCookie(options) {
+          try {
+            document.cookie = `${options.key}=; Max-Age=0`;
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        }
+        async clearCookies() {
+          try {
+            const cookies = document.cookie.split(";") || [];
+            for (const cookie of cookies) {
+              document.cookie = cookie.replace(/^ +/, "").replace(/=.*/, `=;expires=${(/* @__PURE__ */ new Date()).toUTCString()};path=/`);
+            }
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        }
+        async clearAllCookies() {
+          try {
+            await this.clearCookies();
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        }
+      };
+      CapacitorCookies = registerPlugin("CapacitorCookies", {
+        web: () => new CapacitorCookiesPluginWeb()
+      });
+      readBlobAsBase64 = async (blob) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64String = reader.result;
+          resolve(base64String.indexOf(",") >= 0 ? base64String.split(",")[1] : base64String);
+        };
+        reader.onerror = (error) => reject(error);
+        reader.readAsDataURL(blob);
+      });
+      normalizeHttpHeaders = (headers = {}) => {
+        const originalKeys = Object.keys(headers);
+        const loweredKeys = Object.keys(headers).map((k) => k.toLocaleLowerCase());
+        const normalized = loweredKeys.reduce((acc, key, index) => {
+          acc[key] = headers[originalKeys[index]];
+          return acc;
+        }, {});
+        return normalized;
+      };
+      buildUrlParams = (params, shouldEncode = true) => {
+        if (!params)
+          return null;
+        const output = Object.entries(params).reduce((accumulator, entry) => {
+          const [key, value] = entry;
+          let encodedValue;
+          let item;
+          if (Array.isArray(value)) {
+            item = "";
+            value.forEach((str) => {
+              encodedValue = shouldEncode ? encodeURIComponent(str) : str;
+              item += `${key}=${encodedValue}&`;
+            });
+            item.slice(0, -1);
+          } else {
+            encodedValue = shouldEncode ? encodeURIComponent(value) : value;
+            item = `${key}=${encodedValue}`;
+          }
+          return `${accumulator}&${item}`;
+        }, "");
+        return output.substr(1);
+      };
+      buildRequestInit = (options, extra = {}) => {
+        const output = Object.assign({ method: options.method || "GET", headers: options.headers }, extra);
+        const headers = normalizeHttpHeaders(options.headers);
+        const type = headers["content-type"] || "";
+        if (typeof options.data === "string") {
+          output.body = options.data;
+        } else if (type.includes("application/x-www-form-urlencoded")) {
+          const params = new URLSearchParams();
+          for (const [key, value] of Object.entries(options.data || {})) {
+            params.set(key, value);
+          }
+          output.body = params.toString();
+        } else if (type.includes("multipart/form-data") || options.data instanceof FormData) {
+          const form = new FormData();
+          if (options.data instanceof FormData) {
+            options.data.forEach((value, key) => {
+              form.append(key, value);
+            });
+          } else {
+            for (const key of Object.keys(options.data)) {
+              form.append(key, options.data[key]);
+            }
+          }
+          output.body = form;
+          const headers2 = new Headers(output.headers);
+          headers2.delete("content-type");
+          output.headers = headers2;
+        } else if (type.includes("application/json") || typeof options.data === "object") {
+          output.body = JSON.stringify(options.data);
+        }
+        return output;
+      };
+      CapacitorHttpPluginWeb = class extends WebPlugin {
+        /**
+         * Perform an Http request given a set of options
+         * @param options Options to build the HTTP request
+         */
+        async request(options) {
+          const requestInit = buildRequestInit(options, options.webFetchExtra);
+          const urlParams = buildUrlParams(options.params, options.shouldEncodeUrlParams);
+          const url = urlParams ? `${options.url}?${urlParams}` : options.url;
+          const response = await fetch(url, requestInit);
+          const contentType = response.headers.get("content-type") || "";
+          let { responseType = "text" } = response.ok ? options : {};
+          if (contentType.includes("application/json")) {
+            responseType = "json";
+          }
+          let data;
+          let blob;
+          switch (responseType) {
+            case "arraybuffer":
+            case "blob":
+              blob = await response.blob();
+              data = await readBlobAsBase64(blob);
+              break;
+            case "json":
+              data = await response.json();
+              break;
+            case "document":
+            case "text":
+            default:
+              data = await response.text();
+          }
+          const headers = {};
+          response.headers.forEach((value, key) => {
+            headers[key] = value;
+          });
+          return {
+            data,
+            headers,
+            status: response.status,
+            url: response.url
+          };
+        }
+        /**
+         * Perform an Http GET request given a set of options
+         * @param options Options to build the HTTP request
+         */
+        async get(options) {
+          return this.request(Object.assign(Object.assign({}, options), { method: "GET" }));
+        }
+        /**
+         * Perform an Http POST request given a set of options
+         * @param options Options to build the HTTP request
+         */
+        async post(options) {
+          return this.request(Object.assign(Object.assign({}, options), { method: "POST" }));
+        }
+        /**
+         * Perform an Http PUT request given a set of options
+         * @param options Options to build the HTTP request
+         */
+        async put(options) {
+          return this.request(Object.assign(Object.assign({}, options), { method: "PUT" }));
+        }
+        /**
+         * Perform an Http PATCH request given a set of options
+         * @param options Options to build the HTTP request
+         */
+        async patch(options) {
+          return this.request(Object.assign(Object.assign({}, options), { method: "PATCH" }));
+        }
+        /**
+         * Perform an Http DELETE request given a set of options
+         * @param options Options to build the HTTP request
+         */
+        async delete(options) {
+          return this.request(Object.assign(Object.assign({}, options), { method: "DELETE" }));
+        }
+      };
+      CapacitorHttp = registerPlugin("CapacitorHttp", {
+        web: () => new CapacitorHttpPluginWeb()
+      });
+    }
+  });
+
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js
+  var StorageErrorType, KeychainAccess, StorageError;
+  var init_definitions = __esm({
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js"() {
+      (function(StorageErrorType2) {
+        StorageErrorType2["missingKey"] = "missingKey";
+        StorageErrorType2["invalidData"] = "invalidData";
+        StorageErrorType2["osError"] = "osError";
+        StorageErrorType2["unknownError"] = "unknownError";
+      })(StorageErrorType || (StorageErrorType = {}));
+      (function(KeychainAccess2) {
+        KeychainAccess2[KeychainAccess2["whenUnlocked"] = 0] = "whenUnlocked";
+        KeychainAccess2[KeychainAccess2["whenUnlockedThisDeviceOnly"] = 1] = "whenUnlockedThisDeviceOnly";
+        KeychainAccess2[KeychainAccess2["afterFirstUnlock"] = 2] = "afterFirstUnlock";
+        KeychainAccess2[KeychainAccess2["afterFirstUnlockThisDeviceOnly"] = 3] = "afterFirstUnlockThisDeviceOnly";
+        KeychainAccess2[KeychainAccess2["whenPasscodeSetThisDeviceOnly"] = 4] = "whenPasscodeSetThisDeviceOnly";
+      })(KeychainAccess || (KeychainAccess = {}));
+      StorageError = class extends Error {
+        constructor(message, code) {
+          super(message);
+          this.name = this.constructor.name;
+          this.code = code;
+        }
+      };
+    }
+  });
+
+  // node_modules/async-mutex/index.mjs
+  function insertSorted(a, v) {
+    const i3 = findIndexFromEnd(a, (other) => v.priority <= other.priority);
+    a.splice(i3 + 1, 0, v);
+  }
+  function findIndexFromEnd(a, predicate) {
+    for (let i3 = a.length - 1; i3 >= 0; i3--) {
+      if (predicate(a[i3])) {
+        return i3;
+      }
+    }
+    return -1;
+  }
+  var E_TIMEOUT, E_ALREADY_LOCKED, E_CANCELED, __awaiter$2, Semaphore, __awaiter$1, Mutex;
+  var init_async_mutex = __esm({
+    "node_modules/async-mutex/index.mjs"() {
+      E_TIMEOUT = new Error("timeout while waiting for mutex to become available");
+      E_ALREADY_LOCKED = new Error("mutex already locked");
+      E_CANCELED = new Error("request for lock canceled");
+      __awaiter$2 = function(thisArg, _arguments, P, generator) {
+        function adopt(value) {
+          return value instanceof P ? value : new P(function(resolve) {
+            resolve(value);
+          });
+        }
+        return new (P || (P = Promise))(function(resolve, reject) {
+          function fulfilled(value) {
+            try {
+              step(generator.next(value));
+            } catch (e) {
+              reject(e);
+            }
+          }
+          function rejected(value) {
+            try {
+              step(generator["throw"](value));
+            } catch (e) {
+              reject(e);
+            }
+          }
+          function step(result) {
+            result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected);
+          }
+          step((generator = generator.apply(thisArg, _arguments || [])).next());
+        });
+      };
+      Semaphore = class {
+        constructor(_value, _cancelError = E_CANCELED) {
+          this._value = _value;
+          this._cancelError = _cancelError;
+          this._queue = [];
+          this._weightedWaiters = [];
+        }
+        acquire(weight = 1, priority = 0) {
+          if (weight <= 0)
+            throw new Error(`invalid weight ${weight}: must be positive`);
+          return new Promise((resolve, reject) => {
+            const task = { resolve, reject, weight, priority };
+            const i3 = findIndexFromEnd(this._queue, (other) => priority <= other.priority);
+            if (i3 === -1 && weight <= this._value) {
+              this._dispatchItem(task);
+            } else {
+              this._queue.splice(i3 + 1, 0, task);
+            }
+          });
+        }
+        runExclusive(callback_1) {
+          return __awaiter$2(this, arguments, void 0, function* (callback, weight = 1, priority = 0) {
+            const [value, release] = yield this.acquire(weight, priority);
+            try {
+              return yield callback(value);
+            } finally {
+              release();
+            }
+          });
+        }
+        waitForUnlock(weight = 1, priority = 0) {
+          if (weight <= 0)
+            throw new Error(`invalid weight ${weight}: must be positive`);
+          if (this._couldLockImmediately(weight, priority)) {
+            return Promise.resolve();
+          } else {
+            return new Promise((resolve) => {
+              if (!this._weightedWaiters[weight - 1])
+                this._weightedWaiters[weight - 1] = [];
+              insertSorted(this._weightedWaiters[weight - 1], { resolve, priority });
+            });
+          }
+        }
+        isLocked() {
+          return this._value <= 0;
+        }
+        getValue() {
+          return this._value;
+        }
+        setValue(value) {
+          this._value = value;
+          this._dispatchQueue();
+        }
+        release(weight = 1) {
+          if (weight <= 0)
+            throw new Error(`invalid weight ${weight}: must be positive`);
+          this._value += weight;
+          this._dispatchQueue();
+        }
+        cancel() {
+          this._queue.forEach((entry) => entry.reject(this._cancelError));
+          this._queue = [];
+        }
+        _dispatchQueue() {
+          this._drainUnlockWaiters();
+          while (this._queue.length > 0 && this._queue[0].weight <= this._value) {
+            this._dispatchItem(this._queue.shift());
+            this._drainUnlockWaiters();
+          }
+        }
+        _dispatchItem(item) {
+          const previousValue = this._value;
+          this._value -= item.weight;
+          item.resolve([previousValue, this._newReleaser(item.weight)]);
+        }
+        _newReleaser(weight) {
+          let called = false;
+          return () => {
+            if (called)
+              return;
+            called = true;
+            this.release(weight);
+          };
+        }
+        _drainUnlockWaiters() {
+          if (this._queue.length === 0) {
+            for (let weight = this._value; weight > 0; weight--) {
+              const waiters = this._weightedWaiters[weight - 1];
+              if (!waiters)
+                continue;
+              waiters.forEach((waiter) => waiter.resolve());
+              this._weightedWaiters[weight - 1] = [];
+            }
+          } else {
+            const queuedPriority = this._queue[0].priority;
+            for (let weight = this._value; weight > 0; weight--) {
+              const waiters = this._weightedWaiters[weight - 1];
+              if (!waiters)
+                continue;
+              const i3 = waiters.findIndex((waiter) => waiter.priority <= queuedPriority);
+              (i3 === -1 ? waiters : waiters.splice(0, i3)).forEach(((waiter) => waiter.resolve()));
+            }
+          }
+        }
+        _couldLockImmediately(weight, priority) {
+          return (this._queue.length === 0 || this._queue[0].priority < priority) && weight <= this._value;
+        }
+      };
+      __awaiter$1 = function(thisArg, _arguments, P, generator) {
+        function adopt(value) {
+          return value instanceof P ? value : new P(function(resolve) {
+            resolve(value);
+          });
+        }
+        return new (P || (P = Promise))(function(resolve, reject) {
+          function fulfilled(value) {
+            try {
+              step(generator.next(value));
+            } catch (e) {
+              reject(e);
+            }
+          }
+          function rejected(value) {
+            try {
+              step(generator["throw"](value));
+            } catch (e) {
+              reject(e);
+            }
+          }
+          function step(result) {
+            result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected);
+          }
+          step((generator = generator.apply(thisArg, _arguments || [])).next());
+        });
+      };
+      Mutex = class {
+        constructor(cancelError) {
+          this._semaphore = new Semaphore(1, cancelError);
+        }
+        acquire() {
+          return __awaiter$1(this, arguments, void 0, function* (priority = 0) {
+            const [, releaser] = yield this._semaphore.acquire(1, priority);
+            return releaser;
+          });
+        }
+        runExclusive(callback, priority = 0) {
+          return this._semaphore.runExclusive(() => callback(), 1, priority);
+        }
+        isLocked() {
+          return this._semaphore.isLocked();
+        }
+        waitForUnlock(priority = 0) {
+          return this._semaphore.waitForUnlock(1, priority);
+        }
+        release() {
+          if (this._semaphore.isLocked())
+            this._semaphore.release();
+        }
+        cancel() {
+          return this._semaphore.cancel();
+        }
+      };
+    }
+  });
+
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js
+  function isStorageErrorType(value) {
+    return value !== void 0 && Object.keys(StorageErrorType).includes(value);
+  }
+  function parseISODate(isoDate) {
+    const match = isoDateRE.exec(isoDate);
+    if (match) {
+      const year = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1;
+      const day = parseInt(match[3], 10);
+      const hour = parseInt(match[4], 10);
+      const minute = parseInt(match[5], 10);
+      const second = parseInt(match[6], 10);
+      const millis = parseInt(match[7], 10);
+      const epochTime = Date.UTC(year, month, day, hour, minute, second, millis);
+      return new Date(epochTime);
+    }
+    return null;
+  }
+  var mutex, SecureStorageBase, isoDateRE;
+  var init_base = __esm({
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js"() {
+      init_dist();
+      init_async_mutex();
+      init_definitions();
+      mutex = new Mutex();
+      SecureStorageBase = class _SecureStorageBase extends WebPlugin {
+        constructor() {
+          super(...arguments);
+          this.prefix = "capacitor-storage_";
+          this.sync = false;
+          this.access = KeychainAccess.whenUnlocked;
+        }
+        async setSynchronize(sync) {
+          return mutex.runExclusive(async () => {
+            this.sync = sync;
+            if (Capacitor.getPlatform() === "ios") {
+              return this.setSynchronizeKeychain({ sync });
+            }
+            return Promise.resolve();
+          });
+        }
+        async getSynchronize() {
+          return Promise.resolve(this.sync);
+        }
+        async setDefaultKeychainAccess(access) {
+          return mutex.runExclusive(() => {
+            this.access = access;
+          });
+        }
+        async tryOperation(operation) {
+          try {
+            return await mutex.runExclusive(async () => operation());
+          } catch (e) {
+            if (e instanceof CapacitorException && isStorageErrorType(e.code)) {
+              throw new StorageError(e.message, e.code);
+            }
+            throw e;
+          }
+        }
+        async get(key, convertDate = true, sync) {
+          if (key) {
+            const { data } = await this.tryOperation(async () => this.internalGetItem({
+              prefixedKey: this.prefixedKey(key),
+              sync: sync !== null && sync !== void 0 ? sync : this.sync
+            }));
+            if (data === null) {
+              return null;
+            }
+            if (convertDate) {
+              const date = parseISODate(data);
+              if (date) {
+                return date;
+              }
+            }
+            try {
+              return JSON.parse(data);
+            } catch (e) {
+              throw new StorageError("Invalid data", StorageErrorType.invalidData);
+            }
+          }
+          return _SecureStorageBase.missingKey();
+        }
+        async getItem(key) {
+          if (key) {
+            const { data } = await this.tryOperation(async () => this.internalGetItem({
+              prefixedKey: this.prefixedKey(key),
+              sync: this.sync
+            }));
+            return data;
+          }
+          return null;
+        }
+        async set(key, data, convertDate = true, sync, access) {
+          if (key) {
+            let convertedData = data;
+            if (convertDate && data instanceof Date) {
+              convertedData = data.toISOString();
+            }
+            return this.tryOperation(async () => this.internalSetItem({
+              prefixedKey: this.prefixedKey(key),
+              data: JSON.stringify(convertedData),
+              sync: sync !== null && sync !== void 0 ? sync : this.sync,
+              access: access !== null && access !== void 0 ? access : this.access
+            }));
+          }
+          return _SecureStorageBase.missingKey();
+        }
+        async setItem(key, value) {
+          if (key) {
+            return this.tryOperation(async () => this.internalSetItem({
+              prefixedKey: this.prefixedKey(key),
+              data: value,
+              sync: this.sync,
+              access: this.access
+            }));
+          }
+          return _SecureStorageBase.missingKey();
+        }
+        async remove(key, sync) {
+          if (key) {
+            const { success } = await this.tryOperation(async () => this.internalRemoveItem({
+              prefixedKey: this.prefixedKey(key),
+              sync: sync !== null && sync !== void 0 ? sync : this.sync
+            }));
+            return success;
+          }
+          return _SecureStorageBase.missingKey();
+        }
+        async removeItem(key) {
+          if (key) {
+            await this.tryOperation(async () => this.internalRemoveItem({
+              prefixedKey: this.prefixedKey(key),
+              sync: this.sync
+            }));
+            return;
+          }
+          _SecureStorageBase.missingKey();
+        }
+        async keys(sync) {
+          const { keys } = await this.tryOperation(async () => this.getPrefixedKeys({
+            prefix: this.prefix,
+            sync: sync !== null && sync !== void 0 ? sync : this.sync
+          }));
+          const prefixLength = this.prefix.length;
+          return keys.map((key) => key.slice(prefixLength));
+        }
+        async getKeyPrefix() {
+          return Promise.resolve(this.prefix);
+        }
+        async setKeyPrefix(prefix) {
+          this.prefix = prefix;
+          return Promise.resolve();
+        }
+        prefixedKey(key) {
+          return this.prefix + key;
+        }
+        static missingKey() {
+          throw new StorageError("No key provided", StorageErrorType.missingKey);
+        }
+      };
+      isoDateRE = /^"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}).(\d{3})Z"$/u;
+    }
+  });
+
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js
+  var web_exports = {};
+  __export(web_exports, {
+    SecureStorageWeb: () => SecureStorageWeb
+  });
+  var SecureStorageWeb;
+  var init_web = __esm({
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js"() {
+      init_base();
+      SecureStorageWeb = class extends SecureStorageBase {
+        // @native
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        async setSynchronizeKeychain(options) {
+          return Promise.resolve();
+        }
+        // @native
+        // eslint-disable-next-line @typescript-eslint/require-await
+        async internalGetItem(options) {
+          return { data: localStorage.getItem(options.prefixedKey) };
+        }
+        // @native
+        async internalSetItem(options) {
+          localStorage.setItem(options.prefixedKey, options.data);
+          return Promise.resolve();
+        }
+        // @native
+        async internalRemoveItem(options) {
+          const item = localStorage.getItem(options.prefixedKey);
+          if (item !== null) {
+            localStorage.removeItem(options.prefixedKey);
+            return Promise.resolve({ success: true });
+          }
+          return Promise.resolve({ success: false });
+        }
+        async clear() {
+          const { keys } = await this.getPrefixedKeys({ prefix: this.prefix });
+          keys.forEach((key) => {
+            localStorage.removeItem(key);
+          });
+          return Promise.resolve();
+        }
+        // @native
+        // eslint-disable-next-line @typescript-eslint/require-await,@typescript-eslint/no-unused-vars
+        async clearItemsWithPrefix(options) {
+          console.warn("clearItemsWithPrefix is native only");
+        }
+        // @native
+        async getPrefixedKeys(options) {
+          const keys = [];
+          for (let i3 = 0; i3 < localStorage.length; i3++) {
+            const key = localStorage.key(i3);
+            if (key === null || key === void 0 ? void 0 : key.startsWith(options.prefix)) {
+              keys.push(key);
+            }
+          }
+          return Promise.resolve({ keys });
+        }
+      };
+    }
+  });
+
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js
+  var native_exports = {};
+  __export(native_exports, {
+    SecureStorageNative: () => SecureStorageNative
+  });
+  var SecureStorageNative;
+  var init_native = __esm({
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js"() {
+      init_base();
+      SecureStorageNative = class extends SecureStorageBase {
+        constructor(capProxy) {
+          super();
+          const proxy2 = capProxy;
+          this.setSynchronizeKeychain = proxy2.setSynchronizeKeychain;
+          this.internalGetItem = proxy2.internalGetItem;
+          this.internalSetItem = proxy2.internalSetItem;
+          this.internalRemoveItem = proxy2.internalRemoveItem;
+          this.clearItemsWithPrefix = proxy2.clearItemsWithPrefix;
+          this.getPrefixedKeys = proxy2.getPrefixedKeys;
+        }
+        // @native
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        async setSynchronizeKeychain(options) {
+          return Promise.resolve();
+        }
+        // @native
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        async internalGetItem(options) {
+          return Promise.resolve({ data: "" });
+        }
+        // @native
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        async internalSetItem(options) {
+          return Promise.resolve();
+        }
+        // @native
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        async internalRemoveItem(options) {
+          return Promise.resolve({ success: true });
+        }
+        async clear(sync) {
+          return this.tryOperation(async () => this.clearItemsWithPrefix({
+            prefix: this.prefix,
+            sync: sync !== null && sync !== void 0 ? sync : this.sync
+          }));
+        }
+        // @native
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        async clearItemsWithPrefix(options) {
+          return Promise.resolve();
+        }
+        // @native
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        async getPrefixedKeys(options) {
+          return Promise.resolve({ keys: [] });
+        }
+      };
+    }
+  });
+
+  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js
+  var esm_exports = {};
+  __export(esm_exports, {
+    KeychainAccess: () => KeychainAccess,
+    SecureStorage: () => proxy,
+    StorageError: () => StorageError,
+    StorageErrorType: () => StorageErrorType
+  });
+  var proxy;
+  var init_esm = __esm({
+    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js"() {
+      init_dist();
+      init_definitions();
+      proxy = registerPlugin("SecureStorage", {
+        web: async () => Promise.resolve().then(() => (init_web(), web_exports)).then((module) => new module.SecureStorageWeb()),
+        ios: async () => Promise.resolve().then(() => (init_native(), native_exports)).then((module) => new module.SecureStorageNative(proxy)),
+        android: async () => Promise.resolve().then(() => (init_native(), native_exports)).then((module) => new module.SecureStorageNative(proxy))
       });
     }
   });
@@ -7406,9 +8465,9 @@ zoo`.split("\n");
   function chain(...args) {
     const id = (a) => a;
     const wrap = (a, b) => (c) => a(b(c));
-    const encode = args.map((x) => x.encode).reduceRight(wrap, id);
-    const decode2 = args.map((x) => x.decode).reduce(wrap, id);
-    return { encode, decode: decode2 };
+    const encode2 = args.map((x) => x.encode).reduceRight(wrap, id);
+    const decode3 = args.map((x) => x.decode).reduce(wrap, id);
+    return { encode: encode2, decode: decode3 };
   }
   // @__NO_SIDE_EFFECTS__
   function alphabet(letters) {
@@ -7710,7 +8769,7 @@ zoo`.split("\n");
     const fromWords = _words.decode;
     const toWords = _words.encode;
     const fromWordsUnsafe = unsafeWrapper(fromWords);
-    function encode(prefix, words, limit = 90) {
+    function encode2(prefix, words, limit = 90) {
       astr("bech32.encode prefix", prefix);
       if (isBytes2(words))
         words = Array.from(words);
@@ -7725,7 +8784,7 @@ zoo`.split("\n");
       const sum = bechChecksum(lowered, words, ENCODING_CONST);
       return `${lowered}1${BECH_ALPHABET.encode(words)}${sum}`;
     }
-    function decode2(str, limit = 90) {
+    function decode3(str, limit = 90) {
       astr("bech32.decode input", str);
       const slen = str.length;
       if (slen < 8 || limit !== false && slen > limit)
@@ -7746,17 +8805,17 @@ zoo`.split("\n");
         throw new Error(`Invalid checksum in ${str}: expected "${sum}"`);
       return { prefix, words };
     }
-    const decodeUnsafe = unsafeWrapper(decode2);
+    const decodeUnsafe = unsafeWrapper(decode3);
     function decodeToBytes(str) {
-      const { prefix, words } = decode2(str, false);
+      const { prefix, words } = decode3(str, false);
       return { prefix, words, bytes: fromWords(words) };
     }
     function encodeFromBytes(prefix, bytes) {
-      return encode(prefix, toWords(bytes));
+      return encode2(prefix, toWords(bytes));
     }
     return {
-      encode,
-      decode: decode2,
+      encode: encode2,
+      decode: decode3,
       encodeFromBytes,
       decodeToBytes,
       decodeUnsafe,
@@ -11270,6 +12329,69 @@ zoo`.split("\n");
     }
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
+  var _encIsMarker = (raw) => {
+    try {
+      const o = JSON.parse(raw);
+      return !!(o && o.native && !o.ct);
+    } catch {
+      return false;
+    }
+  };
+  async function _secureStore() {
+    const m = await Promise.resolve().then(() => (init_esm(), esm_exports));
+    return m.SecureStorage;
+  }
+  async function encBlobRaw() {
+    const raw = lsGet(ENC_LS);
+    if (!raw) return "";
+    if (!_encIsMarker(raw)) return raw;
+    try {
+      const S = await _secureStore();
+      const s = await S.get(ENC_LS);
+      if (s) return String(s);
+    } catch (e) {
+      console.warn("[steward] secure key get failed", e);
+    }
+    return "";
+  }
+  async function encBlobWrite(str) {
+    if (_isNative()) {
+      try {
+        const S = await _secureStore();
+        await S.set(ENC_LS, str);
+        const v = await S.get(ENC_LS);
+        if (v != null && String(v) === str) {
+          lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+          return true;
+        }
+        console.warn("[steward] secure key read-back mismatch \u2014 keeping the localStorage copy");
+      } catch (e) {
+        console.warn("[steward] secure key set failed \u2014 keeping the localStorage copy", e);
+      }
+    }
+    lsSet(ENC_LS, str);
+    return true;
+  }
+  async function encBlobRemove() {
+    try {
+      localStorage.removeItem(ENC_LS);
+    } catch {
+    }
+    if (!_isNative()) return;
+    try {
+      const S = await _secureStore();
+      await S.remove(ENC_LS);
+    } catch (e) {
+      console.warn("[steward] secure key remove failed", e);
+    }
+  }
+  async function migrateEncToSecure() {
+    if (!_isNative()) return false;
+    const raw = lsGet(ENC_LS);
+    if (!raw || _encIsMarker(raw)) return false;
+    const ok = await encBlobWrite(raw);
+    return ok && _encIsMarker(lsGet(ENC_LS));
+  }
   var needsPin = false;
   function _setNeedsPin(v) {
     v = !!v;
@@ -11390,6 +12512,7 @@ zoo`.split("\n");
         return true;
       }
       if (lsGet(ENC_LS)) {
+        migrateEncToSecure();
         window.Steward.locked = true;
         return false;
       }
@@ -11405,7 +12528,7 @@ zoo`.split("\n");
       if (String(pin).length < 6) return false;
       const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
-      lsSet(ENC_LS, JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
+      await encBlobWrite(JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
       try {
         localStorage.removeItem(KEY_LS);
       } catch {
@@ -11414,8 +12537,8 @@ zoo`.split("\n");
       return true;
     },
     async unlock(pin) {
-      const raw = lsGet(ENC_LS);
-      if (!raw) return true;
+      const raw = await encBlobRaw();
+      if (!raw) return lsGet(ENC_LS) ? false : true;
       try {
         const o = JSON.parse(raw);
         const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
@@ -11439,7 +12562,7 @@ zoo`.split("\n");
     },
     // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).
     async verifyPin(pin) {
-      const raw = lsGet(ENC_LS);
+      const raw = await encBlobRaw();
       if (!raw) return false;
       try {
         const o = JSON.parse(raw);
@@ -11457,10 +12580,7 @@ zoo`.split("\n");
     async removeLock(pin) {
       if (!currentMnemonic) return false;
       if (lsGet(ENC_LS) && !await window.Steward.verifyPin(pin)) return false;
-      try {
-        localStorage.removeItem(ENC_LS);
-      } catch {
-      }
+      await encBlobRemove();
       window.Steward.locked = false;
       _setNeedsPin(true);
       return true;
@@ -11702,9 +12822,9 @@ zoo`.split("\n");
       setKey(m);
       try {
         localStorage.removeItem(KEY_LS);
-        localStorage.removeItem(ENC_LS);
       } catch (e) {
       }
+      encBlobRemove();
       _setNeedsPin(true);
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
       return { npub: window.Steward.npub };
@@ -11835,12 +12955,14 @@ zoo`.split("\n");
     },
     // remove the church key from THIS device (completing a handoff, or stepping away). The church lives on
     // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
+    // Returns a promise so a caller CAN await the hardware-store half; the localStorage half is cleared
+    // synchronously first, so every existing synchronous caller behaves exactly as before.
     removeKey() {
       try {
         localStorage.removeItem(KEY_LS);
-        localStorage.removeItem(ENC_LS);
       } catch {
       }
+      const done = encBlobRemove();
       sk = null;
       pub = null;
       currentMnemonic = null;
@@ -11849,6 +12971,7 @@ zoo`.split("\n");
       window.Steward.hasKey = false;
       window.Steward.locked = false;
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: null } }));
+      return done;
       return true;
     },
     // ---- web push: notify the steward's phone when someone joins (PWA only; Capacitor → local notifs) ----
