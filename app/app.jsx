@@ -37,19 +37,37 @@ function makeReconnectScheduler(bump, opts) {
   const now = o.now || (() => Date.now());
   // -Infinity, not 0: the first reconnect after start-up must never be swallowed as "a moment ago".
   let last = -Infinity, pending = null;
+  const drop = () => { if (pending) { clear(pending); pending = null; } };
+  const run = () => { drop(); last = now(); bump(); };
   return {
-    // `immediate` is the foreground path: run now, and still record the time so a jittered reconnect
-    // arriving a moment later collapses into it rather than re-querying everything twice.
+    // ADVISORY signals: "it might be worth refreshing". Safe to collapse, safe to delay.
+    //   immediate=true  — the member foregrounded the app and is watching the screen.
+    //   immediate=false — a radio or router event, spread across the congregation.
     fire(immediate) {
       const t = now();
       if (t - last < debounceMs) return false;      // already reconnected a moment ago
+      // A foreground refresh SUPERSEDES a pending jittered one rather than queueing behind it. The debounce
+      // check above still applies; what must not happen is the member waiting out someone else's jitter
+      // window, which is what the "foregrounding is immediate" comment always claimed and did not do.
+      if (immediate || jitterMs <= 0) { run(); return true; }
       if (pending) return false;                     // one already scheduled — never queue a second
-      last = t;
-      if (immediate || jitterMs <= 0) { bump(); return true; }
-      pending = timer(() => { pending = null; bump(); }, Math.floor(rand() * jitterMs));
+      // `last` is set when the bump actually RUNS, not here. Recording it at scheduling time made the
+      // guaranteed gap `debounceMs - jitter`, which is zero at the top of the window — two complete
+      // teardown-and-re-subscribe cycles in the same millisecond, the storm this exists to prevent.
+      pending = timer(run, Math.floor(rand() * jitterMs));
       return true;
     },
-    cancel() { if (pending) { clear(pending); pending = null; } },
+    // MANDATORY rebuild. Never debounced, never jittered, never swallowed.
+    //
+    // src/fellowship.src.js reconnectAll() fires `trinity-reconnect` as the LAST step of a teardown it has
+    // ALREADY performed — every church-doc hub closed, the shared-subscription registry emptied, pool.close()
+    // on every relay socket. This is the only thing that rebuilds them. Putting it behind the same debounce as
+    // an advisory refresh meant a member who unlocked within 2.5s of foregrounding was left on an app that
+    // never updated again, with no error anywhere.
+    //
+    // The rule: a signal that REPAIRS state must not share a gate with signals that merely REFRESH it.
+    force() { run(); return true; },
+    cancel() { drop(); },
   };
 }
 
@@ -578,7 +596,13 @@ function App() {
     window.addEventListener('focus', onVis);
     // Fellowship fires this after a PIN unlock: it has dropped the stale (anonymous) relay sockets, so we
     // must re-run the church subscriptions to reopen them — now authenticated with the just-derived key.
-    window.addEventListener('trinity-reconnect', onOnline);
+    // NOT onOnline: a PIN unlock has already torn every socket down, so this must never be debounced away.
+    // force() already runs the bump callback, which refetches. Calling refetch() again here doubled the
+    // church-doc fetch at the exact moment every subscription is being rebuilt — measured on device (a single
+    // unlock produced two refetches). Harmless but backwards, on the one path that is already the most
+    // expensive thing the app does.
+    const onReconnectNeeded = () => { sched.force(); };
+    window.addEventListener('trinity-reconnect', onReconnectNeeded);
     // Native resume: web visibilitychange/focus are unreliable in the Android WebView, so RETURNING to a
     // backgrounded app often didn't re-subscribe — a steward's change (chat tags, groups, care) then never
     // appeared until a force-close+reopen. The App plugin's appStateChange is the reliable native foreground
@@ -602,7 +626,7 @@ function App() {
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
       sched.fire(false);   // P3: a relay restart drops EVERY member at once — jitter this one especially
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onOnline); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onReconnectNeeded); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
