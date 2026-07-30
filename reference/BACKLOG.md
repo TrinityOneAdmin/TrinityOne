@@ -54,3 +54,29 @@
   B/L/D + per-day override, steward skip, "what I'm bringing" note); relay care-read fix (members see each
   other's help + notes); release signing (stable key); auto-update banner one-shot fix; approval-toast loop
   fix; smart relay eviction; care-card cache hydration. (through 0.9.9 / 97)
+
+## Verify next session (2026-07-30)
+- **Does a correctly-formed pending join appear in the console's Members page?** Left mid-test while the
+  owner was away. Church `Test Church 01` has `approval: true`, so a new joiner is held as PENDING until
+  admitted. A member doc was published to a8 from a throwaway key with the SAME shape the real app uses
+  (`src/fellowship.src.js:1798` — `[['d','trinityone/member:'+cp], ['t',NET], ['p',cp]]`) plus a kind-0 so
+  it renders with a name: **"Audit test member"**,
+  `npub1g4sr2fa5wyegky6v0ar7yt597shhe6sugsdd93a8runuqapy6fnqf82fqy`.
+
+  **If it shows up:** there is no bug. The earlier "a join popped up then vanished" was two test artefacts
+  of mine — one join that published a LEAVE a second later (a deliberate retraction test), and two joins
+  that OMITTED the `['p', cp]` tag. The console subscribes with `{kinds:[30078], '#p':[pub]}`
+  (`src/steward.src.js:2751`), so those were invisible to it while the relay still stored them and the push
+  still fired — which is exactly why it looked like a console fault.
+
+  **If it does NOT show up:** it is real, and this is the correctly-formed case to debug with. Two unverified
+  suspects, both only guesses: `subscribeMembers` paints from the `trinityone.steward.members.<pub>`
+  localStorage cache and then OVERWRITES that cache with whatever the live subscription emits; and the
+  Members page only builds `pendingJoins` when `joinApproval && mRosterLoaded` are both true
+  (`app/stew-dashboard.jsx:3348`).
+
+  Already ruled out by measurement: the relay serves a pending member's join doc to the church key
+  (reproduced locally with `approval:true`), and a8 retained the join across a reconnect.
+
+  Cleanup: the key for "Audit test member" is kept, so it can be retracted properly. An earlier throwaway
+  (`30c9c850…fd9a`) is malformed and therefore invisible to the console — it needs no action.
