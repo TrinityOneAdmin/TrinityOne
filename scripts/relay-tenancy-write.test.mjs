@@ -31,13 +31,19 @@ const MEALS_SETTINGS_D = 'trinityone/meals-settings', CAREREQ_D = 'trinityone/ca
 // every church's members, so six write rules ask "a member of anything?" where they mean "a member of THIS
 // church". canRead() was hoisted onto a scoped helper (effMemberOf/churchReader) and the write side was not.
 const MINORS_D = 'trinityone/minors:', AVAIL_D = 'trinityone/careavail:', SAFE_D = 'trinityone/safe:';
-const OPEN_GID = 'grpA-prayer-open';
+const NETWORK_D = 'trinityone/network:';
+const OPEN_GID = 'grpA-prayer-open', OPEN_GID_B = 'grpB-prayer-open';
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
 
 const A = K(), B = K(), alice = K(), mallory = K();   // A = victim church, B = co-tenant attacker church
 const bob = K();   // a member of B ONLY — never joined A. The whole point of the cross-tenant cases.
+// BELONGING IS NOT EXCLUSIVE, and the fix must not assume it is. Owner correction, 2026-07-30: "a person can be
+// members of a number of churches, and can be members of a church network." So the scoped question is "a member
+// of THIS church?", never "which church is this person's?" — two very different rules, and only one is right.
+const dual = K();   // a member of BOTH A and B — every scoped rule must keep letting them write to EITHER
+const netA = K();   // a network A declared. Church-level authority over A, and none at all over B.
 const GID = 'grpA-private-leadership', TEAM = 'teamA-care';
 let relay, dataDir, pub;
 
@@ -83,6 +89,12 @@ before(async () => {
   // in — was never brought along.
   assert.equal((await publish(pub, doc(bob, MEMBER_D + B.pub, { joined: now() })))[0], true, 'bob must be able to join his OWN church');
   assert.equal((await publish(pub, doc(A, GROUP_D + OPEN_GID, { name: 'Prayer', kind: 'group' }, [['church', A.pub]])))[0], true);
+  // …and the pieces the OVER-TIGHTENING controls need: someone who belongs to both churches, a group in B for
+  // them to write to, and a network A declared (and B did not).
+  assert.equal((await publish(pub, doc(dual, MEMBER_D + A.pub, { joined: now() })))[0], true, 'dual must be able to join A');
+  assert.equal((await publish(pub, doc(dual, MEMBER_D + B.pub, { joined: now() })))[0], true, 'dual must be able to join B as well');
+  assert.equal((await publish(pub, doc(B, GROUP_D + OPEN_GID_B, { name: 'Prayer', kind: 'group' }, [['church', B.pub]])))[0], true);
+  assert.equal((await publish(pub, doc(A, NETWORK_D + netA.pub, { joined: now() }, [['church', A.pub]])))[0], true, 'A must be able to declare a network');
   await sleep(150);
 });
 after(() => { try { pub && pub.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
@@ -164,4 +176,70 @@ test('S4b: a member of another church CANNOT join this church’s here-to-help r
   const attack = await publish(pub, doc(bob, AVAIL_D + A.pub, { free: true }, [['church', A.pub]]));
   assert.equal(attack[0], false,
     'a member of church B appears in church A’s volunteer register. Same unscoped `isMember` as S1/S4.');
+});
+
+// ── OVER-TIGHTENING CONTROLS. These pass TODAY and must still pass after the scoping fix. ─────────────────
+//
+// Owner correction, 2026-07-30: a person may belong to SEVERAL churches, and to a church network. So the fix
+// must ask "is this author a member of the church that owns the thing being written?" — never "which single
+// church does this author belong to?". If any of these turn red, the fix has silently disabled real people, and
+// that is a worse bug than the cross-tenant writes it closes: a member locked out of their own congregation's
+// chat sees an app that simply does not work, with nothing on screen to say why.
+//
+// They are ordinary tests, not `todo`, precisely because they are green before the change. That is what makes
+// them a guard rather than a wish.
+
+test('CONTROL: someone who belongs to BOTH churches can write to EITHER — open group chat', async () => {
+  assert.equal((await publish(pub, chat(dual, OPEN_GID, 'dual writes in A')))[0], true,
+    'a member of both A and B was refused in A’s group — the scoping is treating belonging as exclusive');
+  assert.equal((await publish(pub, chat(dual, OPEN_GID_B, 'dual writes in B')))[0], true,
+    'a member of both A and B was refused in B’s group — the scoping is treating belonging as exclusive');
+});
+
+test('CONTROL: …and to the here-to-help register of BOTH', async () => {
+  assert.equal((await publish(pub, doc(dual, AVAIL_D + A.pub, { free: true }, [['church', A.pub]])))[0], true,
+    'a dual member cannot volunteer in A');
+  assert.equal((await publish(pub, doc(dual, AVAIL_D + B.pub, { free: true }, [['church', B.pub]])))[0], true,
+    'a dual member cannot volunteer in B');
+});
+
+test('CONTROL: …and can answer the safety roll-call of BOTH', async () => {
+  // The roll-call is the highest-stakes write in the product. Someone who worships at two churches, or has moved
+  // and not yet left the old one, must be able to say "I am safe" to each of them.
+  assert.equal((await publish(pub, doc(dual, SAFE_D + A.pub, { safe: true }, [['church', A.pub]])))[0], true,
+    'a dual member cannot mark themselves safe to A');
+  assert.equal((await publish(pub, doc(dual, SAFE_D + B.pub, { safe: true }, [['church', B.pub]])))[0], true,
+    'a dual member cannot mark themselves safe to B');
+});
+
+test('CONTROL: a church can still post in its own group, and so can a network it declared', async () => {
+  // Scoping to "effective member" ALONE would refuse the church key itself and its network — neither appears in
+  // any member roster. The write side must mirror churchReader(): the church, its network, its stewards, or an
+  // effective member.
+  assert.equal((await publish(pub, chat(A, OPEN_GID, 'the church itself posts')))[0], true,
+    'church A can no longer post in its own group');
+  assert.equal((await publish(pub, chat(netA, OPEN_GID, 'the network posts')))[0], true,
+    'a network A declared can no longer post in A’s group');
+});
+
+// S1b — FOUND BY THE CONTROL ABOVE, 2026-07-30, and it was not in the audit.
+//
+// I wrote this case expecting it to pass, with a comment asserting REVIEW-2026-07-20 B3 had already scoped the
+// network check. It fails. Writing the assumption down as a test is what caught it; asserting it in a comment is
+// what would have shipped it.
+//
+// Why it fails: `isNetwork` at gateway.mjs:1264 is scoped ONLY when the event names a church —
+// `_netCp ? networkOf(e.pubkey, _netCp) : NETWORKS.has(e.pubkey)`. A kind-1 chat message scopes by GROUP and
+// carries no ['church'] tag, so `_netCp` is empty and the check falls back to the relay-wide NETWORKS union —
+// exactly the hole B3 closed, re-opened for every rule that does not resolve a church itself. The B-2 comments
+// at :1466 and :1473 spotted this for broadcast and invite-only groups and fixed those two branches; the
+// reasoning ("every church-scoped rule keys off the d-tag suffix") does not hold for the open-group tail either.
+//
+// So S1's fix must scope the AUTHORITY as well as the membership: resolve the group's owning church and ask the
+// scoped question of it, rather than trusting a relay-wide leader flag computed before the group is known.
+test('S1b: a network declared by A has NO authority in B’s group', { todo: 'reproduction found by the over-tightening controls — fails today' }, async () => {
+  const attack = await publish(pub, chat(netA, OPEN_GID_B, 'A’s network posts into B'));
+  assert.equal(attack[0], false,
+    'a key that church A declared as its network can post into church B’s group. Network authority must be ' +
+    'scoped to the church that declared it — the relay-wide NETWORKS union is not an authority anywhere.');
 });
