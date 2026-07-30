@@ -1818,7 +1818,17 @@ function canRead(e, authed) {
       return false;   // a group we hold no definition for: still never serve it to a total stranger
     }
   }
-  if (!g || GROUP_VIS.get(g) !== 'invite') return true;
+  // AUDIT-2026-07-30 S5: `!g` fell into this `return true` and was served to ANYONE, unauthenticated. A kind-1
+  // with no group tag has no `g`, so the relay stored and served world-readable chat for any client that omitted
+  // the tag. Found by accident when a load simulation of mine tagged groups wrongly, then probed deliberately.
+  //
+  // Not a leak of existing chat — all three publishers in this codebase always tag a group
+  // (src/fellowship.src.js:2173, src/steward.src.js:1501 and :2843) — so no legitimate ungrouped message exists.
+  // Gated to the author, matching the "your own events stay yours" exception this file already uses for private
+  // docs (:1667), rather than refusing the write: reading is the disclosure, and a client that has some reason to
+  // publish one keeps it.
+  if (!g) return !!authed && authed === e.pubkey;
+  if (GROUP_VIS.get(g) !== 'invite') return true;
   if (!authed) return false;
   // REVIEW-2026-07-20 B3: this was the SAME unscoped check the C3/C4 fix removed from the 30078 branch, left
   // behind here — so a key any church had ever declared a network still read every OTHER congregation's

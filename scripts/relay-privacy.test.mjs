@@ -20,6 +20,10 @@ const PORT = 8837;                                   // isolated high port (memo
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;   // the relay ws endpoint is /relay (root gets socket.destroy())
 const MEMBER_D = 'trinityone/member:';
 const SLOT_D = 'trinityone/careslot:';   // a member's offer to help — care-participation metadata (who's caring for whom)
+// The one document that is PUBLIC by design: a bare {approval:bool} with no PII, which a not-yet-joined member
+// must read before they can join (gateway.mjs:1670). It is the honest anchor for the harness sanity control —
+// see the CONTROL test for why an ungrouped kind-1 no longer is.
+const JOINPOLICY_D = 'trinityone/joinpolicy:';
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -74,16 +78,49 @@ before(async () => {
   // WITHOUT the church tag (the H1 fall-through case). BOTH must be withheld from anon (SECURITY-AUDIT-2026-07-18).
   const careSlotTagged = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', SLOT_D + 'need1:2026-07-20'], ['church', churchPub]], content: JSON.stringify({ careId: 'need1', note: 'I can bring dinner' }) }, aSk);
   const careSlotUntagged = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', SLOT_D + 'need2:2026-07-21']], content: JSON.stringify({ careId: 'need2', note: 'I can drive them' }) }, aSk);
-  for (const e of [publicNote, dm, roster, careSlotTagged, careSlotUntagged]) { const r = await publish(pub, e); assert.equal(r, true, 'seed event stored: kind ' + e.kind); }
+  // AUDIT-2026-07-30 S5: the join policy is the genuinely-public seed. `publicNote` above is an UNGROUPED kind-1,
+  // which used to be world-readable and is now author-only, so it can no longer stand in for "public content".
+  const joinPolicy = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', JOINPOLICY_D + churchPub]], content: JSON.stringify({ approval: false }) }, churchSk);
+  for (const e of [publicNote, dm, roster, careSlotTagged, careSlotUntagged, joinPolicy]) { const r = await publish(pub, e); assert.equal(r, true, 'seed event stored: kind ' + e.kind); }
   pub.close();
 });
 
 after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
 
-test('CONTROL: anonymous client CAN read a public note', async () => {
+test('CONTROL: anonymous client CAN read the join policy', async () => {
+  // The purpose of this control is unchanged — prove the gate is not simply refusing everything, so that the
+  // withholding tests below mean something. What changed is WHAT it reads.
+  //
+  // It used to read an ungrouped kind-1, and passing was the S5 defect: canRead()'s kind-1 tail let `!g` fall
+  // into `return true`, so any chat message with no group tag was served to anyone, unauthenticated. This control
+  // was quietly asserting that hole stayed open. It now reads the one document that is public BY DESIGN.
   const ws = await connect();
-  const r = await reqCollect(ws, 'pub', { kinds: [1] });
-  assert.equal(kinds(r, 1).length, 1, 'public kind-1 served to anon (harness + relay work)');
+  const r = await reqCollect(ws, 'pub', { kinds: [30078], '#d': [JOINPOLICY_D + churchPub] });
+  assert.equal(kinds(r, 30078).length, 1,
+    'the join policy is not served to an anonymous client. It carries no PII and a not-yet-joined member must ' +
+    'read it before they can join, so if this fails the harness is broken — or the read gate now refuses ' +
+    'everything, which would make every test below pass for the wrong reason.');
+  ws.close();
+});
+
+test('S5: an anonymous client CANNOT read an UNGROUPED chat message', async () => {
+  const ws = await connect();
+  const r = await reqCollect(ws, 'ug1', { kinds: [1] });
+  assert.equal(kinds(r, 1).length, 0,
+    'a kind-1 with no group tag was served to an anonymous client. canRead()\'s tail was ' +
+    '`if (!g || GROUP_VIS.get(g) !== "invite") return true`, and an ungrouped message has no `g` — so the ' +
+    'church\'s relay stored and served world-readable content against its own retention budget.');
+  ws.close();
+});
+
+test('…but its own author still can (the fix is a scope, not a delete)', async () => {
+  // Over-tightening control. The chosen fix was "your own events stay yours", matching gateway.mjs:1667 — not
+  // "ungrouped chat is refused". If this fails, a member has lost access to something they wrote.
+  const ws = await connect();
+  const r = await reqCollect(ws, 'ug2', { kinds: [1] }, aSk);
+  assert.equal(kinds(r, 1).length, 1,
+    'the author of an ungrouped message can no longer read it back. The fix scopes the read to the author; ' +
+    'refusing them too would be a data-loss bug dressed as a privacy fix.');
   ws.close();
 });
 
