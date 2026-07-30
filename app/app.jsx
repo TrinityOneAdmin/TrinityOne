@@ -5,6 +5,54 @@ const { useState: useA, useEffect: useAE, useRef: useAR } = React;
 // accent measured 2.16-2.69:1 — below even the 3:1 large-text floor — and dark mode is disproportionately
 // chosen by low-vision users. A dark ink on those same accents measures 6.18-7.70:1.
 // WCAG relative luminance → pick dark ink or white for text sitting on this colour.
+// AUDIT-2026-07-30 P3. A congregation reconnecting in one instant is a self-inflicted denial of service.
+//
+// Measured against a real relay with a 12k-message corpus, twelve groups, twelve subscriptions per member:
+//
+//     idle                                median  25ms   max     29ms
+//     5 members reconnect  (60 REQs)      median  26ms   max  1,926ms
+//     20 members reconnect (240 REQs)     median  26ms   max  7,096ms
+//
+// (The audit reported 10,157ms as the five-member figure. My reproduction says the MEDIAN is flat and it is the
+// WORST CASE that blows out — the relay is not stalled for everyone, but any write arriving mid-burst waits
+// behind the whole queue. Same mechanism, different shape from the one written down.)
+//
+// The relay is single-threaded, so 240 REQs are simply served in turn, ~30ms each. Nothing is broken; the queue
+// is just long. The cheapest real fix is not to make the queue faster but to stop it forming.
+//
+// `visibilitychange` was already gated to once per 2.5s. `online` and `trinity-reconnect` were NOT — they fired
+// immediately, with no debounce and no spread. Fifty phones on one church WiFi that blips would therefore all
+// reconnect on the same tick. This schedules those over a random window instead.
+//
+// Deliberately NOT applied to foregrounding: someone who has just opened the app is watching the screen, and
+// delaying their refresh to protect the relay would trade a real annoyance for a hypothetical one. Those are
+// naturally spread anyway — people open their phones at different moments; a WiFi router does not.
+function makeReconnectScheduler(bump, opts) {
+  const o = opts || {};
+  const debounceMs = o.debounceMs == null ? 2500 : o.debounceMs;
+  const jitterMs = o.jitterMs == null ? 3000 : o.jitterMs;
+  const rand = o.rand || Math.random;
+  const timer = o.setTimeout || ((f, ms) => setTimeout(f, ms));
+  const clear = o.clearTimeout || ((t) => clearTimeout(t));
+  const now = o.now || (() => Date.now());
+  // -Infinity, not 0: the first reconnect after start-up must never be swallowed as "a moment ago".
+  let last = -Infinity, pending = null;
+  return {
+    // `immediate` is the foreground path: run now, and still record the time so a jittered reconnect
+    // arriving a moment later collapses into it rather than re-querying everything twice.
+    fire(immediate) {
+      const t = now();
+      if (t - last < debounceMs) return false;      // already reconnected a moment ago
+      if (pending) return false;                     // one already scheduled — never queue a second
+      last = t;
+      if (immediate || jitterMs <= 0) { bump(); return true; }
+      pending = timer(() => { pending = null; bump(); }, Math.floor(rand() * jitterMs));
+      return true;
+    },
+    cancel() { if (pending) { clear(pending); pending = null; } },
+  };
+}
+
 function _readableOn(hex) {
   try {
     const h = String(hex).replace('#', '');
@@ -520,8 +568,11 @@ function App() {
     let last = Date.now();
     // force the church-doc hubs to re-fetch too (bumpConn alone can't reopen a hub the chat/care screens hold open)
     const refetch = () => { try { const F = window.Fellowship; if (F && F.refetchChurchDocs) F.refetchChurchDocs(); } catch (e) {} };
-    const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - last > 2500) { last = Date.now(); bumpConn(x => x + 1); refetch(); } };
-    const onOnline = () => { bumpConn(x => x + 1); refetch(); };
+    // P3: one scheduler for every reconnect signal, so the debounce is shared. A phone that foregrounds AND
+    // fires `online` in the same second must reconnect once, not twice.
+    const sched = makeReconnectScheduler(() => { bumpConn(x => x + 1); refetch(); });
+    const onVis = () => { if (document.visibilityState === 'visible') sched.fire(true); };   // user is watching → no delay
+    const onOnline = () => { sched.fire(false); };   // radio/router event → spread across the congregation
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('online', onOnline);
     window.addEventListener('focus', onVis);
@@ -536,7 +587,7 @@ function App() {
     try {
       const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
       if (AppP && AppP.addListener) {
-        Promise.resolve(AppP.addListener('appStateChange', (s) => { if (s && s.isActive && Date.now() - last > 2500) { last = Date.now(); bumpConn(x => x + 1); refetch(); } }))
+        Promise.resolve(AppP.addListener('appStateChange', (s) => { if (s && s.isActive) sched.fire(true); }))
           .then(h => { appRemove = (h && h.remove) ? () => h.remove() : null; }).catch(() => {});
       }
     } catch (e) {}
@@ -549,9 +600,9 @@ function App() {
       if (document.visibilityState !== 'visible') return;
       const F = window.Fellowship;
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
-      last = Date.now(); bumpConn(x => x + 1);
+      sched.fire(false);   // P3: a relay restart drops EVERY member at once — jitter this one especially
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onOnline); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('trinity-reconnect', onOnline); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
