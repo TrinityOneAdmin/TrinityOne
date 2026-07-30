@@ -34,6 +34,14 @@ const hex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).joi
 const sha = (s) => createHash('sha256').update(String(s)).digest('hex');
 
 const church = K(), recipient = K(), otherMember = K(), outsider = K();
+// AUDIT-2026-07-30 S7. This harness configured ONE church, and the skip rule's cross-tenant invariant can only
+// fail with a SECOND tenant — so the strongest guard on the care-skip design was structurally unable to see the
+// hole it vouched for. That is the pattern both prior audits named, and it is why S1-S4 sat green for so long.
+//
+// `neighbour` is a second configured church that shares this relay and has nothing to do with any need here.
+// `neighbourMember` belongs to it and to no other. Their whole job is to be present, so that a rule which
+// accidentally asks "a member of ANYTHING?" has something to get wrong.
+const neighbour = K(), neighbourMember = K();
 const cp = church.pub;
 let relay, dataDir, ws;
 
@@ -68,7 +76,7 @@ before(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'trin-skip-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(cp), RELAY_MAX_EVENTS: '5000' },
+    env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: `${npubEncode(cp)},${npubEncode(neighbour.pub)}`, RELAY_MAX_EVENTS: '5000' },
     stdio: 'ignore',
   });
   await waitReady();
@@ -114,6 +122,34 @@ test('a sealed need: an outsider (not even a member) cannot skip', async () => {
   assert.equal((await publish(ws, sealedNeed('c-out', tok)))[0], true);
   const [ok] = await publish(ws, skip(outsider, 'c-out', '2026-08-01', null));
   assert.equal(ok, false, 'an outsider skipped a care need');
+});
+
+// AUDIT-2026-07-30 S7 — the case this file could not express until it had a second tenant.
+//
+// The "outsider" test above proves a total stranger is refused, which is a genuinely different question: an
+// outsider fails every membership check, so it passes even when the rule asks the relay-wide "a member of
+// anything?". A member of the NEIGHBOURING church passes that question and fails the right one, which is why
+// this is the case that actually distinguishes a scoped rule from an unscoped one.
+test('a member of a NEIGHBOURING church on the same relay cannot skip this church’s day', async () => {
+  const tok = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  assert.equal((await publish(ws, sealedNeed('c-xtenant', tok)))[0], true);
+  // they are a real, joined member — of somewhere else
+  assert.equal((await publish(ws, finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', MEMBER_D + neighbour.pub]], content: JSON.stringify({ joined: now() }) }, neighbourMember.sk)))[0], true,
+    'the neighbour’s member must be able to join their OWN church, or this test proves nothing');
+  await sleep(150);
+  const [ok] = await publish(ws, skip(neighbourMember, 'c-xtenant', '2026-08-01', null));
+  assert.equal(ok, false,
+    'a member of another congregation sharing this relay cancelled a day of care for someone in THIS one. ' +
+    'Nobody brings food, and the recipient is not told.');
+});
+
+test('…and the genuine recipient still can, with the neighbour present', async () => {
+  // Over-tightening control: the second tenant must not have changed the answer for the person the scheme is for.
+  const tok = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  assert.equal((await publish(ws, sealedNeed('c-xtenant-ok', tok)))[0], true);
+  const [ok] = await publish(ws, skip(recipient, 'c-xtenant-ok', '2026-08-01', tok));
+  assert.equal(ok, true, 'the recipient’s own token stopped working once a second church shared the relay');
 });
 
 test('the token is per-need: one need’s token does not unlock another', async () => {
