@@ -68,3 +68,30 @@ test('every test that binds a fixed port checks it first', () => {
   assert.deepEqual(missing, [],
     'these tests bind a fixed port without checking it is free — a leftover process can decide their result');
 });
+
+// AUDIT-2026-07-30. requireFreePort() catches a STRAY process. It cannot catch two test FILES that both claim the
+// same port, because `node --test` runs files in parallel: one binds it legitimately, the other's pre-flight then
+// blocks on a port that is in use and will never be released until the first file finishes. The symptom is the one
+// this file already documents at the top — the suite goes from ~115s to many minutes — except there is no stray
+// process to find and kill, so it looks like an infinite hang with no cause.
+//
+// Written after adding relay-careid-rehydrate.test.mjs on port 8859, which relay-childsafe.test.mjs already owned.
+// Two full suite runs were abandoned at 400s and 600s before the clash was spotted. The convention in this repo is
+// one port per file, and it was being held by hand.
+test('no two test files claim the same fixed port', () => {
+  const byPort = new Map();
+  for (const f of readdirSync(SCRIPTS).filter(f => f.endsWith('.test.mjs'))) {
+    const src = readFileSync(join(SCRIPTS, f), 'utf8');
+    for (const m of src.matchAll(/^const (?:PORT|CDP)[A-Z_]*\s*=\s*(\d{2,5})\s*;/gm)) {
+      const port = m[1];
+      if (!byPort.has(port)) byPort.set(port, []);
+      if (!byPort.get(port).includes(f)) byPort.get(port).push(f);
+    }
+  }
+  const clashes = [...byPort.entries()].filter(([, files]) => files.length > 1)
+    .map(([port, files]) => port + ' → ' + files.join(', '));
+  assert.deepEqual(clashes, [],
+    'these files share a fixed port. `node --test` runs files in PARALLEL, so one binds it and the other waits ' +
+    'for a port that cannot free up until the first file is done — the suite appears to hang with no stray ' +
+    'process to blame. Give each file its own port.');
+});
