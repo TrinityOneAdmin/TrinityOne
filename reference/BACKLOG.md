@@ -55,8 +55,19 @@
   other's help + notes); release signing (stable key); auto-update banner one-shot fix; approval-toast loop
   fix; smart relay eviction; care-card cache hydration. (through 0.9.9 / 97)
 
-## Verify next session (2026-07-30)
-- **Does a correctly-formed pending join appear in the console's Members page?** Left mid-test while the
+## RESOLVED 2026-07-31 — there was no console bug (kept as the record)
+- **ANSWERED: yes.** The owner confirmed "Audit test member is admitted" — a correctly-formed join appeared in
+  Members and was approved normally. So the console is fine, and the earlier "a join popped up then vanished"
+  was entirely my own test artefacts: one join that published a LEAVE a second later, and two that omitted the
+  `['p', cp]` tag the console subscribes on. Do NOT chase the two suspects named below; they were guesses and
+  both were wrong.
+
+  Verified on production afterwards, which is the useful part: once ADMITTED, that member's `safe:` and
+  `careavail:` writes were ACCEPTED (they had been correctly REFUSED while pending). Together with yesterday's
+  refusals, that is the 2026-07-30 accept() scoping work proven in both directions against the live church.
+  The test member has since left, so the roster is clean.
+
+- ~~**Does a correctly-formed pending join appear in the console's Members page?**~~ Left mid-test while the
   owner was away. Church `Test Church 01` has `approval: true`, so a new joiner is held as PENDING until
   admitted. A member doc was published to a8 from a throwaway key with the SAME shape the real app uses
   (`src/fellowship.src.js:1798` — `[['d','trinityone/member:'+cp], ['t',NET], ['p',cp]]`) plus a kind-0 so
