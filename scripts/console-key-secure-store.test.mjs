@@ -53,8 +53,12 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
     assert.ok(depth === 0, name + ': braces did not balance — re-anchor this test');
     return BUNDLE.slice(at, i + 1);
   };
-  const parts = ['_secureStore', '_encIsMarker', 'encBlobRaw', 'encBlobWrite', 'encBlobRemove', 'encBlobRemoveResume', 'migrateEncToSecure']
-    .map(lift).join(';\n')
+  // `_encGen` / `_encLastWritten` are plain module counters (no braces, so lift() cannot brace-match them);
+  // declared here so the lifted functions have the state they mutate. _encRepairIfClobbered is the repair a
+  // late-landing remove performs, and it must come from the bundle like everything else.
+  const parts = ['let _encGen = 0, _encLastWritten = null']
+    .concat(['_secureStore', '_encIsMarker', 'encBlobRaw', 'encBlobWrite', 'encBlobRemove',
+             '_encRepairIfClobbered', 'encBlobRemoveResume', 'migrateEncToSecure'].map(lift)).join(';\n')
     // Replace ONLY the module load. esbuild inlines the dynamic import as
     // `Promise.resolve().then(() => (init_esm(), esm_exports))`, which cannot resolve outside a browser — so
     // this hands back the stub module instead. _secureStore()'s OWN body still runs, which is the point: the
@@ -62,6 +66,7 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
     // injected _secureStore as a seam could never have seen it.
     .replace('Promise.resolve().then(() => (init_esm(), esm_exports))', '__SECMOD__()');
   const store = { ...secure };
+  let removeGate = null;
   const calls = { set: 0, get: 0, remove: 0 };
   // A CAPACITOR-SHAPED stub, not a plain object. window.Capacitor.Plugins.SecureStorage is a PROXY that turns
   // every property access into a native call, so touching `.then` on it asks Android for a method named "then".
@@ -76,7 +81,12 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
   const impl = {
     set: async (k, v) => { calls.set++; if (secure.__failSet || store.__failSet) throw new Error('keystore unavailable'); store[k] = secure.__writeGarbage ? 'CORRUPTED' : v; },
     get: async (k) => { calls.get++; if (secure.__failGet) throw new Error('keystore unavailable'); return store[k] === undefined ? null : store[k]; },
-    remove: async (k) => { calls.remove++; if (secure.__failRemove || store.__failRemove) throw new Error('keystore busy'); delete store[k]; },
+    remove: async (k) => {
+      calls.remove++;
+      if (secure.__failRemove || store.__failRemove) throw new Error('keystore busy');
+      if (removeGate) await removeGate;      // a bridge call that hangs and lands later — see holdRemove()
+      delete store[k];
+    },
   };
   const SecureStorage = new Proxy(impl, {
     get(t, prop) {
@@ -106,7 +116,8 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
   const api = fn(devWrap, SecureStorage, __SECMOD__, localStorage, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v),
     () => nativeMode, { warn() {}, log() {} }, KEY, PENDING);
   const holdModule = () => { let open_; modGate = new Promise(r => { open_ = r; }); return () => open_(); };
-  return { ...api, lsData, store, calls, KEY, PENDING, holdModule };
+  const holdRemove = () => { let open_; removeGate = new Promise(r => { open_ = r; }); return () => { removeGate = null; open_(); }; };
+  return { ...api, lsData, store, calls, KEY, PENDING, holdModule, holdRemove };
 }
 const BLOB = JSON.stringify({ v: 2, it: 600000, salt: 'c2FsdA==', iv: 'aXY=', ct: 'Y2lwaGVy' });
 
@@ -443,6 +454,40 @@ test('…and the re-check happens AFTER the async gap, not only before it', asyn
   assert.equal(h.store[h.KEY], NEXT,
     'A LIVE CHURCH KEY WAS DELETED by a removal that passed its guard before the key existed. The guard has ' +
     'to be re-checked immediately before the delete, not once at the top of the function.');
+});
+
+test('A HUNG REMOVE THAT LANDS AFTER THE TIMEOUT MUST NOT DESTROY THE NEW KEY', async () => {
+  // AUDIT-5. Promise.race does NOT cancel S.remove — it only stops waiting for it. So the 5s bound added for
+  // B4 made the documented interleaving MORE reachable, not less: it releases the caller, the steward restores
+  // a church, and the original bridge call then completes and deletes the ciphertext that was just written.
+  //
+  // End state is the one the whole S6 design exists to prevent: the Keystore is empty, localStorage still says
+  // a key is present, so encBlobRaw() returns '' and unlock() rejects the CORRECT PIN for ever. The church
+  // survives only on the paper phrase. A guard checked before an await cannot help here — the delete happens
+  // after everything.
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+
+  // The steward presses "Remove & reload". The bridge call hangs; the button's 3s race releases the UI.
+  const landRemove = h.holdRemove();
+  const removing = h.encBlobRemove();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(h.lsData[h.KEY], undefined, 'fixture: the marker is cleared first, so the device looks empty');
+
+  // The steward restores a church while that call is still in flight.
+  const NEXT = JSON.stringify({ v: 2, it: 600000, salt: 'bGF0ZQ==', iv: 'bGF0ZQ==', ct: 'TEFURQ==' });
+  await h.encBlobWrite(NEXT);
+  assert.equal(h.store[h.KEY], NEXT, 'fixture: the restore should have written the new key');
+
+  landRemove();                              // …and now the hung remove finally lands
+  await removing;
+  await new Promise(r => setTimeout(r, 20));
+
+  assert.equal(h.store[h.KEY], NEXT,
+    'the late-landing remove destroyed the church key written while it was in flight. localStorage still says ' +
+    'a key exists, so the steward\'s correct PIN is rejected for ever and the church is recoverable only from ' +
+    'the paper phrase.');
+  assert.equal(await h.encBlobRaw(), NEXT, 'and it must still be readable');
 });
 
 test('a hardware write that FAILS keeps the retry marker', async () => {

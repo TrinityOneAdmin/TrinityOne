@@ -83,7 +83,12 @@ async function _maybeBumpConn() {
     }
     // Re-subscribing issues the gated REQs that provoke the relay's NIP-42 challenge, so this is also what
     // unlocks writing again after a drop.
-    if (replaced || back) _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
+    if (replaced || back) {
+      _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
+      // Record which sockets the rebuilt subscriptions live on. Only this counts — a bare successful connect
+      // does not, because one-shot reads produce those too and leave nothing listening (AUDIT-5).
+      try { window.Steward.markResubscribed(); } catch (e) {}
+    }
   } finally { _connBusy = false; }
 }
 function _wireStewardConn() {

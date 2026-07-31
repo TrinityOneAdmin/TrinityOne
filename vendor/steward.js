@@ -12279,9 +12279,10 @@ zoo`.split("\n");
   var _subbedOn = /* @__PURE__ */ new Map();
   pool.onRelayConnectionSuccess = (url) => {
     try {
-      const fresh = _subbedOn.get(url) !== pool.relays.get(url);
+      const live = pool.relays.get(url);
+      const fresh = live && _subbedOn.get(url) !== live;
       _relaysTouched.add(url);
-      _subbedOn.set(url, pool.relays.get(url));
+      if (live && !_subbedOn.has(url)) _subbedOn.set(url, live);
       if (fresh) _clearanceSent.clear();
     } catch (e) {
     }
@@ -12400,6 +12401,8 @@ zoo`.split("\n");
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
   var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
+  var _encGen = 0;
+  var _encLastWritten = null;
   var _encIsMarker = (raw) => {
     try {
       const o = JSON.parse(raw);
@@ -12541,6 +12544,8 @@ zoo`.split("\n");
         await S.set(ENC_LS, str);
         const v = await S.get(ENC_LS);
         if (v != null && String(v) === str) {
+          _encGen++;
+          _encLastWritten = str;
           lsSet(ENC_LS, JSON.stringify({ native: 1 }));
           try {
             localStorage.removeItem(ENC_PENDING_LS);
@@ -12568,6 +12573,29 @@ zoo`.split("\n");
     lsSet(ENC_LS, str);
     return true;
   }
+  async function _encRepairIfClobbered(genBefore) {
+    if (_encGen === genBefore || !_encLastWritten) return false;
+    try {
+      const { S } = await _secureStore();
+      await S.set(ENC_LS, _encLastWritten);
+      const back = await S.get(ENC_LS);
+      if (back != null && String(back) === _encLastWritten) {
+        lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+        try {
+          localStorage.removeItem(ENC_PENDING_LS);
+        } catch {
+        }
+        return true;
+      }
+    } catch (e) {
+      console.warn("[steward] could not repair a clobbered church key", e);
+    }
+    try {
+      localStorage.removeItem(ENC_LS);
+    } catch {
+    }
+    return false;
+  }
   async function encBlobRemove() {
     try {
       lsSet(ENC_PENDING_LS, "1");
@@ -12584,9 +12612,11 @@ zoo`.split("\n");
       }
       return;
     }
+    const gen = _encGen;
     try {
       const { S } = await _secureStore();
       await S.remove(ENC_LS);
+      if (await _encRepairIfClobbered(gen)) return;
       try {
         localStorage.removeItem(ENC_PENDING_LS);
       } catch {
@@ -12620,8 +12650,11 @@ zoo`.split("\n");
         }
         return false;
       }
+      const gen = _encGen;
+      const removal = S.remove(ENC_LS).then(() => _encRepairIfClobbered(gen), () => {
+      });
       await Promise.race([
-        S.remove(ENC_LS),
+        removal,
         new Promise((_, rej) => setTimeout(() => rej(new Error("secure remove timed out")), 5e3))
       ]);
       try {
@@ -13901,6 +13934,23 @@ zoo`.split("\n");
     // is the "deaf but connected" state, and it is distinct from "a relay is down": re-subscribing fixes it
     // immediately and then stops. Kept separate from relaysHealthy() so the ticker can tell the two apart — a
     // relay that is simply DOWN must not trigger a re-subscribe on every heartbeat, which is the storm. AUDIT-4.
+    // The ticker calls this immediately after bumping, once it has caused every subscription hook to rebuild.
+    // That is the ONLY thing allowed to say "our subscriptions now live on these sockets" — see the note on
+    // onRelayConnectionSuccess for why a bare successful connect is not evidence of that.
+    markResubscribed() {
+      try {
+        for (const url of relays()) {
+          let k = url;
+          try {
+            k = normalizeURL2(url);
+          } catch (e) {
+          }
+          const live = pool.relays.get(k);
+          if (live) _subbedOn.set(k, live);
+        }
+      } catch (e) {
+      }
+    },
     relaysReplaced() {
       try {
         const st = pool.listConnectionStatus();

@@ -573,9 +573,23 @@ const _relaysTouched = new Set();
 const _subbedOn = new Map();
 pool.onRelayConnectionSuccess = (url) => {
   try {
-    const fresh = _subbedOn.get(url) !== pool.relays.get(url);
+    const live = pool.relays.get(url);
+    const fresh = live && _subbedOn.get(url) !== live;
     _relaysTouched.add(url);
-    _subbedOn.set(url, pool.relays.get(url));
+    // FIRST CONNECT ONLY. AUDIT-5: this used to record on every successful connect, and the reasoning behind
+    // that — "nostr-tools fires this only from its subscribe path, never from publish" — was true but useless,
+    // because subscribeMap backs subscribeMany/subscribeEose/querySync/get as well. So every ONE-SHOT READ
+    // (_one(), _newestByD(), a roster refresh, read-before-write itself) re-opened the socket, recorded it as
+    // "this is where we are subscribed", and then CLOSED, leaving nothing listening. The console then called
+    // itself healthy, the ticker returned at its first line, and it stayed deaf and write-locked for the
+    // session — the exact state this machinery exists to prevent, reachable by the commonest user action
+    // after a relay restart.
+    //
+    // A read must not be able to claim "we are listening here". Only the initial connect seeds this, and only
+    // markResubscribed() — called by the ticker AFTER it has actually rebuilt the subscriptions — refreshes it.
+    // Never record `undefined`: the socket can close between ensureRelay resolving and this callback, and a
+    // stored undefined short-circuits the instance comparison for that url.
+    if (live && !_subbedOn.has(url)) _subbedOn.set(url, live);
     // A RELAY JUST (RE)CONNECTED, so what we believe is stored may be incomplete: read-before-write only ever
     // skipped members on the strength of the relays reachable AT THE TIME, and this one may have missed
     // writes while it was away. Drop the just-published cache so the next back-fill genuinely re-reads rather
@@ -755,6 +769,14 @@ function setKey(mnemonic) {
 const ENC_LS = 'trinityone.steward.church-key.enc';
 // Breadcrumb: a hardware-store removal was started and has not been confirmed finished. See encBlobRemove().
 const ENC_PENDING_LS = 'trinityone.steward.church-key.removing';
+// A native remove() cannot be cancelled — Promise.race only stops WAITING for it. So a bridge call that hangs
+// past its bound can still land after the steward has restored a church, and delete the ciphertext that was
+// written meanwhile. Guards before the await cannot help; the delete happens after everything.
+//
+// So the removal repairs itself: it notes the write generation before it starts, and if a NEWER write landed
+// while it was in flight, it puts that blob back. `_encLastWritten` exists only for that repair.
+// AUDIT-5, after AUDIT-3 and AUDIT-4 each closed a different gap in the same sequence.
+let _encGen = 0, _encLastWritten = null;
 const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } };
 // NEVER return the Capacitor plugin object itself from an async function. `Capacitor.Plugins.SecureStorage` is a
 // PROXY: every property access becomes a native call, so when the await machinery probes the returned value for
@@ -895,6 +917,7 @@ async function encBlobWrite(str) {
       await S.set(ENC_LS, str);
       const v = await S.get(ENC_LS);
       if (v != null && String(v) === str) {
+        _encGen++; _encLastWritten = str;               // so an in-flight removal can put this back
         lsSet(ENC_LS, JSON.stringify({ native: 1 }));   // marker ONLY after read-back
         // …and only NOW is any pending removal superseded. Clearing the breadcrumb before attempting the
         // write (as this did) loses the retry marker when the write then FAILS, leaving the previous church's
@@ -931,13 +954,34 @@ async function encBlobWrite(str) {
 //
 // So: leave a breadcrumb before touching anything, and clear it only once the hardware store has actually let
 // go. A boot that finds the breadcrumb finishes the job. AUDIT-2026-07-31.
+// Did a key get written while our remove() was in flight? If so we have just deleted it — put it back, and
+// restore the marker, so the steward's correct PIN keeps working. Returns true if it repaired something.
+async function _encRepairIfClobbered(genBefore) {
+  if (_encGen === genBefore || !_encLastWritten) return false;
+  try {
+    const { S } = await _secureStore();
+    await S.set(ENC_LS, _encLastWritten);
+    const back = await S.get(ENC_LS);
+    if (back != null && String(back) === _encLastWritten) {
+      lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+      try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+      return true;
+    }
+  } catch (e) { console.warn('[steward] could not repair a clobbered church key', e); }
+  // Could not put it back. Clear the marker rather than leave localStorage claiming a key that is gone —
+  // "no key on this device" is recoverable from the phrase; "correct PIN rejected for ever" is not.
+  try { localStorage.removeItem(ENC_LS); } catch {}
+  return false;
+}
 async function encBlobRemove() {
   try { lsSet(ENC_PENDING_LS, '1'); } catch {}
   try { localStorage.removeItem(ENC_LS); } catch {}
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return; }
+  const gen = _encGen;
   try {
     const { S } = await _secureStore();
     await S.remove(ENC_LS);
+    if (await _encRepairIfClobbered(gen)) return;               // a key arrived mid-flight; we put it back
     try { localStorage.removeItem(ENC_PENDING_LS); } catch {}   // confirmed gone — stop retrying
   } catch (e) { console.warn('[steward] secure key remove failed', e); }   // breadcrumb stays: retried at boot
 }
@@ -961,8 +1005,10 @@ async function encBlobRemoveResume() {
     // marker) -> the hung call finally lands -> live key destroyed, localStorage still says a key exists, so
     // the correct PIN is rejected for ever. A guard checked once before an await is not a guard.
     if (lsGet(ENC_LS)) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
+    const gen = _encGen;
+    const removal = S.remove(ENC_LS).then(() => _encRepairIfClobbered(gen), () => {});
     await Promise.race([
-      S.remove(ENC_LS),
+      removal,
       new Promise((_, rej) => setTimeout(() => rej(new Error('secure remove timed out')), 5000)),
     ]);
     try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
@@ -1964,6 +2010,18 @@ window.Steward = {
   // is the "deaf but connected" state, and it is distinct from "a relay is down": re-subscribing fixes it
   // immediately and then stops. Kept separate from relaysHealthy() so the ticker can tell the two apart — a
   // relay that is simply DOWN must not trigger a re-subscribe on every heartbeat, which is the storm. AUDIT-4.
+  // The ticker calls this immediately after bumping, once it has caused every subscription hook to rebuild.
+  // That is the ONLY thing allowed to say "our subscriptions now live on these sockets" — see the note on
+  // onRelayConnectionSuccess for why a bare successful connect is not evidence of that.
+  markResubscribed() {
+    try {
+      for (const url of relays()) {
+        let k = url; try { k = normalizeURL(url); } catch (e) {}
+        const live = pool.relays.get(k);
+        if (live) _subbedOn.set(k, live);
+      }
+    } catch (e) {}
+  },
   relaysReplaced() {
     try {
       const st = pool.listConnectionStatus();
