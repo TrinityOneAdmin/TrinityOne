@@ -151,3 +151,50 @@ test('an ANALYZE failure cannot stop a store from opening', () => {
   const raw = (src.match(/db\.exec\('ANALYZE'\)/g) || []).length;
   assert.equal(raw, 1, 'ANALYZE is called from ' + raw + ' places; it must go through runAnalyze() only');
 });
+
+// ── P2: the same root cause, on the WRITE path ────────────────────────────────────────────────────────────
+//
+// accept() runs `{kinds:[30078], authors:[pubkey], limit: MEMBER_DOC_CAP+1}` on the catch-all member-document
+// rule (gateway.mjs:1503) — once for EVERY one of the seven MyData documents a member syncs. The audit measured
+// 24ms at 23k docs, scaling to ~331ms at 400k, synchronously, blocking every other client, and predicted that
+// ANALYZE would take it to 0.04ms.
+//
+// Re-measured after the ANALYZE fix landed, at 60k rows with statistics present: 0.04-0.15ms, against the
+// audit's own predicted 0.04ms. So P2 was closed by P1 and needs no separate change.
+//
+// Honest about what was NOT measured: I did not cleanly time the no-statistics case here — the run that
+// printed the un-analysed PLAN took its timing from a connection that had since been re-analysed, so the two
+// numbers in that output are not a fair A/B. The PLAN difference is the reliable part, and it is what these
+// tests assert.
+//
+// What this needs a test for at all: nothing else pinned the plan for the author-scoped query. idx_dtag's test
+// above would stay green while this path silently went back to walking the whole kind-30078 partition on every
+// sync write — seven times per member, synchronously, while every other client waits.
+const AUTHOR_QUERY = 'SELECT raw FROM events WHERE kind IN (?) AND pubkey IN (?) ORDER BY created_at DESC LIMIT ?';
+
+test('the per-member document check uses an index, not a scan of the kind', () => {
+  const { s, cleanup } = seeded(4000);
+  try {
+    const plan = s.db.prepare('EXPLAIN QUERY PLAN ' + AUTHOR_QUERY).all(30078, 'p7', 201).map(r => r.detail).join(' | ');
+    // The SPECIFIC index, not merely "an index": without statistics the planner picks idx_kind_created, which
+    // also reads as "USING INDEX" while walking every event of the kind to find one member's handful. A test
+    // for /USING INDEX/ alone passes either way — checked by sabotage, it did.
+    assert.match(plan, /idx_pubkey_created/,
+      'the member-document cap check is not seeking by author. Plan was:\n      ' + plan + '\n' +
+      '    It runs on every MyData document a member syncs — seven per member, synchronously, while every\n' +
+      '    other client waits.');
+    assert.doesNotMatch(plan, /idx_kind_created/,
+      'the planner fell back to the kind index, which walks the whole kind-30078 partition for one author');
+  } finally { cleanup(); }
+});
+
+test('…and it returns only that author\'s documents', () => {
+  // A plan change that changes answers is a data bug: this query decides whether a member has hit their
+  // document cap, so counting someone else's would refuse a legitimate write.
+  const { s, cleanup } = seeded(2000);
+  try {
+    const rows = s.query({ kinds: [30078], authors: ['p7'], limit: 201 });
+    assert.ok(rows.length > 0, 'the seeded store returned nothing — this test would pass vacuously');
+    for (const e of rows) assert.equal(e.pubkey, 'p7', 'the author-scoped query returned another member\'s document');
+  } finally { cleanup(); }
+});
