@@ -87,6 +87,9 @@ function consoleSide(ws) {
   const publish = (evt) => new Promise(res => { pending.set(evt.id, res); ws.send(JSON.stringify(['EVENT', evt])); });
   const pubClearance = grabMethod(STEWARD, 'publishClearance(memberPub, status)');
   const refresh = grabMethod(STEWARD, 'refreshClearances(memberPubs, minors, approved)');
+  // refreshClearances is now a thin serialising wrapper around _refreshClearancesNow — lift both, and anchor
+  // the inner one on `async ` because its first textual occurrence is the CALL inside the wrapper.
+  const refreshNow = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)');
   // esbuild renames the nip44 imports (encrypt3 / getConversationKey today). Binding the names I EXPECTED
   // instead of the ones it uses made every publish throw inside publishClearance's own try/catch and return
   // null — 150 nulls, nothing on the wire, indistinguishable from the bug under test. Detect them, and fail
@@ -94,7 +97,18 @@ function consoleSide(ws) {
   const encName = (pubClearance.match(/=\s*(encrypt\d*)\(/) || [])[1];
   const ckName = (pubClearance.match(/\b(getConversationKey\d*)\(/) || [])[1];
   assert.ok(encName && ckName, 'publishClearance no longer encrypts the way this test expects — re-anchor it');
+  // READ-BEFORE-WRITE IS DELIBERATELY OUT OF SCOPE HERE, and this is a real decision rather than a convenience.
+  // This file is about PACING a whole-roster back-fill under the relay's 100/s inbound cap — the first-ever
+  // back-fill for a church, where nothing is stored yet and therefore nothing would be skipped anyway. The
+  // skip path has its own file (console-publish-honesty.test.mjs) driving it against a real authenticated
+  // relay. Reporting "not authenticated" here is the honest way to say "no trusted read available", and the
+  // shipped code's response to that is to publish everything — which is exactly the workload under test.
+  const _isRelayAuthed = () => false;
+  const decName = (refreshNow.match(/\b(decrypt\d*)\(/) || [])[1];
+  assert.ok(decName, 'refreshClearances no longer decrypts a stored clearance — re-anchor this test');
   const scope = {
+    _isRelayAuthed, Map, Date,
+    [decName]: (c, k) => nip44v2.decrypt(c, k),
     sk: church.sk, pub: church.pub, actingChurch: '',
     CLEARANCE_D: CLEAR_D, NET: 'trinityone',
     now, publish,
@@ -107,7 +121,11 @@ function consoleSide(ws) {
     setTimeout, Promise, Set, String, JSON,
   };
   const args = Object.keys(scope);
-  const api = new Function(...args, `return ({ ${pubClearance},\n    ${refresh} });`)(...args.map(k => scope[k]));
+  const sentDecl = (STEWARD.match(/var _clearanceSent = [^\n]*\n/) || [])[0];
+  const queueDecl = (STEWARD.match(/var _clearanceQueue = [^\n]*\n/) || [])[0];
+  assert.ok(sentDecl && queueDecl, 'the clearance just-sent cache / serialisation queue are gone — re-anchor');
+  const api = new Function(...args,
+    sentDecl + queueDecl + `return ({ ${pubClearance},\n    ${refresh},\n    ${refreshNow} });`)(...args.map(k => scope[k]));
   Object.assign(scope.window.Steward, api);
   return { api, blocked, refused, ok: () => okCount };
 }
@@ -189,8 +207,10 @@ test('a failure reaches a screen', async () => {
   // worked must use it; that is the difference between this being fixed and being fixed-looking.
   const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   assert.match(D, /addEventListener\('steward-write-blocked'/, 'nothing renders write refusals any more');
-  const at = STEWARD.indexOf('refreshClearances(memberPubs');
-  const fn = STEWARD.slice(at, at + 2600);
+  // Brace-matched on the INNER function, not a fixed window from the wrapper. refreshClearances is now a short
+  // serialising shim, so `slice(at, at + 2600)` reads past it into the neighbouring method and asserts nothing
+  // about the code it names — the fixed-window trap this repo keeps re-learning.
+  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)');
   assert.match(fn, /steward-write-blocked/,
     'a partial safeguarding back-fill is still silent — the children it missed stay missed and nobody is told');
 });
@@ -414,8 +434,7 @@ test('the guard is claimed synchronously, before anything is awaited', () => {
 });
 
 test('the batching is paced under the relay cap, and bounded', () => {
-  const at = STEWARD.indexOf('refreshClearances(memberPubs');
-  const fn = STEWARD.slice(at, at + 2600);
+  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)');
   const batch = Number((fn.match(/BATCH = (\d+)/) || [])[1]);
   const gap = Number((fn.match(/GAP_MS = (\d+)/) || [])[1]);
   assert.ok(batch > 0 && gap > 0, 'the pacing constants are gone — re-anchor this test');

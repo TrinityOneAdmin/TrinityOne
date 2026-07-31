@@ -11724,6 +11724,8 @@ zoo`.split("\n");
   var NAME_RING_MAX = 12;
   var NAME_D = "trinityone/name:";
   var CLEARANCE_D = "trinityone/clearance:";
+  var _clearanceSent = /* @__PURE__ */ new Map();
+  var _clearanceQueue = Promise.resolve();
   var GUARDIANS_D = "trinityone/guardians:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
   var SERMON_D = "trinityone/sermon:";
@@ -12299,6 +12301,7 @@ zoo`.split("\n");
   var _authedRelays = /* @__PURE__ */ new Map();
   pool.automaticallyAuth = (url) => async (authEvent) => {
     if (!sk) throw new Error("no key");
+    const signed = finalizeEvent2(authEvent, sk);
     let k = url;
     try {
       k = normalizeURL2(url);
@@ -12308,7 +12311,7 @@ zoo`.split("\n");
       _authedRelays.set(k, pool.relays.get(k));
     } catch (e) {
     }
-    return finalizeEvent2(authEvent, sk);
+    return signed;
   };
   function _isRelayAuthed() {
     try {
@@ -12655,6 +12658,33 @@ zoo`.split("\n");
       const sub = pool.subscribeMany(relays(), filters, {
         onevent(e) {
           if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+        },
+        oneose() {
+          finish();
+        }
+      });
+      setTimeout(finish, ms);
+    });
+  }
+  function _newestByD(filters, ms = 6e3) {
+    return new Promise((resolve) => {
+      const best = /* @__PURE__ */ new Map();
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try {
+          sub.close();
+        } catch {
+        }
+        resolve(best);
+      };
+      const sub = pool.subscribeMany(relays(), filters, {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d) return;
+          const cur = best.get(d);
+          if (!cur || (e.created_at || 0) > (cur.created_at || 0)) best.set(d, e);
         },
         oneose() {
           finish();
@@ -14380,7 +14410,15 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const cp = actingChurch || pub;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }));
+      return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }))).then((r) => {
+        if (r) {
+          try {
+            _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now() });
+          } catch (e) {
+          }
+        }
+        return r;
+      });
     },
     // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
     // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
@@ -14396,13 +14434,89 @@ zoo`.split("\n");
     // So: publish in small batches, paced under the cap, and never let the failure be quiet again. The batch
     // is awaited, which gives back-pressure for free; the wait is bounded so one publish that never resolves
     // (exactly what a dropped message looks like) cannot stall the rest of the roster.
-    async refreshClearances(memberPubs, minors, approved) {
+    // READ BEFORE WRITE. HANDOFF-2026-07-31 item 7 — the cure for everything findings 2 and 3 were patching.
+    //
+    // Two parts of the console write the SAME clearance doc within one second, routinely: toggleMinor() calls
+    // _reseal() for the member it touched, and it also changes the safeguarding list, which echoes back from the
+    // relay, changes the effect's signature, and re-runs the WHOLE-ROSTER back-fill. `created_at` is whole
+    // seconds, so both land in the same one and the relay refuses the loser on its NIP-01 tie-break. That
+    // refusal was being shown to the steward as "this child did not receive their safeguarding record" —
+    // measured at 8 of 12 toggles, with all 21 records actually stored, on a warning banner that has no dismiss
+    // timer. Alarm fatigue on the safeguarding screen is the harm: a REAL delivery failure looks identical.
+    //
+    // Two earlier attempts patched the symptom. Treating the refusal as success let a fast clock pin a child as
+    // an adult, silently and permanently (reverted). Guarding the double-fire helped but left the toggle path,
+    // which is the dominant source. The actual problem is that the console republishes documents it has no
+    // reason to send — 21 identical seals on every Members visit — so this stops sending them.
+    //
+    // The church can read its own clearances back: nip44 conversation keys are symmetric, so the same key that
+    // sealed it opens it. Fetch what the relay holds, decrypt, and skip every member whose {minor, cleared}
+    // already matches. A repeat Members visit becomes a no-op, the collision disappears at source, and a
+    // tie-break refusal goes back to meaning something.
+    //
+    // FAIL-SAFE DIRECTION, and this is the part that matters: a member is skipped ONLY on a positive match — we
+    // read a document, decrypted it, and it says what we were about to say. Anything else — no document, an
+    // unreachable relay, an unauthenticated read, a decrypt failure, unparseable content — falls through and
+    // publishes exactly as before. Never skip on an empty answer; that is the mistake that has cost this
+    // codebase a care key and nearly cost a child their clearance.
+    //
+    // AND IT RUNS ONE AT A TIME. Read-before-write only helps if the read can see the other writer's work, and
+    // the two writers here start together: toggleMinor() fires _reseal and changes the list in the same tick, so
+    // both runs read the OLD state, both conclude the member needs updating, and both publish into the same
+    // second. Measured: read-before-write alone took the false banner from 8 toggles in 12 down to 1 in 4 — the
+    // remainder being exactly this overlap. Queueing removes it: the second run reads after the first has
+    // written and finds nothing to do. Cheap, because in steady state that second run is now a no-op.
+    refreshClearances(memberPubs, minors, approved) {
+      const run = () => window.Steward._refreshClearancesNow(memberPubs, minors, approved);
+      const next = _clearanceQueue.then(run, run);
+      _clearanceQueue = next.then(() => {
+      }, () => {
+      });
+      return next;
+    },
+    async _refreshClearancesNow(memberPubs, minors, approved) {
       const mins = new Set((minors || []).map((x) => String(x || "").toLowerCase()));
       const appr = new Set((approved || []).map((x) => String(x || "").toLowerCase()));
-      const pubs = [...new Set((memberPubs || []).filter(Boolean))];
+      let pubs = [...new Set((memberPubs || []).filter(Boolean))];
       const BATCH = 20, GAP_MS = 250;
       const out = [];
-      let failed = 0;
+      let failed = 0, skipped = 0;
+      const want = (p) => {
+        const h = String(p).toLowerCase();
+        return { minor: mins.has(h), cleared: appr.has(h) };
+      };
+      const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared;
+      const total = pubs.length;
+      const fresh = Date.now() - 15e3;
+      pubs = pubs.filter((p) => {
+        const sent = _clearanceSent.get(String(p).toLowerCase());
+        if (sent && sent.at >= fresh && same(sent, want(p))) {
+          skipped++;
+          return false;
+        }
+        return true;
+      });
+      if (pubs.length && sk && _isRelayAuthed()) {
+        try {
+          const ds = pubs.map((p) => CLEARANCE_D + String(p).toLowerCase());
+          const held = await _newestByD([{ kinds: [30078], authors: [actingChurch || pub], "#d": ds }], 6e3);
+          pubs = pubs.filter((p) => {
+            const h = String(p).toLowerCase();
+            const e = held.get(CLEARANCE_D + h);
+            if (!e) return true;
+            let got = null;
+            try {
+              got = JSON.parse(decrypt3(e.content, getConversationKey(sk, h)));
+            } catch (x) {
+              return true;
+            }
+            if (!same(got, want(p))) return true;
+            skipped++;
+            return false;
+          });
+        } catch (e) {
+        }
+      }
       for (let i3 = 0; i3 < pubs.length; i3 += BATCH) {
         const slice = pubs.slice(i3, i3 + BATCH);
         const settle = Promise.allSettled(slice.map((p) => {
@@ -14422,12 +14536,12 @@ zoo`.split("\n");
         try {
           window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
             what: "safeguarding clearances",
-            message: failed + " of " + pubs.length + " members did not receive their updated safeguarding record. Until they do, their app cannot tell that they are a child. Open the Members tab again while connected to your relay to retry."
+            message: failed + " of " + total + " members did not receive their updated safeguarding record. Until they do, their app cannot tell that they are a child. Open the Members tab again while connected to your relay to retry."
           } }));
         } catch (e) {
         }
       }
-      return { results: out, failed, total: pubs.length };
+      return { results: out, failed, skipped, total };
     },
     // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
     // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —

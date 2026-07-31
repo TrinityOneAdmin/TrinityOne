@@ -127,6 +127,13 @@ const NAMEKEY_D = 'trinityone/namekey:';   // per-church name key, wrapped per m
 const NAME_RING_MAX = 12;   // same bound as the care key: the ring is sealed PER RECIPIENT, so it multiplies
 const NAME_D = 'trinityone/name:';         // a member's own display name for this church, sealed under it
 const CLEARANCE_D = 'trinityone/clearance:';   // a member's OWN safeguarding status, NIP-44 sealed to them
+// memberPubHex -> { minor, cleared, at } for clearances THIS console has just published. Read-before-write
+// (refreshClearances) covers what the relay already holds; this covers the second or two before the relay has
+// echoed it back, which is exactly the window in which the toggle path and the roster back-fill collide.
+const _clearanceSent = new Map();
+// refreshClearances runs strictly one at a time (see the note on that method). Module scope, so the toggle
+// path and the roster back-fill share the queue even though they are called from different places.
+let _clearanceQueue = Promise.resolve();
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-confirmed parent↔child map, d=guardians:<churchpub>
 const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent NOTICE that they were linked to a child, d=guardnotice:<parentpub>, p-tagged + content NIP-44-encrypted to the parent (the child link never appears in cleartext)
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a self-hosted media item referencing a content-addressed blob (sha256 + host)
@@ -600,9 +607,15 @@ let sk = null, pub = null;                 // the ACTIVE signing identity (churc
 const _authedRelays = new Map();   // normalised url -> the AbstractRelay instance that signed the challenge
 pool.automaticallyAuth = (url) => async (authEvent) => {
   if (!sk) throw new Error('no key');
+  // SIGN FIRST, RECORD SECOND. Recording before signing means recording "this relay challenged us", not "we
+  // answered" — and if signing throws, nostr-tools logs `subscribe auth function failed`, never sends the AUTH
+  // frame, and the socket stays anonymous while the console reports itself authenticated. Not hypothetical:
+  // an identifier mismatch produced exactly that during testing on 2026-07-31 — `_isRelayAuthed()` returned
+  // true on a socket that had signed nothing, and every private read came back empty as a result.
+  const signed = finalizeEvent(authEvent, sk);
   let k = url; try { k = normalizeURL(url); } catch (e) {}
   try { _authedRelays.set(k, pool.relays.get(k)); } catch (e) {}
-  return finalizeEvent(authEvent, sk);
+  return signed;
 };
 // Are we currently connected, on the SAME socket we authenticated on, to a relay we are actually using?
 // Ambiguity resolves to FALSE — including the catch. A spurious false makes the guards refuse a write, which is
@@ -976,6 +989,26 @@ function _one(filters, ms = 4000) {
     const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(best); };
     const sub = pool.subscribeMany(relays(), filters, {
       onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
+      oneose() { finish(); },
+    });
+    setTimeout(finish, ms);
+  });
+}
+
+// One-shot read of the NEWEST event per d-tag across a set of d-tags. Returns a Map d -> event.
+// Bounded like _one: an unanswered relay must not hang the caller. HANDOFF-2026-07-31 item 7.
+function _newestByD(filters, ms = 6000) {
+  return new Promise((resolve) => {
+    const best = new Map();
+    let done = false;
+    const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(best); };
+    const sub = pool.subscribeMany(relays(), filters, {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d) return;
+        const cur = best.get(d);
+        if (!cur || (e.created_at || 0) > (cur.created_at || 0)) best.set(d, e);
+      },
       oneose() { finish(); },
     });
     setTimeout(finish, ms);
@@ -2244,10 +2277,18 @@ window.Steward = {
     //
     // Counting it as a failure is noisy and self-healing: the banner fires, the marker is not recorded, and the
     // next Members visit retries with a fresh created_at that wins cleanly. Noisy beats silently wrong here.
-    // The false banner this was meant to silence is largely gone anyway now that the double-fire is fixed
-    // (fix 3); the real cure is reading the doc back before writing — handoff item 7 — which removes the
-    // collision at source instead of teaching the console to shrug at it.
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }));
+    // The COLLISION ITSELF is removed at source by refreshClearances' read-before-write (item 7), so a
+    // tie-break refusal is now a rare, genuine signal rather than routine noise.
+    return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct })))
+      .then(r => {
+        // Remember what we just put on the wire, so a second writer moments later can tell it is redundant
+        // WITHOUT waiting for the relay to echo it back. The read-before-write below closes the steady-state
+        // case; this closes the sub-second one, which is the common one: toggleMinor() calls _reseal for the
+        // member AND changes the safeguarding list, and the list echoing back re-runs the whole-roster
+        // back-fill — both writing this same doc inside one second.
+        if (r) { try { _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now() }); } catch (e) {} }
+        return r;
+      });
   },
   // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
   // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
@@ -2263,13 +2304,89 @@ window.Steward = {
   // So: publish in small batches, paced under the cap, and never let the failure be quiet again. The batch
   // is awaited, which gives back-pressure for free; the wait is bounded so one publish that never resolves
   // (exactly what a dropped message looks like) cannot stall the rest of the roster.
-  async refreshClearances(memberPubs, minors, approved) {
+  // READ BEFORE WRITE. HANDOFF-2026-07-31 item 7 — the cure for everything findings 2 and 3 were patching.
+  //
+  // Two parts of the console write the SAME clearance doc within one second, routinely: toggleMinor() calls
+  // _reseal() for the member it touched, and it also changes the safeguarding list, which echoes back from the
+  // relay, changes the effect's signature, and re-runs the WHOLE-ROSTER back-fill. `created_at` is whole
+  // seconds, so both land in the same one and the relay refuses the loser on its NIP-01 tie-break. That
+  // refusal was being shown to the steward as "this child did not receive their safeguarding record" —
+  // measured at 8 of 12 toggles, with all 21 records actually stored, on a warning banner that has no dismiss
+  // timer. Alarm fatigue on the safeguarding screen is the harm: a REAL delivery failure looks identical.
+  //
+  // Two earlier attempts patched the symptom. Treating the refusal as success let a fast clock pin a child as
+  // an adult, silently and permanently (reverted). Guarding the double-fire helped but left the toggle path,
+  // which is the dominant source. The actual problem is that the console republishes documents it has no
+  // reason to send — 21 identical seals on every Members visit — so this stops sending them.
+  //
+  // The church can read its own clearances back: nip44 conversation keys are symmetric, so the same key that
+  // sealed it opens it. Fetch what the relay holds, decrypt, and skip every member whose {minor, cleared}
+  // already matches. A repeat Members visit becomes a no-op, the collision disappears at source, and a
+  // tie-break refusal goes back to meaning something.
+  //
+  // FAIL-SAFE DIRECTION, and this is the part that matters: a member is skipped ONLY on a positive match — we
+  // read a document, decrypted it, and it says what we were about to say. Anything else — no document, an
+  // unreachable relay, an unauthenticated read, a decrypt failure, unparseable content — falls through and
+  // publishes exactly as before. Never skip on an empty answer; that is the mistake that has cost this
+  // codebase a care key and nearly cost a child their clearance.
+  //
+  // AND IT RUNS ONE AT A TIME. Read-before-write only helps if the read can see the other writer's work, and
+  // the two writers here start together: toggleMinor() fires _reseal and changes the list in the same tick, so
+  // both runs read the OLD state, both conclude the member needs updating, and both publish into the same
+  // second. Measured: read-before-write alone took the false banner from 8 toggles in 12 down to 1 in 4 — the
+  // remainder being exactly this overlap. Queueing removes it: the second run reads after the first has
+  // written and finds nothing to do. Cheap, because in steady state that second run is now a no-op.
+  refreshClearances(memberPubs, minors, approved) {
+    const run = () => window.Steward._refreshClearancesNow(memberPubs, minors, approved);
+    // Never let one run's rejection break the chain for every later caller.
+    const next = _clearanceQueue.then(run, run);
+    _clearanceQueue = next.then(() => {}, () => {});
+    return next;
+  },
+  async _refreshClearancesNow(memberPubs, minors, approved) {
     const mins = new Set((minors || []).map(x => String(x || '').toLowerCase()));
     const appr = new Set((approved || []).map(x => String(x || '').toLowerCase()));
-    const pubs = [...new Set((memberPubs || []).filter(Boolean))];
+    let pubs = [...new Set((memberPubs || []).filter(Boolean))];
     const BATCH = 20, GAP_MS = 250;   // ≤80/s, comfortably under the relay's 100/s per-connection cap
     const out = [];
-    let failed = 0;
+    let failed = 0, skipped = 0;
+    const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h) }; };
+    const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared;
+
+    // (a) Anything this console itself put on the wire in the last few seconds, still identical. Covers the
+    //     sub-second toggle race without depending on how fast the relay echoes.
+    const total = pubs.length;
+    const fresh = Date.now() - 15000;
+    pubs = pubs.filter(p => {
+      const sent = _clearanceSent.get(String(p).toLowerCase());
+      if (sent && sent.at >= fresh && same(sent, want(p))) { skipped++; return false; }
+      return true;
+    });
+
+    // (b) …and anything the relay already holds with the right answer. Bounded and wrapped: a read that fails
+    //     for ANY reason must leave every member in the publish list.
+    // Only read when we KNOW the read is trustworthy. A clearance is a private doc, so an unauthenticated
+    // connection is served an empty answer identical to "this church has no record" — and the relay's NIP-42
+    // challenge is lazy, so a fresh socket may still be anonymous when this runs. We never skip on an empty
+    // answer, so an unauthenticated read is merely useless rather than dangerous; gating it keeps the
+    // behaviour DETERMINISTIC instead of depending on whether the challenge round-trip beat the EOSE. Measured
+    // without this: the same test collided on some runs and not others.
+    if (pubs.length && sk && _isRelayAuthed()) {
+      try {
+        const ds = pubs.map(p => CLEARANCE_D + String(p).toLowerCase());
+        const held = await _newestByD([{ kinds: [30078], authors: [actingChurch || pub], '#d': ds }], 6000);
+        pubs = pubs.filter(p => {
+          const h = String(p).toLowerCase();
+          const e = held.get(CLEARANCE_D + h);
+          if (!e) return true;
+          let got = null;
+          try { got = JSON.parse(nip44d(e.content, nip44ck(sk, h))); } catch (x) { return true; }
+          if (!same(got, want(p))) return true;
+          skipped++; return false;
+        });
+      } catch (e) { /* read failed → publish everything, exactly as before */ }
+    }
+
     for (let i = 0; i < pubs.length; i += BATCH) {
       const slice = pubs.slice(i, i + BATCH);
       const settle = Promise.allSettled(slice.map(p => {
@@ -2290,12 +2407,15 @@ window.Steward = {
     if (failed) {
       try {
         window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'safeguarding clearances',
-          message: failed + ' of ' + pubs.length + ' members did not receive their updated safeguarding record. '
+          message: failed + ' of ' + total + ' members did not receive their updated safeguarding record. '
             + 'Until they do, their app cannot tell that they are a child. Open the Members tab again while '
             + 'connected to your relay to retry.' } }));
       } catch (e) {}
     }
-    return { results: out, failed, total: pubs.length };
+    // `total` is the ROSTER, not what we ended up publishing — the steward counts people, not writes. `skipped`
+    // is the members already holding the right record; it is the measure of how much work read-before-write
+    // saved, and on a healthy repeat visit it should equal `total`.
+    return { results: out, failed, skipped, total };
   },
   // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
   // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —

@@ -112,8 +112,15 @@ function consoleSide(urls) {
     'cleared (the finding) or always false — re-anchor this test, or rebuild: bash scripts/build-steward.sh');
   const isAuthed = grab('function _isRelayAuthed(');
   const relayAuthed = grab('relayAuthed() {');
+  // esbuild RENAMES imported bindings (finalizeEvent2, normalizeURL2 today). Bind what the bundle actually
+  // emitted: binding the wrong name makes the auth signer throw, nostr-tools logs `subscribe auth function
+  // failed`, no AUTH frame is ever sent — and the socket stays anonymous while these tests think they authed.
+  const pick = (src, base) => (src.match(new RegExp('\\b(' + base + '\\d*)\\(')) || [])[1];
+  const feName = pick(authState, 'finalizeEvent');
+  const normName = pick(authState, 'normalizeURL') || pick(isAuthed, 'normalizeURL') || 'normalizeURL';
+  assert.ok(feName, 'the auth signer no longer signs with finalizeEvent — re-anchor this test');
   const scope = {
-    pool, relays: () => urls, normalizeURL, finalizeEvent,
+    pool, relays: () => urls, [normName]: normalizeURL, [feName]: finalizeEvent,
     sk: church.sk, console: { warn() {}, log() {} }, Set, Map, String, JSON,
   };
   const args = Object.keys(scope);
