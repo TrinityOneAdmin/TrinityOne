@@ -1,4 +1,4 @@
-# Handoff — 2026-07-31 (second pass): the console write path, four audits later
+# Handoff — 2026-07-31 (second pass): the console write path, five audits later
 
 Everything below was **measured**, not reasoned, unless marked SUSPECTED. This supersedes the numbers in
 `HANDOFF-2026-07-31-CONSOLE.md` but not its findings — read that one first for the original six.
@@ -7,20 +7,24 @@ Everything below was **measured**, not reasoned, unless marked SUSPECTED. This s
 
 ## Start here
 
-**Nothing is merged and nothing is deployed.** `main` is untouched at `155485c` / 812 tests. The work is five
-commits on `fix/console-write-path-2026-07-31`, at **871 tests / 870 pass / 0 fail / 1 skipped** (verified 3
-runs back to back). a8 still runs `8a6cecf`.
+**Nothing is merged and nothing is deployed.** `main` is untouched at `155485c` / 812 tests. The work is nine
+commits on `fix/console-write-path-2026-07-31`, at **886 tests / 886 pass / 0 fail / 0 skipped** (three
+consecutive runs). a8 still runs `8a6cecf`.
 
-**The branch is a clear net improvement and it is not ready for a phone.** Four adversarial audits ran; each
-found something real, and **three of the four found bugs in the previous round's fixes**. The fourth audit
-overturned one of my own written conclusions. Three things should land before merge — B1/B2, B3, A1 below.
+**FIVE audits have run.** Audits 1–3 each found bugs the previous round's fixes introduced. Audit 4 found three
+confirmed defects and overturned two of my written conclusions. Audit 5 overturned another and found two more,
+one of them critical. All of audit 5's blockers are now fixed, tested, and sabotage-verified — but that pattern
+is the most important thing on this page: **every single round has found something real, and most rounds found
+it in the previous round's fix.** Do not merge without a sixth audit.
 
-**The single worst open item (B1) is a stuck state this branch CREATED**: after any relay restart the console
-can end up refusing every safeguarding write with *"this device hasn't finished connecting… wait a moment and
-try again"*, and waiting never helps. On `main` those writes went through (dangerously). The branch turns
-silently-dangerous into permanently-refused.
+**Verified since the last round:** full suite stable at 886 over three runs; smoke test 7/7; and a real browser
+against a real relay confirms the audit-5 case — after a relay restart, an ordinary READ no longer makes the
+console report itself healthy (`afterReadHealthy: false`, `relaysReplaced: true`, so the ticker acts).
 
----
+**The one thing the browser run could NOT verify** is saving after recovery, because the console never
+authenticated at all in that probe — the pre-existing `restoreKey` re-auth gap below. That gap is not caused by
+this branch (measured identically on `main`), but it means "a restored console can save again after a drop"
+remains unproven end to end.
 
 ## What landed
 
@@ -31,8 +35,13 @@ silently-dangerous into permanently-refused.
 | `cc9d71f` | read-before-write for clearances (handoff item 7) |
 | `793c5e9` | reconnect probe instead of backoff; removal breadcrumb |
 | `4883c97` | audit-3: a boot that deleted a live key, a probe that hung |
+| `c1547e9` | the four-audit write-up (superseded by this file) |
+| `a31267e` | audit-4: the read/write asymmetry attempt, and the test un-skipped |
+| `e11d2a7` | audit-4 B3: ask every connected relay, not a union |
+| `270b290` | audit-4 B5/B4/B6/B7: the helpers' console, and three smaller ones |
+| `aedfca7` | audit-5: reads reopen sockets too; a late Keystore delete now repairs itself |
 
-14 files, ~2700 insertions. Source changes are confined to `src/steward.src.js`, `app/stew-dashboard.jsx`,
+16 files, ~4000 insertions. Source changes are confined to `src/steward.src.js`, `app/stew-dashboard.jsx`,
 `app/steward-root.jsx` (+ the rebuilt `vendor/steward.js`). Three new test files:
 `console-publish-honesty`, `console-relay-health`, `console-relay-auth-state`.
 
@@ -82,77 +91,38 @@ an adversary no capability they lacked. Do not reuse that reasoning elsewhere as
 
 ## Open, ranked by what a steward or child experiences
 
-**B1 — CONFIRMED, worst. After a drop the console goes blind AND write-locked, while reporting itself healthy.**
-The drop deletes the relay from `pool.relays` and destroys every subscription. Then *any* ordinary read or
-write — a tab switch, a save, any `_one()` — re-opens the socket via `ensureRelay`. Now `st.get(url) === true`,
-so `relaysHealthy()` returns true (ticker never fires), `reconnectDownRelays()` skips the relay and returns
-false (nothing re-subscribes), and the gateway's lazy NIP-42 means nothing re-authenticates — so
-`_isRelayAuthed()` stays false for the rest of the session. Measured:
+Everything audits 1–4 raised is now closed except the items below. The two audit-5 blockers (a read re-opening
+the socket, and a hung Keystore delete landing late) are fixed in `aedfca7`.
 
-```
-B. relay killed                 : authed=false  healthy=false     <- the branch's fix works here
-C. socket re-opened by a write  : authed=false  healthy=true   probe: came-back=false
-D. 6s later, more writes        : authed=false  healthy=true
-E. after a NEW gated sub        : authed=true
-```
+**Backlog from audit 5, none of them blockers:**
 
-Consequence: `_requireTrustedView` throws for the minors list, approved list, blocklist and photo settings;
-the care-key, name-key, group-key and media paths all refuse. Only a tab switch or reload recovers.
-
-**B2 — CONFIRMED. HANDOFF finding 4 is not actually closed in the common case** — same root cause. A live
-subscription still misses events after a restart while `relaysHealthy()` reads true, once any ordinary write
-has re-opened the socket. The branch closes it only for the window between the drop and the next read/write,
-which on a real console is seconds. Not a regression (main was blind too), but the branch's claim is overstated.
-
-**B1 and B2 share one fix:** a per-URL *connection epoch*, bumped whenever `pool.relays` loses or replaces an
-entry, compared against the epoch at the last re-subscribe. `relaysHealthy()` currently asks "is a socket
-open?"; the ticker needs "has the connection I subscribed on been replaced?". The re-subscribe issues gated
-REQs, which re-authenticates — so this closes B1 too. `_authedRelays` already stores the `AbstractRelay`
-instance, so half the machinery exists.
-
-**B3 — CONFIRMED regression. Read-before-write makes partial relay replication permanent.** `publish()`
-succeeds via `Promise.any` (one relay is enough) but `_newestByD` unions *all* relays. Once relay A holds a
-clearance, every later visit skips that member and relay B never receives it. Measured with two independent
-gateways: `stored on A: 3/3, stored on B: 0/3`, and after a retry visit from a fresh console, still `0/3`. On
-`main` the unconditional republish healed this. Scope: the default `relays()` is the canonical *pair*, which is
-two routes to one box, so a default church is unaffected; it bites a church with a genuinely distinct second
-relay. Harm when it bites: a child's app reads no clearance, falls back to the `minors:` list the relay won't
-serve them, and is treated as an adult. Cheap fix: only skip when every URL in `relays()` held the doc.
-
-**B4 — CONFIRMED. The breadcrumb guard does not hold across the await.** `encBlobRemoveResume()` checks
-`lsGet(ENC_LS)` *before* an unbounded native call and never re-checks, and it is fire-and-forget from `init()`
-with nothing serialising it against `encBlobWrite()`. A hung `S.remove` can land *after* a new church key is
-written, destroying it — the exact end-state audit 3 described. The 3 s race on the button makes "reload while
-the bridge is still working" a design guarantee, not an accident. Fix: re-check immediately before `S.remove`,
-and bound it.
-
-**B6 — SUSPECTED (high confidence). `_clearanceSent` survives a church switch.** `setActiveIdentity` clears
-every other per-church global, each with a comment naming the bug that carrying it across caused.
-`_clearanceSent` is keyed by member pubkey only and is not cleared, so within 15 s of switching, a member in
-both churches can be skipped for the wrong one. One line.
-
-**B5 — CONFIRMED. Read-before-write is inert for a delegated steward console.** In delegated mode the
-clearance is authored under the *steward's* pubkey while `_newestByD` filters on the *church's*, and the seal
-uses a different key. So the branch's headline cure does not apply to the console that actually marks children
-in practice. Not a regression; the reach is narrower than the comments claim.
-
-**B7 — LOW.** `encBlobWrite` clears the breadcrumb *before* attempting the hardware write, so a failed write
-loses the retry marker while the previous ciphertext is still in the Keystore.
-
-**B8 — LOW, pre-existing (original handoff finding 6, never addressed).** The 8 s batch race vs a 7.4 s worst
-case. It now costs more: a spurious timeout marks 20 members failed, fires the banner, and trips the 60 s
-cooldown.
+- **The reconciliation's reach is narrower than its commit claims.** `_clearanceSent.clear()` on reconnect only
+  matters inside a 15s window, and the real repair — the per-relay read — needs a *later* back-fill, which
+  `clearanceBackfillDone` suppresses while the roster signature is unchanged. Cross-session healing works;
+  same-session healing often will not.
+- **Read-before-write verifies only its OWN author.** The member accepts a clearance from the church or any
+  current steward, newest-wins. A stale doc written by a *different* trusted author can therefore no longer be
+  displaced by the console that did not write it. Needs the two consoles to disagree about the owner-signed
+  `minors:` list, so unlikely — but it is the same shape as the multi-relay bug, one level up.
+- **B7's retained breadcrumb is still never acted on.** `encBlobWrite` now keeps it when the hardware write
+  fails, but the next boot's resume discards it at its entry guard. The previous church's ciphertext stays in
+  the Keystore. Harmless to data; matters a little under the seizure model. Wants a separate stale-slot marker.
+- **The per-relay skip loop is default-ALLOW.** If `perRelay` were ever empty the loop body would not run and
+  every member would be skipped. Unreachable today (`readFrom.length` guards it), but it is one deleted
+  condition from silently stranding a roster. Invert it.
+- **The un-skipped toggle test has no delay between its four iterations**, so the same-second collision it was
+  fixed for could recur between iterations. Did not fire in 18 runs; one `sleep(1100)` would make it durable.
 
 **Pre-existing, not this branch.** `restoreKey()` does not trigger a re-auth, so a console restored from its
 12 words cannot save anything until the socket is replaced by a reload or a relay restart — measured
 identically on `main`. Matches the known pin-lock-breaks-relay-auth note, whose fix was re-auth-on-unlock;
-restore/adopt appear to have missed it.
+restore/adopt appear to have missed it. **This now also blocks end-to-end verification of the recovery path**,
+so it is worth doing next.
 
-**Two UI defects found on the phone.** The care confirmation card wraps its title one word per line at 720px
-(Message/Withdraw squeeze the text column to ~110px). "Withdraw" retracts a request for help immediately with
-no confirm and no undo — sits with the open U7 item.
+**Also pre-existing:** B8, the 8s batch race (original handoff finding 6, never addressed).
 
----
+**Two UI defects found on the phone.** The care confirmation card wraps its title one word per line at 720px.
+"Withdraw" retracts a request for help immediately, with no confirm and no undo (sits with the open U7 item).
 
 ## Device + smoke coverage added today (Oppo, build 197, Test Church 01, PIN `778899`)
 
