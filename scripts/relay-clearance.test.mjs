@@ -186,14 +186,36 @@ test('the backfill guard survives leaving the Members tab', () => {
 });
 
 test('a partial backfill is not remembered as done', () => {
-  // Recording the signature up-front turns a truncated run into a permanent one: the members who received
-  // nothing are never retried, and nothing on screen says so.
+  // The invariant: a run that did not reach every member must be retried on the next Members open.
+  //
+  // This used to assert the MECHANISM — that the signature is recorded strictly AFTER the call
+  // (`mark > call`). HANDOFF-2026-07-31 (3) had to change that mechanism, because recording the marker only in
+  // the `.then()` left the guard blind for the whole duration of a run (≥250 ms of paced publishing), and the
+  // effect's deps are fresh array identities on every roster emit. Measured on the device: ONE Members open
+  // fired two full-roster back-fills 96 ms apart, [[228,21],[324,21]]. Both stamped the same whole second for
+  // most members, the relay refused the losers on its NIP-01 tie-break, and those refusals were reported to the
+  // steward as children who never received their safeguarding record. Worse, the marker is only recorded when
+  // `failed === 0`, which the duplicate run made impossible — so it was never recorded at all and every visit
+  // re-published the entire roster, permanently.
+  //
+  // The signature is now CLAIMED before the await and GIVEN BACK if the run reports failures, which preserves
+  // this test's invariant while closing the window. Asserted structurally here; proven by execution in
+  // scripts/clearance-backfill.test.mjs ('A BACK-FILL THAT MISSED SOMEONE MUST STILL BE RETRIED', and the
+  // sibling that stops a failed run clobbering a newer signature's claim).
   const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const at = D.indexOf('let clearanceBackfillDone');
   const body = D.slice(D.indexOf('if (!sg.loaded) return', at), D.indexOf('}, [sg.loaded', at));
   const mark = body.indexOf('clearanceBackfillDone = sig'), call = body.indexOf('refreshClearances(roster');
-  assert.ok(call !== -1 && mark > call, 'the backfill is marked done before it has been attempted');
-  assert.match(body, /!r\.failed/, 'the backfill is marked done regardless of whether every member was reached');
+  const guard = body.indexOf('clearanceBackfillDone === sig');
+  assert.ok(call !== -1 && guard !== -1 && mark > guard && mark < call,
+    'the signature is no longer claimed between the guard and the call, so a second roster emit arriving ' +
+    'mid-run starts a duplicate whole-roster back-fill');
+  assert.match(body, /if \(!r \|\| r\.failed\) release\(\)/,
+    'a run that missed members no longer gives the signature back, so the back-fill is remembered as done and ' +
+    'those members are never retried — the failure this test has always existed to catch');
+  assert.match(body, /clearanceBackfillDone === sig\) clearanceBackfillDone = ''/,
+    'the release is unconditional, so a failed run can wipe a LATER signature’s claim and that newer run gets ' +
+    'republished from scratch on the next emit');
 });
 
 test('the backfill cannot fire before the safeguarding lists have loaded', () => {

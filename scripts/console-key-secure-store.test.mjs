@@ -178,6 +178,110 @@ test('removing the key clears the hardware store too, not just the file', async 
   assert.equal(h.lsData[h.KEY], undefined, 'the marker survived, so the console still thinks a PIN is set');
 });
 
+// ── the caller ───────────────────────────────────────────────────────────────────────────────────────────
+// Everything above proves encBlobRemove() clears the hardware store. None of it proves the steward's button
+// ever lets that finish. HANDOFF-2026-07-31 item 1: the one caller was
+//
+//     onClick={() => { window.Steward.removeKey(); window.location.reload(); }}
+//
+// removeKey() returns a promise (S6, so the Keystore half CAN be awaited) and this discarded it, so the
+// reload could tear the WebView down mid-`SecureStorage.remove()`. The steward is told the church key is gone
+// from this device; the ciphertext is still in the Keystore. That is precisely the exposure S6 closed, re-opened
+// at the call site — and no test above can see it, because they all call encBlobRemove() directly.
+//
+// So this EXECUTES the real handler lifted out of app/stew-dashboard.jsx (a classic script the console loads
+// as-is — there is no build step between that file and the phone) and asserts the ordering.
+const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+
+// Lift the onClick={…} expression that contains `needle`, brace-matched rather than line- or regex-bounded so
+// reformatting the JSX cannot silently stop this from matching the shipped handler.
+function liftHandler(needle) {
+  const hit = DASH.indexOf(needle);
+  assert.ok(hit > 0, 'the removeKey call site is gone from stew-dashboard.jsx — re-anchor this test');
+  const at = DASH.lastIndexOf('onClick={', hit);
+  assert.ok(at > 0, 'removeKey() is no longer called from an onClick — re-anchor this test');
+  const open = at + 'onClick='.length;
+  let depth = 0, i = open;
+  for (; i < DASH.length; i++) {
+    const c = DASH[i];
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) break; }
+  }
+  assert.ok(depth === 0, 'braces did not balance lifting the handler — re-anchor this test');
+  assert.ok(i > hit, 'the brace match ended before the removeKey call — re-anchor this test');
+  return DASH.slice(open + 1, i);            // the expression inside onClick={ … }
+}
+
+test('THE REMOVE BUTTON MUST NOT RELOAD OUT FROM UNDER THE KEYSTORE DELETION', async () => {
+  const order = [];
+  let resolveRemoval;
+  // A Keystore that takes a moment, which is what it does on a real phone. Resolves only when we say so.
+  const removal = new Promise(r => { resolveRemoval = () => { order.push('keystore-cleared'); r(true); }; });
+  const win = {
+    Steward: { removeKey: () => { order.push('removeKey-called'); return removal; } },
+    location: { reload: () => { order.push('reload'); } },
+  };
+  const handler = new Function('window', 'return (' + liftHandler('window.Steward.removeKey()') + ');')(win);
+  const ret = handler();
+
+  // Let every microtask drain. A synchronous caller has already reloaded by now.
+  await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(order, ['removeKey-called'],
+    'the page reloaded while the Keystore removal was still in flight (' + order.join(' → ') + '). On a real ' +
+    'device that tears down the WebView mid-remove(), so the church key ciphertext survives in the hardware ' +
+    'store after the steward was told this device had forgotten it.');
+
+  resolveRemoval();
+  await ret;                                  // the handler must give the caller something to wait on
+  await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(order, ['removeKey-called', 'keystore-cleared', 'reload'],
+    'the reload did not follow the completed removal (' + order.join(' → ') + ')');
+});
+
+test('…and removeKey() actually hands back something to await', async () => {
+  // The other half of the same invariant, and the half the two tests around it CANNOT see, because they stub
+  // removeKey. If a later edit drops the `return done` (there used to be a dead `return true` sitting right
+  // under it, inviting exactly that), the awaiting caller above still awaits — it just awaits `undefined`, which
+  // resolves on the next microtask, and the race is silently back with every test still green.
+  // Executes the SHIPPED method out of the bundle.
+  const at = BUNDLE.indexOf('    removeKey() {');
+  assert.ok(at > 0, 'removeKey() is gone from the bundle — re-anchor this test, or rebuild: bash scripts/build-steward.sh');
+  const open = BUNDLE.indexOf('{', at);
+  let depth = 0, i = open;
+  for (; i < BUNDLE.length; i++) {
+    const c = BUNDLE[i];
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) break; }
+  }
+  const body = BUNDLE.slice(open + 1, i);
+  let cleared = false;
+  const sentinel = new Promise(r => setTimeout(() => { cleared = true; r('cleared'); }, 5));
+  const win = { Steward: {}, dispatchEvent() {} };
+  const fn = new Function('localStorage', 'KEY_LS', 'encBlobRemove', 'window', 'CustomEvent', body);
+  const got = fn({ removeItem() {} }, 'k', () => sentinel, win, class { constructor(t, o) { this.type = t; Object.assign(this, o); } });
+
+  assert.ok(got && typeof got.then === 'function',
+    'removeKey() returned ' + String(got) + ' rather than a promise, so `await window.Steward.removeKey()` in ' +
+    'the Remove & reload handler resolves immediately and reloads straight through the Keystore deletion again.');
+  assert.equal(cleared, false, 'the hardware-store removal had already finished synchronously — re-check this test');
+  assert.equal(await got, 'cleared', 'the promise removeKey() returned is not the hardware-store removal');
+  assert.equal(win.Steward.hasKey, false, 'removeKey() no longer clears the in-memory key state');
+});
+
+test('…and a Keystore that throws still reloads, rather than trapping the steward on the page', async () => {
+  // The safe direction. If remove() rejects we have still cleared localStorage, and a steward who pressed
+  // "Remove & reload" and got neither a removal nor a reload has no way to tell what happened.
+  const order = [];
+  const win = {
+    Steward: { removeKey: () => Promise.reject(new Error('keystore unavailable')) },
+    location: { reload: () => { order.push('reload'); } },
+  };
+  const handler = new Function('window', 'return (' + liftHandler('window.Steward.removeKey()') + ');')(win);
+  await handler();
+  await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(order, ['reload'], 'a rejected removal left the steward on an unchanged page with no reload');
+});
+
 test('a marker whose blob cannot be fetched is a FAILED unlock, not an open door', () => {
   // encBlobRaw() returns '' when the store refuses. unlock() must treat that as "wrong PIN", never as
   // "no PIN set" — the latter would hand the console to whoever is holding the phone.

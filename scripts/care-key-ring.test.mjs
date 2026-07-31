@@ -60,7 +60,7 @@ test('the envelope wraps the whole ring, not just the current key', () => {
 
 test('rotation exists, is gated like minting, and keeps the old keys', () => {
   const b = body('rotateCareKey(');
-  assert.match(b, /_relayAuthed/, 'rotation must not run from an untrusted view — same rule as minting');
+  assert.match(b, /_isRelayAuthed\(\)/, 'rotation must not run from an untrusted view — same rule as minting');
   // Assert the CONSTRUCTION carries the old ring forward — matching the name alone passes even if the new
   // ring is built as [fresh] and the old keys are dropped (verified: that sabotage slipped through once).
   assert.match(b, /ring\s*=\s*\[\s*fresh\s*,\s*\.\.\./, 'the new ring must be [fresh, ...previous] — otherwise rotation destroys the church’s history');
@@ -69,7 +69,7 @@ test('rotation exists, is gated like minting, and keeps the old keys', () => {
 
 test('the MEDIA key has the same ring + rotation (a removed member must not keep sermon access)', () => {
   const rot = body('rotateMediaKey(');
-  assert.match(rot, /_relayAuthed/, 'media rotation must not run from an untrusted view');
+  assert.match(rot, /_isRelayAuthed\(\)/, 'media rotation must not run from an untrusted view');
   assert.match(rot, /ring\s*=\s*\[\s*fresh\s*,\s*\.\.\./, 'the new ring must be [fresh, ...previous], or every existing sermon becomes unplayable');
   // both publishers must ship the ring, not a lone key, or members lose older sermons
   assert.match(body('mediaEncryptor('), /_mediaKeyRing/, 'upload path must publish the ring');

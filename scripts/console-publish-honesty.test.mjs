@@ -1,0 +1,376 @@
+// A console that cannot reach a relay must SAY SO. Every steward write depends on this one function.
+// Run: node --test scripts/console-publish-honesty.test.mjs
+//
+// HANDOFF-2026-07-31, finding 1 — the most severe thing in that document, and the smallest.
+//
+// `publish()` does `await Promise.any(pool.publish(relays(), evt))`. When nostr-tools cannot open the socket it
+// does NOT reject — it RESOLVES the per-relay promise with a plain string:
+//
+//     } catch (err) {
+//       this.onRelayConnectionFailure?.(url);
+//       return String("connection failure: " + String(err));      // nostr-tools SimplePool.publish
+//     }
+//
+// A resolution satisfies `Promise.any`. So publish() falls straight through to its success path: it fires
+// `steward-publish-ok`, returns the event, and every caller above it — clearances, the minors list, the
+// blocklist, group keys, the name-key envelope — reports SAVED while nothing left the device.
+//
+// Measured on 2026-07-30 with the relay killed: refreshClearances over 21 members returned
+// `{failed: 0, total: 21}`, fired 21 `steward-publish-ok`, showed no banner, stored nothing — and the
+// dashboard then recorded the back-fill as done and never retried it.
+//
+// This is the failure mode the product is built for. "Does this work over a thin pipe in Tehran" is the
+// question, and the honest answer before this fix was that the console lies about every save on a flapping
+// link, most quietly at exactly the moment it matters.
+//
+// WHAT THIS FILE DRIVES: the shipped `publish()` lifted out of vendor/steward.js, wired to a REAL nostr-tools
+// SimplePool. The "connection failure" string is produced by the library itself, not by a stub — a stub would
+// be asserting my own understanding of nostr-tools rather than nostr-tools. `pinned the prefix` below keeps
+// the bundle and the library honest with each other across a version bump.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { WebSocket } from 'ws';
+import { SimplePool } from 'nostr-tools/pool';
+import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from 'nostr-tools/pure';
+import { npubEncode } from 'nostr-tools/nip19';
+import { v2 as nip44v2 } from 'nostr-tools/nip44';
+import { requireFreePort } from './test-ports.mjs';
+
+const PORT = 8988;          // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
+const DEAD_PORT = 8989;     // deliberately NEVER bound — this is the unreachable relay
+const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
+const DEAD_URL = `ws://127.0.0.1:${DEAD_PORT}/relay`;
+const CLEAR_D = 'trinityone/clearance:';
+const now = () => Math.floor(Date.now() / 1000);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
+const church = K();
+const members = Array.from({ length: 21 }, K);   // 21: the roster size the finding was measured on
+let relay, dataDir;
+
+const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+
+// One of the tests below KILLS the relay on purpose — that is the flapping-link case. Bring it back after,
+// or every later test talks to a dead port and passes for the wrong reason. That is not hypothetical: while
+// writing this file the "a genuine refusal must still raise the banner" test went green against a relay that
+// was not running, because publish() returned false for a connection failure rather than for the refusal it
+// claimed to be testing. A false green in a safeguarding test is worse than no test.
+async function startRelay() {
+  dataDir = dataDir || mkdtempSync(join(tmpdir(), 'trin-pubhonesty-'));
+  relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
+    cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
+    env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_MAX_EVENTS: '20000', CHURCH_NPUB: npubEncode(church.pub) },
+  });
+  const t0 = Date.now();
+  while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${PORT}/status`)).ok) return; } catch {} await sleep(150); }
+  throw new Error('the test relay never came up on port ' + PORT);
+}
+
+before(async () => {
+  await requireFreePort(PORT, 'console-publish-honesty.test.mjs');
+  // The unreachable relay must be genuinely unreachable. If something IS listening on DEAD_PORT the
+  // "connection failure" tests would connect, the assertions would invert, and a real bug could read green.
+  await requireFreePort(DEAD_PORT, 'console-publish-honesty.test.mjs (its deliberately-dead relay port)');
+  await startRelay();
+});
+after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
+
+// Brace-match a function/method out of the bundle. Same shape as clearance-backfill.test.mjs — a fixed-window
+// slice stops matching the moment esbuild reflows the file, and then tests nothing while staying green.
+function grab(sig) {
+  let at = STEWARD.indexOf(sig);
+  assert.notEqual(at, -1, sig + ' is gone from the shipped console bundle — re-anchor this test, or rebuild: bash scripts/build-steward.sh');
+  if (STEWARD.slice(Math.max(0, at - 6), at) === 'async ') at -= 6;
+  let depth = 0, q = '';
+  for (let i = STEWARD.indexOf('{', at); i < STEWARD.length; i++) {
+    const c = STEWARD[i], prev = STEWARD[i - 1];
+    if (q) { if (c === q && prev !== '\\') q = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if (c === '/' && STEWARD[i + 1] === '/') { i = STEWARD.indexOf('\n', i); if (i === -1) break; continue; }
+    if (c === '{') depth++; else if (c === '}' && --depth === 0) return STEWARD.slice(at, i + 1);
+  }
+  assert.fail('could not find the end of ' + sig);
+}
+
+// The shipped publish() + publishClearance() + refreshClearances(), over a real pool pointed at `urls`.
+// `clock` overrides the console's now(). The relay's tie-break is decided by created_at, so a test that wants
+// a collision on purpose has to control the clock — see "the relay already holds a newer version" below.
+function consoleSide(urls, clock) {
+  const pool = new SimplePool({ verifyEvent, websocketImplementation: WebSocket, maxWaitForConnection: 1500 });
+  const events = [];                                    // every window event the console fired
+  const publishSrc = grab('async function publish(evt, out)');
+  const pubClearance = grab('publishClearance(memberPub, status)');
+  const refresh = grab('refreshClearances(memberPubs, minors, approved)');
+  // esbuild renames the nip44 imports. Bind the names it ACTUALLY used, and fail loudly if a rebuild
+  // renumbers them — otherwise every publish throws inside publishClearance's own catch and returns null,
+  // which is indistinguishable from the bug under test. (Learned in clearance-backfill.test.mjs.)
+  const encName = (pubClearance.match(/=\s*(encrypt\d*)\(/) || [])[1];
+  const ckName = (pubClearance.match(/\b(getConversationKey\d*)\(/) || [])[1];
+  assert.ok(encName && ckName, 'publishClearance no longer encrypts the way this test expects — re-anchor it');
+  const scope = {
+    pool, relays: () => urls,
+    sk: church.sk, pub: church.pub, actingChurch: '',
+    CLEARANCE_D: CLEAR_D, NET: 'trinityone',
+    now: clock || now,
+    feChurch: (t) => finalizeEvent(t, church.sk),
+    toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
+    [encName]: (s, k) => nip44v2.encrypt(s, k),
+    [ckName]: (a, b) => nip44v2.utils.getConversationKey(a, b),
+    window: { Steward: {}, dispatchEvent: (e) => { events.push(e); } },
+    CustomEvent: function (t, d) { this.type = t; this.detail = (d || {}).detail; },
+    console: { warn() {}, log() {} },
+    setTimeout, Promise, Set, String, JSON,
+  };
+  const args = Object.keys(scope);
+  const built = new Function(...args,
+    publishSrc + `\nreturn ({ publish, ${pubClearance},\n ${refresh} });`)(...args.map(k => scope[k]));
+  Object.assign(scope.window.Steward, built);
+  return {
+    ...built, pool,
+    ok: () => events.filter(e => e.type === 'steward-publish-ok').length,
+    err: () => events.filter(e => e.type === 'steward-publish-error').length,
+    banners: () => events.filter(e => e.type === 'steward-write-blocked'),
+    close: () => { try { pool.destroy(); } catch {} },
+  };
+}
+
+const churchDoc = (d, body) => finalizeEvent({ kind: 30078, created_at: now(),
+  tags: [['d', d], ['t', 'trinityone'], ['church', church.pub]], content: JSON.stringify(body) }, church.sk);
+
+async function storedCount(pubs) {
+  const w = await new Promise((res, rej) => { const s = new WebSocket(WS_URL); s.on('open', () => res(s)); s.on('error', rej); });
+  const seen = new Set();
+  await new Promise(res => {
+    const on = d => {
+      const m = JSON.parse(d);
+      if (m[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', WS_URL], ['challenge', m[1]]], content: '' }, church.sk)]));
+      if (m[0] === 'EVENT' && m[1] === 'q') seen.add((m[2].tags.find(t => t[0] === 'd') || [])[1]);
+      if (m[0] === 'EOSE' && m[1] === 'q') { w.off('message', on); res(); }
+    };
+    w.on('message', on);
+    w.send(JSON.stringify(['REQ', 'q', { kinds: [30078], '#d': pubs.map(p => CLEAR_D + p) }]));
+    setTimeout(res, 8000);
+  });
+  w.close();
+  return seen.size;
+}
+
+// ── CONTROL ──────────────────────────────────────────────────────────────────────────────────────────────
+// Runs first on purpose. A harness that cannot publish at all produces the same symptom as the bug — nothing
+// stored — so without this, a broken harness reads as a confirmed finding. If this one fails, the TEST is
+// broken, not the console.
+test('CONTROL: against a LIVE relay the shipped publish() succeeds and the event really lands', async () => {
+  const s = consoleSide([WS_URL]);
+  const evt = churchDoc('trinityone/minors:' + church.pub, { pubkeys: [] });
+  const r = await s.publish(evt);
+  await sleep(300);
+  s.close();
+  assert.ok(r && r.id === evt.id, 'publish() did not report success against a healthy relay — the harness is broken');
+  assert.equal(s.ok(), 1, 'no steward-publish-ok fired on a genuinely successful write');
+  assert.equal(s.err(), 0, 'a successful write also reported an error');
+});
+
+// ── the finding ──────────────────────────────────────────────────────────────────────────────────────────
+test('A CONSOLE THAT CANNOT REACH ANY RELAY MUST NOT REPORT THE WRITE AS SAVED', async () => {
+  const s = consoleSide([DEAD_URL]);
+  const r = await s.publish(churchDoc('trinityone/minors:' + church.pub, { pubkeys: [] }));
+  s.close();
+  assert.equal(r, false,
+    'publish() returned ' + JSON.stringify(r) + ' with no relay reachable at all. nostr-tools RESOLVES a ' +
+    'failed connection with the string "connection failure: …", which satisfies Promise.any, so the success ' +
+    'path runs. Every console write — clearances, the minors list, the blocklist, group keys, the name-key ' +
+    'envelope — tells the steward it saved while nothing left the device.');
+  assert.equal(s.ok(), 0, 'steward-publish-ok fired for a write that never left the device');
+  assert.equal(s.err(), 1, 'nothing fired steward-publish-error, so no screen can show the failure');
+});
+
+test('…and it still reports failure when SOME relays are configured but none answer', async () => {
+  // relays() usually returns several. Promise.any needs only one resolution to fall through, so a fan-out of
+  // unreachable relays is the same bug with more chances to hit it.
+  const s = consoleSide([DEAD_URL, `ws://127.0.0.1:${DEAD_PORT}/relay2`, `ws://127.0.0.1:${DEAD_PORT}/relay3`]);
+  const r = await s.publish(churchDoc('trinityone/approved:' + church.pub, { pubkeys: [] }));
+  s.close();
+  assert.equal(r, false, 'three unreachable relays still reported a successful save');
+  assert.equal(s.ok(), 0, 'steward-publish-ok fired with every relay unreachable');
+});
+
+test('…and ONE reachable relay among unreachable ones is still a real save', async () => {
+  // The other direction, and the one a careless fix breaks: publishing to a pool where most relays are down
+  // must still succeed on the one that is up. A fix that made publish() require ALL relays would take the
+  // product offline for anyone whose extra relay is flaky.
+  const s = consoleSide([DEAD_URL, WS_URL]);
+  const evt = churchDoc('trinityone/guardians:' + church.pub, {});
+  const r = await s.publish(evt);
+  await sleep(300);
+  s.close();
+  assert.ok(r && r.id === evt.id,
+    'a write that DID land on a reachable relay was reported as failed because a different relay was down');
+  assert.equal(s.ok(), 1, 'no success event fired for a write that genuinely landed');
+});
+
+test('with the relay unreachable, a whole-roster back-fill reports every member failed and raises the banner', async () => {
+  const s = consoleSide([DEAD_URL]);
+  const pubs = members.map(m => m.pub);
+  const r = await s.refreshClearances(pubs, pubs.slice(0, 5), []);
+  s.close();
+  assert.equal(r.total, 21);
+  assert.equal(r.failed, 21,
+    `refreshClearances reported ${r.failed} of 21 failed with NO relay reachable. Measured on the device as ` +
+    '{failed: 0, total: 21} — and on that answer the dashboard records the back-fill as done and never ' +
+    'retries, so those children stay unclearanced until a steward happens to toggle a flag.');
+  assert.equal(s.banners().length, 1, 'nothing told the steward that no safeguarding record was delivered');
+  assert.match(s.banners()[0].detail.message, /21 of 21/, 'the banner undercounts a total failure');
+});
+
+test('a relay killed MID-SESSION is reported honestly too, not just one that was never there', async () => {
+  // The device symptom was a socket that dropped, not a URL that was wrong. Connect for real, then take the
+  // relay away — this is the flapping-link case the product exists for.
+  const s = consoleSide([WS_URL]);
+  const first = await s.publish(churchDoc('trinityone/minors:' + church.pub, { pubkeys: [members[0].pub] }));
+  assert.ok(first, 'the control write failed before the relay was killed — the harness is broken');
+  relay.kill('SIGKILL');
+  await sleep(600);
+  const after = await s.publish(churchDoc('trinityone/minors:' + church.pub, { pubkeys: [members[1].pub] }));
+  s.close();
+  await startRelay();          // put it back, or every test after this one runs against a dead port
+  assert.equal(after, false,
+    'after the relay went away the console still reported the write as saved. This is the flapping-link case: ' +
+    'the steward sees "saved", the church key never received it, and nothing retries.');
+});
+
+test('GUARD: the relay really is back up before the tests below rely on it', async () => {
+  // Cheap, and it turns "the relay never restarted" into its own named failure instead of a confusing cascade
+  // of wrong answers in the safeguarding tests underneath.
+  const r = await fetch(`http://127.0.0.1:${PORT}/status`);
+  assert.ok(r.ok, 'the relay did not come back after the mid-session kill — every test below this is invalid');
+});
+
+// ── the banner must not cry wolf ─────────────────────────────────────────────────────────────────────────
+// HANDOFF-2026-07-31, finding 2. `created_at` is whole seconds. When the same clearance is written twice
+// inside one second the relay applies its NIP-01 tie-break (event-store.mjs:159-162 — equal created_at, lowest
+// id wins) and refuses the loser with
+//
+//     OK false  "invalid: a newer version of this is already stored — reload and edit again"
+//
+// The back-fill counted that as a member who did not receive their safeguarding record, and told the steward
+// so. Measured: `publish-ok: 32, publish-error: 11, banner: "11 of 21 …", clearances actually stored: 21/21`.
+//
+// Every one of those children HAD a clearance. The harm is alarm fatigue: a genuine delivery failure looks
+// identical to this and gets dismissed. The relay's answer means, by definition, that it already holds a
+// version of this document at least as new as ours.
+//
+// SCOPE OF THAT CLAIM, checked rather than assumed: the relay's write rule for clearance: docs
+// (gateway.mjs:1362-1365) admits only the church key or a CURRENT steward of the church named in the tag — a
+// member cannot write their own. So the writer that won the tie is the church itself or one of its stewards,
+// working from the same safeguarding lists. It is NOT any member, which is what would make this dangerous.
+// Fixing the double-fire (clearance-backfill.test.mjs) removes the common cause; this stops the remaining
+// same-second races — a steward toggling a flag while the back-fill runs, or a second steward's console —
+// from being reported as lost children.
+test('A SAME-SECOND REWRITE IS NOT A LOST CHILD', async () => {
+  const s = consoleSide([WS_URL]);
+  const pubs = members.slice(0, 6).map(m => m.pub);
+  // Both runs inside one second, which is what the device did: two full-roster back-fills 96 ms apart.
+  const [a, b] = await Promise.all([
+    s.refreshClearances(pubs, pubs.slice(0, 2), []),
+    s.refreshClearances(pubs, pubs.slice(0, 2), []),
+  ]);
+  await sleep(300);
+  const stored = await storedCount(pubs);
+  s.close();
+  assert.equal(stored, 6, 'the fixture did not actually store every clearance — the test is wrong, not the code');
+  const total = a.failed + b.failed;
+  assert.equal(total, 0,
+    `${total} of 12 writes were reported as members who did not receive their safeguarding record, while the ` +
+    `relay is holding all ${stored}/6 clearances. That banner is false, and a real delivery failure looks ` +
+    'exactly the same to the steward reading it.');
+  assert.equal(s.banners().length, 0, 'the safeguarding banner fired even though every clearance is stored');
+});
+
+test('a clearance the relay already holds a NEWER version of is not a lost child either', async () => {
+  // The deterministic form of the test above, and the one that actually pins the behaviour.
+  //
+  // A same-second tie is decided by comparing event ids, and the ids are effectively random (the NIP-44 seal
+  // uses a fresh nonce), so whether any given member collides is a coin flip. Asserting "a collision happened"
+  // on that basis is flaky — it failed once while writing this file, on a run where all six writes happened to
+  // win their ties. `failed === 0` above holds either way and is the real invariant; this test is what makes
+  // sure the have-newer PATH is exercised at all rather than passing vacuously.
+  //
+  // Drive the console's clock backwards by a second for the rewrite. The relay then holds a strictly newer
+  // version, which is the same verdict and the same refusal string, reached without a coin flip.
+  const pubs = members.slice(6, 10).map(m => m.pub);
+  const t = now();
+  const first = consoleSide([WS_URL], () => t);
+  const a = await first.refreshClearances(pubs, [], []);
+  first.close();
+  assert.equal(a.failed, 0, 'the first write failed — the fixture is broken, not the code');
+
+  const stale = consoleSide([WS_URL], () => t - 1);          // the relay is now holding something newer
+  const b = await stale.refreshClearances(pubs, [], []);
+  stale.close();
+  assert.ok('haveNewer' in b, 'refreshClearances no longer reports tie-break collisions at all');
+  assert.equal(b.haveNewer, 4,
+    `the relay holds a newer version of all four clearances but only ${b.haveNewer} were recognised as such`);
+  assert.equal(b.failed, 0,
+    `${b.failed} of 4 members were reported as not having received their safeguarding record, when the relay ` +
+    'is holding a NEWER clearance for every one of them');
+  assert.equal(stale.banners().length, 0, 'the safeguarding banner fired for clearances the relay already holds');
+});
+
+test('A GENUINE REFUSAL MUST STILL RAISE THE BANNER', async () => {
+  // The sabotage, kept as a permanent test. `blocked:`/`invalid:` refusals that are NOT the tie-break mean the
+  // clearance really did not land. If the have-newer allowance were widened to "any refusal", this is the test
+  // that notices — and the cost of missing it is a child pinned as an adult with nobody told.
+  const s = consoleSide([WS_URL]);
+  // A member of a DIFFERENT church: the relay's clearance rule refuses it outright (wrong church tag), which
+  // is a real, permanent failure and nothing like a tie-break.
+  const outsider = K();
+  const evil = finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', CLEAR_D + outsider.pub], ['t', 'trinityone'], ['p', outsider.pub], ['church', outsider.pub]],
+    content: 'x' }, church.sk);
+  const r = await s.publish(evil);
+  s.close();
+  assert.equal(r, false,
+    'the relay accepted a clearance tagged to a church this key does not own, or publish() reported a real ' +
+    'refusal as a success. Either way the have-newer allowance is now masking genuine losses.');
+  assert.equal(s.err(), 1, 'a genuine refusal fired no error event, so no banner can appear');
+});
+
+// ── keeping the guard honest ─────────────────────────────────────────────────────────────────────────────
+test('the "connection failure" prefix is pinned to what nostr-tools actually emits', async () => {
+  // The fix is prefix-specific, because a genuine OK also resolves with a string (usually ''). If a
+  // nostr-tools bump changes that wording the guard silently stops matching and the bug returns with every
+  // test above still green — the tests use the same library, so they would move together.
+  //
+  // So this asserts the string THREE ways: what the library emits right now, what the shipped bundle expects,
+  // and that the two are the same text.
+  const pool = new SimplePool({ verifyEvent, websocketImplementation: WebSocket, maxWaitForConnection: 1500 });
+  const raw = await Promise.allSettled(pool.publish([DEAD_URL], churchDoc('trinityone/minors:' + church.pub, { pubkeys: [] })));
+  try { pool.destroy(); } catch {}
+  assert.equal(raw[0].status, 'fulfilled',
+    'nostr-tools now REJECTS an unreachable relay instead of resolving with a string. That is the safe ' +
+    'direction and the bug this file is about is gone at the source — but the guard in publish() is now dead ' +
+    'code testing nothing. Re-read it before deleting this assertion.');
+  assert.ok(String(raw[0].value).startsWith('connection failure'),
+    'nostr-tools resolved an unreachable relay with ' + JSON.stringify(raw[0].value) + ', which does not start ' +
+    'with "connection failure". The prefix check in publish() no longer matches, so the console is silently ' +
+    'back to reporting unreachable writes as saved.');
+  assert.ok(STEWARD.includes('connection failure'),
+    'the shipped bundle has no "connection failure" guard at all — publish() is back to treating an ' +
+    'unreachable relay as a successful save. Rebuild: bash scripts/build-steward.sh');
+});
+
+test('publish() checks the prefix rather than rejecting every string it is handed', () => {
+  // The failure mode of an over-broad fix. A relay's OK reason is ALSO a string — usually '' but it can carry
+  // text — and treating any string as a failure would make every successful save report as failed, which is
+  // the same lie in the other direction and just as damaging (stewards re-entering data that saved fine).
+  const fn = grab('async function publish(evt, out)');
+  assert.match(fn, /startsWith\(/,
+    'publish() no longer discriminates by prefix. If it rejects any string resolution, a relay that answers ' +
+    'OK with a reason string turns every successful save into a reported failure.');
+  assert.ok(!/typeof v === "string"[^&]*\)\s*throw/.test(fn.replace(/\s+/g, ' ')) || /startsWith/.test(fn),
+    're-anchor: the guard shape changed');
+});

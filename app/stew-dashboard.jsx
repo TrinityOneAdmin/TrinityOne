@@ -3285,12 +3285,31 @@ function DashMembers() {
     const sig = [window.Steward.churchPub || '', (sg.minors || []).join(','), (sg.approved || []).join(','),
       members.map(m => m.pubkey).sort().join(',')].join('|');
     if (clearanceBackfillDone === sig) return;   // idempotent: the roster re-emits on every tick
-    // Record only on FULL success. Marking it done up-front is what would turn a truncated back-fill into a
-    // permanent one — the members who got nothing would never be retried.
+    // CLAIM THE SIGNATURE SYNCHRONOUSLY, before anything is awaited. HANDOFF-2026-07-31 (3).
+    // The claim used to live in the `.then()` below, on the reasoning that recording it only on FULL success
+    // stops a truncated back-fill from being remembered as complete. That reasoning is right and is preserved
+    // — by GIVING THE CLAIM BACK on failure, a few lines down — but putting the only write after the await
+    // left the guard blind for the entire duration of a run, and a run takes at least GAP_MS (250 ms) per
+    // batch. The effect's deps are fresh array identities on every roster emit, so a second emit lands inside
+    // that window: measured on the device as two full-roster back-fills 96 ms apart, [[228,21],[324,21]].
+    //
+    // That double-fire caused both of the day's visible symptoms. `created_at` is whole seconds, so both runs
+    // stamp the same second for most members and the relay refuses the loser on its NIP-01 tie-break — and
+    // those refusals were shown to the steward as children who did not receive their safeguarding record.
+    // Worse, the marker is only recorded when `failed === 0`, which the duplicate run made impossible, so it
+    // was NEVER recorded: every Members visit re-sealed and republished the whole roster, permanently.
+    //
+    // Keyed on `sig` rather than a bare in-flight flag, so a roster that genuinely changes mid-run is a
+    // different signature and still gets its own back-fill.
+    clearanceBackfillDone = sig;
     const roster = members.map(m => m.pubkey);
+    // Give the claim back if the run did not fully land, so the next Members open retries. Only ever clear our
+    // OWN claim: if the roster moved on and a later signature has already claimed the marker, blanking it here
+    // would discard that newer run's result and re-publish it from scratch.
+    const release = () => { if (clearanceBackfillDone === sig) clearanceBackfillDone = ''; };
     Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || []))
-      .then(r => { if (r && !r.failed) clearanceBackfillDone = sig; })
-      .catch(() => {});
+      .then(r => { if (!r || r.failed) release(); })
+      .catch(() => { release(); });
   }, [sg.loaded, sg.minors, sg.approved, members]);
   const toggleMinor = (pk) => {
     const next = minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
@@ -5281,7 +5300,11 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <div style={{ padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))' }}>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>This forgets the church key on <b>this</b> device only — the church keeps running wherever its phrase is held. Make sure you’ve backed up the phrase or handed it on first, or this church is gone from here.</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => { window.Steward.removeKey(); window.location.reload(); }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="x" size={14} color="var(--on-clay)" /> Remove &amp; reload</button>
+              {/* AWAIT the removal. removeKey() clears localStorage synchronously but the Keystore half is a
+                  native round-trip, and reloading on top of it tears the WebView down mid-remove() — leaving the
+                  church-key ciphertext in the hardware store after we told the steward this device had forgotten
+                  it. A Keystore that throws must still reload, or the button looks dead. HANDOFF-2026-07-31 (1). */}
+              <button onClick={async () => { try { await window.Steward.removeKey(); } catch (e) {} window.location.reload(); }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="x" size={14} color="var(--on-clay)" /> Remove &amp; reload</button>
               <button onClick={() => setConfirmRemove(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
             </div>
           </div>

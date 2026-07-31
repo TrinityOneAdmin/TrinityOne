@@ -132,7 +132,7 @@ test('a delegated console cannot mint a name key over the owner’s', () => {
   const fn = STEWARD.slice(at, at + 2600);
   assert.match(fn, /if \(opts\.rotate && !ring\.length\) return/, 'a rotate with no ring still mints a replacement key');
   assert.match(fn, /if \(!ring\.length && _nameKeyDocKeys\) return/, 'an envelope exists and we are not in it — minting over it orphans every sealed name');
-  assert.match(fn, /if \(!_nameKeyChecked \|\| !_relayAuthed\) return/, 'the console will mint from a view it never established');
+  assert.match(fn, /if \(!_nameKeyChecked \|\| !_isRelayAuthed\(\)\) return/, 'the console will mint from a view it never established');
   assert.match(DASH, /!delegated && window\.Steward\.ensureNameKeyForMembers/, 'block() still rotates the name key while acting as a delegated steward');
 });
 

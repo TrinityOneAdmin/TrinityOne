@@ -6242,6 +6242,31 @@
     }
   };
 
+  // node_modules/nostr-tools/lib/esm/utils.js
+  var utf8Decoder2 = new TextDecoder("utf-8");
+  var utf8Encoder2 = new TextEncoder();
+  function normalizeURL2(url) {
+    try {
+      if (url.indexOf("://") === -1)
+        url = "wss://" + url;
+      let p = new URL(url);
+      if (p.protocol === "http:")
+        p.protocol = "ws:";
+      else if (p.protocol === "https:")
+        p.protocol = "wss:";
+      p.pathname = p.pathname.replace(/\/+/g, "/");
+      if (p.pathname.endsWith("/"))
+        p.pathname = p.pathname.slice(0, -1);
+      if (p.port === "80" && p.protocol === "ws:" || p.port === "443" && p.protocol === "wss:")
+        p.port = "";
+      p.searchParams.sort();
+      p.hash = "";
+      return p.toString();
+    } catch (e) {
+      throw new Error(`Invalid URL: ${url}`);
+    }
+  }
+
   // node_modules/nostr-tools/lib/esm/pure.js
   var verifiedSymbol2 = /* @__PURE__ */ Symbol("verified");
   var isRecord2 = (obj) => obj instanceof Object;
@@ -6271,8 +6296,8 @@
     }
     return true;
   }
-  var utf8Decoder2 = new TextDecoder("utf-8");
-  var utf8Encoder2 = new TextEncoder();
+  var utf8Decoder3 = new TextDecoder("utf-8");
+  var utf8Encoder3 = new TextEncoder();
   var JS2 = class {
     generateSecretKey() {
       return schnorr.utils.randomSecretKey();
@@ -6312,7 +6337,7 @@
     return JSON.stringify([0, evt.pubkey, evt.created_at, evt.kind, evt.tags, evt.content]);
   }
   function getEventHash2(event) {
-    let eventHash = sha256(utf8Encoder2.encode(serializeEvent2(event)));
+    let eventHash = sha256(utf8Encoder3.encode(serializeEvent2(event)));
     return bytesToHex(eventHash);
   }
   var i2 = new JS2();
@@ -9239,8 +9264,8 @@ zoo`.split("\n");
   }
 
   // node_modules/nostr-tools/lib/esm/nip19.js
-  var utf8Decoder3 = new TextDecoder("utf-8");
-  var utf8Encoder3 = new TextEncoder();
+  var utf8Decoder4 = new TextDecoder("utf-8");
+  var utf8Encoder4 = new TextEncoder();
   var Bech32MaxSize = 5e3;
   function decode(code) {
     let { prefix, words } = bech32.decode(code, Bech32MaxSize);
@@ -9256,7 +9281,7 @@ zoo`.split("\n");
           type: "nprofile",
           data: {
             pubkey: bytesToHex(tlv[0][0]),
-            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder3.decode(d)) : []
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder4.decode(d)) : []
           }
         };
       }
@@ -9274,7 +9299,7 @@ zoo`.split("\n");
           type: "nevent",
           data: {
             id: bytesToHex(tlv[0][0]),
-            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder3.decode(d)) : [],
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder4.decode(d)) : [],
             author: tlv[2]?.[0] ? bytesToHex(tlv[2][0]) : void 0,
             kind: tlv[3]?.[0] ? parseInt(bytesToHex(tlv[3][0]), 16) : void 0
           }
@@ -9295,10 +9320,10 @@ zoo`.split("\n");
         return {
           type: "naddr",
           data: {
-            identifier: utf8Decoder3.decode(tlv[0][0]),
+            identifier: utf8Decoder4.decode(tlv[0][0]),
             pubkey: bytesToHex(tlv[2][0]),
             kind: parseInt(bytesToHex(tlv[3][0]), 16),
-            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder3.decode(d)) : []
+            relays: tlv[1] ? tlv[1].map((d) => utf8Decoder4.decode(d)) : []
           }
         };
       }
@@ -9834,14 +9859,14 @@ zoo`.split("\n");
   cmac.create = (key) => new _CMAC(key);
 
   // node_modules/nostr-tools/lib/esm/nip04.js
-  var utf8Decoder4 = new TextDecoder("utf-8");
-  var utf8Encoder4 = new TextEncoder();
+  var utf8Decoder5 = new TextDecoder("utf-8");
+  var utf8Encoder5 = new TextEncoder();
   function encrypt2(secretKey, pubkey, text) {
     const privkey = secretKey instanceof Uint8Array ? secretKey : hexToBytes(secretKey);
     const key = secp256k1.getSharedSecret(privkey, hexToBytes("02" + pubkey));
     const normalizedKey = getNormalizedX(key);
     let iv = Uint8Array.from(randomBytes(16));
-    let plaintext = utf8Encoder4.encode(text);
+    let plaintext = utf8Encoder5.encode(text);
     let ciphertext = cbc(normalizedKey, iv).encrypt(plaintext);
     let ctb64 = base64.encode(new Uint8Array(ciphertext));
     let ivb64 = base64.encode(new Uint8Array(iv.buffer));
@@ -9855,7 +9880,7 @@ zoo`.split("\n");
     let iv = base64.decode(ivb64);
     let ciphertext = base64.decode(ctb64);
     let plaintext = cbc(normalizedKey, iv).decrypt(ciphertext);
-    return utf8Decoder4.decode(plaintext);
+    return utf8Decoder5.decode(plaintext);
   }
   function getNormalizedX(key) {
     return key.slice(1, 33);
@@ -10495,14 +10520,14 @@ zoo`.split("\n");
   }
 
   // node_modules/nostr-tools/lib/esm/nip44.js
-  var utf8Decoder5 = new TextDecoder("utf-8");
-  var utf8Encoder5 = new TextEncoder();
+  var utf8Decoder6 = new TextDecoder("utf-8");
+  var utf8Encoder6 = new TextEncoder();
   var minPlaintextSize = 1;
   var maxPlaintextSize = 4294967295;
   var extendedPrefixThreshold = 65536;
   function getConversationKey(privkeyA, pubkeyB) {
     const sharedX = secp256k1.getSharedSecret(privkeyA, hexToBytes("02" + pubkeyB)).subarray(1, 33);
-    return extract(sha256, sharedX, utf8Encoder5.encode("nip44-v2"));
+    return extract(sha256, sharedX, utf8Encoder6.encode("nip44-v2"));
   }
   function getMessageKeys(conversationKey, nonce) {
     const keys = expand(sha256, conversationKey, nonce, 76);
@@ -10536,7 +10561,7 @@ zoo`.split("\n");
     return arr;
   }
   function pad(plaintext) {
-    const unpadded = utf8Encoder5.encode(plaintext);
+    const unpadded = utf8Encoder6.encode(plaintext);
     const unpaddedLen = unpadded.length;
     if (unpaddedLen < minPlaintextSize || unpaddedLen > maxPlaintextSize)
       throw new Error("invalid plaintext size: must be between 1 and 4294967295 bytes");
@@ -10561,7 +10586,7 @@ zoo`.split("\n");
     const unpadded = padded.subarray(prefixLen, prefixLen + unpaddedLen);
     if (unpaddedLen < minPlaintextSize || unpaddedLen > maxPlaintextSize || unpadded.length !== unpaddedLen || padded.length !== prefixLen + calcPaddedLen(unpaddedLen))
       throw new Error("invalid padding");
-    return utf8Decoder5.decode(unpadded);
+    return utf8Decoder6.decode(unpadded);
   }
   function hmacAad(key, message, aad) {
     if (aad.length !== 32)
@@ -11774,7 +11799,7 @@ zoo`.split("\n");
   var _byChurch = (e) => e.pubkey === pub;
   var _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
   function _requireTrustedView(what) {
-    if (_relayAuthed) return;
+    if (_isRelayAuthed()) return;
     const err2 = new Error("Can\u2019t save the " + what + " yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t see the current list. Wait a moment and try again.");
     try {
       window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what, message: err2.message } }));
@@ -12248,6 +12273,19 @@ zoo`.split("\n");
     return picked;
   }
   var pool = new SimplePool();
+  var _relaysTouched = /* @__PURE__ */ new Set();
+  pool.onRelayConnectionSuccess = (url) => {
+    try {
+      _relaysTouched.add(url);
+    } catch (e) {
+    }
+  };
+  pool.onRelayConnectionFailure = (url) => {
+    try {
+      _relaysTouched.add(url);
+    } catch (e) {
+    }
+  };
   function _b64ToU8(base642) {
     const pad2 = "=".repeat((4 - base642.length % 4) % 4);
     const s = (base642 + pad2).replace(/-/g, "+").replace(/_/g, "/");
@@ -12258,12 +12296,27 @@ zoo`.split("\n");
   }
   var sk = null;
   var pub = null;
-  var _relayAuthed = false;
-  pool.automaticallyAuth = () => async (authEvent) => {
+  var _authedRelays = /* @__PURE__ */ new Set();
+  pool.automaticallyAuth = (url) => async (authEvent) => {
     if (!sk) throw new Error("no key");
-    _relayAuthed = true;
+    try {
+      _authedRelays.add(normalizeURL2(url));
+    } catch (e) {
+      _authedRelays.add(url);
+    }
     return finalizeEvent2(authEvent, sk);
   };
+  function _isRelayAuthed() {
+    try {
+      const st = pool.listConnectionStatus();
+      for (const url of _authedRelays) {
+        if (st.get(url) === true) return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
   var _noPhoto = /* @__PURE__ */ new Set();
   var _applyNoPhotoList = (list) => {
     _noPhoto = pubSet(list);
@@ -12532,15 +12585,22 @@ zoo`.split("\n");
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
     return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iterations || PIN_ITER_LEGACY, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
-  async function publish(evt) {
+  async function publish(evt, out) {
     try {
-      await Promise.any(pool.publish(relays(), evt));
+      await Promise.any(pool.publish(relays(), evt).map((p) => p.then((v) => {
+        if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        return v;
+      })));
     } catch (e) {
       console.warn("[steward] publish failed", e);
       let reason = "";
       try {
         const errs = e && e.errors || [];
         reason = errs[0] && (errs[0].message || String(errs[0])) || "";
+      } catch (x) {
+      }
+      try {
+        if (out) out.reason = reason;
       } catch (x) {
       }
       try {
@@ -13113,7 +13173,6 @@ zoo`.split("\n");
       window.Steward.locked = false;
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: null } }));
       return done;
-      return true;
     },
     // ---- web push: notify the steward's phone when someone joins (PWA only; Capacitor → local notifs) ----
     // The subscription is filed under the CHURCH key, so the gateway pushes church-targeted alerts (joins)
@@ -13391,7 +13450,7 @@ zoo`.split("\n");
     // so the host (and any cloud backup) only ever holds ciphertext; only members hold the key to decrypt.
     async mediaEncryptor(memberPubs) {
       if (!sk) throw new Error("no key");
-      if (!_mediaKeyHex && !_relayAuthed) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
+      if (!_mediaKeyHex && !_isRelayAuthed()) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
       if (!_mediaKeyHex) {
         _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
         _mediaKeyRing = [_mediaKeyHex];
@@ -13444,7 +13503,7 @@ zoo`.split("\n");
     // already downloaded is theirs, and no key change alters that.
     async rotateMediaKey(memberPubs) {
       if (!sk || !pub) return false;
-      if (!_relayAuthed) return false;
+      if (!_isRelayAuthed()) return false;
       if (!_mediaKeyHex) return false;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const ring = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 12);
@@ -13506,7 +13565,7 @@ zoo`.split("\n");
       if (_careKeyPending.length) return false;
       if (!_careKeyHex) {
         if (_careKeyDocKeys) return false;
-        if (!_relayAuthed) return false;
+        if (!_isRelayAuthed()) return false;
         if (await _churchHasCareNeeds()) return false;
         _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
         _careKeyRing = [_careKeyHex];
@@ -13598,7 +13657,7 @@ zoo`.split("\n");
     async rotateCareKey(memberPubs, stewardPubs) {
       const cp = actingChurch || pub;
       if (!sk || !cp || !churchPub) return false;
-      if (!_careKeyChecked || !_relayAuthed) return false;
+      if (!_careKeyChecked || !_isRelayAuthed()) return false;
       if (!_careKeyHex) return false;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const ring = [fresh, ..._careKeyRing.length ? _careKeyRing : [_careKeyHex]].slice(0, 12);
@@ -13622,7 +13681,7 @@ zoo`.split("\n");
     // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
     // from "the relay didn't serve it to us" before doing anything destructive. See _requireTrustedView.
     relayAuthed() {
-      return _relayAuthed;
+      return _isRelayAuthed();
     },
     careKeyChecked() {
       return _careKeyChecked;
@@ -13674,11 +13733,25 @@ zoo`.split("\n");
     // true if every relay this console has opened is still connected. The console's reconnect ticker only
     // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
     // subs are broad + un-cursored, so blindly re-REQing every 90s would re-download the whole church every 90s).
+    // HANDOFF-2026-07-31 (4). This used to ask only `st.get(url) === false`, which a dead relay never is: the
+    // pool DELETES it from the map on close, so its status is `undefined`. The console therefore reported itself
+    // healthy with every socket gone, the ticker never fired, and nothing re-subscribed — measured as a Members
+    // list frozen at 6 while a 7th member joined, recoverable only by reloading.
+    //
+    // The rule is "a relay we have actually opened (or tried to) is not currently connected". Only relays still
+    // in relays() are considered, so one the steward has REMOVED cannot pin the console unhealthy for ever.
     relaysHealthy() {
       try {
         const st = pool.listConnectionStatus();
         for (const url of relays()) {
-          if (st.get(url) === false) return false;
+          let k = url;
+          try {
+            k = normalizeURL2(url);
+          } catch (e) {
+          }
+          const s = st.get(k);
+          if (s === false) return false;
+          if (s !== true && _relaysTouched.has(k)) return false;
         }
         return true;
       } catch (e) {
@@ -14139,7 +14212,7 @@ zoo`.split("\n");
       const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])];
       let ring = _skeys[groupId] || [];
       let key = ring[0];
-      if (!opts.rotate && !key && !_relayAuthed) return Promise.resolve(null);
+      if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
       if (opts.rotate || !key) {
         key = crypto.getRandomValues(new Uint8Array(32));
         _srev[groupId] = (_srev[groupId] || 0) + 1;
@@ -14301,7 +14374,8 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const cp = actingChurch || pub;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }));
+      const out = {};
+      return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }), out)).then((r) => r === false && /newer version of this is already stored/.test(out.reason || "") ? "have-newer" : r);
     },
     // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
     // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
@@ -14323,7 +14397,7 @@ zoo`.split("\n");
       const pubs = [...new Set((memberPubs || []).filter(Boolean))];
       const BATCH = 20, GAP_MS = 250;
       const out = [];
-      let failed = 0;
+      let failed = 0, haveNewer = 0;
       for (let i3 = 0; i3 < pubs.length; i3 += BATCH) {
         const slice = pubs.slice(i3, i3 + BATCH);
         const settle = Promise.allSettled(slice.map((p) => {
@@ -14335,6 +14409,7 @@ zoo`.split("\n");
           failed += slice.length;
         } else {
           out.push(...rs);
+          haveNewer += rs.filter((r) => r.status === "fulfilled" && r.value === "have-newer").length;
           failed += rs.filter((r) => r.status === "rejected" || r.value === false || r.value === null).length;
         }
         if (i3 + BATCH < pubs.length) await new Promise((r) => setTimeout(r, GAP_MS));
@@ -14348,7 +14423,7 @@ zoo`.split("\n");
         } catch (e) {
         }
       }
-      return { results: out, failed, total: pubs.length };
+      return { results: out, failed, haveNewer, total: pubs.length };
     },
     // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
     // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —
@@ -14360,7 +14435,7 @@ zoo`.split("\n");
     ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const cp = actingChurch || pub;
-      if (!_nameKeyChecked || !_relayAuthed) return Promise.resolve(null);
+      if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);
       let ring = _nameKeyRing.slice();
       if (!ring.length && _nameKeyDocKeys) return Promise.resolve(null);
       if (opts.rotate && !ring.length) return Promise.resolve(null);

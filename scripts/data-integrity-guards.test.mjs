@@ -67,13 +67,13 @@ for (const [name, consequence] of WHOLE_LIST_WRITERS) {
 }
 
 test('the media key is not minted from an untrusted view', () => {
-  assert.match(body('mediaEncryptor(', BUNDLE), /_relayAuthed/,
+  assert.match(body('mediaEncryptor(', BUNDLE), /_isRelayAuthed\(\)/,
     'minting a second media key makes every previously-encrypted sermon undecryptable, for the church and ' +
     'every member, forever');
 });
 
 test('an encrypted group key is not minted from an untrusted view', () => {
-  assert.match(body('publishGroupKey(', BUNDLE), /_relayAuthed/,
+  assert.match(body('publishGroupKey(', BUNDLE), /_isRelayAuthed\(\)/,
     'minting over an existing group key orphans that group’s entire encrypted history. The reuseOnly path ' +
     'was already guarded; the interactive "add a member" path was not.');
 });
@@ -88,9 +88,21 @@ test('the finance book only seeds after an authenticated read', () => {
     'against a chart it no longer matches');
 });
 
-test('the trusted-view signal is a real auth, not a constant', () => {
+test('the trusted-view signal is a real auth, not a constant — and it cannot outlive the socket', () => {
+  // HANDOFF-2026-07-31 (5). This asserted a boolean `_relayAuthed = true`, and that boolean was the bug: set
+  // on the first signed challenge, never cleared, still true with the relay killed. The signal is now derived
+  // from the pool — "are we connected to a relay we authenticated to" — so it expires by itself when the
+  // socket goes. Same invariant, one more clause: it must be able to become false again.
   const at = BUNDLE.indexOf('pool.automaticallyAuth =');
   assert.notEqual(at, -1, 'the NIP-42 auth hook is missing');
-  assert.match(BUNDLE.slice(at, at + 400), /_relayAuthed\s*=\s*true/, 'the flag must be set where the auth event is signed');
-  assert.doesNotMatch(BUNDLE, /let\s+_relayAuthed\s*=\s*true/, 'it must start false, or it asserts an auth that never happened');
+  assert.match(BUNDLE.slice(at, at + 500), /_authedRelays\.add\(/,
+    'the authenticated relay must be recorded where the auth event is signed');
+  assert.doesNotMatch(BUNDLE, /_authedRelays = new Set\(\[[^\]]/,
+    'it must start empty, or it asserts an auth that never happened');
+  const isAuthed = body('function _isRelayAuthed(', BUNDLE);
+  const q = isAuthed.indexOf('listConnectionStatus()'), yes = isAuthed.indexOf('return true');
+  assert.ok(q !== -1 && (yes === -1 || q < yes),
+    'the signal returns true without asking whether the relay is still connected, so a dropped socket leaves ' +
+    'every mint gate and list write open — the never-cleared flag, back again. (Behaviour is driven against a ' +
+    'real relay in scripts/console-relay-auth-state.test.mjs.)');
 });
