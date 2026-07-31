@@ -12401,8 +12401,6 @@ zoo`.split("\n");
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
   var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
-  var _encGen = 0;
-  var _encLastWritten = null;
   var _encIsMarker = (raw) => {
     try {
       const o = JSON.parse(raw);
@@ -12538,20 +12536,15 @@ zoo`.split("\n");
     return "";
   }
   async function encBlobWrite(str) {
+    if (_isNative()) _encIntent = { have: str };
     if (_isNative()) {
       try {
         const { S } = await _secureStore();
         await S.set(ENC_LS, str);
         const v = await S.get(ENC_LS);
         if (v != null && String(v) === str) {
-          _encGen++;
-          _encLastWritten = str;
-          lsSet(ENC_LS, JSON.stringify({ native: 1 }));
-          try {
-            localStorage.removeItem(ENC_PENDING_LS);
-          } catch {
-          }
-          return true;
+          await _encConverge();
+          return _encIsMarker(lsGet(ENC_LS));
         }
         console.warn("[steward] secure key read-back mismatch \u2014 keeping the localStorage copy");
       } catch (e) {
@@ -12573,30 +12566,77 @@ zoo`.split("\n");
     lsSet(ENC_LS, str);
     return true;
   }
-  async function _encRepairIfClobbered(genBefore) {
-    if (_encGen === genBefore || !_encLastWritten) return false;
+  var _encIntent = { have: null };
+  var _encConverging = null;
+  function _encBound(p) {
+    return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("keystore call timed out")), 3e3))]);
+  }
+  function _encAfter(p) {
     try {
-      const { S } = await _secureStore();
-      await S.set(ENC_LS, _encLastWritten);
-      const back = await S.get(ENC_LS);
-      if (back != null && String(back) === _encLastWritten) {
-        lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+      p.then(() => _encConverge(), () => {
+      });
+    } catch (e) {
+    }
+    return p;
+  }
+  function _encConverge() {
+    const run = async () => {
+      if (!_isNative()) return;
+      const want = _encIntent.have;
+      try {
+        const { S } = await _encBound(_secureStore());
+        const read = async () => {
+          const v = await _encBound(S.get(ENC_LS));
+          return v == null ? null : String(v);
+        };
+        let actual = await read();
+        if (want && actual !== want) {
+          await _encBound(_encAfter(S.set(ENC_LS, want)));
+          actual = await read();
+        } else if (!want && actual !== null) {
+          await _encBound(_encAfter(S.remove(ENC_LS)));
+          actual = await read();
+        }
+        if (want && actual === want) {
+          lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+          try {
+            localStorage.removeItem(ENC_PENDING_LS);
+          } catch {
+          }
+        } else if (!want && actual === null) {
+          try {
+            localStorage.removeItem(ENC_LS);
+          } catch {
+          }
+          try {
+            localStorage.removeItem(ENC_PENDING_LS);
+          } catch {
+          }
+        } else {
+          try {
+            lsSet(ENC_PENDING_LS, "1");
+          } catch {
+          }
+          if (actual === null) {
+            try {
+              localStorage.removeItem(ENC_LS);
+            } catch {
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[steward] could not converge the church key", e);
         try {
-          localStorage.removeItem(ENC_PENDING_LS);
+          lsSet(ENC_PENDING_LS, "1");
         } catch {
         }
-        return true;
       }
-    } catch (e) {
-      console.warn("[steward] could not repair a clobbered church key", e);
-    }
-    try {
-      localStorage.removeItem(ENC_LS);
-    } catch {
-    }
-    return false;
+    };
+    _encConverging = (_encConverging || Promise.resolve()).then(run, run);
+    return _encConverging;
   }
   async function encBlobRemove() {
+    if (_isNative()) _encIntent = { have: null };
     try {
       lsSet(ENC_PENDING_LS, "1");
     } catch {
@@ -12612,28 +12652,10 @@ zoo`.split("\n");
       }
       return;
     }
-    const gen = _encGen;
-    try {
-      const { S } = await _secureStore();
-      await S.remove(ENC_LS);
-      if (await _encRepairIfClobbered(gen)) return;
-      try {
-        localStorage.removeItem(ENC_PENDING_LS);
-      } catch {
-      }
-    } catch (e) {
-      console.warn("[steward] secure key remove failed", e);
-    }
+    await _encConverge();
   }
   async function encBlobRemoveResume() {
     if (!lsGet(ENC_PENDING_LS)) return false;
-    if (lsGet(ENC_LS)) {
-      try {
-        localStorage.removeItem(ENC_PENDING_LS);
-      } catch {
-      }
-      return false;
-    }
     if (!_isNative()) {
       try {
         localStorage.removeItem(ENC_PENDING_LS);
@@ -12641,31 +12663,15 @@ zoo`.split("\n");
       }
       return false;
     }
-    try {
-      const { S } = await _secureStore();
-      if (lsGet(ENC_LS)) {
-        try {
-          localStorage.removeItem(ENC_PENDING_LS);
-        } catch {
-        }
-        return false;
-      }
-      const gen = _encGen;
-      const removal = S.remove(ENC_LS).then(() => _encRepairIfClobbered(gen), () => {
-      });
-      await Promise.race([
-        removal,
-        new Promise((_, rej) => setTimeout(() => rej(new Error("secure remove timed out")), 5e3))
-      ]);
+    if (_encIntent.have === null && _encIsMarker(lsGet(ENC_LS))) {
       try {
         localStorage.removeItem(ENC_PENDING_LS);
       } catch {
       }
-      return true;
-    } catch (e) {
-      console.warn("[steward] secure key remove retry failed", e);
       return false;
     }
+    await _encConverge();
+    return !lsGet(ENC_PENDING_LS);
   }
   async function migrateEncToSecure() {
     if (!_isNative()) return false;

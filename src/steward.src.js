@@ -769,14 +769,7 @@ function setKey(mnemonic) {
 const ENC_LS = 'trinityone.steward.church-key.enc';
 // Breadcrumb: a hardware-store removal was started and has not been confirmed finished. See encBlobRemove().
 const ENC_PENDING_LS = 'trinityone.steward.church-key.removing';
-// A native remove() cannot be cancelled — Promise.race only stops WAITING for it. So a bridge call that hangs
-// past its bound can still land after the steward has restored a church, and delete the ciphertext that was
-// written meanwhile. Guards before the await cannot help; the delete happens after everything.
-//
-// So the removal repairs itself: it notes the write generation before it starts, and if a NEWER write landed
-// while it was in flight, it puts that blob back. `_encLastWritten` exists only for that repair.
-// AUDIT-5, after AUDIT-3 and AUDIT-4 each closed a different gap in the same sequence.
-let _encGen = 0, _encLastWritten = null;
+
 const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } };
 // NEVER return the Capacitor plugin object itself from an async function. `Capacitor.Plugins.SecureStorage` is a
 // PROXY: every property access becomes a native call, so when the await machinery probes the returned value for
@@ -911,20 +904,20 @@ async function encBlobRaw() {
 }
 // write the blob. Returns true only if it durably landed somewhere it can be read back.
 async function encBlobWrite(str) {
+  // INTENT FIRST, synchronously. Everything after this line can be interrupted, hang, or land late. This
+  // cannot, which is why every converge pass can trust it.
+  if (_isNative()) _encIntent = { have: str };
   if (_isNative()) {
     try {
       const { S } = await _secureStore();
       await S.set(ENC_LS, str);
       const v = await S.get(ENC_LS);
       if (v != null && String(v) === str) {
-        _encGen++; _encLastWritten = str;               // so an in-flight removal can put this back
-        lsSet(ENC_LS, JSON.stringify({ native: 1 }));   // marker ONLY after read-back
-        // …and only NOW is any pending removal superseded. Clearing the breadcrumb before attempting the
-        // write (as this did) loses the retry marker when the write then FAILS, leaving the previous church's
-        // ciphertext in the hardware store with nothing left to remove it. AUDIT-4. Belt and braces with the
-        // re-check in encBlobRemoveResume().
-        try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
-        return true;
+        // Marker and breadcrumb come from a converge pass, not from this call's belief about what it just
+        // did: an operation still in flight elsewhere may yet change what the store holds. Awaited, so the
+        // caller sees a settled device, and the answer is read back from reality.
+        await _encConverge();
+        return _encIsMarker(lsGet(ENC_LS));
       }
       console.warn('[steward] secure key read-back mismatch — keeping the localStorage copy');
     } catch (e) { console.warn('[steward] secure key set failed — keeping the localStorage copy', e); }
@@ -954,66 +947,143 @@ async function encBlobWrite(str) {
 //
 // So: leave a breadcrumb before touching anything, and clear it only once the hardware store has actually let
 // go. A boot that finds the breadcrumb finishes the job. AUDIT-2026-07-31.
-// Did a key get written while our remove() was in flight? If so we have just deleted it — put it back, and
-// restore the marker, so the steward's correct PIN keeps working. Returns true if it repaired something.
-async function _encRepairIfClobbered(genBefore) {
-  if (_encGen === genBefore || !_encLastWritten) return false;
-  try {
-    const { S } = await _secureStore();
-    await S.set(ENC_LS, _encLastWritten);
-    const back = await S.get(ENC_LS);
-    if (back != null && String(back) === _encLastWritten) {
-      lsSet(ENC_LS, JSON.stringify({ native: 1 }));
-      try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
-      return true;
+// DECLARED INTENT + CONVERGENCE. AUDIT-6 (verified independently by a second model) found FOUR defects in the
+// previous approach, one of which produced the exact state it was written to prevent. Recorded here because
+// the shape of the mistake matters more than the individual bugs:
+//
+//   • two overlapping removals with a write between them ended with the Keystore EMPTY and the marker PRESENT
+//     — correct PIN rejected for ever, surviving a reload;
+//   • a removal that hung and landed late RESURRECTED a key the steward had deliberately removed, so
+//     "Remove this church from this device" silently did not;
+//   • the repair's own stale write could clobber a newer one, locking the steward out AND leaving a
+//     superseded ciphertext at rest.
+//
+// The root cause was the strategy, not the details. The old `_encRepairIfClobbered` tried to COMPENSATE AFTER
+// THE FACT for native calls that cannot be cancelled, reasoning only about writes (via a generation) with no
+// notion of a competing removal. Every patch in that style — add a removal generation, add another re-check —
+// shrinks the windows and keeps the shape, and there is always one more interleaving. Three audits' worth of
+// evidence says so.
+//
+// So: stop compensating, and converge instead.
+//
+//   1. INTENT is recorded synchronously the moment the steward acts: `{ have: blob }` or `{ have: null }`.
+//      It never waits on a native call, so it cannot be stale.
+//   2. EVERY native operation, whenever it lands — including long after its caller gave up — ends by calling
+//      _encConverge(), which reads what the store ACTUALLY holds, compares it to the intent, and fixes the
+//      difference.
+//   3. The marker and the breadcrumb are written from the CONVERGED state, never from one operation's belief
+//      about what it just did.
+//
+// Ordering then stops mattering, which is the property you need when calls can land in any order: a late
+// delete is undone because intent says a key is wanted; a late write is undone because intent says none is; a
+// stale write loses to the next converge. Each of the four defects becomes unreachable by construction rather
+// than by a guard someone has to remember to check.
+//
+// The invariant, fuzzed over random interleavings in scripts/console-key-secure-store.test.mjs:
+//
+//     the marker says a key exists  IFF  the hardware store holds one, AND it is the one last asked for.
+//
+let _encIntent = { have: null };        // what the steward has asked for; updated synchronously
+let _encConverging = null;              // serialises converge passes so two cannot fight each other
+
+// Bring the hardware store into line with `_encIntent`, then set the marker + breadcrumb from what is ACTUALLY
+// there.
+//
+// BOUNDED, AND SELF-RETRIGGERING — both halves are load-bearing, and the first version of this had neither:
+//
+//   • BOUNDED, because converge passes are serialised (two must not fight over the same slot) and a native
+//     bridge call can hang. Without a bound, one hung removal blocks every later operation — the steward
+//     restores a church and the write simply never completes. That trades a destructive race for a dead
+//     console, which is better but still broken. A pass that gives up releases the queue and leaves the
+//     breadcrumb, so the state is known-unfinished rather than wrong.
+//   • SELF-RETRIGGERING, because a call we stopped waiting for still LANDS eventually, and when it does it
+//     changes the store behind our back. Every native call therefore schedules another converge on settle.
+//     That is what makes a late landing self-healing instead of catastrophic: whatever it did, the next pass
+//     compares the store against the intent again and fixes the difference.
+// Function declarations, not arrow consts: the tests lift these out of the bundle by brace-matching, and a
+// `const x = (p) => …` with no braces cannot be lifted — it would silently be missing and every converge pass
+// would throw into its own catch, reporting "could not reach the store" for a perfectly healthy device.
+function _encBound(p) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('keystore call timed out')), 3000))]);
+}
+// Attach a re-converge to a native call, so a call we stopped waiting for is noticed when it finally LANDS —
+// that is what makes a late arrival self-healing rather than catastrophic.
+//
+// ON SUCCESS ONLY, and the fuzzer found out why the hard way: retriggering on rejection is an infinite loop.
+// Converge tries a write, the store refuses, the rejection schedules another converge, which tries the same
+// write... The first version did that and the random-interleaving test hung the runner outright ("Map maximum
+// size exceeded"). A failed call changed nothing, so there is nothing new to reconcile; the breadcrumb is
+// already set and a later pass or boot will try again. A successful call DID change something, and the
+// converge it schedules either finds the store already matching the intent — and stops — or fixes it.
+function _encAfter(p) {
+  try { p.then(() => _encConverge(), () => {}); } catch (e) {}
+  return p;
+}
+
+function _encConverge() {
+  const run = async () => {
+    if (!_isNative()) return;
+    const want = _encIntent.have;
+    try {
+      const { S } = await _encBound(_secureStore());
+      const read = async () => { const v = await _encBound(S.get(ENC_LS)); return v == null ? null : String(v); };
+      let actual = await read();
+      if (want && actual !== want) { await _encBound(_encAfter(S.set(ENC_LS, want))); actual = await read(); }
+      else if (!want && actual !== null) { await _encBound(_encAfter(S.remove(ENC_LS))); actual = await read(); }
+      // The marker mirrors REALITY, not intention. A marker with no blob behind it is the lockout state; a
+      // blob with no marker is a key the console cannot see. Neither is ever written here.
+      if (want && actual === want) {
+        lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+        try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+      } else if (!want && actual === null) {
+        try { localStorage.removeItem(ENC_LS); } catch {}
+        try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+      } else {
+        // Did not reach the intent. Keep the breadcrumb so a later pass or boot tries again, and never leave
+        // localStorage claiming a key the store does not hold — "no key on this device" is recoverable from
+        // the phrase; "correct PIN rejected for ever" is not.
+        try { lsSet(ENC_PENDING_LS, '1'); } catch {}
+        if (actual === null) { try { localStorage.removeItem(ENC_LS); } catch {} }
+      }
+    } catch (e) {
+      // Could not reach the store, or a call outran its bound. We know nothing for certain, so change nothing
+      // beyond guaranteeing another attempt.
+      console.warn('[steward] could not converge the church key', e);
+      try { lsSet(ENC_PENDING_LS, '1'); } catch {}
     }
-  } catch (e) { console.warn('[steward] could not repair a clobbered church key', e); }
-  // Could not put it back. Clear the marker rather than leave localStorage claiming a key that is gone —
-  // "no key on this device" is recoverable from the phrase; "correct PIN rejected for ever" is not.
-  try { localStorage.removeItem(ENC_LS); } catch {}
-  return false;
+  };
+  _encConverging = (_encConverging || Promise.resolve()).then(run, run);
+  return _encConverging;
 }
 async function encBlobRemove() {
+  // Intent first and synchronously: from this instant the steward wants no key here, whatever any in-flight
+  // native call does afterwards. The breadcrumb goes down before anything is touched, so an interrupted
+  // removal is always finishable; the marker is cleared at once so the console stops offering to unlock a
+  // church it is forgetting.
+  if (_isNative()) _encIntent = { have: null };
   try { lsSet(ENC_PENDING_LS, '1'); } catch {}
   try { localStorage.removeItem(ENC_LS); } catch {}
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return; }
-  const gen = _encGen;
-  try {
-    const { S } = await _secureStore();
-    await S.remove(ENC_LS);
-    if (await _encRepairIfClobbered(gen)) return;               // a key arrived mid-flight; we put it back
-    try { localStorage.removeItem(ENC_PENDING_LS); } catch {}   // confirmed gone — stop retrying
-  } catch (e) { console.warn('[steward] secure key remove failed', e); }   // breadcrumb stays: retried at boot
+  await _encConverge();
 }
-// Finish a removal that was cut off — by the reload racing it, by a hung bridge call, or by the app being
-// killed. Safe to call on every boot: it does nothing unless the breadcrumb is there.
+// Finish an operation that was cut off — by the reload racing it, a hung bridge call, or the app being
+// killed. Safe on every boot: does nothing without the breadcrumb.
 async function encBlobRemoveResume() {
   if (!lsGet(ENC_PENDING_LS)) return false;
-  // A KEY IS PRESENT AGAIN — the steward put a church back on this device after the removal that left this
-  // breadcrumb. The Keystore slot is REUSED, so the breadcrumb cannot tell a stranded old key from a live new
-  // one, and removing now destroys the new one. AUDIT-3: reproduced — failed removal, steward restores a
-  // church, next boot deleted it; localStorage still says a key exists, so unlock() then rejects the correct
-  // PIN for ever and the church survives only on the paper phrase. Drop the breadcrumb instead: a completed
-  // removeKey() clears ENC_LS, so a genuine interrupted removal reaches this line with nothing there.
-  if (lsGet(ENC_LS)) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
-  try {
-    const { S } = await _secureStore();
-    // RE-CHECK, immediately before the delete. The guard above ran before an async bridge load, and this is
-    // fire-and-forget from init() with nothing serialising it against encBlobWrite(). AUDIT-4 walked the
-    // interleaving: removal hangs -> boot resume in flight -> steward restores a church (new ciphertext, new
-    // marker) -> the hung call finally lands -> live key destroyed, localStorage still says a key exists, so
-    // the correct PIN is rejected for ever. A guard checked once before an await is not a guard.
-    if (lsGet(ENC_LS)) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
-    const gen = _encGen;
-    const removal = S.remove(ENC_LS).then(() => _encRepairIfClobbered(gen), () => {});
-    await Promise.race([
-      removal,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('secure remove timed out')), 5000)),
-    ]);
+  // Module state is gone after a restart, so recover the intent from what localStorage says: a marker means a
+  // key is wanted (a completed removal clears it), no marker means none is.
+  //
+  // A marker WITH no remembered blob is the one case converge cannot serve — it knows a key is wanted but not
+  // which one, and it must never invent or delete on a guess. Stop retrying and let unlock() read the store
+  // directly; that is the honest answer, and it is what the previous three versions of this function each got
+  // wrong in a different way.
+  if (_encIntent.have === null && _encIsMarker(lsGet(ENC_LS))) {
     try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
-    return true;
-  } catch (e) { console.warn('[steward] secure key remove retry failed', e); return false; }
+    return false;
+  }
+  await _encConverge();
+  return !lsGet(ENC_PENDING_LS);
 }
 // One-time move of an EXISTING native install's blob out of localStorage. Deliberately does nothing unless the
 // read-back matches, so a device whose Keystore misbehaves simply stays as it was rather than losing the key.
