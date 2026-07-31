@@ -889,16 +889,20 @@ async function encBlobRaw() {
 }
 // write the blob. Returns true only if it durably landed somewhere it can be read back.
 async function encBlobWrite(str) {
-  // Writing a key SUPERSEDES any pending removal of the previous one. The Keystore slot is reused, so leaving
-  // the breadcrumb behind arms encBlobRemoveResume() to delete the key we are about to write, at the next
-  // boot. AUDIT-3. Belt and braces with the guard in the resume itself.
-  try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
   if (_isNative()) {
     try {
       const { S } = await _secureStore();
       await S.set(ENC_LS, str);
       const v = await S.get(ENC_LS);
-      if (v != null && String(v) === str) { lsSet(ENC_LS, JSON.stringify({ native: 1 })); return true; }   // marker ONLY after read-back
+      if (v != null && String(v) === str) {
+        lsSet(ENC_LS, JSON.stringify({ native: 1 }));   // marker ONLY after read-back
+        // …and only NOW is any pending removal superseded. Clearing the breadcrumb before attempting the
+        // write (as this did) loses the retry marker when the write then FAILS, leaving the previous church's
+        // ciphertext in the hardware store with nothing left to remove it. AUDIT-4. Belt and braces with the
+        // re-check in encBlobRemoveResume().
+        try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+        return true;
+      }
       console.warn('[steward] secure key read-back mismatch — keeping the localStorage copy');
     } catch (e) { console.warn('[steward] secure key set failed — keeping the localStorage copy', e); }
   }
@@ -951,7 +955,16 @@ async function encBlobRemoveResume() {
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
   try {
     const { S } = await _secureStore();
-    await S.remove(ENC_LS);
+    // RE-CHECK, immediately before the delete. The guard above ran before an async bridge load, and this is
+    // fire-and-forget from init() with nothing serialising it against encBlobWrite(). AUDIT-4 walked the
+    // interleaving: removal hangs -> boot resume in flight -> steward restores a church (new ciphertext, new
+    // marker) -> the hung call finally lands -> live key destroyed, localStorage still says a key exists, so
+    // the correct PIN is rejected for ever. A guard checked once before an await is not a guard.
+    if (lsGet(ENC_LS)) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
+    await Promise.race([
+      S.remove(ENC_LS),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('secure remove timed out')), 5000)),
+    ]);
     try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
     return true;
   } catch (e) { console.warn('[steward] secure key remove retry failed', e); return false; }
@@ -2526,8 +2539,18 @@ window.Steward = {
     if (pubs.length && sk && _isRelayAuthed() && readFrom.length) {
       try {
         const ds = pubs.map(p => CLEARANCE_D + String(p).toLowerCase());
+        // AUTHORED BY WHOEVER IS SIGNING, not by the church. AUDIT-4 B5: a DELEGATED steward console signs
+        // with its own key (setActiveIdentity: sk = the steward, pub = the church, actingChurch = the church),
+        // so filtering on the church never matched its own writes — it skipped nothing and republished the
+        // whole roster on every Members visit, for ever. That is the console fellowship.src.js calls "who
+        // marks a child in practice", so the cure was missing exactly where it matters most.
+        //
+        // Our own signing key is also the only author we CAN verify: the seal is nip44ck(sk, member), so a
+        // clearance written by the church owner is opaque to a delegated steward. Unreadable means unverified
+        // means republish — the safe direction, and the reason this filter is deliberately narrow.
+        let mine = pub; try { mine = getPublicKey(sk); } catch (e) {}
         const perRelay = await Promise.all(readFrom.map(u =>
-          _newestByD([{ kinds: [30078], authors: [actingChurch || pub], '#d': ds }], 6000, [u])
+          _newestByD([{ kinds: [30078], authors: [mine], '#d': ds }], 6000, [u])
             .then(m => m, () => new Map())));
         pubs = pubs.filter(p => {
           const h = String(p).toLowerCase();
@@ -3517,6 +3540,11 @@ window.Steward = {
       try { sk = privateKeyFromSeedWords(rec.mnemonic); pub = getPublicKey(sk); actingChurch = ''; } catch { return false; }
     }
     lastProfile = {}; _profileLoaded = false;   // don't carry one identity's profile fields — or its loaded-ness — into the other's edits
+    // The just-published clearance cache is per-CHURCH and must not survive the switch either: it is keyed by
+    // member pubkey alone, so a member who belongs to both churches could be skipped for the wrong one within
+    // its 15s window — and church B would never receive their clearance. Same family as the name-key note
+    // below; that one cost church B's members the key to every sealed name. AUDIT-4.
+    _clearanceSent.clear();
     // The name key is per-church and MUST NOT survive an identity switch. It was a bare module global, and
     // subscribeNameKey is mounted once with an empty dependency list, so switching from your own church to one
     // you steward carried church A's ring across — and the roster effect then published it as church B's name

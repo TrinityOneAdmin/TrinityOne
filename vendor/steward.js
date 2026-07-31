@@ -12535,10 +12535,6 @@ zoo`.split("\n");
     return "";
   }
   async function encBlobWrite(str) {
-    try {
-      localStorage.removeItem(ENC_PENDING_LS);
-    } catch {
-    }
     if (_isNative()) {
       try {
         const { S } = await _secureStore();
@@ -12546,6 +12542,10 @@ zoo`.split("\n");
         const v = await S.get(ENC_LS);
         if (v != null && String(v) === str) {
           lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+          try {
+            localStorage.removeItem(ENC_PENDING_LS);
+          } catch {
+          }
           return true;
         }
         console.warn("[steward] secure key read-back mismatch \u2014 keeping the localStorage copy");
@@ -12613,7 +12613,17 @@ zoo`.split("\n");
     }
     try {
       const { S } = await _secureStore();
-      await S.remove(ENC_LS);
+      if (lsGet(ENC_LS)) {
+        try {
+          localStorage.removeItem(ENC_PENDING_LS);
+        } catch {
+        }
+        return false;
+      }
+      await Promise.race([
+        S.remove(ENC_LS),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("secure remove timed out")), 5e3))
+      ]);
       try {
         localStorage.removeItem(ENC_PENDING_LS);
       } catch {
@@ -14634,7 +14644,12 @@ zoo`.split("\n");
       if (pubs.length && sk && _isRelayAuthed() && readFrom.length) {
         try {
           const ds = pubs.map((p) => CLEARANCE_D + String(p).toLowerCase());
-          const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], authors: [actingChurch || pub], "#d": ds }], 6e3, [u]).then((m) => m, () => /* @__PURE__ */ new Map())));
+          let mine = pub;
+          try {
+            mine = getPublicKey2(sk);
+          } catch (e) {
+          }
+          const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], authors: [mine], "#d": ds }], 6e3, [u]).then((m) => m, () => /* @__PURE__ */ new Map())));
           pubs = pubs.filter((p) => {
             const h = String(p).toLowerCase();
             const key = CLEARANCE_D + h;
@@ -16082,6 +16097,7 @@ zoo`.split("\n");
       }
       lastProfile = {};
       _profileLoaded = false;
+      _clearanceSent.clear();
       _nameKeyRing = [];
       _nameKeyDocKeys = null;
       _nameKeyChecked = false;

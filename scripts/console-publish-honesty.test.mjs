@@ -100,7 +100,7 @@ function grab(sig) {
 // The shipped publish() + publishClearance() + refreshClearances(), over a real pool pointed at `urls`.
 // `clock` overrides the console's now(). The relay's tie-break is decided by created_at, so a test that wants
 // a collision on purpose has to control the clock — see "the relay already holds a newer version" below.
-function consoleSide(urls, clock) {
+function consoleSide(urls, clock, ident) {
   const pool = new SimplePool({ verifyEvent, websocketImplementation: WebSocket, maxWaitForConnection: 1500 });
   const events = [];                                    // every window event the console fired
 
@@ -147,6 +147,11 @@ function consoleSide(urls, clock) {
   const ckName = pick(pubClearance, 'getConversationKey');
   const decName = pick(refreshNow, 'decrypt');
   const feName = pick(authWiring, 'finalizeEvent');
+  // NO SILENT DEFAULT. The shipped code wraps its getPublicKey call in a try/catch that falls back to the
+  // church pubkey — the safe direction in production, but in a harness with the wrong binding it silently
+  // reproduces the exact bug under test and the delegated tests fail for the wrong reason. (They did.)
+  const gpName = pick(refreshNow, 'getPublicKey');
+  assert.ok(gpName, 'refreshClearances no longer resolves its own signing pubkey — re-anchor this test');
   const normName = pick(authWiring, 'normalizeURL') || pick(isAuthed, 'normalizeURL') || 'normalizeURL';
   for (const [n, v] of [['encrypt', encName], ['getConversationKey', ckName], ['decrypt', decName], ['finalizeEvent', feName]]) {
     assert.ok(v, 'the shipped code no longer calls ' + n + ' where this test expects it — re-anchor');
@@ -154,10 +159,21 @@ function consoleSide(urls, clock) {
 
   const scope = {
     pool, relays: () => urls,
-    sk: church.sk, pub: church.pub, actingChurch: '',
+    // A DELEGATED steward console signs with its OWN key while reading in the church's context:
+    // setActiveIdentity sets sk = the steward's key, pub = the church, actingChurch = the church.
+    sk: (ident && ident.sk) || church.sk,
+    pub: (ident && ident.pub) || church.pub,
+    actingChurch: (ident && ident.actingChurch) || '',
     CLEARANCE_D: CLEAR_D, NET: 'trinityone',
-    now: clock || now,
-    feChurch: (t) => finalizeEvent(t, church.sk),
+    now: clock || now, [gpName]: getPublicKey,
+    // Mirrors the shipped feChurch: adds the church tag when acting as a delegated steward, and signs with
+    // the ACTIVE key — which for a delegated console is the steward's own, not the church's.
+    feChurch: (t) => {
+      const acting = (ident && ident.actingChurch) || '';
+      const tags = acting && !(t.tags || []).some(x => x[0] === 'church')
+        ? [...(t.tags || []), ['church', acting]] : t.tags;
+      return finalizeEvent({ ...t, tags }, (ident && ident.sk) || church.sk);
+    },
     toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
     [encName]: (a, k) => nip44v2.encrypt(a, k),
     [decName]: (c, k) => nip44v2.decrypt(c, k),
@@ -803,6 +819,81 @@ test('A RELAY JOINING MUST FORCE A RE-CHECK, NOT A CACHED SKIP', async () => {
     try { relayB.kill('SIGKILL'); } catch {}
     try { rmSync(bDir, { recursive: true, force: true }); } catch {}
   }
+});
+
+// ── the console that actually marks children ─────────────────────────────────────────────────────────────
+// AUDIT-4 B5. Churches delegate: setActiveIdentity puts the console into a mode where it signs with the
+// STEWARD'S own key while reading in the church's context (sk = steward, pub = church, actingChurch = church).
+// src/fellowship.src.js says of that path: "a member's own sealed clearance may also come from a CURRENT
+// roster steward, WHICH IS WHO MARKS A CHILD IN PRACTICE."
+//
+// Read-before-write filtered its read on `authors: [actingChurch || pub]` — the CHURCH — while feChurch signs
+// with the steward's key. So a delegated console never matched its own writes, never skipped, and republished
+// the entire roster on every Members visit, for ever. The branch's headline cure did not reach the console
+// that needs it most. Measured: owner skipped 4 of 4 on a second visit, delegated 0 of 4.
+//
+// The member side is fine and needs no change — it decrypts with nip44ck(sk, e.pubkey), i.e. the actual
+// author, so a steward-authored clearance opens correctly on the child's phone.
+test('A DELEGATED STEWARD CONSOLE ALSO STOPS REPUBLISHING', async () => {
+  const steward = K();
+  // The relay only accepts a clearance from the church or a CURRENT steward of the church named in the tag.
+  const w = await new Promise((res, rej) => { const x = new WebSocket(WS_URL); x.on('open', () => res(x)); x.on('error', rej); });
+  const rosterDoc = finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', 'trinityone/stewards:' + church.pub], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [steward.pub] }) }, church.sk);
+  const accepted = await new Promise(res => {
+    const on = d => { const m = JSON.parse(d); if (m[0] === 'OK' && m[1] === rosterDoc.id) { w.off('message', on); res(m[2]); } };
+    w.on('message', on); w.send(JSON.stringify(['EVENT', rosterDoc]));
+    setTimeout(() => res(false), 5000);
+  });
+  w.close();
+  assert.equal(accepted, true, 'the steward roster was refused — fixture broken');
+  await sleep(400);
+
+  const ident = { sk: steward.sk, pub: church.pub, actingChurch: church.pub };
+  const pubs = Array.from({ length: 4 }, K).map(m => m.pub);
+
+  const first = await authenticate(consoleSide([WS_URL], null, ident));
+  const r1 = await first.refreshClearances(pubs, [pubs[0]], []);
+  first.close();
+  assert.equal(r1.failed, 0,
+    'a delegated steward could not write a clearance at all — check the stewards: roster fixture, not the fix');
+  await sleep(500);
+
+  // A fresh delegated console: nothing remembered, so any skip must come from reading the relay.
+  const again = await authenticate(consoleSide([WS_URL], null, ident));
+  const r2 = await again.refreshClearances(pubs, [pubs[0]], []);
+  again.close();
+  assert.equal(r2.skipped, 4,
+    `a delegated console re-published ${4 - r2.skipped} of 4 clearances it had already written. It reads with ` +
+    'the CHURCH as author while it signs with the steward\'s key, so it never recognises its own work — and ' +
+    'this is the console that marks children in practice, so the whole cure misses where it matters most.');
+  assert.equal(r2.failed, 0);
+});
+
+test('…and a delegated console still writes a member whose status CHANGED', async () => {
+  const steward = K();
+  const w = await new Promise((res, rej) => { const x = new WebSocket(WS_URL); x.on('open', () => res(x)); x.on('error', rej); });
+  const rosterDoc = finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', 'trinityone/stewards:' + church.pub], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [steward.pub] }) }, church.sk);
+  await new Promise(res => {
+    const on = d => { const m = JSON.parse(d); if (m[0] === 'OK' && m[1] === rosterDoc.id) { w.off('message', on); res(m[2]); } };
+    w.on('message', on); w.send(JSON.stringify(['EVENT', rosterDoc])); setTimeout(res, 5000);
+  });
+  w.close();
+  await sleep(400);
+  const ident = { sk: steward.sk, pub: church.pub, actingChurch: church.pub };
+  const pubs = Array.from({ length: 3 }, K).map(m => m.pub);
+  const s1 = await authenticate(consoleSide([WS_URL], null, ident));
+  await s1.refreshClearances(pubs, [], []);
+  s1.close();
+  await sleep(1200);                                  // clear of the same wall-clock second
+  const s2 = await authenticate(consoleSide([WS_URL], null, ident));
+  const r = await s2.refreshClearances(pubs, [pubs[0]], []);   // one becomes a minor
+  s2.close();
+  assert.equal(r.failed, 0, 'a delegated console failed to write a changed clearance');
+  assert.equal(r.skipped, 2, 'the changed member was skipped, or the unchanged ones were re-published');
 });
 
 // ── keeping the guard honest ─────────────────────────────────────────────────────────────────────────────

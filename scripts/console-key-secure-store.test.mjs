@@ -60,7 +60,7 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
     // this hands back the stub module instead. _secureStore()'s OWN body still runs, which is the point: the
     // device bug lived in what that function RETURNS across an async boundary, and a version of this file that
     // injected _secureStore as a seam could never have seen it.
-    .replace('Promise.resolve().then(() => (init_esm(), esm_exports))', 'Promise.resolve({ SecureStorage: __SECURE__ })');
+    .replace('Promise.resolve().then(() => (init_esm(), esm_exports))', '__SECMOD__()');
   const store = { ...secure };
   const calls = { set: 0, get: 0, remove: 0 };
   // A CAPACITOR-SHAPED stub, not a plain object. window.Capacitor.Plugins.SecureStorage is a PROXY that turns
@@ -74,7 +74,7 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
   // value for `.then`. The plugin answered, the call failed, and setPin never settled. Modelling the proxy here
   // is what makes that reproducible off-device.
   const impl = {
-    set: async (k, v) => { calls.set++; if (secure.__failSet) throw new Error('keystore unavailable'); store[k] = secure.__writeGarbage ? 'CORRUPTED' : v; },
+    set: async (k, v) => { calls.set++; if (secure.__failSet || store.__failSet) throw new Error('keystore unavailable'); store[k] = secure.__writeGarbage ? 'CORRUPTED' : v; },
     get: async (k) => { calls.get++; if (secure.__failGet) throw new Error('keystore unavailable'); return store[k] === undefined ? null : store[k]; },
     remove: async (k) => { calls.remove++; if (secure.__failRemove || store.__failRemove) throw new Error('keystore busy'); delete store[k]; },
   };
@@ -95,11 +95,18 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
   // lands and whether it can be lost. The wrap has its own file, console-device-bound-key.test.mjs.
   const devWrap = { wrap: async () => null, unwrap: async (x) => x, isWrapped: () => false };
   const PENDING = 'trinityone.steward.church-key.removing';
-  const fn = new Function('_devWrap', '__SECURE__', 'localStorage', 'lsGet', 'lsSet', '_isNative', 'console', 'ENC_LS', 'ENC_PENDING_LS',
+  // The module load is a real async gap in the shipped code, and one bug lives IN that gap: a guard checked
+  // before it is not a guard. `hold()` lets a test park the load and change the device state underneath.
+  let modGate = null;
+  // ONE-SHOT: only the next module load is parked. Holding every load deadlocks, because the write the test
+  // performs during the gap needs the store too.
+  const __SECMOD__ = () => { const g = modGate; modGate = null; return (g || Promise.resolve()).then(() => ({ SecureStorage })); };
+  const fn = new Function('_devWrap', '__SECURE__', '__SECMOD__', 'localStorage', 'lsGet', 'lsSet', '_isNative', 'console', 'ENC_LS', 'ENC_PENDING_LS',
     src + '\nreturn { encBlobRaw, encBlobWrite, encBlobRemove, encBlobRemoveResume, migrateEncToSecure, _encIsMarker };');
-  const api = fn(devWrap, SecureStorage, localStorage, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v),
+  const api = fn(devWrap, SecureStorage, __SECMOD__, localStorage, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v),
     () => nativeMode, { warn() {}, log() {} }, KEY, PENDING);
-  return { ...api, lsData, store, calls, KEY, PENDING };
+  const holdModule = () => { let open_; modGate = new Promise(r => { open_ = r; }); return () => open_(); };
+  return { ...api, lsData, store, calls, KEY, PENDING, holdModule };
 }
 const BLOB = JSON.stringify({ v: 2, it: 600000, salt: 'c2FsdA==', iv: 'aXY=', ct: 'Y2lwaGVy' });
 
@@ -382,6 +389,78 @@ test('…and a successful removal leaves no breadcrumb to retry', async () => {
   await h.encBlobRemove();
   assert.equal(h.lsData[h.PENDING], undefined,
     'a clean removal still left the retry marker, so the next boot re-runs a delete that already succeeded');
+});
+
+test('A HUNG REMOVAL THAT LANDS LATE MUST NOT DELETE THE KEY WRITTEN MEANWHILE', async () => {
+  // AUDIT-4. The guard added for AUDIT-3 checked lsGet(ENC_LS) at function entry — BEFORE an async bridge
+  // load — and never again. encBlobRemoveResume() is fire-and-forget from init() with nothing serialising it
+  // against encBlobWrite(), so the interleaving is reachable:
+  //
+  //   1. removal starts, the native bridge hangs        keystore: OLD  ls: null   breadcrumb: set
+  //   2. boot resume passes its entry guard, in flight  keystore: OLD  ls: null   breadcrumb: set
+  //   3. the steward restores a church                  keystore: NEW  ls: marker breadcrumb: cleared
+  //   4. the hung remove finally lands                  keystore: EMPTY, marker still says a key exists
+  //
+  // Step 4 is the harm AUDIT-3 described, reached a different way: unlock() then rejects the CORRECT PIN for
+  // ever and the church survives only on the paper phrase. A guard checked once before an await is not a guard.
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+  h.store.__failRemove = true;
+  await h.encBlobRemove();                        // hangs/fails: breadcrumb stays, marker cleared
+  delete h.store.__failRemove;
+
+  // The steward puts a church back on the device WHILE a resume would be in flight.
+  const NEXT = JSON.stringify({ v: 2, it: 600000, salt: 'bmV3', iv: 'bmV3', ct: 'TkVX' });
+  await h.encBlobWrite(NEXT);
+  h.lsData[h.PENDING] = '1';                      // a resume that read its guard before the write landed
+
+  assert.equal(await h.encBlobRemoveResume(), false,
+    'the resume proceeded even though a key is present on the device at the moment it was about to delete');
+  assert.equal(h.store[h.KEY], NEXT,
+    'A LIVE CHURCH KEY WAS DELETED by a removal that started before it existed. localStorage still says a key ' +
+    'is here, so the steward\'s correct PIN is rejected for ever.');
+  assert.equal(await h.encBlobRaw(), NEXT, 'and it must still be readable');
+});
+
+test('…and the re-check happens AFTER the async gap, not only before it', async () => {
+  // Isolates the inner guard. The entry check runs, then the code awaits the secure-store module — and the
+  // steward can restore a church during exactly that gap. Caught by sabotage: with the test above alone,
+  // deleting the re-check left the suite green, because the entry check was doing all the work.
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+  h.store.__failRemove = true;
+  await h.encBlobRemove();
+  delete h.store.__failRemove;
+  assert.equal(h.lsData[h.PENDING], '1', 'fixture: breadcrumb set, no key on the device');
+
+  const release = h.holdModule();          // park the module load: the entry guard has already passed
+  const resuming = h.encBlobRemoveResume();
+  await new Promise(r => setTimeout(r, 0));
+  const NEXT = JSON.stringify({ v: 2, it: 600000, salt: 'Zw==', iv: 'Zw==', ct: 'R0FQ' });
+  await h.encBlobWrite(NEXT);              // the steward restores a church DURING the gap
+  release();
+  assert.equal(await resuming, false, 'the resume deleted through a key that appeared while it was loading');
+  assert.equal(h.store[h.KEY], NEXT,
+    'A LIVE CHURCH KEY WAS DELETED by a removal that passed its guard before the key existed. The guard has ' +
+    'to be re-checked immediately before the delete, not once at the top of the function.');
+});
+
+test('a hardware write that FAILS keeps the retry marker', async () => {
+  // AUDIT-4 B7. Clearing the breadcrumb before attempting the write loses the retry marker when the write then
+  // fails — leaving the previous church's ciphertext in the hardware store with nothing left to remove it.
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+  h.store.__failRemove = true;
+  await h.encBlobRemove();
+  delete h.store.__failRemove;
+  assert.equal(h.lsData[h.PENDING], '1', 'fixture: a failed removal should leave the breadcrumb');
+
+  h.store.__failSet = true;                       // the hardware write now fails; it falls back to localStorage
+  await h.encBlobWrite(JSON.stringify({ v: 2, it: 600000, salt: 'eA==', iv: 'eA==', ct: 'WA==' }));
+  delete h.store.__failSet;
+  assert.equal(h.lsData[h.PENDING], '1',
+    'the breadcrumb was dropped by a write that never reached the hardware store, so the previous church\'s ' +
+    'ciphertext is stranded there with nothing left that would ever remove it');
 });
 
 test('a marker whose blob cannot be fetched is a FAILED unlock, not an open door', () => {
