@@ -1847,6 +1847,8 @@ window.Fellowship = {
       saveMembersCache(cp, [...hub.byPub.values()]);   // keep the legacy cache warm for next launch
       onMembers(visible, !!done);
     };
+    // Per-event arrivals coalesce; see the onchange/oneose handlers below for why EOSE does not.
+    const emitSoon = _coalesce(() => emit(false));
     // (re)open the single profile sub for every still-unnamed member. churchRelays() — NOT
     // window.Fellowship.relays, which is empty on a native install. Kept open so a slow relay isn't cut off.
     const refreshProfiles = () => {
@@ -1873,14 +1875,23 @@ window.Fellowship = {
       if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);   // debounce the burst of arriving members
     };
     const off = _onChurchMembers(cp, {
-      onchange(pk) { ensureProfile(pk); emit(); },
-      oneose() { emit(true); },   // initial load complete
+      // AUDIT-2026-07-31 P8. This ran the WHOLE emit per incoming event: spread the roster Map, filter, sort,
+      // JSON.stringify it into localStorage, and setState — for every member arriving during a load. The
+      // console's identical path was fixed on 2026-07-18 with a comment naming the cost, and _coalesce has sat
+      // 1,700 lines above in this same file all along, used by a dozen of this function's siblings.
+      //
+      // EOSE is deliberately NOT coalesced. It carries `done`, which is how a screen knows the initial load
+      // finished — delaying or dropping it leaves a spinner up. _coalesce ignores arguments, so wrapping emit
+      // wholesale would have silently turned every `emit(true)` into `emit(undefined)`: the roster would arrive
+      // and the screen would still be waiting for it.
+      onchange(pk) { ensureProfile(pk); emitSoon(); },
+      oneose() { emitSoon.cancel(); emit(true); },   // initial load complete — immediate, and drops a stale pending emit
     });
     // the since-cursor means long-known members won't re-arrive as events — resolve names for the
     // cached/buffered roster too, not just live arrivals
     for (const pk of hub.byPub.keys()) ensureProfile(pk);
     if (hub.byPub.size) emit(false);   // paint the cached roster immediately, before the relay answers
-    return () => { off(); if (profTimer) clearTimeout(profTimer); try { profSub && profSub.close(); } catch {} };
+    return () => { emitSoon.cancel(); off(); if (profTimer) clearTimeout(profTimer); try { profSub && profSub.close(); } catch {} };
   },
 
   // relay configuration (persisted) — accepts ws:// or wss:// URLs

@@ -7886,6 +7886,7 @@
         saveMembersCache(cp, [...hub.byPub.values()]);
         onMembers(visible, !!done);
       };
+      const emitSoon = _coalesce(() => emit(false));
       const refreshProfiles = () => {
         profTimer = null;
         const authors = [...profAuthors].filter((pk) => !(pk in profiles));
@@ -7929,18 +7930,29 @@
         if (!profTimer) profTimer = setTimeout(refreshProfiles, 300);
       };
       const off = _onChurchMembers(cp, {
+        // AUDIT-2026-07-31 P8. This ran the WHOLE emit per incoming event: spread the roster Map, filter, sort,
+        // JSON.stringify it into localStorage, and setState — for every member arriving during a load. The
+        // console's identical path was fixed on 2026-07-18 with a comment naming the cost, and _coalesce has sat
+        // 1,700 lines above in this same file all along, used by a dozen of this function's siblings.
+        //
+        // EOSE is deliberately NOT coalesced. It carries `done`, which is how a screen knows the initial load
+        // finished — delaying or dropping it leaves a spinner up. _coalesce ignores arguments, so wrapping emit
+        // wholesale would have silently turned every `emit(true)` into `emit(undefined)`: the roster would arrive
+        // and the screen would still be waiting for it.
         onchange(pk) {
           ensureProfile(pk);
-          emit();
+          emitSoon();
         },
         oneose() {
+          emitSoon.cancel();
           emit(true);
         }
-        // initial load complete
+        // initial load complete — immediate, and drops a stale pending emit
       });
       for (const pk of hub.byPub.keys()) ensureProfile(pk);
       if (hub.byPub.size) emit(false);
       return () => {
+        emitSoon.cancel();
         off();
         if (profTimer) clearTimeout(profTimer);
         try {
