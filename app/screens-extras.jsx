@@ -131,7 +131,7 @@ function ListenScreen({ open, onClose, ctx }) {
     setLoading(true);
     fetch(base + '/audiofeed?url=' + encodeURIComponent(audioFeed))
       .then(r => r.json()).then(d => setData(d || { episodes: [] }))
-      .catch(() => setData({ episodes: [] }))
+      .catch(() => setData({ episodes: [], error: 'unreachable' }))   // U6: record WHY — an empty list and a failed fetch are not the same thing
       .then(() => setLoading(false));
   }, [open, audioFeed]);
   React.useEffect(() => {
@@ -188,8 +188,13 @@ function ListenScreen({ open, onClose, ctx }) {
         {!loading && !episodes.length ? (
           <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--ink-3)' }}>
             <div style={{ width: 56, height: 56, borderRadius: 16, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="headphones" size={26} color="var(--ink-3)" /></div>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink-2)' }}>Nothing to listen to yet</div>
-            <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '6px auto 0' }}>{audioFeed ? 'Your church’s audio will appear here soon.' : 'Your church hasn’t added an audio feed yet.'}</p>
+            {/* AUDIT-2026-07-31 U6. This said "Nothing to listen to yet" and blamed the church — "Your church
+                hasn't added an audio feed yet" — while `data.error` was already set to 'offline' and never
+                read. A member with no signal was told their church had not done something. Relay-down and
+                genuinely-empty rendered identically, which is the silent-emptiness class this codebase keeps
+                producing: the app knows why, and says something untrue instead. */}
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink-2)' }}>{(data && data.error) ? 'Can’t reach the audio just now' : 'Nothing to listen to yet'}</div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '6px auto 0' }}>{(data && data.error) ? 'This is your connection, not your church — it will load when you are back online.' : (audioFeed ? 'Your church’s audio will appear here soon.' : 'Your church hasn’t added an audio feed yet.')}</p>
           </div>
         ) : null}
 

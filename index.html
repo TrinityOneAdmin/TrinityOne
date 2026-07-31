@@ -42,6 +42,13 @@
 
   /* ── TrinityOne design tokens (light) — Halo brand.css ── */
   .trinity {
+    /* AUDIT-2026-07-31 U8. --mono was USED but never DEFINED in the member app, so `font-family: var(--mono)`
+       resolved to nothing and fell back to the proportional UI font. That is not cosmetic: the one place it is
+       used is the phone-to-phone CHECK CODE (app/identity-extras.jsx:410), the string a member must compare
+       character by character to be sure they are moving their account to their own phone and not to an
+       attacker holding up a substituted QR (AUDIT-2026-07-26 S5). In a proportional face l/I/1 and 0/O are
+       near-identical — exactly the confusion that check exists to prevent. A monospace face separates them. */
+    --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
     --paper:      #F4EEE2;
     --paper-soft: #FBF6EC;
     --surface:    #FFFDF8;
