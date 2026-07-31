@@ -80,3 +80,24 @@
 
   Cleanup: the key for "Audit test member" is kept, so it can be retracted properly. An earlier throwaway
   (`30c9c850…fd9a`) is malformed and therefore invisible to the console — it needs no action.
+
+## P6 — measured and WITHDRAWN (2026-07-31)
+- **The console's ~10 "byte-identical" subscriptions are not on the wire.** The audit priced them at 2,500ms
+  and 3,428 KB. Measured in a real browser against a real relay, ten screens each calling a different
+  `subscribe*` that uses the union: **main opened 2 REQs, the deduplicated branch opened 2 REQs.** Identical.
+  All ten were verified to actually subscribe. nostr-tools' SimplePool already merges identical filter sets.
+
+  The 17 duplicated call sites in `src/steward.src.js` are real, and `app/steward-root.jsx:68` still names
+  porting `_docsHub` as the deeper fix — but the COST attributed to them was not reproducible, so there is
+  nothing to buy back. Do not re-open this on the strength of the source duplication alone; measure first.
+
+  A working, sabotage-verified implementation sits unmerged on `perf/console-shared-docs` (ten tests, aimed at
+  the dangerous half: a screen that mounts late must still receive everything). Ready if the console ever
+  moves off SimplePool.
+
+- **Two things worth keeping from that branch if it is ever revived:**
+  - `_resetSharedSubs()` must be wired into `setKey()` and `removeKey()`. The registry is keyed by filter and
+    every filter names the church pubkey, so a church switch otherwise hands the next screen a dead stream —
+    the member app's "Retry button does nothing" bug (AUDIT 2026-07-25).
+  - A REQ count taken from a console that never mounts its screens measures nothing: those subscriptions open
+    when their screens do. My first measurement did exactly that and showed no difference for the wrong reason.
