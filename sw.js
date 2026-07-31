@@ -22,9 +22,20 @@ const SENSITIVE_QS = ['invite', 'follow', 'relay', 'name', 'adopt', 'church', 'c
 //
 // So: read index.html at install time and cache exactly what it references. It cannot drift again, and it is
 // correct for both the .jsx dev shell and the transpiled build without either knowing about this file.
+// AUDIT-2026-07-31 P7. `./vendor/sqljs/sql-wasm.wasm` USED TO BE PRECACHED HERE, correctly noting that no tag
+// references it. It is 655 KB — the single largest thing the app would ever download — and at the 20 kB/s
+// this product is built for that is roughly THIRTY-THREE SECONDS of a member's first install, before a word
+// of Scripture or a single message.
+//
+// It is only ever needed by engine.js:222, which calls initSqlJs() when opening a Bible module that happens
+// to be in SQLite format. Most members will never open one; nobody needs it to read their church's chat.
+//
+// Safe to drop from the precache because the fetch handler caches successful responses at runtime (see
+// `fresh` below), and a SQLite Bible cannot exist offline without a download that required being online —
+// the same session in which the wasm is fetched and cached. The trade is one extra request the first time
+// someone opens that kind of module, against 655 KB every member pays on install whether they ever do or not.
 const EXTRA = [
   './', './index.html',
-  './vendor/sqljs/sql-wasm.wasm',      // fetched BY sql-wasm.js, so no tag references it
   './catalog.json', './manifest.json', './web-audio-manifest.json',
 ];
 const sameOrigin = (u) => u && !/^[a-z]+:/i.test(u) && !u.startsWith('//') && !u.startsWith('#');

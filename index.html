@@ -209,7 +209,8 @@
 <!-- Real public-domain Library: window.TrinityLibrary (previews + available); full books in vendor/library/*.json.gz -->
 <script src="vendor/library/index.js"></script>
 
-<!-- TrinityOne UI (JSX, transpiled in-browser by Babel) -->
+<!-- TrinityOne UI. In THIS dev shell the .jsx below is transpiled in-browser by Babel; the shipped build
+     (www/) transpiles ahead of time and loads plain .js, so members never download the compiler. -->
 <script type="text/babel" src="app/data.jsx"></script>
 <script type="text/babel" src="app/recur.jsx"></script>
 <script type="text/babel" src="app/icons.jsx"></script>
