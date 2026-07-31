@@ -104,10 +104,14 @@ function consoleSide(ws) {
   // relay. Reporting "not authenticated" here is the honest way to say "no trusted read available", and the
   // shipped code's response to that is to publish everything — which is exactly the workload under test.
   const _isRelayAuthed = () => false;
+  // …and with no trusted read there is nothing to consult, so no relay is "currently connected" for
+  // read-before-write's purposes either. Both stubs say the same thing: this file measures the cold-roster
+  // publish path, where nothing is stored yet and nothing would be skipped anyway.
+  const _connectedRelays = () => [];
   const decName = (refreshNow.match(/\b(decrypt\d*)\(/) || [])[1];
   assert.ok(decName, 'refreshClearances no longer decrypts a stored clearance — re-anchor this test');
   const scope = {
-    _isRelayAuthed, Map, Date,
+    _isRelayAuthed, _connectedRelays, Map, Date,
     [decName]: (c, k) => nip44v2.decrypt(c, k),
     sk: church.sk, pub: church.pub, actingChurch: '',
     CLEARANCE_D: CLEAR_D, NET: 'trinityone',

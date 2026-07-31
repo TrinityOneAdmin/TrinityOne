@@ -12279,8 +12279,10 @@ zoo`.split("\n");
   var _subbedOn = /* @__PURE__ */ new Map();
   pool.onRelayConnectionSuccess = (url) => {
     try {
+      const fresh = _subbedOn.get(url) !== pool.relays.get(url);
       _relaysTouched.add(url);
       _subbedOn.set(url, pool.relays.get(url));
+      if (fresh) _clearanceSent.clear();
     } catch (e) {
     }
   };
@@ -12716,7 +12718,7 @@ zoo`.split("\n");
       setTimeout(finish, ms);
     });
   }
-  function _newestByD(filters, ms = 6e3) {
+  function _newestByD(filters, ms = 6e3, urls = null) {
     return new Promise((resolve) => {
       const best = /* @__PURE__ */ new Map();
       let done = false;
@@ -12729,7 +12731,7 @@ zoo`.split("\n");
         }
         resolve(best);
       };
-      const sub = pool.subscribeMany(relays(), filters, {
+      const sub = pool.subscribeMany(urls || relays(), filters, {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d) return;
@@ -12742,6 +12744,21 @@ zoo`.split("\n");
       });
       setTimeout(finish, ms);
     });
+  }
+  function _connectedRelays() {
+    try {
+      const st = pool.listConnectionStatus();
+      return relays().filter((u) => {
+        let k = u;
+        try {
+          k = normalizeURL2(u);
+        } catch (e) {
+        }
+        return st.get(k) === true;
+      });
+    } catch (e) {
+      return [];
+    }
   }
   var _evtSeq = 0;
   window.Steward = {
@@ -14613,21 +14630,25 @@ zoo`.split("\n");
         }
         return true;
       });
-      if (pubs.length && sk && _isRelayAuthed()) {
+      const readFrom = _connectedRelays();
+      if (pubs.length && sk && _isRelayAuthed() && readFrom.length) {
         try {
           const ds = pubs.map((p) => CLEARANCE_D + String(p).toLowerCase());
-          const held = await _newestByD([{ kinds: [30078], authors: [actingChurch || pub], "#d": ds }], 6e3);
+          const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], authors: [actingChurch || pub], "#d": ds }], 6e3, [u]).then((m) => m, () => /* @__PURE__ */ new Map())));
           pubs = pubs.filter((p) => {
             const h = String(p).toLowerCase();
-            const e = held.get(CLEARANCE_D + h);
-            if (!e) return true;
-            let got = null;
-            try {
-              got = JSON.parse(decrypt3(e.content, getConversationKey(sk, h)));
-            } catch (x) {
-              return true;
+            const key = CLEARANCE_D + h;
+            for (const held of perRelay) {
+              const e = held.get(key);
+              if (!e) return true;
+              let got = null;
+              try {
+                got = JSON.parse(decrypt3(e.content, getConversationKey(sk, h)));
+              } catch (x) {
+                return true;
+              }
+              if (!same(got, want(p))) return true;
             }
-            if (!same(got, want(p))) return true;
             skipped++;
             return false;
           });

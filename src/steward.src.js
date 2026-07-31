@@ -572,7 +572,17 @@ const _relaysTouched = new Set();
 // "listening again".
 const _subbedOn = new Map();
 pool.onRelayConnectionSuccess = (url) => {
-  try { _relaysTouched.add(url); _subbedOn.set(url, pool.relays.get(url)); } catch (e) {}
+  try {
+    const fresh = _subbedOn.get(url) !== pool.relays.get(url);
+    _relaysTouched.add(url);
+    _subbedOn.set(url, pool.relays.get(url));
+    // A RELAY JUST (RE)CONNECTED, so what we believe is stored may be incomplete: read-before-write only ever
+    // skipped members on the strength of the relays reachable AT THE TIME, and this one may have missed
+    // writes while it was away. Drop the just-published cache so the next back-fill genuinely re-reads rather
+    // than skipping from memory. Cheap — the cache is roster-sized and only suppresses redundant writes.
+    // AUDIT-4: this is the reconciliation trigger for a relay that was down when a clearance was written.
+    if (fresh) _clearanceSent.clear();
+  } catch (e) {}
 };
 pool.onRelayConnectionFailure = (url) => { try { _relaysTouched.add(url); } catch (e) {} };
 // decode a base64url VAPID key to the Uint8Array the Push API wants
@@ -1045,12 +1055,12 @@ function _one(filters, ms = 4000) {
 
 // One-shot read of the NEWEST event per d-tag across a set of d-tags. Returns a Map d -> event.
 // Bounded like _one: an unanswered relay must not hang the caller. HANDOFF-2026-07-31 item 7.
-function _newestByD(filters, ms = 6000) {
+function _newestByD(filters, ms = 6000, urls = null) {
   return new Promise((resolve) => {
     const best = new Map();
     let done = false;
     const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(best); };
-    const sub = pool.subscribeMany(relays(), filters, {
+    const sub = pool.subscribeMany(urls || relays(), filters, {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d) return;
@@ -1061,6 +1071,14 @@ function _newestByD(filters, ms = 6000) {
     });
     setTimeout(finish, ms);
   });
+}
+// The relays we are CURRENTLY connected to. Read-before-write asks each of them separately, because "some
+// relay has it" is not the invariant a church needs — see the note in _refreshClearancesNow.
+function _connectedRelays() {
+  try {
+    const st = pool.listConnectionStatus();
+    return relays().filter(u => { let k = u; try { k = normalizeURL(u); } catch (e) {} return st.get(k) === true; });
+  } catch (e) { return []; }
 }
 
 // Sequence for locally-minted event ids. Date.now() is identical across ids minted in one tick, so
@@ -2490,17 +2508,39 @@ window.Steward = {
     // answer, so an unauthenticated read is merely useless rather than dangerous; gating it keeps the
     // behaviour DETERMINISTIC instead of depending on whether the challenge round-trip beat the EOSE. Measured
     // without this: the same test collided on some runs and not others.
-    if (pubs.length && sk && _isRelayAuthed()) {
+    //
+    // EVERY RELAY WE CAN REACH, ASKED SEPARATELY — not a union. AUDIT-4 measured the union version losing a
+    // child's record permanently: publish() succeeds via Promise.any as soon as ONE relay accepts, so with
+    // relay B down the doc lands on A alone; the next visit reads the union, sees it on A, and skips the
+    // member — so B never receives it, on that visit or any later one. Before read-before-write existed the
+    // unconditional republish healed that by accident. Measured: `stored on A 3/3, stored on B 0/3`, still
+    // 0/3 after a retry visit from a fresh console. A member whose phone reads B then finds no clearance,
+    // falls back to the minors: list the relay will not serve them, and is treated as an adult.
+    //
+    // Currently-CONNECTED relays rather than all configured ones: a relay that is down cannot be written to
+    // either, so holding it against the skip would just disable read-before-write for the whole outage — the
+    // write amplification back at exactly the moment the link is worst. The residual is that a relay which
+    // was down at write time still needs reconciling when it returns; that is what the _clearanceSent clear
+    // on a connection change below is for, and a full per-relay outbox is the real cure.
+    const readFrom = _connectedRelays();
+    if (pubs.length && sk && _isRelayAuthed() && readFrom.length) {
       try {
         const ds = pubs.map(p => CLEARANCE_D + String(p).toLowerCase());
-        const held = await _newestByD([{ kinds: [30078], authors: [actingChurch || pub], '#d': ds }], 6000);
+        const perRelay = await Promise.all(readFrom.map(u =>
+          _newestByD([{ kinds: [30078], authors: [actingChurch || pub], '#d': ds }], 6000, [u])
+            .then(m => m, () => new Map())));
         pubs = pubs.filter(p => {
           const h = String(p).toLowerCase();
-          const e = held.get(CLEARANCE_D + h);
-          if (!e) return true;
-          let got = null;
-          try { got = JSON.parse(nip44d(e.content, nip44ck(sk, h))); } catch (x) { return true; }
-          if (!same(got, want(p))) return true;
+          const key = CLEARANCE_D + h;
+          // Only skip if EVERY relay we can reach holds a matching record. One missing copy means the write
+          // still has to go out, which is the whole point.
+          for (const held of perRelay) {
+            const e = held.get(key);
+            if (!e) return true;
+            let got = null;
+            try { got = JSON.parse(nip44d(e.content, nip44ck(sk, h))); } catch (x) { return true; }
+            if (!same(got, want(p))) return true;
+          }
           skipped++; return false;
         });
       } catch (e) { /* read failed → publish everything, exactly as before */ }

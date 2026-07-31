@@ -112,6 +112,18 @@ function consoleSide(urls, clock) {
   // wrapper, so brace-matching from there returns the wrapper's tail. Anchor on the `async ` declaration.
   const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved)');
   const newest = grab('function _newestByD(');
+  const connected = grab('function _connectedRelays(');
+  // The connection wiring — _relaysTouched, _subbedOn, and the onRelayConnection* hooks. The reconciliation
+  // that clears the just-published cache when a relay (re)connects lives in onRelayConnectionSuccess, so a
+  // harness without this block does not contain the mechanism at all and cannot test it.
+  const touchFrom = STEWARD.indexOf('var _relaysTouched = ');
+  assert.ok(touchFrom > 0, 'the relay-tracking block is gone from the bundle — re-anchor this test');
+  let td = 0, te = STEWARD.indexOf('{', STEWARD.indexOf('pool.onRelayConnectionFailure = ', touchFrom));
+  for (; te < STEWARD.length; te++) { if (STEWARD[te] === '{') td++; else if (STEWARD[te] === '}' && --td === 0) break; }
+  const touchWiring = STEWARD.slice(touchFrom, STEWARD.indexOf(';', te) + 1);
+  assert.match(touchWiring, /_clearanceSent\.clear\(\)/,
+    'a relay (re)connecting no longer clears the just-published cache, so a console keeps skipping members ' +
+    'on the strength of relays that were not there when they were written');
   const isAuthed = grab('function _isRelayAuthed(');
   // The read is gated on a COMPLETED auth, so the auth wiring is part of what is under test. Lifting it beats
   // stubbing it: a stub would assert my description of the auth state rather than the console's.
@@ -159,11 +171,11 @@ function consoleSide(urls, clock) {
   };
   const args = Object.keys(scope);
   const built = new Function(...args,
-    sentDecl + queueDecl + authWiring + isAuthed + newest + publishSrc +
+    sentDecl + queueDecl + touchWiring + authWiring + isAuthed + newest + connected + publishSrc +
     `\nreturn ({ publish, _isRelayAuthed, ${pubClearance},\n ${refresh},\n ${refreshNow} });`)(...args.map(k => scope[k]));
   Object.assign(scope.window.Steward, built);
   return {
-    ...built, pool,
+    ...built, pool, urls,
     ok: () => events.filter(e => e.type === 'steward-publish-ok').length,
     err: () => events.filter(e => e.type === 'steward-publish-error').length,
     banners: () => events.filter(e => e.type === 'steward-write-blocked'),
@@ -171,18 +183,47 @@ function consoleSide(urls, clock) {
   };
 }
 
+// Assert every named relay is actually connected. read-before-write only consults relays it is connected to,
+// so a multi-relay test that does not wait for the second socket measures the single-relay path and passes
+// for the wrong reason.
+async function requireConnected(s, urls) {
+  const want3 = urls.map(u => normalizeURL(u));
+  for (let i = 0; i < 60; i++) {
+    const st = s.pool.listConnectionStatus();
+    if (want3.every(u => st.get(u) === true)) return s;
+    await sleep(100);
+  }
+  assert.fail('not every relay connected: ' + JSON.stringify([...s.pool.listConnectionStatus()]));
+}
+
 // The relay's NIP-42 challenge is LAZY (gateway.mjs) — it only challenges a REQ naming an invite group, a
 // safeguarding doc or a safety d-tag. refreshClearances' read is gated on a COMPLETED auth, so a console that
 // has never been challenged simply skips the read and publishes everything. Real consoles are challenged early
 // by their ~20 subscriptions; provoke the same thing here, and WAIT for it, or these tests race the handshake.
 async function authenticate(s) {
+  // Subscribe to EVERY relay the console is configured with, because that is what the real console does — its
+  // ~20 subscription hooks all call pool.subscribeMany(relays(), …). A test that subscribes to only one leaves
+  // the others un-dialled, so read-before-write sees fewer "currently connected" relays than production would
+  // and the multi-relay behaviour it is meant to exercise never happens.
+  //
   // Deliberately left OPEN. Closing the last subscription lets the pool drop the socket, and the next REQ
   // opens a fresh, unauthenticated one — which is exactly what _isRelayAuthed() is designed to notice.
-  s._authSub = s.pool.subscribeMany([WS_URL], [{ kinds: [30078], '#d': ['trinityone/safetycheck:' + church.pub] }],
-    { onevent() {}, oneose() {} });
+  s._authSub = s.pool.subscribeMany((s.urls || [WS_URL]).filter(u => u !== DEAD_URL),
+    [{ kinds: [30078], '#d': ['trinityone/safetycheck:' + church.pub] }], { onevent() {}, oneose() {} });
   for (let i = 0; i < 40 && !s._isRelayAuthed(); i++) await sleep(100);
   assert.ok(s._isRelayAuthed(), 'the console never authenticated, so read-before-write is skipped entirely and ' +
     'these tests would pass or fail on the in-memory cache alone');
+  // AND wait for every reachable relay's socket to actually be up. Auth completes as soon as ONE relay
+  // challenges, which can be well before a second relay has connected — and read-before-write asks only the
+  // relays it is currently connected to. Returning early made the multi-relay test pass or fail on timing.
+  const want2 = (s.urls || [WS_URL]).filter(u => u !== DEAD_URL).map(u => normalizeURL(u));
+  for (let i = 0; i < 60; i++) {
+    const st = s.pool.listConnectionStatus();
+    if (want2.every(u => st.get(u) === true)) break;
+    await sleep(100);
+  }
+  // Best effort, NOT an assertion: some tests deliberately point the console at a relay that is down, and
+  // that is a legitimate state. A test that needs every relay up asserts it itself — see requireConnected.
   return s;
 }
 
@@ -577,6 +618,191 @@ test('THE TOGGLE PATH NO LONGER RAISES A FALSE BANNER', async () => {
     'relay holds all 12 records. Measured at 8 of 12 before read-before-write. The banner has no dismiss ' +
     'timer, so each one sits on the safeguarding screen until tapped — which is how a steward learns to ' +
     'dismiss the real one.');
+});
+
+// ── two relays: "some relay has it" is not the invariant a church needs ──────────────────────────────────
+// AUDIT-4. publish() succeeds via Promise.any as soon as ONE relay accepts. The first version of
+// read-before-write asked all relays as a UNION, so with relay B down the doc landed on A alone, the next
+// visit saw it on A, skipped the member — and B never received it, on that visit or any later one. Measured:
+// `stored on A 3/3, stored on B 0/3`, still 0/3 after a retry visit from a fresh console. Before
+// read-before-write existed, the unconditional republish healed this by accident; the optimisation turned a
+// self-healing gap into a permanent one.
+//
+// What a child experiences: their phone happens to read relay B, finds no clearance, falls back to the
+// `minors:` list the relay will not serve an ordinary member, and is treated as an adult.
+test('A CLEARANCE MISSING FROM ONE RELAY IS STILL WRITTEN', async () => {
+  const B_PORT = 8987;
+  await requireFreePort(B_PORT, 'console-publish-honesty.test.mjs (its second relay)');
+  const bDir = mkdtempSync(join(tmpdir(), 'trin-relayB-'));
+  const bUrl = `ws://127.0.0.1:${B_PORT}/relay`;
+  const spawnB = () => spawn(process.execPath, ['scripts/gateway.mjs', String(B_PORT)], {
+    cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
+    env: { ...process.env, TRINITY_DATA_DIR: bDir, RELAY_MAX_EVENTS: '20000', CHURCH_NPUB: npubEncode(church.pub) },
+  });
+  let relayB = null;
+  const upB = async () => {
+    relayB = spawnB();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${B_PORT}/status`)).ok) return; } catch {} await sleep(150); }
+    throw new Error('relay B never came up');
+  };
+  const storedOnB = async (pubs) => {
+    const w = await new Promise((res, rej) => { const x = new WebSocket(bUrl); x.on('open', () => res(x)); x.on('error', rej); });
+    const seen = new Set();
+    await new Promise(res => {
+      const on = d => {
+        const m = JSON.parse(d);
+        if (m[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', bUrl], ['challenge', m[1]]], content: '' }, church.sk)]));
+        if (m[0] === 'EVENT' && m[1] === 'q') seen.add((m[2].tags.find(t => t[0] === 'd') || [])[1]);
+        if (m[0] === 'EOSE' && m[1] === 'q') { w.off('message', on); res(); }
+      };
+      w.on('message', on);
+      w.send(JSON.stringify(['REQ', 'q', { kinds: [30078], '#d': pubs.map(p => CLEAR_D + p) }]));
+      setTimeout(res, 6000);
+    });
+    w.close();
+    return seen.size;
+  };
+
+  try {
+    const pubs = members.slice(0, 3).map(m => m.pub);
+    // Relay B is DOWN. The write lands on A alone — correct, and publish() rightly reports success.
+    const s1 = await authenticate(consoleSide([WS_URL, bUrl]));
+    const r1 = await s1.refreshClearances(pubs, [pubs[0]], []);
+    s1.close();
+    assert.equal(r1.failed, 0, 'the write should succeed via relay A alone');
+    await sleep(400);
+    await upB();
+    assert.equal(await storedOnB(pubs), 0, 'fixture: relay B should have missed the write');
+
+    // A fresh console — nothing remembered — with BOTH relays up. It must NOT skip these members.
+    const s2 = await authenticate(consoleSide([WS_URL, bUrl]));
+    await requireConnected(s2, [WS_URL, bUrl]);      // both up now — this is the case under test
+    const r2 = await s2.refreshClearances(pubs, [pubs[0]], []);
+    s2.close();
+    await sleep(500);
+    const onB = await storedOnB(pubs);
+    assert.equal(r2.skipped, 0,
+      `${r2.skipped} of 3 members were skipped because relay A already held their clearance, while relay B ` +
+      'held none of them. Nothing else ever retries, so a member reading relay B has no record for good.');
+    assert.equal(onB, 3,
+      `relay B holds ${onB} of 3 clearances after a retry visit. A child whose phone reads B finds nothing, ` +
+      'falls back to the minors list the relay will not serve them, and is treated as an adult.');
+  } finally {
+    try { relayB && relayB.kill('SIGKILL'); } catch {}
+    try { rmSync(bDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('…and with both relays holding it, the skip still happens', async () => {
+  // The other direction: the fix must not switch read-before-write off whenever a second relay exists.
+  const B_PORT = 8986;
+  await requireFreePort(B_PORT, 'console-publish-honesty.test.mjs (its second relay, agreement case)');
+  const bDir = mkdtempSync(join(tmpdir(), 'trin-relayB2-'));
+  const bUrl = `ws://127.0.0.1:${B_PORT}/relay`;
+  const relayB = spawn(process.execPath, ['scripts/gateway.mjs', String(B_PORT)], {
+    cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
+    env: { ...process.env, TRINITY_DATA_DIR: bDir, RELAY_MAX_EVENTS: '20000', CHURCH_NPUB: npubEncode(church.pub) },
+  });
+  try {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${B_PORT}/status`)).ok) break; } catch {} await sleep(150); }
+    const pubs = members.slice(3, 6).map(m => m.pub);
+    const s1 = await authenticate(consoleSide([WS_URL, bUrl]));
+    await requireConnected(s1, [WS_URL, bUrl]);
+    assert.equal((await s1.refreshClearances(pubs, [], [])).failed, 0, 'seeding both relays failed');
+    s1.close();
+    await sleep(600);
+    const s2 = await authenticate(consoleSide([WS_URL, bUrl]));
+    await requireConnected(s2, [WS_URL, bUrl]);
+    const r = await s2.refreshClearances(pubs, [], []);
+    s2.close();
+    assert.equal(r.skipped, 3,
+      `only ${r.skipped} of 3 skipped with both relays holding matching records — read-before-write has been ` +
+      'switched off for every multi-relay church, which is the write amplification it exists to remove');
+  } finally {
+    try { relayB.kill('SIGKILL'); } catch {}
+    try { rmSync(bDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('A RELAY JOINING MUST FORCE A RE-CHECK, NOT A CACHED SKIP', async () => {
+  // The reconciliation half of the two-relay fix, and getting a real test on it took three attempts — worth
+  // recording, because the first two passed with the guard DELETED.
+  //
+  //   1st: single relay, killed and restarted. Useless — the data survived the restart, so a cached skip lost
+  //        nothing and the assertion held either way.
+  //   2nd: two relays, B down during the write, brought up afterwards. Also useless: `_clearanceSent` has a
+  //        15-SECOND freshness window, and starting a gateway plus re-authenticating takes longer than that,
+  //        so the cache had already expired and the guard was never the thing being exercised.
+  //
+  // So the window is the thing to respect: the exposure this guard closes is only ever 15 seconds wide, which
+  // is worth knowing — it means the per-relay read above is the load-bearing fix and this is belt-and-braces.
+  // To reach it, the relay list is mutated in place (the console reads relays() on every call, as the real one
+  // does when a steward adds a relay) so B can join a console that has just written, with the cache still warm.
+  const B_PORT = 8985;
+  await requireFreePort(B_PORT, 'console-publish-honesty.test.mjs (its reconciliation relay)');
+  const bDir = mkdtempSync(join(tmpdir(), 'trin-relayB3-'));
+  const bUrl = `ws://127.0.0.1:${B_PORT}/relay`;
+  const relayB = spawn(process.execPath, ['scripts/gateway.mjs', String(B_PORT)], {
+    cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
+    env: { ...process.env, TRINITY_DATA_DIR: bDir, RELAY_MAX_EVENTS: '20000', CHURCH_NPUB: npubEncode(church.pub) },
+  });
+  const countOnB = async (pubs) => {
+    const w = await new Promise((res, rej) => { const x = new WebSocket(bUrl); x.on('open', () => res(x)); x.on('error', rej); });
+    const seen = new Set();
+    await new Promise(res => {
+      const on = d => {
+        const m = JSON.parse(d);
+        if (m[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', bUrl], ['challenge', m[1]]], content: '' }, church.sk)]));
+        if (m[0] === 'EVENT' && m[1] === 'q') seen.add((m[2].tags.find(t => t[0] === 'd') || [])[1]);
+        if (m[0] === 'EOSE' && m[1] === 'q') { w.off('message', on); res(); }
+      };
+      w.on('message', on);
+      w.send(JSON.stringify(['REQ', 'q', { kinds: [30078], '#d': pubs.map(p => CLEAR_D + p) }]));
+      setTimeout(res, 6000);
+    });
+    w.close();
+    return seen.size;
+  };
+  try {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${B_PORT}/status`)).ok) break; } catch {} await sleep(150); }
+    // FRESH keys, not a slice of the shared roster. Every other test in this file seeds some range of
+    // `members`, so a reused slice is already stored on relay A — the first write here would then be skipped
+    // by the relay read, never populate the cache, and the sabotage would have nothing to bite on. That is
+    // exactly why the first three attempts at this test passed with the guard deleted.
+    const fresh3 = Array.from({ length: 3 }, K);
+    const pubs = fresh3.map(m => m.pub);
+
+    const urls = [WS_URL];                       // the console starts on relay A only
+    const s = await authenticate(consoleSide(urls));
+    assert.equal((await s.refreshClearances(pubs, [], [])).failed, 0, 'the write to relay A failed');
+    const tWrite = Date.now();
+
+    urls.push(bUrl);                             // relay B joins, cache still inside its 15s window
+    try { s._authSub && s._authSub.close(); } catch {}
+    await authenticate(s);
+    await requireConnected(s, [WS_URL, bUrl]);
+
+    const elapsed = Date.now() - tWrite;
+    (await import('node:fs')).writeFileSync('/tmp/recon.txt', 'elapsed_ms=' + elapsed);
+    const r = await s.refreshClearances(pubs, [], []);
+    s.close();
+    await sleep(500);
+    const onB = await countOnB(pubs);
+    assert.ok(elapsed < 15000, `the cache window (15s) expired after ${elapsed}ms, so this test cannot reach ` +
+      'the guard it names — tighten it or the sabotage will never bite');
+    assert.equal(r.skipped, 0,
+      `${r.skipped} of 3 members were skipped from the console's cache after a new relay connected. That cache ` +
+      'only ever proved the relays reachable AT THE TIME held the record — B has never seen these.');
+    assert.equal(onB, 3,
+      `relay B holds ${onB} of 3 clearances. A member reading B finds nothing, falls back to the minors list ` +
+      'the relay will not serve them, and is treated as an adult.');
+  } finally {
+    try { relayB.kill('SIGKILL'); } catch {}
+    try { rmSync(bDir, { recursive: true, force: true }); } catch {}
+  }
 });
 
 // ── keeping the guard honest ─────────────────────────────────────────────────────────────────────────────
