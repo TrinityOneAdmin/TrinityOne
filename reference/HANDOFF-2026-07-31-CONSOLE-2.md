@@ -124,6 +124,54 @@ so it is worth doing next.
 **Two UI defects found on the phone.** The care confirmation card wraps its title one word per line at 720px.
 "Withdraw" retracts a request for help immediately, with no confirm and no undo (sits with the open U7 item).
 
+## Network simulation — the console over a bad link (2026-07-31, FIRST RUN)
+
+`scripts/netsim-console.mjs` + `scripts/netsim-link.mjs`. Not part of `npm test`; run by hand when the write
+path changes. The 2026-07-14 sims measured the RELAY (DoS, partition, scale); this measures the CONSOLE, which
+is a different question and the one this branch is about. The link shim models what a bad path actually
+presents to an application — latency, jitter, a bandwidth ceiling, connection churn, and BLACKHOLE (accept the
+socket then say nothing, the DPI/half-open-NAT case). It deliberately does not drop packets: TCP retransmits,
+so byte-level loss would corrupt WebSocket framing and test the wrong thing.
+
+Marking 3 children out of an 8-member roster, measuring whether each child's record actually ARRIVES and
+DECRYPTS to `minor: true` — presence is not enough, a stale record passes a presence check and still tells a
+child's app they are an adult:
+
+| link | children delivered | told "saved" falsely | false alarms | bytes |
+|---|---|---|---|---|
+| fast | 3/3 | no | 0 | 9 kB |
+| DSL | 3/3 | no | 0 | 9 kB |
+| 2G/EDGE | 3/3 | no | **1** (`failed=3` of 8) | 9 kB |
+| satellite | 3/3 | no | **1** (`failed=6` of 8) | 8 kB |
+| awful (2.5s RTT, 4 kB/s) | **0/3** | no | 0 | 0 kB |
+| link cut mid-write, 2G | 3/3 | no | **1** (`failed=2`) | 8 kB |
+| blackholed mid-write, 2G | **0/3** | no | 0 | 1 kB |
+| second visit, nothing changed, 2G | 3/3 | no | — | 10 kB, **published 0 events, skipped 8/8** |
+
+**The headline fix holds everywhere.** `lied = false` in all eight scenarios: the console never reported a save
+that did not happen, on any link, including mid-write cuts and blackholes. That is what this branch was for and
+it is now measured under adverse conditions rather than only against a healthy or hard-killed relay.
+
+**Read-before-write works on a slow link too** — a repeat visit published nothing at all and skipped 8 of 8.
+
+**But the alarm fatigue is NOT fixed for real links, and this is the finding.** On every link slower than DSL
+the steward is warned that children did not receive their safeguarding record while all of them did: 3 of 8
+reported failed on 2G, 6 of 8 on satellite. The cause is not the tie-break this branch fixed — it is the 8s
+batch bound in `refreshClearances` racing `maxWaitForConnection` 3000 + `publishTimeout` 4400 = 7400 ms worst
+case. That is **B8 / original handoff finding 6**, carried as backlog through six audits on the grounds that it
+was theoretical. It is not theoretical: it fires on the ordinary connection this product is built for, and it
+produces exactly the false banner the branch set out to remove. **Promote it to a blocker.**
+
+On the two worst profiles nothing is delivered at all. For the blackhole that is arguably honest (the link is a
+black hole and the console says so); for "awful" it means a 2.5s-RTT link cannot complete a back-fill within
+the current bounds — the same B8 arithmetic, one step further.
+
+**A methodology trap worth keeping:** the first run crashed mid-matrix and left its gateway behind. The next run
+then reported 0/3 on EVERY scenario including the fast one, because the stray relay answered `/status` with a
+different church key and refused every write. `scripts/test-ports.mjs` exists for exactly this — it usually
+makes broken code look green; here it made working code look catastrophic. The sim now calls `requireFreePort`
+and cleans up on `uncaughtException`.
+
 ## Device + smoke coverage added today (Oppo, build 197, Test Church 01, PIN `778899`)
 
 | route | result |
