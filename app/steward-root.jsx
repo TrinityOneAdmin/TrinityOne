@@ -26,10 +26,32 @@ window.useStewardIdv = useStewardIdv;
 // which would otherwise each register 3 listeners + a 90s timer). It bumps a monotonic counter ONLY when a relay
 // this console opened has actually dropped (relaysHealthy() === false) — so a healthy socket never fires the
 // full-corpus re-query storm; a real drop (every deploy restarts the relay) re-subscribes everything once to recover.
+//
+// AND IT BACKS OFF. HANDOFF-2026-07-31 audit. relaysHealthy() is now honest about a relay that has dropped
+// (before this it could never say so, which was the bug) — but "unhealthy" is not always a condition that
+// clears. relays() is multi-entry by default: the canonical pair, plus any relay the steward added, plus the
+// named-relay tunnel URLs that the comment at src/steward.src.js:321 says go dead as a matter of routine. One
+// permanently unreachable entry alongside a perfectly healthy primary leaves this false FOR EVER.
+//
+// Without backoff that means ~20 broad, un-cursored subscriptions torn down and re-opened every 90 seconds and
+// on every return-to-foreground, permanently — re-downloading the whole church corpus each time, over exactly
+// the metered and censored connections this product is for. Measured in audit: healthy primary + one dead
+// spare = `relaysHealthy() === false`, still false after a full re-subscribe cycle.
+//
+// So the first attempt after a drop is immediate (recovery is the point), and each attempt that does not
+// restore health waits longer, capped. A relay that comes back resets it to eager.
 const _connListeners = new Set();
-let _connWired = false, _connLast = 0;
+let _connWired = false, _connLast = 0, _connTries = 0;
+const _CONN_BASE_MS = 90000, _CONN_MAX_MS = 900000;
 function _stewardHealthy() { try { return !window.Steward || !window.Steward.relaysHealthy || window.Steward.relaysHealthy(); } catch (e) { return true; } }
-function _maybeBumpConn() { if (_stewardHealthy()) return; _connLast = Date.now(); _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} }); }
+function _connGap() { return Math.min(_CONN_MAX_MS, _CONN_BASE_MS * Math.pow(2, Math.min(_connTries, 4))); }
+function _maybeBumpConn() {
+  if (_stewardHealthy()) { _connTries = 0; return; }          // recovered — be eager again next time
+  if (_connLast && Date.now() - _connLast < _connGap()) return;   // still down, and we only just tried
+  _connTries++;
+  _connLast = Date.now();
+  _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
+}
 function _wireStewardConn() {
   if (_connWired || typeof document === 'undefined') return; _connWired = true;
   const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - _connLast > 2500) _maybeBumpConn(); };

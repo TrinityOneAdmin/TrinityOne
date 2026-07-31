@@ -95,9 +95,9 @@ test('the trusted-view signal is a real auth, not a constant — and it cannot o
   // socket goes. Same invariant, one more clause: it must be able to become false again.
   const at = BUNDLE.indexOf('pool.automaticallyAuth =');
   assert.notEqual(at, -1, 'the NIP-42 auth hook is missing');
-  assert.match(BUNDLE.slice(at, at + 500), /_authedRelays\.add\(/,
+  assert.match(BUNDLE.slice(at, at + 500), /_authedRelays\.set\(/,
     'the authenticated relay must be recorded where the auth event is signed');
-  assert.doesNotMatch(BUNDLE, /_authedRelays = new Set\(\[[^\]]/,
+  assert.doesNotMatch(BUNDLE, /_authedRelays = new (?:Set|Map)\(\[[^\]]/,
     'it must start empty, or it asserts an auth that never happened');
   const isAuthed = body('function _isRelayAuthed(', BUNDLE);
   const q = isAuthed.indexOf('listConnectionStatus()'), yes = isAuthed.indexOf('return true');

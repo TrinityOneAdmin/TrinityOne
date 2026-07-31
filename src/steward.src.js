@@ -582,26 +582,41 @@ let sk = null, pub = null;                 // the ACTIVE signing identity (churc
 // connection answers "nothing" for a church that HAS a key. Minting on that answer orphans every sealed name
 // or care need; writing a list on it hard-deletes the real list.
 //
-// So there is no flag to forget to reset. Record WHICH relay we authenticated to, and answer the question by
-// asking the pool whether that relay is still connected. A dropped relay is deleted from the pool's map
-// (AbstractSimplePool.ensureRelay's onclose), so this goes false on its own.
+// So there is no flag to forget to reset. Record WHICH SOCKET we authenticated on, and answer the question by
+// asking the pool whether that same socket is still the live one.
+//
+// KEYED ON THE RELAY OBJECT, NOT THE URL, and this is the whole point. Auth belongs to a connection, not a
+// hostname. A url-keyed version of this shipped for an afternoon and was caught by audit: kill the relay, let
+// the pool reconnect on a REQ the gateway's lazy NIP-42 does not challenge, and the new socket has never signed
+// anything — but the url is back in listConnectionStatus() as `true`, so it reported authed again. Measured:
+//     connected = true, relayAuthed() = true, challenge never sent.
+// Every mint gate and list write is open in that state, which is the destructive direction. `ensureRelay`
+// constructs a NEW AbstractRelay after a close, so comparing object identity makes a reconnect read
+// unauthenticated until it has actually re-authed.
 //
 // Note the honest limit, unchanged from before: this records that we SIGNED the challenge, not that the relay
 // accepted it. Narrowing that further would need the relay's OK on the auth event, which nostr-tools does not
 // surface here.
-const _authedRelays = new Set();
+const _authedRelays = new Map();   // normalised url -> the AbstractRelay instance that signed the challenge
 pool.automaticallyAuth = (url) => async (authEvent) => {
   if (!sk) throw new Error('no key');
-  try { _authedRelays.add(normalizeURL(url)); } catch (e) { _authedRelays.add(url); }
+  let k = url; try { k = normalizeURL(url); } catch (e) {}
+  try { _authedRelays.set(k, pool.relays.get(k)); } catch (e) {}
   return finalizeEvent(authEvent, sk);
 };
-// Are we currently connected to a relay we have authenticated to? Ambiguity resolves to FALSE — including the
-// catch. A spurious false makes the guards refuse a write, which is visible to the steward and retryable; a
-// spurious true silently destroys a church's keys or its safeguarding list.
+// Are we currently connected, on the SAME socket we authenticated on, to a relay we are actually using?
+// Ambiguity resolves to FALSE — including the catch. A spurious false makes the guards refuse a write, which is
+// visible to the steward and retryable; a spurious true silently destroys a church's keys or its safeguarding
+// list. Intersected with relays() for the same reason relaysHealthy() is: a socket to a relay this console has
+// since stopped using must not vouch for the view we are reading now.
 function _isRelayAuthed() {
   try {
     const st = pool.listConnectionStatus();
-    for (const url of _authedRelays) { if (st.get(url) === true) return true; }
+    for (const url of relays()) {
+      let k = url; try { k = normalizeURL(url); } catch (e) {}
+      const authedOn = _authedRelays.get(k);
+      if (authedOn && st.get(k) === true && pool.relays.get(k) === authedOn) return true;
+    }
     return false;
   } catch (e) { return false; }
 }
@@ -914,12 +929,7 @@ async function deriveAes(pin, salt, iterations) {
 // The prefix is written inline rather than hoisted to a constant so this function stays self-contained: the
 // tests lift it out of the bundle and run it, and a name resolved from the enclosing IIFE would be undefined
 // there — a green suite proving nothing.
-//
-// `out` is an optional object this fills in with `{ reason }` on failure, so a caller that needs to tell one
-// refusal from another can, without changing what publish() RETURNS. The return contract is load-bearing in
-// about seventy places (truthy event / false), and widening it to carry the reason would have meant auditing
-// every one of them; refreshClearances is the only caller that needs to discriminate. HANDOFF-2026-07-31 (2).
-async function publish(evt, out) {
+async function publish(evt) {
   try {
     await Promise.any(pool.publish(relays(), evt).map(p => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
@@ -931,7 +941,6 @@ async function publish(evt, out) {
     // every relay rejected — surface it so the steward isn't left wondering why nothing saved
     let reason = '';
     try { const errs = (e && e.errors) || []; reason = (errs[0] && (errs[0].message || String(errs[0]))) || ''; } catch (x) {}
-    try { if (out) out.reason = reason; } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
     return false;   // total failure — every relay rejected; callers that await the result can surface it
   }
@@ -2216,22 +2225,29 @@ window.Steward = {
     // in every church. A safeguarding regression created by the change meant to protect them. The test missed
     // it by hand-building the event WITH the tag instead of calling this function. AUDIT-2026-07-27.
     const cp = actingChurch || pub;
-    // HANDOFF-2026-07-31 (2). `created_at` is whole seconds, so two writes of the SAME member's clearance inside
-    // one second collide, and the relay applies its NIP-01 tie-break (event-store.mjs:159-162 — equal
-    // created_at, lowest id wins), refusing the loser with "a newer version of this is already stored". The
-    // back-fill counted those refusals as children who did not receive their safeguarding record and told the
-    // steward so — measured as a banner reading "11 of 21" while all 21 were stored. The harm is alarm fatigue:
-    // a genuine delivery failure looks identical to the steward and gets dismissed.
+    // A REFUSED CLEARANCE IS A FAILURE, INCLUDING THE TIE-BREAK ONE. HANDOFF-2026-07-31 (2) proposed treating
+    // the relay's "a newer version of this is already stored" as success, on the grounds that the relay must
+    // then hold something at least as new. That was implemented, audited, and REVERTED on 2026-07-31 — the
+    // reasoning is wrong in a way that costs a child their clearance:
     //
-    // That refusal means the relay already holds a version of THIS document at least as new as ours. Only the
-    // church key or a CURRENT steward of the tagged church can write it (gateway.mjs:1362-1365) — never the
-    // member themselves — so the writer that won the tie is the church or one of its stewards, working from the
-    // same safeguarding lists. Report it as its own outcome: not a delivery failure, not silently a success.
-    // Deliberately NOT done inside publish(): a blocklist or group-key write that loses a tie-break IS
-    // something the steward must hear about, and "reload and edit again" is the relay's own advice for it.
-    const out = {};
-    return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }), out))
-      .then(r => (r === false && /newer version of this is already stored/.test(out.reason || '')) ? 'have-newer' : r);
+    //   • The tie-break compares created_at, not CONTENT. `created_at` is whole seconds and the relay accepts
+    //     up to 900s of clock skew (scripts/event-store.mjs), so a steward whose phone clock runs fast can
+    //     write {minor:false} and win against the correct {minor:true} that follows. Reproduced: the correct
+    //     write came back have-newer, the run reported failed:0, no banner, and — because the back-fill records
+    //     a clean run as done — nothing ever retried. The child's app reads "not a minor". event-store.mjs says
+    //     it plainly: a future-dated doc "can NEVER be corrected — an honest-timestamped fix is rejected as
+    //     'have-newer', pinning the stale state".
+    //   • The string is free text chosen by the relay (scripts/gateway.mjs:3720), not a NIP-01 signal. Under
+    //     this product's threat model — a seized or compelled relay — accepting it as proof that a child's
+    //     safeguarding record is stored hands an adversary a way to suppress every clearance and have the
+    //     console report a clean save.
+    //
+    // Counting it as a failure is noisy and self-healing: the banner fires, the marker is not recorded, and the
+    // next Members visit retries with a fresh created_at that wins cleanly. Noisy beats silently wrong here.
+    // The false banner this was meant to silence is largely gone anyway now that the double-fire is fixed
+    // (fix 3); the real cure is reading the doc back before writing — handoff item 7 — which removes the
+    // collision at source instead of teaching the console to shrug at it.
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }));
   },
   // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
   // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
@@ -2253,7 +2269,7 @@ window.Steward = {
     const pubs = [...new Set((memberPubs || []).filter(Boolean))];
     const BATCH = 20, GAP_MS = 250;   // ≤80/s, comfortably under the relay's 100/s per-connection cap
     const out = [];
-    let failed = 0, haveNewer = 0;
+    let failed = 0;
     for (let i = 0; i < pubs.length; i += BATCH) {
       const slice = pubs.slice(i, i + BATCH);
       const settle = Promise.allSettled(slice.map(p => {
@@ -2265,10 +2281,6 @@ window.Steward = {
       const rs = await Promise.race([settle, new Promise(r => setTimeout(() => r(null), 8000))]);
       if (!rs) { failed += slice.length; } else {
         out.push(...rs);
-        // 'have-newer' is NOT a failure: the relay is holding a version of that member's clearance at least as
-        // new as the one we just sent (see publishClearance). Counted separately rather than dropped, so a
-        // console colliding with itself stays measurable instead of becoming invisible. HANDOFF-2026-07-31 (2).
-        haveNewer += rs.filter(r => r.status === 'fulfilled' && r.value === 'have-newer').length;
         failed += rs.filter(r => r.status === 'rejected' || r.value === false || r.value === null).length;
       }
       if (i + BATCH < pubs.length) await new Promise(r => setTimeout(r, GAP_MS));
@@ -2283,7 +2295,7 @@ window.Steward = {
             + 'connected to your relay to retry.' } }));
       } catch (e) {}
     }
-    return { results: out, failed, haveNewer, total: pubs.length };
+    return { results: out, failed, total: pubs.length };
   },
   // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
   // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —

@@ -80,10 +80,10 @@ test('the authenticated-view signal is a real auth, not hardcoded — and it EXP
   const at = BUNDLE.indexOf('pool.automaticallyAuth =');
   assert.notEqual(at, -1, 'the NIP-42 auth hook is missing from the shipped bundle');
   const near = BUNDLE.slice(at, at + 500);
-  assert.match(near, /_authedRelays\.add\(/,
+  assert.match(near, /_authedRelays\.set\(/,
     'the authenticated relay must be recorded where the auth event is actually signed');
-  assert.doesNotMatch(BUNDLE, /_authedRelays = new Set\(\[[^\]]/,
-    'the authed-relay set starts pre-populated, so it asserts an auth that never happened');
+  assert.doesNotMatch(BUNDLE, /_authedRelays = new (?:Set|Map)\(\[[^\]]/,
+    'the authed-relay map starts pre-populated, so it asserts an auth that never happened');
   // And the answer must be derived from the pool, not from "have we ever authed" — that is the sticky flag
   // again under a new name.
   // NOT body('_isRelayAuthed'): its first occurrence in the bundle is a CALL inside _requireTrustedView, so

@@ -107,14 +107,14 @@ function consoleSide(urls) {
   // Whatever the console tracks auth in, and however it wires the pool's auth hook, has to come from the
   // bundle — re-declaring it here would test a description of the console rather than the console.
   const authState = grabSpan('var _authedRelays = ', 'pool.automaticallyAuth = ');
-  assert.match(authState, /_authedRelays\.add/,
+  assert.match(authState, /_authedRelays\.set\(/,
     'nothing records which relay the console authenticated to, so relayAuthed() is either a flag that is never ' +
     'cleared (the finding) or always false — re-anchor this test, or rebuild: bash scripts/build-steward.sh');
   const isAuthed = grab('function _isRelayAuthed(');
   const relayAuthed = grab('relayAuthed() {');
   const scope = {
     pool, relays: () => urls, normalizeURL, finalizeEvent,
-    sk: church.sk, console: { warn() {}, log() {} }, Set, String, JSON,
+    sk: church.sk, console: { warn() {}, log() {} }, Set, Map, String, JSON,
   };
   const args = Object.keys(scope);
   const built = new Function(...args,
@@ -183,6 +183,42 @@ test('…and re-authenticating on the new socket restores it', async () => {
     'the relay is back and the console has re-authenticated, but it still reports itself unauthenticated — so ' +
     'every list write and key check refuses for the rest of the session');
   try { sub2.close(); } catch {}
+  s.close();
+});
+
+test('A RECONNECTED SOCKET THAT WAS NEVER RE-CHALLENGED IS NOT AUTHENTICATED', async () => {
+  // Found by audit, after the first version of this fix shipped and every other test here was green.
+  //
+  // That version keyed the authed state on the URL. The test above ("re-authenticating on the new socket
+  // restores it") passes because it calls authSub() again, which PROVOKES a challenge. But the relay's NIP-42
+  // is lazy — it challenges only a REQ naming an invite group, a safeguarding doc or a safety d-tag. Any other
+  // re-subscription, and any publish(), brings the socket back WITHOUT a challenge. The url then reappears in
+  // listConnectionStatus() as `true`, and a url-keyed check said "authed" for a socket that had never signed
+  // anything. Measured: connected = true, relayAuthed() = true, challenge never sent.
+  //
+  // Auth belongs to a connection, not a hostname. `ensureRelay` builds a NEW AbstractRelay after a close, so
+  // the check compares object identity.
+  const s = consoleSide([WS_URL]);
+  const sub = authSub(s);
+  await sleep(1000);
+  assert.equal(s.relayAuthed(), true, 'the console did not authenticate at all — fixture broken');
+  try { sub.close(); } catch {}
+
+  relay.kill('SIGKILL');
+  await sleep(1200);
+  await startRelay();
+
+  // Reconnect via a subscription the gateway does NOT challenge. This is what the reconnect ticker does.
+  const plain = s.pool.subscribeMany([WS_URL], [{ kinds: [1], limit: 1 }], { onevent() {}, oneose() {} });
+  await sleep(1800);
+  assert.equal(s.pool.listConnectionStatus().get(normalizeURL(WS_URL)), true,
+    'the socket did not come back — fixture broken, this test proves nothing');
+  assert.equal(s.relayAuthed(), false,
+    'the console reports itself authenticated on a socket that has never signed a challenge. Every mint gate ' +
+    'and every whole-list write is open: the care key and name key can be re-minted over the real ones, and a ' +
+    'minors-list edit can hard-delete the real list. This is the ordinary state after any relay restart, not ' +
+    'an edge case.');
+  try { plain.close(); } catch {}
   s.close();
 });
 

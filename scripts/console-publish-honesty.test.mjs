@@ -102,7 +102,7 @@ function grab(sig) {
 function consoleSide(urls, clock) {
   const pool = new SimplePool({ verifyEvent, websocketImplementation: WebSocket, maxWaitForConnection: 1500 });
   const events = [];                                    // every window event the console fired
-  const publishSrc = grab('async function publish(evt, out)');
+  const publishSrc = grab('async function publish(evt)');
   const pubClearance = grab('publishClearance(memberPub, status)');
   const refresh = grab('refreshClearances(memberPubs, minors, approved)');
   // esbuild renames the nip44 imports. Bind the names it ACTUALLY used, and fail loudly if a rebuild
@@ -249,75 +249,64 @@ test('GUARD: the relay really is back up before the tests below rely on it', asy
   assert.ok(r.ok, 'the relay did not come back after the mid-session kill — every test below this is invalid');
 });
 
-// ── the banner must not cry wolf ─────────────────────────────────────────────────────────────────────────
-// HANDOFF-2026-07-31, finding 2. `created_at` is whole seconds. When the same clearance is written twice
-// inside one second the relay applies its NIP-01 tie-break (event-store.mjs:159-162 — equal created_at, lowest
-// id wins) and refuses the loser with
+// ── the tie-break must stay a FAILURE ────────────────────────────────────────────────────────────────────
+// HANDOFF-2026-07-31 finding 2 proposed the opposite of this, it was implemented, and it was reverted the same
+// day after audit. Keeping the test is the point: this is the shape of a mistake that is easy to talk yourself
+// into a second time, because the reasoning for it sounds airtight.
 //
-//     OK false  "invalid: a newer version of this is already stored — reload and edit again"
+// The argument was: `created_at` is whole seconds, so two writes of one member's clearance inside a second
+// collide; the relay's NIP-01 tie-break refuses the loser with "a newer version of this is already stored";
+// and since only the church key or a current steward can write a clearance (gateway.mjs:1362-1365 — verified,
+// that part is true), the winner must be a legitimate, at-least-as-new version. So: not a lost child, don't
+// raise the banner.
 //
-// The back-fill counted that as a member who did not receive their safeguarding record, and told the steward
-// so. Measured: `publish-ok: 32, publish-error: 11, banner: "11 of 21 …", clearances actually stored: 21/21`.
+// It is wrong in two ways that cost a child their clearance:
 //
-// Every one of those children HAD a clearance. The harm is alarm fatigue: a genuine delivery failure looks
-// identical to this and gets dismissed. The relay's answer means, by definition, that it already holds a
-// version of this document at least as new as ours.
+//   • The tie-break compares created_at, NOT content. The relay accepts up to 900s of clock skew
+//     (scripts/event-store.mjs), so a steward whose phone clock runs fast writes {minor:false} and BEATS the
+//     correct {minor:true} that follows. Reproduced during audit: the correct write came back have-newer, the
+//     run reported failed:0, no banner fired, and the back-fill recorded itself as done — so nothing ever
+//     retried. event-store.mjs says it in its own comment: an honest-timestamped fix "is rejected as
+//     'have-newer', pinning the stale state".
+//   • The string is free text this gateway happens to emit (gateway.mjs:3720). It is not NIP-01 and it is
+//     ATTACKER-SUPPLIED. A seized or compelled relay — the threat model — could answer it to every clearance
+//     write and have the console report a clean save for records it silently dropped.
 //
-// SCOPE OF THAT CLAIM, checked rather than assumed: the relay's write rule for clearance: docs
-// (gateway.mjs:1362-1365) admits only the church key or a CURRENT steward of the church named in the tag — a
-// member cannot write their own. So the writer that won the tie is the church itself or one of its stewards,
-// working from the same safeguarding lists. It is NOT any member, which is what would make this dangerous.
-// Fixing the double-fire (clearance-backfill.test.mjs) removes the common cause; this stops the remaining
-// same-second races — a steward toggling a flag while the back-fill runs, or a second steward's console —
-// from being reported as lost children.
-test('A SAME-SECOND REWRITE IS NOT A LOST CHILD', async () => {
+// Counting it as a failure is noisy and self-healing: the banner fires, the back-fill is not marked done, and
+// the next visit retries with a fresh created_at that wins. The real cure for the noise is reading the doc back
+// before writing (handoff item 7), which removes the collision instead of ignoring it.
+test('A TIE-BREAK REFUSAL IS A FAILURE, NOT A SILENT SUCCESS', async () => {
   const s = consoleSide([WS_URL]);
-  const pubs = members.slice(0, 6).map(m => m.pub);
-  // Both runs inside one second, which is what the device did: two full-roster back-fills 96 ms apart.
-  const [a, b] = await Promise.all([
-    s.refreshClearances(pubs, pubs.slice(0, 2), []),
-    s.refreshClearances(pubs, pubs.slice(0, 2), []),
-  ]);
-  await sleep(300);
-  const stored = await storedCount(pubs);
-  s.close();
-  assert.equal(stored, 6, 'the fixture did not actually store every clearance — the test is wrong, not the code');
-  const total = a.failed + b.failed;
-  assert.equal(total, 0,
-    `${total} of 12 writes were reported as members who did not receive their safeguarding record, while the ` +
-    `relay is holding all ${stored}/6 clearances. That banner is false, and a real delivery failure looks ` +
-    'exactly the same to the steward reading it.');
-  assert.equal(s.banners().length, 0, 'the safeguarding banner fired even though every clearance is stored');
-});
-
-test('a clearance the relay already holds a NEWER version of is not a lost child either', async () => {
-  // The deterministic form of the test above, and the one that actually pins the behaviour.
-  //
-  // A same-second tie is decided by comparing event ids, and the ids are effectively random (the NIP-44 seal
-  // uses a fresh nonce), so whether any given member collides is a coin flip. Asserting "a collision happened"
-  // on that basis is flaky — it failed once while writing this file, on a run where all six writes happened to
-  // win their ties. `failed === 0` above holds either way and is the real invariant; this test is what makes
-  // sure the have-newer PATH is exercised at all rather than passing vacuously.
-  //
-  // Drive the console's clock backwards by a second for the rewrite. The relay then holds a strictly newer
-  // version, which is the same verdict and the same refusal string, reached without a coin flip.
   const pubs = members.slice(6, 10).map(m => m.pub);
   const t = now();
   const first = consoleSide([WS_URL], () => t);
-  const a = await first.refreshClearances(pubs, [], []);
+  assert.equal((await first.refreshClearances(pubs, [], [])).failed, 0, 'the first write failed — fixture broken');
   first.close();
-  assert.equal(a.failed, 0, 'the first write failed — the fixture is broken, not the code');
 
-  const stale = consoleSide([WS_URL], () => t - 1);          // the relay is now holding something newer
-  const b = await stale.refreshClearances(pubs, [], []);
+  // Drive the clock back a second: the relay now holds a strictly newer version, which is the same verdict and
+  // the same refusal string as a same-second tie, reached deterministically rather than on a coin flip.
+  const stale = consoleSide([WS_URL], () => t - 1);
+  const r = await stale.refreshClearances(pubs, [], []);
   stale.close();
-  assert.ok('haveNewer' in b, 'refreshClearances no longer reports tie-break collisions at all');
-  assert.equal(b.haveNewer, 4,
-    `the relay holds a newer version of all four clearances but only ${b.haveNewer} were recognised as such`);
-  assert.equal(b.failed, 0,
-    `${b.failed} of 4 members were reported as not having received their safeguarding record, when the relay ` +
-    'is holding a NEWER clearance for every one of them');
-  assert.equal(stale.banners().length, 0, 'the safeguarding banner fired for clearances the relay already holds');
+  s.close();
+  assert.equal(r.failed, 4,
+    `the relay refused all 4 clearances and the run reported ${r.failed} failures. Treating "a newer version is ` +
+    'already stored" as success is only safe if the stored version is also CORRECT, and the tie-break compares ' +
+    'timestamps, not content — so a steward with a fast clock can pin {minor:false} over a child and nobody is ' +
+    'told. The relay also chooses that string, so a compelled relay could claim it for every write.');
+  assert.equal(stale.banners().length, 1, 'the steward was not told that four clearances did not land');
+  assert.ok(!('haveNewer' in r) || r.haveNewer === 0,
+    'refreshClearances is bucketing tie-break refusals away from `failed` again');
+});
+
+test('…and a run that lost the tie-break is NOT recorded as done', async () => {
+  // The other half, and the half that makes it permanent. The dashboard records the back-fill as complete only
+  // when `failed === 0`; if a tie-break refusal is not counted, a stale clearance is never revisited.
+  const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+  const at = D.indexOf('let clearanceBackfillDone');
+  const body = D.slice(D.indexOf('if (!sg.loaded) return', at), D.indexOf('}, [sg.loaded', at));
+  assert.match(body, /if \(!r \|\| r\.failed\) release\(\)/,
+    'the back-fill no longer gives its claim back on failure, so a refused clearance is remembered as delivered');
 });
 
 test('A GENUINE REFUSAL MUST STILL RAISE THE BANNER', async () => {
@@ -367,7 +356,7 @@ test('publish() checks the prefix rather than rejecting every string it is hande
   // The failure mode of an over-broad fix. A relay's OK reason is ALSO a string — usually '' but it can carry
   // text — and treating any string as a failure would make every successful save report as failed, which is
   // the same lie in the other direction and just as damaging (stewards re-entering data that saved fine).
-  const fn = grab('async function publish(evt, out)');
+  const fn = grab('async function publish(evt)');
   assert.match(fn, /startsWith\(/,
     'publish() no longer discriminates by prefix. If it rejects any string resolution, a relay that answers ' +
     'OK with a reason string turns every successful save into a reported failure.');

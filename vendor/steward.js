@@ -12296,21 +12296,31 @@ zoo`.split("\n");
   }
   var sk = null;
   var pub = null;
-  var _authedRelays = /* @__PURE__ */ new Set();
+  var _authedRelays = /* @__PURE__ */ new Map();
   pool.automaticallyAuth = (url) => async (authEvent) => {
     if (!sk) throw new Error("no key");
+    let k = url;
     try {
-      _authedRelays.add(normalizeURL2(url));
+      k = normalizeURL2(url);
     } catch (e) {
-      _authedRelays.add(url);
+    }
+    try {
+      _authedRelays.set(k, pool.relays.get(k));
+    } catch (e) {
     }
     return finalizeEvent2(authEvent, sk);
   };
   function _isRelayAuthed() {
     try {
       const st = pool.listConnectionStatus();
-      for (const url of _authedRelays) {
-        if (st.get(url) === true) return true;
+      for (const url of relays()) {
+        let k = url;
+        try {
+          k = normalizeURL2(url);
+        } catch (e) {
+        }
+        const authedOn = _authedRelays.get(k);
+        if (authedOn && st.get(k) === true && pool.relays.get(k) === authedOn) return true;
       }
       return false;
     } catch (e) {
@@ -12585,7 +12595,7 @@ zoo`.split("\n");
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
     return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iterations || PIN_ITER_LEGACY, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
-  async function publish(evt, out) {
+  async function publish(evt) {
     try {
       await Promise.any(pool.publish(relays(), evt).map((p) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
@@ -12597,10 +12607,6 @@ zoo`.split("\n");
       try {
         const errs = e && e.errors || [];
         reason = errs[0] && (errs[0].message || String(errs[0])) || "";
-      } catch (x) {
-      }
-      try {
-        if (out) out.reason = reason;
       } catch (x) {
       }
       try {
@@ -14374,8 +14380,7 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const cp = actingChurch || pub;
-      const out = {};
-      return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }), out)).then((r) => r === false && /newer version of this is already stored/.test(out.reason || "") ? "have-newer" : r);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }));
     },
     // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
     // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
@@ -14397,7 +14402,7 @@ zoo`.split("\n");
       const pubs = [...new Set((memberPubs || []).filter(Boolean))];
       const BATCH = 20, GAP_MS = 250;
       const out = [];
-      let failed = 0, haveNewer = 0;
+      let failed = 0;
       for (let i3 = 0; i3 < pubs.length; i3 += BATCH) {
         const slice = pubs.slice(i3, i3 + BATCH);
         const settle = Promise.allSettled(slice.map((p) => {
@@ -14409,7 +14414,6 @@ zoo`.split("\n");
           failed += slice.length;
         } else {
           out.push(...rs);
-          haveNewer += rs.filter((r) => r.status === "fulfilled" && r.value === "have-newer").length;
           failed += rs.filter((r) => r.status === "rejected" || r.value === false || r.value === null).length;
         }
         if (i3 + BATCH < pubs.length) await new Promise((r) => setTimeout(r, GAP_MS));
@@ -14423,7 +14427,7 @@ zoo`.split("\n");
         } catch (e) {
         }
       }
-      return { results: out, failed, haveNewer, total: pubs.length };
+      return { results: out, failed, total: pubs.length };
     },
     // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
     // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —

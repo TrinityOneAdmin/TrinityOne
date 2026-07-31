@@ -245,13 +245,21 @@ function backfillEffect() {
       return gate ? gate.then(() => res) : Promise.resolve(res);
     },
   };
-  const make = new Function('window', `
+  // The module-scope state the effect mutates. Re-declared here (not passed as parameters) because the effect
+  // ASSIGNS to these, and an assignment to a parameter is invisible to the caller — the test would then prove
+  // nothing. `now` is injectable so the retry cooldown can be exercised without a real 60-second wait.
+  let clock = Date.now();
+  const make = new Function('window', 'Date', `
     let clearanceBackfillDone = '';
+    let clearanceBackfillFailedAt = 0;
+    let clearanceBackfillLastSig = '';
+    const CLEARANCE_RETRY_MS = 60000;
     const effect = (sg, members) => ${body};
-    return { effect, peek: () => clearanceBackfillDone };
-  `)({ Steward });
+    return { effect, peek: () => clearanceBackfillDone, failedAt: () => clearanceBackfillFailedAt };
+  `)({ Steward }, { now: () => clock });
   return {
     ...make, calls, Steward,
+    advance: (ms) => { clock += ms; },
     answers: (a) => { answer = a; },
     hold: () => { let open_; gate = new Promise(r => { open_ = r; }); return () => { const g = gate; gate = null; open_(); return g; }; },
   };
@@ -298,6 +306,7 @@ test('A BACK-FILL THAT MISSED SOMEONE MUST STILL BE RETRIED', async () => {
   h.effect(SG(), ROSTER5());
   await tick(); await tick();
   assert.equal(h.peek(), '', 'a back-fill that missed 3 members recorded itself as done');
+  h.advance(61000);                              // past the retry cooldown (see the hot-loop test below)
   h.effect(SG(), ROSTER5());
   await tick();
   assert.equal(h.calls.length, 2,
@@ -306,12 +315,48 @@ test('A BACK-FILL THAT MISSED SOMEONE MUST STILL BE RETRIED', async () => {
     'among them is treated as an adult until a steward happens to toggle their flag.');
 });
 
+test('A FAILING BACK-FILL MUST NOT BECOME A HOT LOOP ON A DOWN LINK', async () => {
+  // HANDOFF-2026-07-31 audit. Releasing the claim on failure is what makes the retry above possible, and the
+  // effect's deps are fresh array identities on every roster emit — so without a cooldown the very next emit
+  // restarts the whole thing, for ever. This only became reachable when fix 4 made publish() tell the truth:
+  // before that an offline run reported `failed: 0` and the loop stayed quiet.
+  //
+  // At 500 members a cycle is ~500 NIP-44 seals and ~25 seconds of paced publishing, on a cheap phone with no
+  // connection. That is the device and the link this product exists for.
+  const h = backfillEffect();
+  h.answers({ failed: 5 });
+  for (let i = 0; i < 4; i++) { h.effect(SG(), ROSTER5()); await tick(); await tick(); }
+  assert.equal(h.calls.length, 1,
+    `an offline Members tab ran the back-fill ${h.calls.length} times across 4 roster emits with no connection. ` +
+    'Each run re-seals and re-publishes the entire roster.');
+  h.advance(61000);
+  h.effect(SG(), ROSTER5());
+  await tick();
+  assert.equal(h.calls.length, 2, 'the cooldown never expires, so a genuinely retryable back-fill is stuck');
+});
+
+test('…but a roster that CHANGED does not wait out the cooldown', async () => {
+  // A child marked while the link is down must be sealed as soon as the link is back — not up to a minute
+  // later. The cooldown is keyed to the signature that failed, so a new signature goes straight through.
+  const h = backfillEffect();
+  h.answers({ failed: 5 });
+  h.effect(SG(), ROSTER5());
+  await tick(); await tick();
+  assert.equal(h.calls.length, 1);
+  h.answers({ failed: 0 });
+  h.effect(SG({ minors: [members[0].pub, members[1].pub] }), ROSTER5());   // a steward just marked another child
+  await tick();
+  assert.equal(h.calls.length, 2,
+    'a newly-marked child had to wait out the failed run’s cooldown before their clearance was sealed');
+});
+
 test('…and a back-fill that THREW is retried too', async () => {
   const h = backfillEffect();
   h.Steward.refreshClearances = () => { h.calls.push({ n: 5 }); return Promise.reject(new Error('relay gone')); };
   h.effect(SG(), ROSTER5());
   await tick(); await tick();
   assert.equal(h.peek(), '', 'a back-fill that threw recorded itself as done');
+  h.advance(61000);
   h.effect(SG(), ROSTER5());
   await tick();
   assert.equal(h.calls.length, 2, 'a back-fill that threw was never retried');

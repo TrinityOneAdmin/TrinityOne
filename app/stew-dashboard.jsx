@@ -3227,6 +3227,16 @@ window.BulkInviteModal = BulkInviteModal;
 // (These files are classic scripts sharing ONE global scope, so this name must stay unique across app/*.jsx;
 // scripts/bundle-free-globals.test.mjs is the guard.)
 let clearanceBackfillDone = '';
+// When a back-fill last FAILED. HANDOFF-2026-07-31 audit. Releasing the claim on failure (below) is what keeps
+// a partial back-fill retryable — but the effect's deps are fresh array identities on every roster emit, so
+// without a cooldown the next emit restarts the whole thing at once. Before fix 4, an offline publish() lied
+// `failed: 0` and this stayed quiet; now that it tells the truth, an open Members tab on a down link would
+// re-seal and re-publish the entire roster in a continuous loop. Measured in audit: 4 roster emits, 4 full
+// runs. At 500 members that is ~500 NIP-44 seals and ~25s of paced publishing per cycle, on a cheap phone with
+// no connection — the exact device and the exact link this product is built for.
+let clearanceBackfillFailedAt = 0;
+let clearanceBackfillLastSig = '';   // which signature that failure belonged to — a CHANGED roster skips the wait
+const CLEARANCE_RETRY_MS = 60000;
 
 function DashMembers() {
   // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
@@ -3301,12 +3311,19 @@ function DashMembers() {
     //
     // Keyed on `sig` rather than a bare in-flight flag, so a roster that genuinely changes mid-run is a
     // different signature and still gets its own back-fill.
+    // Not straight after a failed run. The release below makes a partial back-fill retryable; this stops that
+    // becoming a hot loop on a link that is simply down. A steward who wants it sooner can leave the tab and
+    // come back after the cooldown, and a genuinely-changed roster is a different signature — which SKIPS this,
+    // because a new child marked while offline must not wait a minute to be sealed.
+    if (clearanceBackfillFailedAt && Date.now() - clearanceBackfillFailedAt < CLEARANCE_RETRY_MS
+        && sig === clearanceBackfillLastSig) return;
+    clearanceBackfillLastSig = sig;
     clearanceBackfillDone = sig;
     const roster = members.map(m => m.pubkey);
     // Give the claim back if the run did not fully land, so the next Members open retries. Only ever clear our
     // OWN claim: if the roster moved on and a later signature has already claimed the marker, blanking it here
     // would discard that newer run's result and re-publish it from scratch.
-    const release = () => { if (clearanceBackfillDone === sig) clearanceBackfillDone = ''; };
+    const release = () => { clearanceBackfillFailedAt = Date.now(); if (clearanceBackfillDone === sig) clearanceBackfillDone = ''; };
     Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || []))
       .then(r => { if (!r || r.failed) release(); })
       .catch(() => { release(); });
@@ -5303,8 +5320,15 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
               {/* AWAIT the removal. removeKey() clears localStorage synchronously but the Keystore half is a
                   native round-trip, and reloading on top of it tears the WebView down mid-remove() — leaving the
                   church-key ciphertext in the hardware store after we told the steward this device had forgotten
-                  it. A Keystore that throws must still reload, or the button looks dead. HANDOFF-2026-07-31 (1). */}
-              <button onClick={async () => { try { await window.Steward.removeKey(); } catch (e) {} window.location.reload(); }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="x" size={14} color="var(--on-clay)" /> Remove &amp; reload</button>
+                  it. A Keystore that throws must still reload, or the button looks dead. HANDOFF-2026-07-31 (1).
+                  BOUNDED, because a native bridge call can hang rather than throw, and an unbounded await here
+                  produces exactly the dead button the catch exists to avoid — no spinner, nothing disabled, so
+                  the steward taps it again and concludes the key was never forgotten. The localStorage copy is
+                  already gone by then, so reloading after the wait loses nothing. */}
+              <button onClick={async () => {
+                try { await Promise.race([window.Steward.removeKey(), new Promise(r => setTimeout(r, 3000))]); } catch (e) {}
+                window.location.reload();
+              }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="x" size={14} color="var(--on-clay)" /> Remove &amp; reload</button>
               <button onClick={() => setConfirmRemove(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
             </div>
           </div>

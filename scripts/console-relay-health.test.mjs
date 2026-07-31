@@ -242,6 +242,67 @@ test('a relay the steward has REMOVED stops counting against health', async () =
   await startRelay();
 });
 
+// ── the other sign of the same bug ───────────────────────────────────────────────────────────────────────
+// Found by audit AFTER the health fix above shipped, and it is the failure the fix's own comment claims to
+// avoid. relaysHealthy() is now honest — but "unhealthy" is not always a condition that clears. relays() is
+// multi-entry by default (the canonical pair, plus steward-added relays, plus named-relay tunnel URLs that
+// src/steward.src.js:321 says go dead routinely). One permanently unreachable entry beside a healthy primary
+// leaves it false for ever. Measured:
+//
+//     status map: [['…8975/relay', true]]      touched: ['…8976/relay', '…8975/relay']
+//     relaysHealthy() = false   — and still false after a full re-subscribe cycle
+//
+// The ticker in app/steward-root.jsx bumps whenever that is false, on a 90s interval AND on every
+// focus/visibilitychange. Each bump tears down and re-opens ~20 broad, un-cursored subscriptions — the whole
+// church corpus, re-downloaded, for ever, over the metered and censored links this product is for. Blind-and-
+// quiet and storming-the-relay are the same size of bug with opposite signs; the first fix traded one for the
+// other. The health signal stays truthful and the TICKER backs off.
+test('A PERMANENTLY DEAD RELAY MUST NOT RE-QUERY THE WHOLE CHURCH FOR EVER', () => {
+  const R = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8');
+  const from = R.indexOf('const _connListeners = new Set();');
+  const end = R.indexOf('function _wireStewardConn(');
+  const src = R.slice(from, end);
+  let healthy = false, clock = 1000000, bumped = 0;
+  const api = new Function('window', 'Date', 'Math', src +
+    '\nreturn { bump: _maybeBumpConn, listeners: _connListeners };'
+  )({ Steward: { relaysHealthy: () => healthy } }, { now: () => clock }, Math);
+  api.listeners.add(() => { bumped++; });
+
+  api.bump();
+  assert.equal(bumped, 1, 'the first attempt after a drop must be immediate — recovery is the point');
+
+  // Simulate a steward using the console: foreground events and the 90s heartbeat, over an hour, with one
+  // relay that is never coming back.
+  for (let i = 0; i < 40; i++) { clock += 90000; api.bump(); }
+  assert.ok(bumped <= 8,
+    `${bumped} full re-subscribes in an hour with one permanently unreachable relay. Each one re-opens ~20 ` +
+    'broad, un-cursored subscriptions — the entire church corpus, re-downloaded, on a metered connection. ' +
+    'The ticker needs backoff; relaysHealthy() being honest is not enough on its own.');
+
+  // …and it must go EAGER AGAIN the moment the relay is back, or the next genuine drop waits out a 15-minute
+  // backoff earned by an unrelated dead spare. Caught by sabotage: dropping the `_connTries = 0` reset left
+  // every assertion above green while a real outage took a quarter of an hour to even attempt recovery.
+  healthy = true;
+  clock += 90000; api.bump();                 // a healthy tick: resets the backoff, bumps nothing
+  const afterRecovery = bumped;
+  healthy = false;                            // and now a REAL drop
+  clock += 90000; api.bump();
+  assert.equal(bumped, afterRecovery + 1,
+    'after the relay came back healthy, the next genuine drop did not get a prompt retry — the backoff earned ' +
+    'by a permanently dead spare is still being served, so recovery from a real outage waits up to 15 minutes');
+});
+
+test('…and a healthy console never bumps at all', () => {
+  const R = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8');
+  const src = R.slice(R.indexOf('const _connListeners = new Set();'), R.indexOf('function _wireStewardConn('));
+  let clock = 1000000, bumped = 0;
+  const api = new Function('window', 'Date', 'Math', src + '\nreturn { bump: _maybeBumpConn, listeners: _connListeners };'
+  )({ Steward: { relaysHealthy: () => true } }, { now: () => clock }, Math);
+  api.listeners.add(() => { bumped++; });
+  for (let i = 0; i < 20; i++) { clock += 90000; api.bump(); }
+  assert.equal(bumped, 0, 'a healthy console re-queried the whole church anyway');
+});
+
 // ── end to end: the symptom the steward actually reported ────────────────────────────────────────────────
 test('AFTER A RESTART A NEW MEMBER IS SEEN WITHOUT RELOADING THE CONSOLE', async () => {
   // The measured symptom: 6 members → relay killed → restarted → a 7th joined → console still showed 6.
