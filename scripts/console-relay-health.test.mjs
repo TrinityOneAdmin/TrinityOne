@@ -107,8 +107,9 @@ function consoleSide(urls) {
   // The console ALWAYS answers a NIP-42 challenge (src/steward.src.js — `pool.automaticallyAuth`), and the
   // relay serves the member roster only to an authenticated reader. Without this the subscription below reads
   // an empty church and the end-to-end test fails for a reason that has nothing to do with relay health.
-  pool.automaticallyAuth = () => async (authEvent) => finalizeEvent(authEvent, church.sk);
   const healthy = grab('relaysHealthy() {');
+  const relayAuthedM = grab('relayAuthed() {');
+  const publishSrc = grab('async function publish(evt)');
   const reconnect = grab('async reconnectDownRelays() {');
   // The fix has to remember which relays were actually opened. However that is spelled, it has to be wired to
   // the pool's own success callback — bind whatever the bundle installs, so this test follows the shipped code
@@ -136,11 +137,31 @@ function consoleSide(urls) {
   }
   const wiring = STEWARD.slice(from, STEWARD.indexOf(';', end) + 1);
   assert.match(wiring, /_relaysTouched\.add/, 'nothing in the wiring actually records a relay — re-anchor this test');
-  const scope = { pool, relays: () => urls, normalizeURL, console: { warn() {}, log() {} }, Set, String, JSON };
+  // The real auth machinery, lifted — relayAuthed() is part of what the stuck-state tests measure, and a stub
+  // would assert my description of it rather than the console's.
+  const authFrom = STEWARD.indexOf('var _authedRelays = ');
+  let ad = 0, ae = STEWARD.indexOf('{', STEWARD.indexOf('pool.automaticallyAuth = ', authFrom));
+  for (; ae < STEWARD.length; ae++) { if (STEWARD[ae] === '{') ad++; else if (STEWARD[ae] === '}' && --ad === 0) break; }
+  const authWiring = STEWARD.slice(authFrom, STEWARD.indexOf(';', ae) + 1);
+  const isAuthedSrc = authWiring + '\n' + grab('function _isRelayAuthed(');
+  // esbuild renames imported bindings; bind what it emitted or the signer throws and nothing ever authenticates.
+  const pick = (src, base) => (src.match(new RegExp('\\b(' + base + '\\d*)\\(')) || [])[1];
+  const feName = pick(authWiring, 'finalizeEvent') || 'finalizeEvent';
+  const normName = pick(authWiring, 'normalizeURL') || 'normalizeURL';
+  const scope = { pool, relays: () => urls, [normName]: normalizeURL, [feName]: finalizeEvent,
+    sk: church.sk, console: { warn() {}, log() {} }, Set, Map, String, JSON,
+    window: { Steward: {}, dispatchEvent() {} },
+    CustomEvent: function (t, d) { this.type = t; this.detail = (d || {}).detail; },
+    setTimeout, Promise };
   const args = Object.keys(scope);
-  const built = new Function(...args, `${wiring}\nreturn ({ ${healthy},\n ${reconnect} });`)(...args.map(k => scope[k]));
+  const built = new Function(...args, `${wiring}\n${isAuthedSrc}\n${publishSrc}\nreturn ({ publish, ${healthy},\n ${reconnect},\n ${relayAuthedM} });`)(...args.map(k => scope[k]));
   return { ...built, pool, close: () => { try { pool.destroy(); } catch {} } };
 }
+
+// The relay's NIP-42 challenge is lazy — only a REQ naming a safeguarding/safety/invite doc provokes one.
+// Left OPEN by the caller where it matters: closing the last subscription lets the pool drop the socket.
+const authSubH = (s) => s.pool.subscribeMany([WS_URL],
+  [{ kinds: [30078], '#d': ['trinityone/safetycheck:' + church.pub] }], { onevent() {}, oneose() {} });
 
 const memberDoc = (who) => finalizeEvent({ kind: 30078, created_at: now(),
   tags: [['d', MEMBER_D + church.pub], ['t', 'trinityone']], content: JSON.stringify({ joined: now() }) }, who.sk);
@@ -310,7 +331,7 @@ test('…but a relay that COMES BACK re-subscribes, exactly once', async () => {
   let up = false, probes = 0;
   const stub = {
     clock: 1000000,
-    relaysHealthy: () => up,                          // healthy again once it reconnects
+    relaysHealthy: () => up, relaysReplaced: () => false,   // healthy again once it reconnects
     reconnectDownRelays: async () => { probes++; if (!up) { up = true; return true; } return false; },
   };
   const t = ticker(stub);
@@ -323,7 +344,7 @@ test('…but a relay that COMES BACK re-subscribes, exactly once', async () => {
 
 test('a healthy console never probes and never re-subscribes', async () => {
   let probes = 0;
-  const stub = { clock: 1000000, relaysHealthy: () => true, reconnectDownRelays: async () => { probes++; return false; } };
+  const stub = { clock: 1000000, relaysHealthy: () => true, relaysReplaced: () => false, reconnectDownRelays: async () => { probes++; return false; } };
   const t = ticker(stub);
   for (let i = 0; i < 20; i++) { stub.clock += 90000; await t.bump(); }
   assert.equal(t.bumps(), 0, 'a healthy console re-queried the whole church anyway');
@@ -334,7 +355,7 @@ test('rapid foreground churn cannot hammer the probe', async () => {
   // visibilitychange + focus + online all reach _maybeBumpConn, and a steward flicking between apps can fire
   // them several times a second.
   let probes = 0;
-  const stub = { clock: 1000000, relaysHealthy: () => false, reconnectDownRelays: async () => { probes++; return false; } };
+  const stub = { clock: 1000000, relaysHealthy: () => false, relaysReplaced: () => false, reconnectDownRelays: async () => { probes++; return false; } };
   const t = ticker(stub);
   for (let i = 0; i < 25; i++) { stub.clock += 200; await t.bump(); }
   assert.ok(probes <= 2, `${probes} connect attempts in five seconds of foreground churn`);
@@ -374,7 +395,16 @@ test('…and once the relay is back, the probe reports it so the ticker can act'
   assert.equal(await s.reconnectDownRelays(), true,
     'the relay is back but the probe did not notice, so the ticker will never re-subscribe and the console ' +
     'stays blind until the steward reloads');
-  assert.equal(s.relaysHealthy(), true, 'reconnecting did not restore health');
+  // AND IT IS STILL NOT HEALTHY. Re-opening the socket is not the same as listening on it: the old
+  // subscriptions died with the old connection. Health returns only once we have re-subscribed, which is what
+  // keeps the ticker firing until the console can actually hear again. AUDIT-4.
+  assert.equal(s.relaysHealthy(), false,
+    'a socket reconnected by the probe reads healthy while nothing is subscribed on it — that is the state ' +
+    'where the console is deaf and refuses every safeguarding write, and it must not look fine');
+  const sub3 = authSubH(s);
+  await sleep(1500);
+  assert.equal(s.relaysHealthy(), true, 're-subscribing did not clear the unhealthy state — the ticker would loop');
+  try { sub3.close(); } catch {}
   s.close();
 });
 
@@ -434,6 +464,92 @@ test('…and one stalled relay must not stop a healthy one being recovered', asy
       'the healthy relay was not recovered because a stalled one came first in relays(). The console stays ' +
       'blind on a relay that is up and reachable.');
   } finally { await silent.close(); }
+});
+
+// ── the hole all of the above still leaves ───────────────────────────────────────────────────────────────
+// AUDIT-4, and it is the worst thing on this branch because the branch CREATED half of it.
+//
+// A drop deletes the relay from pool.relays and destroys every subscription. Then ANY ordinary read or write —
+// a tab switch, a save, any _one() — calls ensureRelay and re-opens the socket. The url is connected again, so:
+//
+//   • relaysHealthy() reads TRUE, so the ticker returns at its first line and never re-subscribes;
+//   • reconnectDownRelays() skips the relay (already connected) and reports nothing came back;
+//   • the gateway's NIP-42 challenge is lazy, so nothing re-authenticates.
+//
+// The console is then permanently deaf (the live subscriptions died with the old socket and were never
+// rebuilt — HANDOFF finding 4, still open) AND permanently write-locked (_isRelayAuthed() stays false, so
+// _requireTrustedView throws for the minors list, the blocklist, the approved list, and every key mint), while
+// telling the steward "this device hasn't finished connecting… wait a moment and try again". Waiting never
+// helps. On main those writes went through — silently dangerous. This turned that into permanently refused.
+//
+// The signal is wrong, not the ticker: relaysHealthy() asks "is a socket open?" when the question is "has the
+// connection my subscriptions live on been replaced?".
+test('A SOCKET RE-OPENED BY AN ORDINARY WRITE MUST NOT READ AS HEALTHY', async () => {
+  const s = consoleSide([WS_URL]);
+  const sub = authSubH(s);
+  await sleep(1200);
+  assert.equal(s.relaysHealthy(), true, 'fixture: not healthy before the kill');
+  try { sub.close(); } catch {}
+
+  relay.kill('SIGKILL');
+  await sleep(1200);
+  assert.equal(s.relaysHealthy(), false, 'fixture: the drop was not detected');
+  await startRelay();
+
+  // An ordinary write — no subscription — re-opens the socket. This is a save, a tab switch, any _one().
+  await s.publish(finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', 'trinityone/minors:' + church.pub], ['t', 'trinityone'], ['church', church.pub]],
+    content: '{"pubkeys":[]}' }, church.sk));
+  await sleep(800);
+  assert.equal(s.pool.listConnectionStatus().get(normalizeURL(WS_URL)), true,
+    'fixture: the write did not re-open the socket, so this test proves nothing');
+
+  assert.equal(s.relaysHealthy(), false,
+    'the console reports itself healthy on a socket its subscriptions do NOT live on. The ticker returns at ' +
+    'its first line, nothing re-subscribes, and nothing re-authenticates — so the console is deaf to new ' +
+    'members AND refuses every safeguarding write, telling the steward to wait. Waiting never helps.');
+  s.close();
+});
+
+test('…and the ticker rebuilds the subscriptions in that state', async () => {
+  // relaysHealthy() being honest is only half of it: the ticker also has to ACT. reconnectDownRelays() reports
+  // "nothing came back" here, correctly — the socket is already up — so the ticker needs a second reason to
+  // fire, or the honest signal changes nothing.
+  const R = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8');
+  const src = R.slice(R.indexOf('const _connListeners = new Set();'), R.indexOf('function _wireStewardConn('));
+  let bumped = 0, healthy = false;
+  const api = new Function('window', 'Date', 'Math', src + '\nreturn { bump: _maybeBumpConn, listeners: _connListeners };')(
+    // The state under test: the socket is UP (so the probe honestly reports nothing new came back) but our
+    // subscriptions died with the old connection.
+    { Steward: { relaysHealthy: () => healthy, relaysReplaced: () => true, reconnectDownRelays: async () => false } },
+    { now: () => 1000000 }, Math);
+  api.listeners.add(() => { bumped++; });
+  await api.bump();
+  assert.equal(bumped, 1,
+    'the socket is up but the subscriptions are dead, and the probe correctly reports nothing NEW came back — ' +
+    'so the ticker did nothing. Unhealthy has to be enough to re-subscribe, or an honest signal is wasted.');
+});
+
+test('…and re-subscribing restores both hearing and the ability to save', async () => {
+  const s = consoleSide([WS_URL]);
+  const sub = authSubH(s);
+  await sleep(1200);
+  try { sub.close(); } catch {}
+  relay.kill('SIGKILL');
+  await sleep(1200);
+  await startRelay();
+  await s.publish(finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', 'trinityone/minors:' + church.pub], ['t', 'trinityone'], ['church', church.pub]],
+    content: '{"pubkeys":[]}' }, church.sk));
+  await sleep(800);
+  assert.equal(s.relayAuthed(), false, 'fixture: a write-reopened socket should not be authenticated');
+
+  const sub2 = authSubH(s);                    // what the ticker's bump causes
+  await sleep(1500);
+  assert.equal(s.relayAuthed(), true, 're-subscribing did not re-authenticate, so writes stay locked out');
+  assert.equal(s.relaysHealthy(), true, 're-subscribing did not clear the unhealthy state — the ticker would loop');
+  try { sub2.close(); } catch {}
+  s.close();
 });
 
 // ── end to end: the symptom the steward actually reported ────────────────────────────────────────────────

@@ -12276,9 +12276,11 @@ zoo`.split("\n");
   }
   var pool = new SimplePool();
   var _relaysTouched = /* @__PURE__ */ new Set();
+  var _subbedOn = /* @__PURE__ */ new Map();
   pool.onRelayConnectionSuccess = (url) => {
     try {
       _relaysTouched.add(url);
+      _subbedOn.set(url, pool.relays.get(url));
     } catch (e) {
     }
   };
@@ -13868,6 +13870,27 @@ zoo`.split("\n");
       }
       return back;
     },
+    // Is a relay CONNECTED but on a different socket than the one our subscriptions were established on? That
+    // is the "deaf but connected" state, and it is distinct from "a relay is down": re-subscribing fixes it
+    // immediately and then stops. Kept separate from relaysHealthy() so the ticker can tell the two apart — a
+    // relay that is simply DOWN must not trigger a re-subscribe on every heartbeat, which is the storm. AUDIT-4.
+    relaysReplaced() {
+      try {
+        const st = pool.listConnectionStatus();
+        for (const url of relays()) {
+          let k = url;
+          try {
+            k = normalizeURL2(url);
+          } catch (e) {
+          }
+          const on = _subbedOn.get(k);
+          if (on && st.get(k) === true && pool.relays.get(k) !== on) return true;
+        }
+        return false;
+      } catch (e) {
+        return false;
+      }
+    },
     relaysHealthy() {
       try {
         const st = pool.listConnectionStatus();
@@ -13880,6 +13903,8 @@ zoo`.split("\n");
           const s = st.get(k);
           if (s === false) return false;
           if (s !== true && _relaysTouched.has(k)) return false;
+          const on = _subbedOn.get(k);
+          if (on && pool.relays.get(k) !== on) return false;
         }
         return true;
       } catch (e) {

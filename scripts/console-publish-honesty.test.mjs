@@ -189,6 +189,37 @@ async function authenticate(s) {
 const churchDoc = (d, body) => finalizeEvent({ kind: 30078, created_at: now(),
   tags: [['d', d], ['t', 'trinityone'], ['church', church.pub]], content: JSON.stringify(body) }, church.sk);
 
+// What the relay ACTUALLY HOLDS for each member, decrypted. Counting d-tags is not enough: a member left
+// holding a STALE clearance has a document, so a presence count passes while their app still reads the wrong
+// answer. That is the failure this whole file is about, so the assertion has to open the envelope.
+// (The church can: nip44 conversation keys are symmetric.) AUDIT-4.
+async function storedStatus(pubs) {
+  const w = await new Promise((res, rej) => { const s = new WebSocket(WS_URL); s.on('open', () => res(s)); s.on('error', rej); });
+  const out = new Map();
+  await new Promise(res => {
+    const on = d => {
+      const m = JSON.parse(d);
+      if (m[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', WS_URL], ['challenge', m[1]]], content: '' }, church.sk)]));
+      if (m[0] === 'EVENT' && m[1] === 'q') {
+        const e = m[2];
+        const dtag = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        const pub = dtag.slice(CLEAR_D.length);
+        try {
+          const body = JSON.parse(nip44v2.decrypt(e.content, nip44v2.utils.getConversationKey(church.sk, pub)));
+          const prev = out.get(pub);
+          if (!prev || (e.created_at || 0) >= prev.at) out.set(pub, { minor: !!body.minor, cleared: !!body.cleared, at: e.created_at || 0 });
+        } catch (x) { out.set(pub, { undecryptable: true }); }
+      }
+      if (m[0] === 'EOSE' && m[1] === 'q') { w.off('message', on); res(); }
+    };
+    w.on('message', on);
+    w.send(JSON.stringify(['REQ', 'q', { kinds: [30078], '#d': pubs.map(p => CLEAR_D + p) }]));
+    setTimeout(res, 8000);
+  });
+  w.close();
+  return out;
+}
+
 async function storedCount(pubs) {
   const w = await new Promise((res, rej) => { const s = new WebSocket(WS_URL); s.on('open', () => res(s)); s.on('error', rej); });
   const seen = new Set();
@@ -482,29 +513,31 @@ test('A READ THAT FAILS MUST PUBLISH EVERYTHING, NEVER SKIP', async () => {
   assert.equal(r.failed, 4, 'and every one of them must still be reported as undelivered');
 });
 
-// QUARANTINED, deliberately, and not because it is inconvenient. This is the end-to-end reproduction of the
-// measured harm, and it is the strongest evidence on this branch: with a live authenticated socket it goes
-// from 8 false banners in 12 toggles down to 0. But it fails roughly 1 run in 5 — the console loses its
-// authenticated socket part-way through, read-before-write is then correctly skipped (an unauthenticated read
-// is served an empty answer and must NEVER be treated as "already correct"), and every iteration collides.
+// The end-to-end reproduction of the measured harm, and the strongest evidence on this branch: 8 false
+// banners in 12 toggles before read-before-write, 0 after.
 //
-// That is a REAL limitation of the fix, not a test artefact: while the console is unauthenticated, the false
-// banner comes back. It is fail-safe — nothing is lost, records are still published — but it is not closed.
-// Re-authenticating inside the loop did not settle it, so the instability is in the socket, not the assertion.
+// THIS WAS QUARANTINED WITH THE WRONG REASON, which is worth recording because the wrong reason was mine and
+// it would have cost the next person a day. The skip note blamed "the console loses its authenticated socket
+// mid-run" and told the reader to go and make the socket stable. Audit 4 un-skipped it, wrapped the WebSocket
+// to log every close, and logged the auth state and the relay's refusal reason per iteration: 24 runs, 4
+// failures, ZERO socket closes, `authed === true` throughout. `pruneIdleRelays` exists in the bundle but is
+// never called and `enablePing` is never set, so the mechanism I blamed cannot even occur.
 //
-// A flaky test in this suite is worse than no test: `npm test` gates the release (scripts/release.sh and CI),
-// so an intermittent red trains everyone to re-run until green — the same alarm fatigue this whole change is
-// about. Skipped with its measurements intact rather than deleted or weakened until it passes.
-// TO FINISH: make the authenticated socket stable across a long run (or make read-before-write survive a
-// re-auth), then delete this skip. Do not delete the test.
-test('THE TOGGLE PATH NO LONGER RAISES A FALSE BANNER', { skip: 'flaky ~1 in 5: loses the authed socket mid-run — see the note above; read-before-write is correctly gated on auth, so the collisions return while unauthenticated' }, async () => {
+// The real cause was in the FIXTURE. The seed marks 12 members as adults and the first toggle followed 0.5s
+// later, so the seed write and the first toggles shared a wall-clock second — and `created_at` is whole
+// seconds. Two writes of DIFFERENT content in one second tie-break against each other, which read-before-write
+// cannot help with by design (the content genuinely differs, so the write must go out) and is not supposed to.
+// A steward cannot mark a child twice inside one second; the fixture could. One second of clearance fixes it.
+test('THE TOGGLE PATH NO LONGER RAISES A FALSE BANNER', async () => {
   // The end-to-end reproduction of the measured harm. A steward marks a child: `_reseal` writes that member's
   // clearance, and the changed safeguarding list re-triggers the whole-roster back-fill moments later. Both
   // used to write the same doc in the same second; the loser was refused and reported as a lost child.
   const s = await authenticate(consoleSide([WS_URL]));
   const roster = members.slice(0, 12).map(m => m.pub);
   await s.refreshClearances(roster, [], []);            // the church is settled, everyone an adult
-  await sleep(500);
+  // A FULL SECOND before the first toggle. created_at is whole seconds, so without this the seed and the first
+  // toggle collide on the relay's tie-break — a fixture artefact, not the behaviour under test. See the note.
+  await sleep(1200);
 
   let falseBanners = 0;
   for (let i = 0; i < 4; i++) {
@@ -526,9 +559,19 @@ test('THE TOGGLE PATH NO LONGER RAISES A FALSE BANNER', { skip: 'flaky ~1 in 5: 
     falseBanners += s.banners().length - bannersBefore;
   }
   await sleep(400);
-  const stored = await storedCount(roster);
+  const held = await storedStatus(roster);
   s.close();
-  assert.equal(stored, 12, 'the fixture did not store every clearance — the test is wrong, not the code');
+  assert.equal(held.size, 12, 'the fixture did not store every clearance — the test is wrong, not the code');
+  // CONTENT, not just presence. The four members the steward marked must actually READ as minors, and the
+  // eight untouched ones must not. A presence count passes even when a member is left holding a stale record,
+  // which is precisely the outcome a child experiences as "my app thinks I am an adult".
+  for (let i = 0; i < 12; i++) {
+    const st2 = held.get(roster[i]);
+    assert.ok(st2 && !st2.undecryptable, `member ${i} has no readable clearance`);
+    assert.equal(st2.minor, i < 4,
+      `member ${i} is stored as minor=${st2.minor}, expected ${i < 4}. The relay holds a record, so a ` +
+      'presence check would pass — but the child\'s own app reads this value and would conclude the opposite.');
+  }
   assert.equal(falseBanners, 0,
     `marking 4 children raised ${falseBanners} "did not receive their safeguarding record" warnings while the ` +
     'relay holds all 12 records. Measured at 8 of 12 before read-before-write. The banner has no dismiss ' +

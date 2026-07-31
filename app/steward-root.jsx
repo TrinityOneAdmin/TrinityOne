@@ -55,22 +55,35 @@ async function _maybeBumpConn() {
   _connBusy = true;
   _connLast = Date.now();
   try {
+    // TWO DIFFERENT BROKEN STATES, and they need different answers. Conflating them is how this went wrong
+    // twice — first by re-querying on any unhealthy signal (a storm), then by re-querying only when a relay
+    // came back from DOWN (which never fires for the commonest fault). AUDIT-4.
+    //
+    //   REPLACED — the socket is UP but our subscriptions died with the old one, because a drop destroys them
+    //              and the next ordinary read or write silently re-opens the connection. Nothing is listening
+    //              and nothing has re-authenticated. Re-subscribe immediately: it fixes itself and then stops,
+    //              so there is no storm to guard against.
+    //   DOWN     — the relay is unreachable. Probe it cheaply and re-subscribe ONLY if it actually came back.
+    //              A relay that is never coming back must cost one connect attempt per heartbeat, no more.
+    let replaced = false;
+    try { replaced = !!window.Steward.relaysReplaced(); } catch (e) {}
     let back = false;
-    // BOUNDED HERE TOO. _connBusy is the re-entry guard for the console's ONLY reconnect ticker — 90s
-    // heartbeat, visibilitychange, focus, online, all of them — and holding it across an await that never
-    // settles disables reconnection for the rest of the session. That is HANDOFF finding 4 (the console goes
-    // permanently blind after a drop) reintroduced by the fix for it; AUDIT-3 measured the probe still pending
-    // at 12s against a socket that accepted and then said nothing. The probe bounds itself as well; this is the
-    // backstop, because a guard that can latch must never depend on someone else's timeout.
-    try {
-      back = await Promise.race([
-        window.Steward.reconnectDownRelays(),
-        new Promise(r => setTimeout(() => r(false), 15000)),
-      ]);
-    } catch (e) {}
-    // Nothing came back, so there is nothing new to read — re-subscribing would re-download the whole church
-    // to reach the same relays we already have. Wait for the next tick.
-    if (back) _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
+    if (!replaced) {
+      // BOUNDED. _connBusy is the re-entry guard for the console's ONLY reconnect ticker — 90s heartbeat,
+      // visibilitychange, focus, online — and holding it across an await that never settles disables
+      // reconnection for the whole session. AUDIT-3 measured the probe still pending at 12s against a socket
+      // that accepted and then said nothing. The probe bounds itself too; this is the backstop, because a
+      // guard that can latch must never depend on someone else's timeout.
+      try {
+        back = await Promise.race([
+          window.Steward.reconnectDownRelays(),
+          new Promise(r => setTimeout(() => r(false), 15000)),
+        ]);
+      } catch (e) {}
+    }
+    // Re-subscribing issues the gated REQs that provoke the relay's NIP-42 challenge, so this is also what
+    // unlocks writing again after a drop.
+    if (replaced || back) _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
   } finally { _connBusy = false; }
 }
 function _wireStewardConn() {

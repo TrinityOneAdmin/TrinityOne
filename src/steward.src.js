@@ -565,7 +565,15 @@ const pool = new SimplePool();
 // and un-cursored, so a console that reads unhealthy at boot re-queries the entire church immediately and then
 // every 90 seconds. Blind-and-quiet and storming-the-relay are the same size of bug with opposite signs.
 const _relaysTouched = new Set();
-pool.onRelayConnectionSuccess = (url) => { try { _relaysTouched.add(url); } catch (e) {} };
+// WHICH SOCKET OUR SUBSCRIPTIONS LIVE ON, per normalised url. AUDIT-4, and this is the load-bearing detail:
+// nostr-tools fires onRelayConnectionSuccess ONLY from its subscribe path, never from publish. So a socket
+// re-opened by an ordinary write does not advance this — which is exactly the case that used to hide the
+// fault. relaysHealthy() compares it against the live instance, so "connected again" is not mistaken for
+// "listening again".
+const _subbedOn = new Map();
+pool.onRelayConnectionSuccess = (url) => {
+  try { _relaysTouched.add(url); _subbedOn.set(url, pool.relays.get(url)); } catch (e) {}
+};
 pool.onRelayConnectionFailure = (url) => { try { _relaysTouched.add(url); } catch (e) {} };
 // decode a base64url VAPID key to the Uint8Array the Push API wants
 function _b64ToU8(base64) {
@@ -1921,6 +1929,21 @@ window.Steward = {
     } catch (e) {}
     return back;
   },
+  // Is a relay CONNECTED but on a different socket than the one our subscriptions were established on? That
+  // is the "deaf but connected" state, and it is distinct from "a relay is down": re-subscribing fixes it
+  // immediately and then stops. Kept separate from relaysHealthy() so the ticker can tell the two apart — a
+  // relay that is simply DOWN must not trigger a re-subscribe on every heartbeat, which is the storm. AUDIT-4.
+  relaysReplaced() {
+    try {
+      const st = pool.listConnectionStatus();
+      for (const url of relays()) {
+        let k = url; try { k = normalizeURL(url); } catch (e) {}
+        const on = _subbedOn.get(k);
+        if (on && st.get(k) === true && pool.relays.get(k) !== on) return true;
+      }
+      return false;
+    } catch (e) { return false; }
+  },
   relaysHealthy() {
     try {
       const st = pool.listConnectionStatus();
@@ -1929,6 +1952,13 @@ window.Steward = {
         const s = st.get(k);
         if (s === false) return false;                              // present and reporting down
         if (s !== true && _relaysTouched.has(k)) return false;      // we had this one open; now it is gone entirely
+        // CONNECTED IS NOT LISTENING. A drop destroys every subscription, and the next ordinary read or write
+        // re-opens the socket — so the url reads connected while nothing is subscribed on it and nothing has
+        // re-authenticated. Asking only "is a socket open?" reported that as healthy, which left the console
+        // deaf to new members AND refusing every safeguarding write with "wait a moment and try again", for
+        // the rest of the session. Compare the INSTANCE our subscriptions were established on. AUDIT-4.
+        const on = _subbedOn.get(k);
+        if (on && pool.relays.get(k) !== on) return false;          // same url, different socket
       }
       return true;
     } catch (e) { return true; }
