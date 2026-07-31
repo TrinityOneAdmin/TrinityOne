@@ -12395,6 +12395,7 @@ zoo`.split("\n");
     }
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
+  var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
   var _encIsMarker = (raw) => {
     try {
       const o = JSON.parse(raw);
@@ -12561,15 +12562,51 @@ zoo`.split("\n");
   }
   async function encBlobRemove() {
     try {
+      lsSet(ENC_PENDING_LS, "1");
+    } catch {
+    }
+    try {
       localStorage.removeItem(ENC_LS);
     } catch {
     }
-    if (!_isNative()) return;
+    if (!_isNative()) {
+      try {
+        localStorage.removeItem(ENC_PENDING_LS);
+      } catch {
+      }
+      return;
+    }
     try {
       const { S } = await _secureStore();
       await S.remove(ENC_LS);
+      try {
+        localStorage.removeItem(ENC_PENDING_LS);
+      } catch {
+      }
     } catch (e) {
       console.warn("[steward] secure key remove failed", e);
+    }
+  }
+  async function encBlobRemoveResume() {
+    if (!lsGet(ENC_PENDING_LS)) return false;
+    if (!_isNative()) {
+      try {
+        localStorage.removeItem(ENC_PENDING_LS);
+      } catch {
+      }
+      return false;
+    }
+    try {
+      const { S } = await _secureStore();
+      await S.remove(ENC_LS);
+      try {
+        localStorage.removeItem(ENC_PENDING_LS);
+      } catch {
+      }
+      return true;
+    } catch (e) {
+      console.warn("[steward] secure key remove retry failed", e);
+      return false;
     }
   }
   async function migrateEncToSecure() {
@@ -12714,6 +12751,10 @@ zoo`.split("\n");
     // PIN-setup modal whenever this is true.
     needsPin: false,
     init(mnemonicOverride) {
+      try {
+        encBlobRemoveResume();
+      } catch (e) {
+      }
       if (mnemonicOverride) {
         lsSet(KEY_LS, mnemonicOverride);
         setKey(mnemonicOverride);
@@ -13776,6 +13817,41 @@ zoo`.split("\n");
     //
     // The rule is "a relay we have actually opened (or tried to) is not currently connected". Only relays still
     // in relays() are considered, so one the steward has REMOVED cannot pin the console unhealthy for ever.
+    // Try to re-open every relay we EXPECT to be connected to and are not. Returns true only if at least one
+    // actually came back — which is the only thing that justifies re-subscribing.
+    //
+    // AUDIT-2026-07-31. The reconnect ticker used to re-subscribe whenever relaysHealthy() was false, and
+    // relaysHealthy() is an AND over every url in relays(). One durably-unreachable entry — a stale named-relay
+    // tunnel, a blocked canonical relay on a censored network — therefore made it re-download the entire church
+    // every 90 seconds, for ever. Adding a backoff only slowed that to four times an hour and made a GENUINE
+    // drop wait up to fifteen minutes, because the reset condition ("everything healthy") was unreachable in
+    // exactly the configuration it was written for.
+    //
+    // Opening a socket is cheap; re-querying the whole church is not. So probe first and re-subscribe only on
+    // success. A relay that is never coming back costs one failed connect attempt per heartbeat and nothing
+    // else; a relay that returns is picked up on the next tick.
+    async reconnectDownRelays() {
+      let back = false;
+      try {
+        const st = pool.listConnectionStatus();
+        for (const url of relays()) {
+          let k = url;
+          try {
+            k = normalizeURL2(url);
+          } catch (e) {
+          }
+          if (st.get(k) === true) continue;
+          if (!_relaysTouched.has(k)) continue;
+          try {
+            await pool.ensureRelay(k);
+            back = true;
+          } catch (e) {
+          }
+        }
+      } catch (e) {
+      }
+      return back;
+    },
     relaysHealthy() {
       try {
         const st = pool.listConnectionStatus();

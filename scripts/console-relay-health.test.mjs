@@ -95,6 +95,7 @@ function consoleSide(urls) {
   // an empty church and the end-to-end test fails for a reason that has nothing to do with relay health.
   pool.automaticallyAuth = () => async (authEvent) => finalizeEvent(authEvent, church.sk);
   const healthy = grab('relaysHealthy() {');
+  const reconnect = grab('async reconnectDownRelays() {');
   // The fix has to remember which relays were actually opened. However that is spelled, it has to be wired to
   // the pool's own success callback — bind whatever the bundle installs, so this test follows the shipped code
   // rather than dictating a shape to it.
@@ -123,7 +124,7 @@ function consoleSide(urls) {
   assert.match(wiring, /_relaysTouched\.add/, 'nothing in the wiring actually records a relay — re-anchor this test');
   const scope = { pool, relays: () => urls, normalizeURL, console: { warn() {}, log() {} }, Set, String, JSON };
   const args = Object.keys(scope);
-  const built = new Function(...args, `${wiring}\nreturn ({ ${healthy} });`)(...args.map(k => scope[k]));
+  const built = new Function(...args, `${wiring}\nreturn ({ ${healthy},\n ${reconnect} });`)(...args.map(k => scope[k]));
   return { ...built, pool, close: () => { try { pool.destroy(); } catch {} } };
 }
 
@@ -243,64 +244,124 @@ test('a relay the steward has REMOVED stops counting against health', async () =
 });
 
 // ── the other sign of the same bug ───────────────────────────────────────────────────────────────────────
-// Found by audit AFTER the health fix above shipped, and it is the failure the fix's own comment claims to
-// avoid. relaysHealthy() is now honest — but "unhealthy" is not always a condition that clears. relays() is
-// multi-entry by default (the canonical pair, plus steward-added relays, plus named-relay tunnel URLs that
-// src/steward.src.js:321 says go dead routinely). One permanently unreachable entry beside a healthy primary
-// leaves it false for ever. Measured:
+// Found by audit AFTER the health fix above shipped. relaysHealthy() is an AND over every url in relays(), and
+// relays() is multi-entry by default (the canonical pair, plus steward-added relays, plus named-relay tunnel
+// URLs that src/steward.src.js says go dead routinely). One durably unreachable entry beside a healthy primary
+// leaves it false FOR EVER:
 //
-//     status map: [['…8975/relay', true]]      touched: ['…8976/relay', '…8975/relay']
-//     relaysHealthy() = false   — and still false after a full re-subscribe cycle
+//     status map: [['…/relay', true]]   touched: ['…dead/relay', '…/relay']   relaysHealthy() = false
 //
-// The ticker in app/steward-root.jsx bumps whenever that is false, on a 90s interval AND on every
-// focus/visibilitychange. Each bump tears down and re-opens ~20 broad, un-cursored subscriptions — the whole
-// church corpus, re-downloaded, for ever, over the metered and censored links this product is for. Blind-and-
-// quiet and storming-the-relay are the same size of bug with opposite signs; the first fix traded one for the
-// other. The health signal stays truthful and the TICKER backs off.
-test('A PERMANENTLY DEAD RELAY MUST NOT RE-QUERY THE WHOLE CHURCH FOR EVER', () => {
+// The ticker in app/steward-root.jsx bumps when that is false, tearing down and re-opening ~20 broad,
+// un-cursored subscriptions — the whole church corpus, re-downloaded, every 90s and on every
+// return-to-foreground. Backing off was tried and was WRONG: its reset condition ("everything healthy") is
+// unreachable in exactly that configuration, so it settled at four re-queries an hour for ever and made a
+// genuine drop wait fifteen minutes.
+//
+// The signal stays honest. The TICKER now probes the down relays and re-subscribes only if one came back.
+function ticker(stewardStub) {
   const R = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8');
   const from = R.indexOf('const _connListeners = new Set();');
   const end = R.indexOf('function _wireStewardConn(');
+  assert.ok(from > 0 && end > from, 're-anchor: the shared reconnect ticker moved in steward-root.jsx');
   const src = R.slice(from, end);
-  let healthy = false, clock = 1000000, bumped = 0;
-  const api = new Function('window', 'Date', 'Math', src +
-    '\nreturn { bump: _maybeBumpConn, listeners: _connListeners };'
-  )({ Steward: { relaysHealthy: () => healthy } }, { now: () => clock }, Math);
+  assert.match(src, /reconnectDownRelays/,
+    'the ticker no longer probes before re-subscribing, so it is back to re-querying the whole church on a ' +
+    'signal that a durably-dead relay pins false for ever');
+  let bumped = 0;
+  const api = new Function('window', 'Date', 'Math',
+    src + '\nreturn { bump: _maybeBumpConn, listeners: _connListeners };'
+  )({ Steward: stewardStub }, { now: () => stewardStub.clock }, Math);
   api.listeners.add(() => { bumped++; });
+  return { ...api, bumps: () => bumped };
+}
 
-  api.bump();
-  assert.equal(bumped, 1, 'the first attempt after a drop must be immediate — recovery is the point');
-
-  // Simulate a steward using the console: foreground events and the 90s heartbeat, over an hour, with one
-  // relay that is never coming back.
-  for (let i = 0; i < 40; i++) { clock += 90000; api.bump(); }
-  assert.ok(bumped <= 8,
-    `${bumped} full re-subscribes in an hour with one permanently unreachable relay. Each one re-opens ~20 ` +
-    'broad, un-cursored subscriptions — the entire church corpus, re-downloaded, on a metered connection. ' +
-    'The ticker needs backoff; relaysHealthy() being honest is not enough on its own.');
-
-  // …and it must go EAGER AGAIN the moment the relay is back, or the next genuine drop waits out a 15-minute
-  // backoff earned by an unrelated dead spare. Caught by sabotage: dropping the `_connTries = 0` reset left
-  // every assertion above green while a real outage took a quarter of an hour to even attempt recovery.
-  healthy = true;
-  clock += 90000; api.bump();                 // a healthy tick: resets the backoff, bumps nothing
-  const afterRecovery = bumped;
-  healthy = false;                            // and now a REAL drop
-  clock += 90000; api.bump();
-  assert.equal(bumped, afterRecovery + 1,
-    'after the relay came back healthy, the next genuine drop did not get a prompt retry — the backoff earned ' +
-    'by a permanently dead spare is still being served, so recovery from a real outage waits up to 15 minutes');
+test('A PERMANENTLY DEAD RELAY MUST NEVER RE-QUERY THE CHURCH', async () => {
+  // The probe fails every time because the relay is gone. That must cost one connect attempt and nothing else.
+  let probes = 0;
+  const stub = {
+    clock: 1000000,
+    relaysHealthy: () => false,                       // a dead spare: never clears
+    reconnectDownRelays: async () => { probes++; return false; },
+  };
+  const t = ticker(stub);
+  for (let i = 0; i < 40; i++) { stub.clock += 90000; await t.bump(); }
+  assert.equal(t.bumps(), 0,
+    `${t.bumps()} full-corpus re-subscribes in an hour with one permanently unreachable relay. Each one ` +
+    're-opens ~20 broad, un-cursored subscriptions — the entire church, re-downloaded, on a metered link.');
+  assert.ok(probes > 30, `the ticker stopped probing after ${probes} attempts, so a relay that came back would ` +
+    'never be noticed');
 });
 
-test('…and a healthy console never bumps at all', () => {
-  const R = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8');
-  const src = R.slice(R.indexOf('const _connListeners = new Set();'), R.indexOf('function _wireStewardConn('));
-  let clock = 1000000, bumped = 0;
-  const api = new Function('window', 'Date', 'Math', src + '\nreturn { bump: _maybeBumpConn, listeners: _connListeners };'
-  )({ Steward: { relaysHealthy: () => true } }, { now: () => clock }, Math);
-  api.listeners.add(() => { bumped++; });
-  for (let i = 0; i < 20; i++) { clock += 90000; api.bump(); }
-  assert.equal(bumped, 0, 'a healthy console re-queried the whole church anyway');
+test('…but a relay that COMES BACK re-subscribes, exactly once', async () => {
+  let up = false, probes = 0;
+  const stub = {
+    clock: 1000000,
+    relaysHealthy: () => up,                          // healthy again once it reconnects
+    reconnectDownRelays: async () => { probes++; if (!up) { up = true; return true; } return false; },
+  };
+  const t = ticker(stub);
+  await t.bump();
+  assert.equal(t.bumps(), 1, 'a relay came back and nothing re-subscribed — the console stays blind');
+  for (let i = 0; i < 10; i++) { stub.clock += 90000; await t.bump(); }
+  assert.equal(t.bumps(), 1, 'it kept re-subscribing after recovery');
+  assert.equal(probes, 1, 'it kept probing a relay that is already connected');
+});
+
+test('a healthy console never probes and never re-subscribes', async () => {
+  let probes = 0;
+  const stub = { clock: 1000000, relaysHealthy: () => true, reconnectDownRelays: async () => { probes++; return false; } };
+  const t = ticker(stub);
+  for (let i = 0; i < 20; i++) { stub.clock += 90000; await t.bump(); }
+  assert.equal(t.bumps(), 0, 'a healthy console re-queried the whole church anyway');
+  assert.equal(probes, 0, 'a healthy console is dialling relays it is already connected to');
+});
+
+test('rapid foreground churn cannot hammer the probe', async () => {
+  // visibilitychange + focus + online all reach _maybeBumpConn, and a steward flicking between apps can fire
+  // them several times a second.
+  let probes = 0;
+  const stub = { clock: 1000000, relaysHealthy: () => false, reconnectDownRelays: async () => { probes++; return false; } };
+  const t = ticker(stub);
+  for (let i = 0; i < 25; i++) { stub.clock += 200; await t.bump(); }
+  assert.ok(probes <= 2, `${probes} connect attempts in five seconds of foreground churn`);
+});
+
+test('RECONNECTING A DEAD RELAY REALLY IS CHEAP — it does not re-query', async () => {
+  // The claim the whole design rests on, measured against a real relay rather than asserted. Killing the relay
+  // and probing must not produce EVENT traffic; only a successful re-subscribe should.
+  const s = consoleSide([WS_URL]);
+  const seen = [];
+  const sub = s.pool.subscribeMany([WS_URL], [{ kinds: [30078], '#d': [MEMBER_D + church.pub] }],
+    { onevent(e) { seen.push(e.id); }, oneose() {} });
+  await sleep(700);
+  assert.equal(s.relaysHealthy(), true, 'fixture broken — not connected before the kill');
+  relay.kill('SIGKILL');
+  await sleep(1200);
+  const before = seen.length;
+  for (let i = 0; i < 3; i++) await s.reconnectDownRelays();
+  await sleep(600);
+  assert.equal(seen.length, before, 'probing a dead relay produced event traffic');
+  assert.equal(s.relaysHealthy(), false, 'a dead relay reads healthy');
+  try { sub.close(); } catch {}
+  s.close();
+  await startRelay();
+});
+
+test('…and once the relay is back, the probe reports it so the ticker can act', async () => {
+  const s = consoleSide([WS_URL]);
+  const sub = s.pool.subscribeMany([WS_URL], [{ kinds: [30078], '#d': [MEMBER_D + church.pub] }],
+    { onevent() {}, oneose() {} });
+  await sleep(700);
+  relay.kill('SIGKILL');
+  await sleep(1200);
+  assert.equal(await s.reconnectDownRelays(), false, 'it claimed a dead relay came back');
+  try { sub.close(); } catch {}
+  await startRelay();
+  assert.equal(await s.reconnectDownRelays(), true,
+    'the relay is back but the probe did not notice, so the ticker will never re-subscribe and the console ' +
+    'stays blind until the steward reloads');
+  assert.equal(s.relaysHealthy(), true, 'reconnecting did not restore health');
+  s.close();
 });
 
 // ── end to end: the symptom the steward actually reported ────────────────────────────────────────────────

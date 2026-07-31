@@ -735,6 +735,8 @@ function setKey(mnemonic) {
 // written AND READ BACK matching. A silent Keystore no-op that we "trusted" would orphan the only copy of a
 // church's key — a far worse outcome than the exposure being fixed.
 const ENC_LS = 'trinityone.steward.church-key.enc';
+// Breadcrumb: a hardware-store removal was started and has not been confirmed finished. See encBlobRemove().
+const ENC_PENDING_LS = 'trinityone.steward.church-key.removing';
 const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } };
 // NEVER return the Capacitor plugin object itself from an async function. `Capacitor.Plugins.SecureStorage` is a
 // PROXY: every property access becomes a native call, so when the await machinery probes the returned value for
@@ -893,10 +895,37 @@ async function encBlobWrite(str) {
   lsSet(ENC_LS, str);   // web/desktop fallback, or native when the hardware store is unavailable
   return true;
 }
+// "Remove this church from this device" is a panic button, so its failure must be RECOVERABLE, not silent.
+//
+// The order here is load-bearing. Clearing the localStorage marker first makes encBlobRaw() short-circuit, so
+// the next boot looks clean — while the church-key ciphertext is still sitting in the Android Keystore, and
+// nothing would ever try again: encBlobRemove() is only reached from removeKey() and forgetPin(), and both
+// then find nothing to do. The caller races this against a timeout (a native bridge call can hang rather than
+// throw), so "the reload won" is a case that WILL happen.
+//
+// So: leave a breadcrumb before touching anything, and clear it only once the hardware store has actually let
+// go. A boot that finds the breadcrumb finishes the job. AUDIT-2026-07-31.
 async function encBlobRemove() {
+  try { lsSet(ENC_PENDING_LS, '1'); } catch {}
   try { localStorage.removeItem(ENC_LS); } catch {}
-  if (!_isNative()) return;
-  try { const { S } = await _secureStore(); await S.remove(ENC_LS); } catch (e) { console.warn('[steward] secure key remove failed', e); }
+  if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return; }
+  try {
+    const { S } = await _secureStore();
+    await S.remove(ENC_LS);
+    try { localStorage.removeItem(ENC_PENDING_LS); } catch {}   // confirmed gone — stop retrying
+  } catch (e) { console.warn('[steward] secure key remove failed', e); }   // breadcrumb stays: retried at boot
+}
+// Finish a removal that was cut off — by the reload racing it, by a hung bridge call, or by the app being
+// killed. Safe to call on every boot: it does nothing unless the breadcrumb is there.
+async function encBlobRemoveResume() {
+  if (!lsGet(ENC_PENDING_LS)) return false;
+  if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
+  try {
+    const { S } = await _secureStore();
+    await S.remove(ENC_LS);
+    try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+    return true;
+  } catch (e) { console.warn('[steward] secure key remove retry failed', e); return false; }
 }
 // One-time move of an EXISTING native install's blob out of localStorage. Deliberately does nothing unless the
 // read-back matches, so a device whose Keystore misbehaves simply stays as it was rather than losing the key.
@@ -1040,6 +1069,11 @@ window.Steward = {
   // PIN-setup modal whenever this is true.
   needsPin: false,
   init(mnemonicOverride) {
+    // Finish any hardware-store removal that was cut off — by the reload racing it, a hung native call, or the
+    // app being killed. Fire-and-forget and a no-op without the breadcrumb, so it costs a boot nothing; but
+    // without it, "Remove this church from this device" can leave the church key in the Keystore for ever with
+    // nothing left to notice. AUDIT-2026-07-31.
+    try { encBlobRemoveResume(); } catch (e) {}
     if (mnemonicOverride) {
       // test hook — keep behaviour but force PIN setup so an injected key never persists plaintext past first boot
       lsSet(KEY_LS, mnemonicOverride); setKey(mnemonicOverride);
@@ -1832,6 +1866,32 @@ window.Steward = {
   //
   // The rule is "a relay we have actually opened (or tried to) is not currently connected". Only relays still
   // in relays() are considered, so one the steward has REMOVED cannot pin the console unhealthy for ever.
+  // Try to re-open every relay we EXPECT to be connected to and are not. Returns true only if at least one
+  // actually came back — which is the only thing that justifies re-subscribing.
+  //
+  // AUDIT-2026-07-31. The reconnect ticker used to re-subscribe whenever relaysHealthy() was false, and
+  // relaysHealthy() is an AND over every url in relays(). One durably-unreachable entry — a stale named-relay
+  // tunnel, a blocked canonical relay on a censored network — therefore made it re-download the entire church
+  // every 90 seconds, for ever. Adding a backoff only slowed that to four times an hour and made a GENUINE
+  // drop wait up to fifteen minutes, because the reset condition ("everything healthy") was unreachable in
+  // exactly the configuration it was written for.
+  //
+  // Opening a socket is cheap; re-querying the whole church is not. So probe first and re-subscribe only on
+  // success. A relay that is never coming back costs one failed connect attempt per heartbeat and nothing
+  // else; a relay that returns is picked up on the next tick.
+  async reconnectDownRelays() {
+    let back = false;
+    try {
+      const st = pool.listConnectionStatus();
+      for (const url of relays()) {
+        let k = url; try { k = normalizeURL(url); } catch (e) {}
+        if (st.get(k) === true) continue;             // already up
+        if (!_relaysTouched.has(k)) continue;         // never opened — ordinary subscription will handle it
+        try { await pool.ensureRelay(k); back = true; } catch (e) {}
+      }
+    } catch (e) {}
+    return back;
+  },
   relaysHealthy() {
     try {
       const st = pool.listConnectionStatus();

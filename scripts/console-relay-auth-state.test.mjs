@@ -254,9 +254,28 @@ test('AN ERROR ASKING THE POOL RESOLVES TO "NOT AUTHENTICATED"', () => {
   // The direction matters and is not symmetric. False → the guards refuse a write, the steward sees "wait a
   // moment and try again", and they retry. True → a minors-list edit republishes over a view we could not
   // verify and hard-deletes the real list, silently un-minoring every other child.
-  const throwing = { listConnectionStatus() { throw new Error('pool is gone'); } };
-  const isAuthed = new Function('pool', '_authedRelays', 'normalizeURL', 'Set',
-    grab('function _isRelayAuthed(') + '\nreturn _isRelayAuthed;')(throwing, new Set(['ws://x/relay']), (u) => u, Set);
+  // The scope here must match what the shipped function actually closes over — a Map (not a Set), and a
+  // relays() to iterate. Caught by audit: the earlier version passed a Set and no `relays`, so it would have
+  // passed on a ReferenceError rather than on the catch it claims to pin. A test that is green for the wrong
+  // reason is the thing this whole branch keeps re-learning.
+  const url = 'ws://x/relay';
+  const throwing = { listConnectionStatus() { throw new Error('pool is gone'); }, relays: new Map() };
+  const mk = (poolStub) => new Function('pool', '_authedRelays', 'normalizeURL', 'relays', 'Set', 'Map',
+    grab('function _isRelayAuthed(') + '\nreturn _isRelayAuthed;')(
+    poolStub, new Map([[url, {}]]), (u) => u, () => [url], Set, Map);
+
+  // First prove the scope is right, or the assertion below proves nothing: with a WORKING pool that reports
+  // the same relay object connected, this must return TRUE.
+  const relayObj = {};
+  const working = { listConnectionStatus: () => new Map([[url, true]]), relays: new Map([[url, relayObj]]) };
+  const okAuthed = new Function('pool', '_authedRelays', 'normalizeURL', 'relays', 'Set', 'Map',
+    grab('function _isRelayAuthed(') + '\nreturn _isRelayAuthed;')(
+    working, new Map([[url, relayObj]]), (u) => u, () => [url], Set, Map);
+  assert.equal(okAuthed(), true,
+    'the harness scope does not match what the shipped function needs, so the catch test below would pass on ' +
+    'a ReferenceError instead of on the catch');
+
+  const isAuthed = mk(throwing);
   assert.equal(isAuthed(), false,
     'when the pool cannot be asked, the console assumes it IS authenticated. Every trusted-view guard then ' +
     'acts on a view it could not verify — which is the destructive direction, not the annoying one.');

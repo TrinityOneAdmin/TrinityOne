@@ -27,30 +27,40 @@ window.useStewardIdv = useStewardIdv;
 // this console opened has actually dropped (relaysHealthy() === false) — so a healthy socket never fires the
 // full-corpus re-query storm; a real drop (every deploy restarts the relay) re-subscribes everything once to recover.
 //
-// AND IT BACKS OFF. HANDOFF-2026-07-31 audit. relaysHealthy() is now honest about a relay that has dropped
-// (before this it could never say so, which was the bug) — but "unhealthy" is not always a condition that
-// clears. relays() is multi-entry by default: the canonical pair, plus any relay the steward added, plus the
-// named-relay tunnel URLs that the comment at src/steward.src.js:321 says go dead as a matter of routine. One
-// permanently unreachable entry alongside a perfectly healthy primary leaves this false FOR EVER.
+// AND IT ONLY RE-QUERIES WHEN A RELAY HAS ACTUALLY COME BACK. HANDOFF-2026-07-31 audit.
 //
-// Without backoff that means ~20 broad, un-cursored subscriptions torn down and re-opened every 90 seconds and
-// on every return-to-foreground, permanently — re-downloading the whole church corpus each time, over exactly
-// the metered and censored connections this product is for. Measured in audit: healthy primary + one dead
-// spare = `relaysHealthy() === false`, still false after a full re-subscribe cycle.
+// relaysHealthy() is now honest about a relay that has dropped (before, it could never say so — that was the
+// bug). But "unhealthy" is not a condition that always clears: relays() is multi-entry by default — the
+// canonical pair, plus any relay the steward added, plus named-relay tunnel URLs that src/steward.src.js says
+// go dead as a matter of routine. One durably unreachable entry beside a perfectly healthy primary leaves it
+// false FOR EVER, and bumping on "false" then re-downloads the entire church every 90 seconds and on every
+// return-to-foreground, permanently, over exactly the metered and censored links this product is for.
 //
-// So the first attempt after a drop is immediate (recovery is the point), and each attempt that does not
-// restore health waits longer, capped. A relay that comes back resets it to eager.
+// Backing off was the first attempt and it was wrong: the reset condition ("everything healthy") is
+// unreachable in precisely the configuration the backoff was written for, so it settled at four full-corpus
+// re-queries an hour for ever AND made a genuine drop wait up to fifteen minutes to recover. Measured.
+//
+// Opening a socket is cheap. Re-querying the whole church is not. So: probe the relays that are down, and
+// re-subscribe ONLY if one actually reconnected. A relay that is never coming back now costs one failed
+// connect attempt per heartbeat and nothing else. A relay that returns — the deploy-restart case, which is
+// the common one — is picked up on the next tick and re-subscribed exactly once.
 const _connListeners = new Set();
-let _connWired = false, _connLast = 0, _connTries = 0;
-const _CONN_BASE_MS = 90000, _CONN_MAX_MS = 900000;
+let _connWired = false, _connLast = 0, _connBusy = false;
+const _CONN_FLOOR_MS = 20000;    // don't hammer the probe on rapid foreground/visibility churn
 function _stewardHealthy() { try { return !window.Steward || !window.Steward.relaysHealthy || window.Steward.relaysHealthy(); } catch (e) { return true; } }
-function _connGap() { return Math.min(_CONN_MAX_MS, _CONN_BASE_MS * Math.pow(2, Math.min(_connTries, 4))); }
-function _maybeBumpConn() {
-  if (_stewardHealthy()) { _connTries = 0; return; }          // recovered — be eager again next time
-  if (_connLast && Date.now() - _connLast < _connGap()) return;   // still down, and we only just tried
-  _connTries++;
+async function _maybeBumpConn() {
+  if (_connBusy) return;
+  if (_stewardHealthy()) return;                                  // nothing we depend on is missing
+  if (_connLast && Date.now() - _connLast < _CONN_FLOOR_MS) return;
+  _connBusy = true;
   _connLast = Date.now();
-  _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
+  try {
+    let back = false;
+    try { back = await window.Steward.reconnectDownRelays(); } catch (e) {}
+    // Nothing came back, so there is nothing new to read — re-subscribing would re-download the whole church
+    // to reach the same relays we already have. Wait for the next tick.
+    if (back) _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
+  } finally { _connBusy = false; }
 }
 function _wireStewardConn() {
   if (_connWired || typeof document === 'undefined') return; _connWired = true;

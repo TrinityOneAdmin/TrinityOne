@@ -53,7 +53,7 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
     assert.ok(depth === 0, name + ': braces did not balance — re-anchor this test');
     return BUNDLE.slice(at, i + 1);
   };
-  const parts = ['_secureStore', '_encIsMarker', 'encBlobRaw', 'encBlobWrite', 'encBlobRemove', 'migrateEncToSecure']
+  const parts = ['_secureStore', '_encIsMarker', 'encBlobRaw', 'encBlobWrite', 'encBlobRemove', 'encBlobRemoveResume', 'migrateEncToSecure']
     .map(lift).join(';\n')
     // Replace ONLY the module load. esbuild inlines the dynamic import as
     // `Promise.resolve().then(() => (init_esm(), esm_exports))`, which cannot resolve outside a browser — so
@@ -76,7 +76,7 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
   const impl = {
     set: async (k, v) => { calls.set++; if (secure.__failSet) throw new Error('keystore unavailable'); store[k] = secure.__writeGarbage ? 'CORRUPTED' : v; },
     get: async (k) => { calls.get++; if (secure.__failGet) throw new Error('keystore unavailable'); return store[k] === undefined ? null : store[k]; },
-    remove: async (k) => { calls.remove++; delete store[k]; },
+    remove: async (k) => { calls.remove++; if (secure.__failRemove || store.__failRemove) throw new Error('keystore busy'); delete store[k]; },
   };
   const SecureStorage = new Proxy(impl, {
     get(t, prop) {
@@ -94,11 +94,12 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
   // Injected here as a PASS-THROUGH so these tests keep testing what they are about — where the ciphertext
   // lands and whether it can be lost. The wrap has its own file, console-device-bound-key.test.mjs.
   const devWrap = { wrap: async () => null, unwrap: async (x) => x, isWrapped: () => false };
-  const fn = new Function('_devWrap', '__SECURE__', 'localStorage', 'lsGet', 'lsSet', '_isNative', 'console', 'ENC_LS',
-    src + '\nreturn { encBlobRaw, encBlobWrite, encBlobRemove, migrateEncToSecure, _encIsMarker };');
+  const PENDING = 'trinityone.steward.church-key.removing';
+  const fn = new Function('_devWrap', '__SECURE__', 'localStorage', 'lsGet', 'lsSet', '_isNative', 'console', 'ENC_LS', 'ENC_PENDING_LS',
+    src + '\nreturn { encBlobRaw, encBlobWrite, encBlobRemove, encBlobRemoveResume, migrateEncToSecure, _encIsMarker };');
   const api = fn(devWrap, SecureStorage, localStorage, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v),
-    () => nativeMode, { warn() {}, log() {} }, KEY);
-  return { ...api, lsData, store, calls, KEY };
+    () => nativeMode, { warn() {}, log() {} }, KEY, PENDING);
+  return { ...api, lsData, store, calls, KEY, PENDING };
 }
 const BLOB = JSON.stringify({ v: 2, it: 600000, salt: 'c2FsdA==', iv: 'aXY=', ct: 'Y2lwaGVy' });
 
@@ -280,6 +281,51 @@ test('…and a Keystore that throws still reloads, rather than trapping the stew
   await handler();
   await new Promise(r => setTimeout(r, 0));
   assert.deepEqual(order, ['reload'], 'a rejected removal left the steward on an unchanged page with no reload');
+});
+
+// ── a removal that gets cut off must finish later ────────────────────────────────────────────────────────
+// AUDIT-2026-07-31. The Remove & reload handler races removeKey() against a 3s timeout, because a native
+// bridge call can hang rather than throw and an unbounded await leaves a dead button. But encBlobRemove()
+// cleared the localStorage marker FIRST — so if the timeout won, the reload fired mid-remove(), encBlobRaw()
+// short-circuited on the missing marker, and the next boot looked perfectly clean while the church-key
+// ciphertext sat in the Android Keystore. Nothing would ever try again: encBlobRemove() is only reached from
+// removeKey() and forgetPin(), and both then find nothing to do.
+//
+// That is the exact failure S6 exists to prevent, reached by a different route — and the fix that introduced
+// it shipped with no test at all, which is how it survived a sabotage pass.
+test('A REMOVAL CUT OFF BY THE RELOAD IS FINISHED AT THE NEXT BOOT', async () => {
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+  assert.equal(h.store[h.KEY], BLOB, 'fixture: the blob should be in the hardware store');
+
+  // The Keystore hangs — the case the 3s bound exists for. The page reloads out from under it.
+  h.store.__failRemove = true;
+  await h.encBlobRemove();
+  assert.equal(h.store[h.KEY], BLOB, 'fixture: this removal was supposed to fail');
+  assert.ok(h.lsData[h.PENDING],
+    'nothing recorded that a removal was started, so the church key is now stranded in the hardware store ' +
+    'with no marker, no caller, and nothing that will ever try to remove it again');
+
+  // Next boot: the Keystore is working again.
+  delete h.store.__failRemove;
+  assert.equal(await h.encBlobRemoveResume(), true, 'the interrupted removal was not resumed at boot');
+  assert.equal(h.store[h.KEY], undefined, 'the church-key ciphertext is STILL in the hardware store');
+  assert.equal(h.lsData[h.PENDING], undefined, 'the breadcrumb was left behind, so every boot retries for ever');
+});
+
+test('…and a boot with no interrupted removal does nothing at all', async () => {
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+  assert.equal(await h.encBlobRemoveResume(), false, 'a normal boot tried to delete the church key');
+  assert.equal(h.store[h.KEY], BLOB, 'a normal boot REMOVED the church key — catastrophic');
+});
+
+test('…and a successful removal leaves no breadcrumb to retry', async () => {
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+  await h.encBlobRemove();
+  assert.equal(h.lsData[h.PENDING], undefined,
+    'a clean removal still left the retry marker, so the next boot re-runs a delete that already succeeded');
 });
 
 test('a marker whose blob cannot be fetched is a FAILED unlock, not an open door', () => {
