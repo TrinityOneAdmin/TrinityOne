@@ -1,4 +1,17 @@
-// test-event-store.mjs — regression test for the relay's SQLite event store.
+// event-store-import.test.mjs — regression test for the relay's SQLite event store.
+//
+// AUDIT-2026-07-30 P5. This file was called `test-event-store.mjs`, and `npm test` is
+// `node --test scripts/*.test.mjs` — so it NEVER RAN. Not once. Meanwhile it exited 1 on its first assertion,
+// because importAll() was broken (P4): put() opened an unconditional BEGIN inside the caller's transaction, so
+// every replaceable event threw and the whole import silently did nothing.
+//
+// That is how a green suite coexisted with a broken store API — the same shape as A6 and S7, three in one day:
+// a guard whose universe is smaller than its claim. Renamed so the glob picks it up; it is the RUNNING that
+// matters, not the prose.
+//
+// It is not written in node:test style — it prints ticks and exits non-zero on failure, which `node --test`
+// reports as a failing file. Left that way deliberately: rewriting 6KB of working assertions to change their
+// punctuation is how you introduce a bug into your own safety net.
 // Proves store.query() returns exactly what the old full-scan matchFilter did, plus replaceable dedup +
 // smart retention. Self-contained (synthetic events); also runs the real relay-db.json if present.
 //   node scripts/test-event-store.mjs

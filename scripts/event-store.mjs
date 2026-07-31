@@ -108,6 +108,23 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     runAnalyze();
   };
 
+  // AUDIT-2026-07-30 P4. put() opened an UNCONDITIONAL `BEGIN` for the replaceable-event swap, and importAll()
+  // (and reattribute) had already opened one — so every replaceable event threw "cannot start a transaction
+  // within a transaction", and put()'s catch issued a bare ROLLBACK that discarded the CALLER's transaction
+  // too. importAll therefore imported nothing at all, and the legacy JSON->SQLite migration at
+  // gateway.mjs:3353 threw on every boot, so renameSync never ran and an old relay's entire relay-db.json
+  // history silently never migrated. For ever, with no error surfaced anywhere.
+  //
+  // SQLite's answer to nesting is SAVEPOINT, which composes: the outermost is a real transaction, inner ones
+  // are named markers that release into their parent. `txDepth` chooses between them, so put() is correct
+  // whether it is called alone or inside a batch.
+  let txDepth = 0;
+  const txBegin = () => { db.exec(txDepth === 0 ? 'BEGIN' : 'SAVEPOINT sp' + txDepth); txDepth++; };
+  const txCommit = () => { txDepth--; db.exec(txDepth === 0 ? 'COMMIT' : 'RELEASE sp' + txDepth); };
+  // A rollback must undo only what THIS level did. A bare ROLLBACK inside a batch is what turned one bad
+  // event into "the whole import silently did nothing".
+  const txRollback = () => { txDepth--; try { db.exec(txDepth === 0 ? 'ROLLBACK' : 'ROLLBACK TO sp' + txDepth + '; RELEASE sp' + txDepth); } catch {} };
+
   const qByRepl = db.prepare('SELECT id, created_at FROM events WHERE repl = ?');
   const qById   = db.prepare('SELECT 1 FROM events WHERE id = ?');
   const delById = db.prepare('DELETE FROM events WHERE id = ?');
@@ -148,12 +165,12 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
       // destroys data (reattribute/importAll were already wrapped). A throw between the two — or a power cut,
       // since synchronous=NORMAL lets the DELETE reach disk while the INSERT doesn't — left the church's
       // roster / blocklist / stewards / sealed care need simply GONE, not stale. Make the swap atomic.
-      db.exec('BEGIN');
+      txBegin();
       try {
         for (const r of rows) delById.run(r.id);
         ins.run(e.id, e.pubkey, e.kind, e.created_at || 0, dtagOf(e), ch, rk, 1, JSON.stringify(e));
-        db.exec('COMMIT');
-      } catch (err) { try { db.exec('ROLLBACK'); } catch {} throw err; }
+        txCommit();
+      } catch (err) { txRollback(); throw err; }
       maybeAnalyze();   // P1: a fresh DB is empty at open, so the statistics have to be gathered once it fills
       return 'stored';
     }
@@ -314,9 +331,9 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     const rows = qUnattributed.all();
     if (!rows.length) return 0;
     let n = 0;
-    db.exec('BEGIN');
-    try { for (const r of rows) { let e; try { e = JSON.parse(r.raw); } catch { continue; } const ch = resolveFn(e); if (ch) { updChurch.run(ch, r.id); n++; } } db.exec('COMMIT'); }
-    catch (err) { db.exec('ROLLBACK'); throw err; }
+    txBegin();
+    try { for (const r of rows) { let e; try { e = JSON.parse(r.raw); } catch { continue; } const ch = resolveFn(e); if (ch) { updChurch.run(ch, r.id); n++; } } txCommit(); }
+    catch (err) { txRollback(); throw err; }
     return n;
   }
 
@@ -324,9 +341,9 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   function importAll(arr) {
     if (!Array.isArray(arr) || !arr.length) return 0;
     let n = 0;
-    db.exec('BEGIN');
-    try { for (const e of arr) { if (put(e) === 'stored') n++; } db.exec('COMMIT'); }
-    catch (err) { db.exec('ROLLBACK'); throw err; }
+    txBegin();
+    try { for (const e of arr) { if (put(e) === 'stored') n++; } txCommit(); }
+    catch (err) { txRollback(); throw err; }
     return n;
   }
 
