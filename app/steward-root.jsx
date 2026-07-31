@@ -56,7 +56,18 @@ async function _maybeBumpConn() {
   _connLast = Date.now();
   try {
     let back = false;
-    try { back = await window.Steward.reconnectDownRelays(); } catch (e) {}
+    // BOUNDED HERE TOO. _connBusy is the re-entry guard for the console's ONLY reconnect ticker — 90s
+    // heartbeat, visibilitychange, focus, online, all of them — and holding it across an await that never
+    // settles disables reconnection for the rest of the session. That is HANDOFF finding 4 (the console goes
+    // permanently blind after a drop) reintroduced by the fix for it; AUDIT-3 measured the probe still pending
+    // at 12s against a socket that accepted and then said nothing. The probe bounds itself as well; this is the
+    // backstop, because a guard that can latch must never depend on someone else's timeout.
+    try {
+      back = await Promise.race([
+        window.Steward.reconnectDownRelays(),
+        new Promise(r => setTimeout(() => r(false), 15000)),
+      ]);
+    } catch (e) {}
     // Nothing came back, so there is nothing new to read — re-subscribing would re-download the whole church
     // to reach the same relays we already have. Wait for the next tick.
     if (back) _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });

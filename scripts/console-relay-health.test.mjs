@@ -43,6 +43,8 @@ import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8990;          // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const DEAD_PORT = 8991;     // deliberately NEVER bound
+const SILENT_PORT = 8996;   // accepts the TCP connection and then says nothing — a filtering middlebox
+const SILENT_URL = `ws://127.0.0.1:${SILENT_PORT}/relay`;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const DEAD_URL = `ws://127.0.0.1:${DEAD_PORT}/relay`;
 const MEMBER_D = 'trinityone/member:';
@@ -67,9 +69,21 @@ async function startRelay() {
 before(async () => {
   await requireFreePort(PORT, 'console-relay-health.test.mjs');
   await requireFreePort(DEAD_PORT, 'console-relay-health.test.mjs (its deliberately-dead relay port)');
+  await requireFreePort(SILENT_PORT, 'console-relay-health.test.mjs (its silent-middlebox port)');
   await startRelay();
 });
 after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
+
+// A socket that is accepted and then never spoken to — a filtering middlebox, a half-open NAT entry. Node's
+// server.close() waits for open connections, so the sockets must be destroyed explicitly or the test hangs
+// (learned the hard way: the whole file timed out at 6m40s).
+async function silentRelay() {
+  const { createServer } = await import('node:net');
+  const socks = new Set();
+  const srv = createServer(sock => { socks.add(sock); sock.on('close', () => socks.delete(sock)); });
+  await new Promise(r => srv.listen(SILENT_PORT, '127.0.0.1', r));
+  return { close: async () => { for (const s2 of socks) { try { s2.destroy(); } catch {} } await new Promise(r => srv.close(r)); } };
+}
 
 function grab(sig) {
   let at = STEWARD.indexOf(sig);
@@ -362,6 +376,64 @@ test('…and once the relay is back, the probe reports it so the ticker can act'
     'stays blind until the steward reloads');
   assert.equal(s.relaysHealthy(), true, 'reconnecting did not restore health');
   s.close();
+});
+
+test('A PROBE MUST GIVE UP — a socket that accepts and then says nothing cannot hang the ticker', async () => {
+  // AUDIT-3, and it restored the very bug this mechanism exists to close. ensureRelay() only arms its timer
+  // when a timeout is PASSED (AbstractRelay.connect); every other pool path passes maxWaitForConnection, and
+  // reconnectDownRelays did not. A middlebox that accepts the TCP connection and then stays silent — routine
+  // on the filtered networks this product is for — left the await pending indefinitely. Measured: still
+  // pending at 12s while an ordinary subscription gave up at 1.5s.
+  //
+  // The caller holds its re-entry flag across that await, so ONE stalled probe disabled the console's only
+  // reconnect ticker for the whole session: no heartbeat, no focus, no online event. Permanently blind after a
+  // drop, which is HANDOFF finding 4 verbatim.
+  const silent = await silentRelay();
+  try {
+    const s = consoleSide([SILENT_URL]);
+    // Make it a relay we have "opened", so the probe considers it at all.
+    const sub = s.pool.subscribeMany([SILENT_URL], [{ kinds: [1], limit: 1 }], { onevent() {}, oneose() {} });
+    await sleep(2500);
+    try { sub.close(); } catch {}
+
+    const t0 = Date.now();
+    const settled = await Promise.race([
+      s.reconnectDownRelays().then(() => 'settled'),
+      new Promise(r => setTimeout(() => r('HUNG'), 12000)),
+    ]);
+    const took = Date.now() - t0;
+    s.close();
+    assert.equal(settled, 'settled',
+      `the probe was still pending after ${took}ms against a socket that accepts and then goes silent. The ` +
+      'caller holds its re-entry guard across this await, so the console never attempts reconnection again ' +
+      'for the rest of the session — permanently blind after a drop, with nothing on screen to say so.');
+    assert.ok(took < 11000, `the probe took ${took}ms to give up — too slow to keep a 90s ticker honest`);
+  } finally { await silent.close(); }
+});
+
+test('…and one stalled relay must not stop a healthy one being recovered', async () => {
+  // The probe used to loop sequentially with an await inside, so a relay listed BEFORE a recoverable one
+  // blocked it entirely. Ordering in relays() is not something a steward controls.
+  const silent = await silentRelay();
+  try {
+    const s = consoleSide([SILENT_URL, WS_URL]);            // the stalled one FIRST
+    const a = s.pool.subscribeMany([SILENT_URL], [{ kinds: [1], limit: 1 }], { onevent() {}, oneose() {} });
+    const b = s.pool.subscribeMany([WS_URL], [{ kinds: [30078], '#d': [MEMBER_D + church.pub] }], { onevent() {}, oneose() {} });
+    await sleep(2500);
+    relay.kill('SIGKILL');
+    await sleep(1200);
+    try { a.close(); } catch {} try { b.close(); } catch {}
+    await startRelay();
+
+    const got = await Promise.race([
+      s.reconnectDownRelays(),
+      new Promise(r => setTimeout(() => r('HUNG'), 12000)),
+    ]);
+    s.close();
+    assert.equal(got, true,
+      'the healthy relay was not recovered because a stalled one came first in relays(). The console stays ' +
+      'blind on a relay that is up and reachable.');
+  } finally { await silent.close(); }
 });
 
 // ── end to end: the symptom the steward actually reported ────────────────────────────────────────────────

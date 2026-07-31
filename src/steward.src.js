@@ -871,6 +871,10 @@ async function encBlobRaw() {
 }
 // write the blob. Returns true only if it durably landed somewhere it can be read back.
 async function encBlobWrite(str) {
+  // Writing a key SUPERSEDES any pending removal of the previous one. The Keystore slot is reused, so leaving
+  // the breadcrumb behind arms encBlobRemoveResume() to delete the key we are about to write, at the next
+  // boot. AUDIT-3. Belt and braces with the guard in the resume itself.
+  try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
   if (_isNative()) {
     try {
       const { S } = await _secureStore();
@@ -919,6 +923,13 @@ async function encBlobRemove() {
 // killed. Safe to call on every boot: it does nothing unless the breadcrumb is there.
 async function encBlobRemoveResume() {
   if (!lsGet(ENC_PENDING_LS)) return false;
+  // A KEY IS PRESENT AGAIN — the steward put a church back on this device after the removal that left this
+  // breadcrumb. The Keystore slot is REUSED, so the breadcrumb cannot tell a stranded old key from a live new
+  // one, and removing now destroys the new one. AUDIT-3: reproduced — failed removal, steward restores a
+  // church, next boot deleted it; localStorage still says a key exists, so unlock() then rejects the correct
+  // PIN for ever and the church survives only on the paper phrase. Drop the breadcrumb instead: a completed
+  // removeKey() clears ENC_LS, so a genuine interrupted removal reaches this line with nothing there.
+  if (lsGet(ENC_LS)) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
   if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
   try {
     const { S } = await _secureStore();
@@ -1883,12 +1894,30 @@ window.Steward = {
     let back = false;
     try {
       const st = pool.listConnectionStatus();
+      // In PARALLEL. Sequentially, a slow or stalled relay delays — and previously blocked entirely — every
+      // relay listed after it, so a healthy relay could never be recovered because a dead one came first.
+      const probes = [];
       for (const url of relays()) {
         let k = url; try { k = normalizeURL(url); } catch (e) {}
         if (st.get(k) === true) continue;             // already up
         if (!_relaysTouched.has(k)) continue;         // never opened — ordinary subscription will handle it
-        try { await pool.ensureRelay(k); back = true; } catch (e) {}
+        // BOUNDED, and this is not optional. ensureRelay() only arms its timer when a timeout is passed
+        // (AbstractRelay.connect), and every other pool path passes pool.maxWaitForConnection — this was the
+        // one connect in the codebase without one. A middlebox that accepts the socket and says nothing, or a
+        // dropped SYN, then leaves this await pending for ever. AUDIT-3 measured it still hanging at 12s while
+        // an ordinary subscription gave up at 1.5s. The caller holds a re-entry flag across this await, so one
+        // stalled probe silently disables the console's ONLY reconnect ticker for the rest of the session —
+        // which is HANDOFF finding 4, the exact bug this whole mechanism exists to close, restored by its fix.
+        //
+        // Raced independently of the connect as well: a promise that never settles cannot be fixed by a
+        // parameter alone if a future nostr-tools drops the option.
+        const timeout = pool.maxWaitForConnection || 3000;
+        probes.push(Promise.race([
+          pool.ensureRelay(k, { connectionTimeout: timeout }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('probe timed out')), timeout + 500)),
+        ]).then(() => { back = true; }, () => {}));
       }
+      await Promise.all(probes);
     } catch (e) {}
     return back;
   },

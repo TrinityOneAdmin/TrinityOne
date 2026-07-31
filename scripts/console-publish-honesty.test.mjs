@@ -429,7 +429,6 @@ test('THE SKIP COMES FROM THE RELAY, NOT JUST THIS PAGE\'S MEMORY', async () => 
 
   const reloaded = await authenticate(consoleSide([WS_URL]));   // a different page: nothing remembered
   const r = await reloaded.refreshClearances(pubs, [pubs[0]], []);
-  (await import('node:fs')).writeFileSync('/tmp/dbg.json', JSON.stringify({authed: reloaded._isRelayAuthed(), r: {failed:r.failed, skipped:r.skipped, total:r.total}}));
   reloaded.close();
   assert.equal(r.skipped, 2,
     `a freshly-loaded console re-published ${2 - r.skipped} of 2 clearances the relay already holds. The skip ` +

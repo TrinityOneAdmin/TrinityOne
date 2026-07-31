@@ -313,6 +313,62 @@ test('A REMOVAL CUT OFF BY THE RELOAD IS FINISHED AT THE NEXT BOOT', async () =>
   assert.equal(h.lsData[h.PENDING], undefined, 'the breadcrumb was left behind, so every boot retries for ever');
 });
 
+test('A STALE BREADCRUMB MUST NOT DELETE THE NEXT CHURCH KEY', async () => {
+  // AUDIT-3, and this is the one that destroys data. The breadcrumb records THAT a removal started, never
+  // WHICH blob — and the Keystore slot is reused. So: a removal fails (the case the breadcrumb exists for),
+  // the steward puts a church back on the device, and the next boot's resume deletes the key they just
+  // restored. localStorage still holds the marker, so unlock() then rejects the CORRECT PIN for ever and the
+  // church survives only on the paper phrase. That is the S6 failure mode — orphaning the only copy of a
+  // church's identity — created by the fix for S6's sibling.
+  //
+  // The test that shipped beside that fix ('a boot with no interrupted removal does nothing') checked the
+  // safe direction only, which is why sabotage never caught it.
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+  h.store.__failRemove = true;                   // set AFTER the write, so it can be cleared again below
+  await h.encBlobRemove();                       // fails; breadcrumb stays, by design
+  assert.equal(h.lsData[h.PENDING], '1', 'fixture: the breadcrumb should be set after a failed removal');
+
+  delete h.store.__failRemove;
+  const NEXT = JSON.stringify({ v: 2, it: 600000, salt: 'bmV3', iv: 'bmV3', ct: 'TkVX' });
+  await h.encBlobWrite(NEXT);                    // the steward restores a church
+  assert.equal(h.lsData[h.PENDING], undefined,
+    'writing a key left the removal breadcrumb in place, so the next boot is armed to delete it');
+
+  assert.equal(await h.encBlobRemoveResume(), false, 'the resume acted on a device that has a live key');
+  assert.equal(h.store[h.KEY], NEXT,
+    'THE BOOT-TIME RESUME DELETED A LIVE CHURCH KEY. The localStorage marker still says a key exists, so the ' +
+    'steward\'s correct PIN is rejected for ever and the church is recoverable only from the paper phrase.');
+  assert.equal(await h.encBlobRaw(), NEXT, 'and the key must still be readable');
+});
+
+test('…and the resume refuses on its OWN, not just because writing clears the breadcrumb', async () => {
+  // Two independent defences cover this: encBlobWrite() drops the breadcrumb, AND the resume refuses when a
+  // key is present. That is deliberate defence-in-depth, but it means neither is tested by the scenario above
+  // — removing either one alone still passes. Caught by sabotage. This exercises the guard in isolation, with
+  // the breadcrumb and a live key both present however they got there.
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+  h.lsData[h.PENDING] = '1';                     // a breadcrumb from some earlier, unrelated removal
+  assert.equal(await h.encBlobRemoveResume(), false, 'the resume ran with a live key on the device');
+  assert.equal(h.store[h.KEY], BLOB, 'the resume deleted a live church key');
+  assert.equal(h.lsData[h.PENDING], undefined, 'the stale breadcrumb was left to fire again on the next boot');
+});
+
+test('…and the resume STILL finishes a genuinely interrupted removal', async () => {
+  // The guard must not disarm the repair it exists for. A real interruption leaves no localStorage marker,
+  // because removeKey() clears that synchronously before the hardware store is touched.
+  const h = harness();
+  await h.encBlobWrite(BLOB);
+  h.store.__failRemove = true;
+  await h.encBlobRemove();
+  delete h.store.__failRemove;
+  assert.equal(h.lsData[h.KEY], undefined, 'fixture: a removal clears the localStorage marker first');
+  assert.equal(await h.encBlobRemoveResume(), true, 'the interrupted removal was abandoned, not finished');
+  assert.equal(h.store[h.KEY], undefined, 'the church-key ciphertext is STILL in the hardware store');
+  assert.equal(h.lsData[h.PENDING], undefined, 'the breadcrumb survived a successful resume');
+});
+
 test('…and a boot with no interrupted removal does nothing at all', async () => {
   const h = harness();
   await h.encBlobWrite(BLOB);

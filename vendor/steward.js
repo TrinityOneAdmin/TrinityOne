@@ -12531,6 +12531,10 @@ zoo`.split("\n");
     return "";
   }
   async function encBlobWrite(str) {
+    try {
+      localStorage.removeItem(ENC_PENDING_LS);
+    } catch {
+    }
     if (_isNative()) {
       try {
         const { S } = await _secureStore();
@@ -12589,6 +12593,13 @@ zoo`.split("\n");
   }
   async function encBlobRemoveResume() {
     if (!lsGet(ENC_PENDING_LS)) return false;
+    if (lsGet(ENC_LS)) {
+      try {
+        localStorage.removeItem(ENC_PENDING_LS);
+      } catch {
+      }
+      return false;
+    }
     if (!_isNative()) {
       try {
         localStorage.removeItem(ENC_PENDING_LS);
@@ -13834,6 +13845,7 @@ zoo`.split("\n");
       let back = false;
       try {
         const st = pool.listConnectionStatus();
+        const probes = [];
         for (const url of relays()) {
           let k = url;
           try {
@@ -13842,12 +13854,16 @@ zoo`.split("\n");
           }
           if (st.get(k) === true) continue;
           if (!_relaysTouched.has(k)) continue;
-          try {
-            await pool.ensureRelay(k);
+          const timeout = pool.maxWaitForConnection || 3e3;
+          probes.push(Promise.race([
+            pool.ensureRelay(k, { connectionTimeout: timeout }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("probe timed out")), timeout + 500))
+          ]).then(() => {
             back = true;
-          } catch (e) {
-          }
+          }, () => {
+          }));
         }
+        await Promise.all(probes);
       } catch (e) {
       }
       return back;
