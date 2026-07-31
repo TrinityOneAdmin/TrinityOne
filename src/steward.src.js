@@ -672,10 +672,122 @@ const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && 
 // never returns the plugin. Wrapping it in a plain object gives an await-safe value with the same convenience.
 async function _secureStore() { const m = await import('@aparajita/capacitor-secure-storage'); return { S: m.SecureStorage }; }
 // the blob STRING ({v,it,salt,iv,ct}), from wherever it actually lives, or '' if there is none
+// ── DEVICE-BOUND WRAP (browser/desktop consoles) ──────────────────────────────────────────────────────────
+//
+// AUDIT-2026-07-30. On native the ciphertext lives in the OS hardware store and a copied file yields nothing.
+// A BROWSER has no such store, and that is where most stewards actually run the console — so the encrypted
+// church key sits in a file that can be copied in seconds and then attacked OFFLINE, at any speed, with none
+// of the unlock screen's throttling in the way. At the shipped cost (PBKDF2, 600k rounds) a six-character PIN
+// is roughly half a minute of one graphics card; even eight characters chosen by a person is hours.
+//
+// The browser can hold a key that JavaScript may USE but never READ: generate it non-extractable and keep the
+// CryptoKey object itself in IndexedDB. There is no API that returns its bytes. Wrapping the PIN-encrypted blob
+// with it means a copied localStorage file is not enough — the attacker must also have that browser profile,
+// and even then they are reduced to guessing through the browser rather than on a GPU farm.
+//
+// IT IS HARDENING, NOT CUSTODY. Lose the browser profile — reinstall, clear site data, a new machine — and the
+// blob is unopenable. That is ACCEPTABLE and deliberate: the steward restores from their 12 words, which they
+// are told to keep on paper. The cost of losing it is an inconvenience, never a church.
+//
+// WHAT MUST NOT HAPPEN is the silent version of that: the device key gone, the blob still present, and every
+// correct passphrase reported as "wrong". So the wrapped form is TAGGED (`dev:1`), and unwrap failure is
+// reported as a distinct condition the UI can explain — see unlock()/verifyPin().
+//
+// Applied to the WEB path only. Native already has Keystore (verified on device), and layering a second scheme
+// over a working one buys nothing and risks the thing that works.
+const DEV_DB = 'trinityone-steward', DEV_STORE = 'devkey', DEV_ID = 'church-wrap-v1';
+// AUDIT-2026-07-30: a swallowed createObjectStore failure USED TO BE PERMANENT. The upgrade still commits at
+// version 1 with no object store, every later transaction throws NotFoundError, _deviceKey catches it and
+// returns null — and because the version is hardcoded, onupgradeneeded never fires again, so there is no
+// self-repair. The console then either silently protects nothing, or (if a wrapped blob already exists) is
+// locked out for ever. Now: verify the store is really there, and reopen at a higher version to rebuild it.
+function _openIdb(version) {
+  return new Promise((res, rej) => {
+    let r; try { r = version ? indexedDB.open(DEV_DB, version) : indexedDB.open(DEV_DB); } catch (e) { return rej(e); }
+    r.onupgradeneeded = () => { const db = r.result; if (!db.objectStoreNames.contains(DEV_STORE)) db.createObjectStore(DEV_STORE); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error || new Error('indexeddb open failed'));
+  });
+}
+async function _idb() {
+  let db = await _openIdb();
+  if (db.objectStoreNames.contains(DEV_STORE)) return db;
+  const next = (db.version || 1) + 1;   // rebuild: a version bump is the ONLY way to get another upgrade
+  try { db.close(); } catch (e) {}
+  db = await _openIdb(next);
+  if (!db.objectStoreNames.contains(DEV_STORE)) throw new Error('indexeddb store missing after rebuild');
+  return db;
+}
+function _idbTx(db, mode, fn) {
+  return new Promise((res, rej) => {
+    const tx = db.transaction(DEV_STORE, mode);
+    const req = fn(tx.objectStore(DEV_STORE));
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error || new Error('indexeddb request failed'));
+  });
+}
+// get-or-create the non-extractable wrapping key. Returns null when the platform cannot provide one, which
+// means "carry on exactly as before" rather than "fail".
+async function _deviceKey(create) {
+  try {
+    if (typeof indexedDB === 'undefined' || !window.crypto || !window.crypto.subtle) return null;
+    const db = await _idb();
+    const found = await _idbTx(db, 'readonly', (st) => st.get(DEV_ID));
+    if (found) return found;
+    if (!create) return null;
+    // Ask the browser NOT to evict this origin before minting the key it will be asked to keep. Best-effort
+    // storage is subject to eviction under pressure and to some "clear site data" paths, and the asymmetric
+    // case — blob survives, key does not — is the one that strands a steward. Losing it is recoverable from
+    // the 12 words, but it should not happen because the browser tidied up.
+    try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) {}
+    const k = await window.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await _idbTx(db, 'readwrite', (st) => st.put(k, DEV_ID));
+    // read it back: a key we cannot fetch again is a key that would lock the steward out on the next boot
+    const back = await _idbTx(db, 'readonly', (st) => st.get(DEV_ID));
+    return back || null;
+  } catch (e) { console.warn('[steward] device key unavailable', e); return null; }
+}
+// The pure half, injectable so it can be exercised against real WebCrypto in tests.
+function makeDeviceWrap(opts) {
+  const o = opts || {};
+  const getKey = o.getKey || _deviceKey;
+  const subtle = o.subtle || (typeof window !== 'undefined' && window.crypto && window.crypto.subtle);
+  const rand = o.randomBytes || ((n) => window.crypto.getRandomValues(new Uint8Array(n)));
+  const isWrapped = (raw) => { try { const j = JSON.parse(raw); return !!(j && j.dev === 1 && j.ct && j.iv); } catch { return false; } };
+  return {
+    isWrapped,
+    // returns the wrapped string, or NULL meaning "this platform cannot, store it as before"
+    async wrap(str) {
+      try {
+        const key = await getKey(true);
+        if (!key || !subtle) return null;
+        const iv = rand(12);
+        const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(str)));
+        return JSON.stringify({ dev: 1, iv: b64e(iv), ct: b64e(ct) });
+      } catch (e) { console.warn('[steward] device wrap failed', e); return null; }
+    },
+    // returns the inner blob, or throws with .deviceKeyMissing so the caller can say WHY rather than "wrong PIN"
+    async unwrap(outer) {
+      if (!isWrapped(outer)) return outer;                    // not wrapped — plain blob, nothing to do
+      const key = await getKey(false);
+      if (!key || !subtle) { const e = new Error('device key missing'); e.deviceKeyMissing = true; throw e; }
+      const j = JSON.parse(outer);
+      try {
+        const pt = await subtle.decrypt({ name: 'AES-GCM', iv: b64d(j.iv) }, key, b64d(j.ct));
+        return new TextDecoder().decode(pt);
+      } catch (err) { const e = new Error('device key does not match'); e.deviceKeyMissing = true; throw e; }
+    },
+  };
+}
+const _devWrap = makeDeviceWrap();
+
 async function encBlobRaw() {
   const raw = lsGet(ENC_LS);
   if (!raw) return '';
-  if (!_encIsMarker(raw)) return raw;                       // web/desktop, or a native install not yet migrated
+  // web/desktop, or a native install not yet migrated. May carry the device-bound wrap; unwrap() passes a
+  // plain blob straight through, and THROWS with .deviceKeyMissing when the browser no longer holds the key —
+  // which the caller must report as "this computer no longer recognises the key", never as a wrong passphrase.
+  if (!_encIsMarker(raw)) return await _devWrap.unwrap(raw);
   try { const { S } = await _secureStore(); const s = await S.get(ENC_LS); if (s) return String(s); }
   catch (e) { console.warn('[steward] secure key get failed', e); }
   return '';   // marker present but the store would not give it up — unlock() surfaces this as a failed unlock
@@ -691,7 +803,19 @@ async function encBlobWrite(str) {
       console.warn('[steward] secure key read-back mismatch — keeping the localStorage copy');
     } catch (e) { console.warn('[steward] secure key set failed — keeping the localStorage copy', e); }
   }
-  lsSet(ENC_LS, str);   // web/desktop, or native fallback when the hardware store is unavailable
+  // WEB/DESKTOP: bind the blob to this browser so a copied file is not enough on its own. Returns null when
+  // the platform cannot (no IndexedDB, no WebCrypto, private mode), and then we store exactly as before —
+  // a console that cannot be hardened must still WORK.
+  if (!_isNative()) {
+    const wrapped = await _devWrap.wrap(str);
+    if (wrapped) {
+      lsSet(ENC_LS, wrapped);
+      // read-back, same discipline as the hardware store: never leave a blob we cannot open again
+      try { const back = await _devWrap.unwrap(lsGet(ENC_LS)); if (back === str) return true; } catch (e) {}
+      console.warn('[steward] device-wrapped blob did not read back — storing unwrapped');
+    }
+  }
+  lsSet(ENC_LS, str);   // web/desktop fallback, or native when the hardware store is unavailable
   return true;
 }
 async function encBlobRemove() {
@@ -860,7 +984,17 @@ window.Steward = {
     return true;
   },
   async unlock(pin) {                              // decrypt into memory (does NOT re-write the plaintext)
-    const raw = await encBlobRaw(); if (!raw) return lsGet(ENC_LS) ? false : true;   // S6: a marker we cannot open is a FAILED unlock, not an open door
+    // A device-bound blob this browser can no longer open is NOT a wrong passphrase, and saying so would send
+    // the steward round the "try again" loop for ever. Surfaced as a distinct state the UI explains.
+    // AUDIT-2026-07-30: cleared FIRST. It used to be set once and never reset, so after recovering in place a
+    // simple typo reported "this computer no longer recognises the stored key — your passphrase is fine",
+    // sending the steward off to re-restore a key that was never broken. Worse, the caller returns before the
+    // failed-attempt counter, so the escalating lockout stayed disabled for the rest of the session.
+    window.Steward.deviceKeyLost = false;
+    let raw;
+    try { raw = await encBlobRaw(); }
+    catch (e) { if (e && e.deviceKeyMissing) { window.Steward.deviceKeyLost = true; return false; } throw e; }
+    if (!raw) return lsGet(ENC_LS) ? false : true;   // S6: a marker we cannot open is a FAILED unlock, not an open door
     try {
       const o = JSON.parse(raw);
       const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
@@ -877,7 +1011,11 @@ window.Steward = {
   },
   // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).
   async verifyPin(pin) {
-    const raw = await encBlobRaw(); if (!raw) return false;
+    window.Steward.deviceKeyLost = false;   // see unlock(): reports THIS attempt, never latches
+    let raw;
+    try { raw = await encBlobRaw(); }
+    catch (e) { if (e && e.deviceKeyMissing) { window.Steward.deviceKeyLost = true; return false; } throw e; }
+    if (!raw) return false;
     try {
       const o = JSON.parse(raw);
       await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct));
