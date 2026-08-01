@@ -11743,7 +11743,7 @@ zoo`.split("\n");
   var _careKeyRev = 0;
   var _careKeyChecked = false;
   var _careRoster = /* @__PURE__ */ new Set();
-  var _sgSourceTs = 0;
+  var _careRosterKnown = false;
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
   var _mediaKeyRing = [];
@@ -12769,7 +12769,7 @@ zoo`.split("\n");
       setTimeout(finish, ms);
     });
   }
-  function _newestByD(filters, ms = 6e3, urls = null, mineHex = null) {
+  function _newestByD(filters, ms = 6e3, urls = null, mineHex = null, topOk = null) {
     return new Promise((resolve) => {
       const best = /* @__PURE__ */ new Map();
       let done = false;
@@ -12788,35 +12788,39 @@ zoo`.split("\n");
           if (!d) return;
           const cur = best.get(d) || { ours: null, top: null };
           const at = e.created_at || 0;
-          if (!cur.top || at > (cur.top.created_at || 0)) cur.top = e;
+          if ((!topOk || topOk(e)) && (!cur.top || at > (cur.top.created_at || 0))) cur.top = e;
           if (mineHex && e.pubkey === mineHex && (!cur.ours || at > (cur.ours.created_at || 0))) cur.ours = e;
           best.set(d, cur);
         },
         oneose() {
           finish(true);
-        }
+        },
+        // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER. nostr-tools arms its own EOSE timer and calls
+        // `oneose` when it expires, whether or not the relay ever sent the frame (lib/esm/index.js:1035, default
+        // `baseEoseTimeout` 4400ms). AUDIT-8 measured it: a relay that accepts the REQ and then says nothing for
+        // ever was recorded as `complete: true` after 4421ms, and a dead port after 3ms. Every caller that reads
+        // `complete` as "the relay finished answering" was therefore reading a lie — including the skip gate the
+        // previous commit added for exactly this reason. Pushing the library's timer well past our own bound
+        // means an EOSE arriving inside `ms` is a real one.
+        // RESIDUAL, deliberately left: `handleClose` calls `handleEose` first, so a relay that CLOSEs the
+        // subscription (e.g. refusing an oversized filter) still reports complete. subscribeMany overwrites any
+        // `onclose` we pass, so closing that needs a direct `relay.subscribe`. Tracked in the backlog.
+        maxWait: ms + 5e3
       });
       setTimeout(() => finish(false), ms);
     });
   }
-  function _topWeMustAnswer(rec, ours, churchHex) {
+  function _memberHonours(e, churchHex) {
+    if (!e || _authFuture(e)) return false;
+    if (((e.tags.find((t) => t[0] === "church") || [])[1] || "") !== churchHex) return false;
+    if (e.pubkey === churchHex) return true;
+    return _careRosterKnown ? _careRoster.has(e.pubkey) : true;
+  }
+  function _topWeMustAnswer(rec, ours) {
     const top = rec && rec.top;
     if (!top || top.pubkey === ours.pubkey) return null;
     if ((top.created_at || 0) <= (ours.created_at || 0)) return null;
-    if (_authFuture(top)) return null;
-    if (top.pubkey !== churchHex && !_careRoster.has(top.pubkey)) return null;
-    const ct = (top.tags.find((t) => t[0] === "church") || [])[1] || "";
-    if (ct !== churchHex) return null;
     return top;
-  }
-  function _clearanceStale(top, ours, churchHex) {
-    const sv = (e) => {
-      const t = (e.tags.find((x) => x[0] === "sv") || [])[1];
-      return t == null ? null : parseInt(t, 10) || 0;
-    };
-    const theirs = sv(top), mine = sv(ours);
-    if (theirs === null || mine === null) return _clearanceOutranks(ours.pubkey, top.pubkey, churchHex);
-    return theirs < mine;
   }
   function _clearanceOutranks(a, b, churchHex) {
     if (a === b) return false;
@@ -12836,44 +12840,49 @@ zoo`.split("\n");
       } catch (e) {
       }
       const readMs = (pool.maxWaitForConnection || 3e3) + 9e3;
-      const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], "#d": ds }], readMs, [u], mine).then((r) => r, () => ({ byD: /* @__PURE__ */ new Map(), complete: false }))));
+      const churchHex = actingChurch || pub;
+      const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], "#d": ds }], readMs, [u], mine, (e) => _memberHonours(e, churchHex)).then((r) => r, () => ({ byD: /* @__PURE__ */ new Map(), complete: false }))));
       if (!perRelay.length) return null;
       const definitive = perRelay.every((r) => r.complete);
-      const churchHex = actingChurch || pub;
       const ok = /* @__PURE__ */ new Set();
       const wrong = /* @__PURE__ */ new Set();
+      let scanned = 0;
       for (const p of pubs) {
         const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
+        let ck = null;
+        try {
+          ck = getConversationKey(sk, h);
+        } catch (x) {
+          continue;
+        }
         let settled = true, contentWrong = false;
         for (const { byD: held } of perRelay) {
           const rec = held.get(key);
           const e = rec && rec.ours;
           if (!e) {
             settled = false;
-            break;
+            continue;
           }
           let got = null;
           try {
-            got = JSON.parse(decrypt3(e.content, getConversationKey(sk, h)));
+            got = JSON.parse(decrypt3(e.content, ck));
           } catch (x) {
             settled = false;
             contentWrong = true;
-            break;
+            continue;
           }
           const w = wantFor(p);
           if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) {
             settled = false;
             contentWrong = true;
-            break;
+            continue;
           }
-          const top = _topWeMustAnswer(rec, e, churchHex);
-          if (top && _clearanceStale(top, e, churchHex)) {
-            settled = false;
-            break;
-          }
+          const top = _topWeMustAnswer(rec, e);
+          if (top && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) settled = false;
         }
         if (settled) ok.add(h);
         if (contentWrong) wrong.add(h);
+        if (++scanned % 25 === 0) await null;
       }
       return { matching: ok, wrong, definitive };
     } catch (e) {
@@ -13930,11 +13939,18 @@ zoo`.split("\n");
     },
     // the console feeds the live steward roster in, so the envelope's author check stays current when a
     // steward is revoked (a revoked steward's envelope must stop being accepted, same as their content)
+    // roster just changed — adopt any buffered envelope it now verifies.
+    // An EMPTY list from this entry point is ignored once the engine's own subscription has read a real roster
+    // (see subscribeStewards). The caller is a React effect whose hook starts at [] and re-fires [] on every
+    // remount, so an empty list here means "I have nothing yet" far more often than "this church has no
+    // stewards" — and blanking the roster silently switches off the check that decides whether another writer's
+    // copy is one the member honours. A genuine removal arrives through the subscription, which does set it
+    // empty. AUDIT-8.
     setCareRoster(list) {
-      _careRoster = new Set((list || []).filter(Boolean));
+      const next = new Set((list || []).filter(Boolean));
+      if (next.size || !_careRosterKnown) _careRoster = next;
       _reCheckCareKeyPending();
     },
-    // roster just changed — adopt any buffered envelope it now verifies
     // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
     subscribeMediaKey() {
       if (!pub) return () => {
@@ -14626,7 +14642,6 @@ zoo`.split("\n");
             if (!_byChurch(e)) return;
             if (e.created_at < tMinors) return;
             tMinors = e.created_at;
-            if (tMinors > _sgSourceTs) _sgSourceTs = tMinors;
             loaded = true;
             try {
               minors = JSON.parse(e.content).pubkeys || [];
@@ -14638,7 +14653,6 @@ zoo`.split("\n");
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
             tApproved = e.created_at;
-            if (tApproved > _sgSourceTs) _sgSourceTs = tApproved;
             try {
               approved = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -14698,7 +14712,7 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const cp = actingChurch || pub;
-      return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp], ["sv", String(_sgSourceTs || 0)]], content: ct }))).then((r) => {
+      return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }))).then((r) => {
         if (r) {
           try {
             _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now() });
@@ -15235,6 +15249,8 @@ zoo`.split("\n");
               cur = [];
             }
           }
+          _careRoster = new Set(cur.filter(Boolean));
+          _careRosterKnown = true;
           onList(cur);
         },
         oneose() {
@@ -16244,6 +16260,8 @@ zoo`.split("\n");
       lastProfile = {};
       _profileLoaded = false;
       _clearanceSent.clear();
+      _careRoster = /* @__PURE__ */ new Set();
+      _careRosterKnown = false;
       _nameKeyRing = [];
       _nameKeyDocKeys = null;
       _nameKeyChecked = false;

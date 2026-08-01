@@ -90,7 +90,7 @@ function consoleSide(urls) {
   // would assert my description of when that refusal fires rather than the console's.
   const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
   const matching = skewDecl + futureDecl + netViewDecl
-    + grab('function _topWeMustAnswer(') + grab('function _clearanceStale(')
+    + grab('function _memberHonours(') + grab('function _topWeMustAnswer(')
     + grab('async function _clearancesMatching(')
     // The cross-author ranking rule lives beside it and is called from inside it. Unlifted, the call
     // throws ReferenceError into _clearancesMatching's own catch, which returns null — "could not
@@ -115,7 +115,7 @@ function consoleSide(urls) {
     // This device's OWN church key. The console refuses the clearance back-fill when `pub` is neither
     // churchPub nor a church it is acting for — that is a NETWORK identity, which has no members.
     churchPub: church.pub,
-    _sgSourceTs: 0, _careRoster: new Set(), now,
+    _careRoster: new Set(), _careRosterKnown: true, now,
     feChurch: (t) => finalizeEvent(t, church.sk),
     toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
     [encName]: (a, k) => nip44v2.encrypt(a, k),

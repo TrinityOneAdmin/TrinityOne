@@ -8877,6 +8877,7 @@
           if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
           if (e.pubkey !== pubk && !(d || "").startsWith("trinityone/clearance:")) return;
           const _ts = e.created_at || 0;
+          if (_ts > Math.floor(Date.now() / 1e3) + 600) return;
           if (d === "trinityone/minors:" + pubk) {
             if (_ts < _sgTs.minors) return;
             _sgTs.minors = _ts;

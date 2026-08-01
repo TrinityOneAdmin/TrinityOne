@@ -2566,6 +2566,15 @@ window.Fellowship = {
         // (with a note on exactly why safeguarding is the worst place to let a stale copy win); the member side
         // never got it. One timestamp PER DOCUMENT, so a fresh minors list can't suppress a current approved one.
         const _ts = e.created_at || 0;
+        // NO FUTURE-DATED SAFEGUARDING DOCUMENT, and the bound must be the SAME ONE THE CONSOLE USES (600s,
+        // `_CLOCK_SKEW` in src/steward.src.js). This side had no bound at all while the console rejected past
+        // +600s and the relay accepted to +900s — so in that band a clearance existed that this app APPLIED
+        // and the church's console could not see. AUDIT-8 measured the consequence: a steward's phone running
+        // 11 minutes fast wrote "not a minor" for a child, this app obeyed it, and the owner's console
+        // reported `skipped=1, failed=0` with no banner for the whole skew window. Newest-wins also makes a
+        // far-future copy permanent: it pins `_clrTs` where no honest correction can ever reach it.
+        // Two programs that must agree cannot run different rulebooks.
+        if (_ts > Math.floor(Date.now() / 1000) + 600) return;
         if (d === 'trinityone/minors:' + pubk) { if (_ts < _sgTs.minors) return; _sgTs.minors = _ts; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
         else if (d === 'trinityone/approved:' + pubk) { if (_ts < _sgTs.approved) return; _sgTs.approved = _ts; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
         else if (d === 'trinityone/guardians:' + pubk) { if (_ts < _sgTs.guardians) return; _sgTs.guardians = _ts; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }

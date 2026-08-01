@@ -121,7 +121,7 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   // The version rule and the "would the member even honour this author" filter both live beside the read and
   // are called from inside it. Unlifted, the call throws ReferenceError into _clearancesMatching's own catch,
   // which returns null — "could not check" — so the harness would quietly measure the no-read path.
-  const guards = grab('function _topWeMustAnswer(') + grab('function _clearanceStale(');
+  const guards = grab('function _topWeMustAnswer(') + grab('function _memberHonours(');
   const skewDecl = (STEWARD.match(/var _CLOCK_SKEW = [^\n]*\n/) || [])[0];
   const futureDecl = (STEWARD.match(/var _authFuture = [^\n]*\n/) || [])[0];
   // The console refuses the clearance back-fill in a NETWORK view — lifted, not stubbed, because a stub
@@ -188,11 +188,12 @@ function consoleSide(urls, clock, ident, mutate, extra) {
     // This device's OWN church key. The console refuses the clearance back-fill when `pub` is neither
     // churchPub nor a church it is acting for — that is a NETWORK identity, which has no members.
     churchPub: church.pub,
-    // Which version of the church's minors:/approved: lists this console derived its clearances from, and the
-    // steward roster it would honour a competing copy from. Both are real console state; a harness that
-    // hardcoded them would be asserting my description of the console rather than the console.
-    _sgSourceTs: (extra && extra.sourceTs) || 0,
+    // The steward roster this console would honour a competing copy from, and whether it has actually READ a
+    // roster as opposed to simply not having one yet. Both are real console state; a harness that hardcoded
+    // them would be asserting my description of the console rather than the console. `rosterUnknown` models
+    // the boot race — the back-fill reaching Members before the roster subscription has answered.
     _careRoster: new Set((extra && extra.roster) || []),
+    _careRosterKnown: !(extra && extra.rosterUnknown),
     now: clock || now, [gpName]: getPublicKey,
     // Mirrors the shipped feChurch: adds the church tag when acting as a delegated steward, and signs with
     // the ACTIVE key — which for a delegated console is the steward's own, not the church's.
@@ -217,7 +218,7 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   // The whole program, INCLUDING the methods in the return expression — refreshClearances and
   // _refreshClearancesNow live there, and a sabotage hook that could not reach them silently matched nothing.
   let body = sentDecl + queueDecl + touchWiring + authWiring + isAuthed + newest + connected + matching + publishSrc
-    + `\nreturn ({ publish, _isRelayAuthed, _topWeMustAnswer, _clearanceStale, ${pubClearance},\n ${refresh},\n ${refreshNow} });`;
+    + `\nreturn ({ publish, _isRelayAuthed, _topWeMustAnswer, _memberHonours, ${pubClearance},\n ${refresh},\n ${refreshNow} });`;
   if (mutate) {
     const before = body;
     body = mutate(body);
@@ -748,7 +749,7 @@ test('A CLEARANCE MISSING FROM ONE RELAY IS STILL WRITTEN', async () => {
 
 test('…and with both relays holding it, the skip still happens', async () => {
   // The other direction: the fix must not switch read-before-write off whenever a second relay exists.
-  const B_PORT = 8986;
+  const B_PORT = 8993;   // NOT 8986: relay-careid-rehydrate.test.mjs binds that, and `npm test` runs files in PARALLEL
   await requireFreePort(B_PORT, 'console-publish-honesty.test.mjs (its second relay, agreement case)');
   const bDir = mkdtempSync(join(tmpdir(), 'trin-relayB2-'));
   const bUrl = `ws://127.0.0.1:${B_PORT}/relay`;
@@ -792,7 +793,7 @@ test('A RELAY JOINING MUST FORCE A RE-CHECK, NOT A CACHED SKIP', async () => {
   // is worth knowing — it means the per-relay read above is the load-bearing fix and this is belt-and-braces.
   // To reach it, the relay list is mutated in place (the console reads relays() on every call, as the real one
   // does when a steward adds a relay) so B can join a console that has just written, with the cache still warm.
-  const B_PORT = 8985;
+  const B_PORT = 8994;   // NOT 8985: join-resolver.test.mjs binds that as CENTRAL_PORT (same parallel-run collision)
   await requireFreePort(B_PORT, 'console-publish-honesty.test.mjs (its reconciliation relay)');
   const bDir = mkdtempSync(join(tmpdir(), 'trin-relayB3-'));
   const bUrl = `ws://127.0.0.1:${B_PORT}/relay`;
@@ -838,7 +839,6 @@ test('A RELAY JOINING MUST FORCE A RE-CHECK, NOT A CACHED SKIP', async () => {
     await requireConnected(s, [WS_URL, bUrl]);
 
     const elapsed = Date.now() - tWrite;
-    (await import('node:fs')).writeFileSync('/tmp/recon.txt', 'elapsed_ms=' + elapsed);
     const r = await s.refreshClearances(pubs, [], []);
     s.close();
     await sleep(500);
@@ -1097,7 +1097,7 @@ test('A CHILD OUTRANKED BY ANOTHER STEWARD\'S OLDER VIEW IS PUT RIGHT', async ()
   const child = K();
 
   // 1. The church owner marks the child. The member's app agrees.
-  const OWNER_VIEW = { sourceTs: now(), roster: [steward.pub] };
+  const OWNER_VIEW = { roster: [steward.pub] };
   const owner1 = await authenticate(consoleSide([WS_URL], null, null, null, OWNER_VIEW));
   await owner1.refreshClearances([child.pub], [child.pub], []);
   owner1.close();
@@ -1114,7 +1114,7 @@ test('A CHILD OUTRANKED BY ANOTHER STEWARD\'S OLDER VIEW IS PUT RIGHT', async ()
   // The steward's console is working from an OLDER view of the church's minors:/approved: lists — which is
   // what "has not caught up" means, and what its clearances are now stamped with. Everything downstream turns
   // on that stamp, so the fixture has to carry it rather than assert it.
-  const stew = await authenticate(consoleSide([WS_URL], null, ident, null, { sourceTs: now() - 600 }));
+  const stew = await authenticate(consoleSide([WS_URL], null, ident, null, {}));
   await stew.refreshClearances([child.pub], [], []);
   stew.close();
   const afterStew = await memberSees(child);
@@ -1147,7 +1147,7 @@ test('…and the steward\'s console gives way instead of fighting back', async (
   // The steward's own copy is correct and on top.
   // BOTH consoles hold the SAME view of the church's lists, which is the ordinary state of affairs — they
   // mirror one owner-signed source. Neither copy is stale, so neither console has anything to correct.
-  const VIEW = { sourceTs: now(), roster: [steward.pub] };
+  const VIEW = { roster: [steward.pub] };
   const s1 = await authenticate(consoleSide([WS_URL], null, ident, null, VIEW));
   const a = await s1.refreshClearances([child.pub], [child.pub], []);
   s1.close();
@@ -1172,22 +1172,27 @@ test('…and the steward\'s console gives way instead of fighting back', async (
   assert.equal((await memberSees(child)).minor, true, 'the child must still read as a child throughout');
 });
 
-test('…and the version stamp is what does both, not a coincidence', async () => {
-  // SABOTAGE, both directions. Never-stale must leave the child wrong; always-stale must produce the fight.
-  // If either sabotage behaves like the shipped code, the rule is inert.
+test('…and the author ranking is what does both, not a coincidence', async () => {
+  // SABOTAGE, both directions. Never-outranks must leave the child wrong; always-outranks must produce the
+  // fight. If either sabotage behaves like the shipped code, the rule is inert.
+  //
+  // AUDIT-8 re-aimed this at `_clearanceOutranks` after the version stamp it used to target was removed. The
+  // stamp lost on both counts it was introduced for: a writer chose its own number, so a steward asserting a
+  // large one outranked the church for ever; and two consoles reading the same relay derive the SAME number,
+  // so the ordinary equal case fell through to "concede" and whoever wrote last won by accident.
   const steward = K();
   const ident = await seatSteward(steward);
-  const never = (src) => src.replace(/function _clearanceStale\(top, ours, churchHex\) \{/, '$& return false;');
-  const always = (src) => src.replace(/function _clearanceStale\(top, ours, churchHex\) \{/, '$& return true;');
+  const never = (src) => src.replace(/function _clearanceOutranks\(a, b, churchHex\) \{/, '$& return false;');
+  const always = (src) => src.replace(/function _clearanceOutranks\(a, b, churchHex\) \{/, '$& return true;');
 
   // (a) never outranks → the owner leaves the steward's stale copy on top, which is the original bug.
   const kid = K();
-  const VIEW = { sourceTs: now(), roster: [steward.pub] };
+  const VIEW = { roster: [steward.pub] };
   const o1 = await authenticate(consoleSide([WS_URL], null, null, null, VIEW));
   await o1.refreshClearances([kid.pub], [kid.pub], []);
   o1.close();
   await sleep(1200);
-  const st = await authenticate(consoleSide([WS_URL], null, ident, null, { sourceTs: now() - 600 }));
+  const st = await authenticate(consoleSide([WS_URL], null, ident, null, {}));
   await st.refreshClearances([kid.pub], [], []);        // an older view of the lists: not a minor
   st.close();
   await sleep(1200);
@@ -1197,11 +1202,11 @@ test('…and the version stamp is what does both, not a coincidence', async () =
   assert.equal(r.skipped, 1, 'the sabotage did not take — this test proves nothing');
   assert.equal((await memberSees(kid)).minor, false,
     'with the staleness rule disabled the child must still be reading as an adult; if they are not, something '
-    + 'other than the version stamp is fixing this and the shipped rule is untested');
+    + 'other than the author ranking is fixing this and the shipped rule is untested');
 
   // (b) always outranks → the steward stops giving way and rewrites a settled member.
   const kid2 = K();
-  const SVIEW = { sourceTs: now(), roster: [steward.pub] };
+  const SVIEW = { roster: [steward.pub] };
   const s1 = await authenticate(consoleSide([WS_URL], null, ident, null, SVIEW));
   await s1.refreshClearances([kid2.pub], [kid2.pub], []);
   s1.close();
@@ -1215,7 +1220,7 @@ test('…and the version stamp is what does both, not a coincidence', async () =
   s2.close();
   assert.equal(b.skipped, 0,
     'with every copy treated as stale the steward should rewrite a clearance that needs no rewriting — the '
-    + 'first step of the endless fight. It did not, so the version comparison is not what prevents it.');
+    + 'first step of the endless fight. It did not, so the author ranking is not what prevents it.');
 });
 
 // A read that FINISHES and returns nothing. Isolates the "we never saw the record" guard from the "the read
@@ -1290,7 +1295,7 @@ test('AUDIT-7 #1: another console\'s copy on top is not a lost child', async () 
   // three children reading correctly on their phones the whole time.
   const steward = K();
   const ident = await seatSteward(steward);
-  const VIEW = { sourceTs: now(), roster: [steward.pub] };
+  const VIEW = { roster: [steward.pub] };
   const kids = [K(), K(), K()];
   const pubs = kids.map(k => k.pub);
 
@@ -1303,7 +1308,7 @@ test('AUDIT-7 #1: another console\'s copy on top is not a lost child', async () 
   // which is the point: the owner legitimately has work to do here, and doing it is not the same as the
   // members having lost anything. The owner's own copies are still present and still correct.
   await sleep(1200);
-  const stew = await authenticate(consoleSide([WS_URL], null, ident, null, { sourceTs: now() - 900, roster: [steward.pub] }));
+  const stew = await authenticate(consoleSide([WS_URL], null, ident, null, { roster: [steward.pub] }));
   await stew.refreshClearances(pubs, [], []);
   stew.close();
 
@@ -1333,56 +1338,49 @@ test('AUDIT-7 #1: another console\'s copy on top is not a lost child', async () 
     + 'separation is not what fixed this and the test above passes for some other reason');
 });
 
-test('AUDIT-7 #2: the steward holding the CURRENT lists wins, whatever their pubkey', async () => {
-  // Before the version stamp this was decided by hex ordering, so a steward working from a stale view could
-  // pin a child as "not a minor" simply by having the higher pubkey — 0 failed, no banner, nothing to retry,
-  // and only the church owner could break it. Delegation exists precisely so the owner does not have to open
-  // Members, so "the owner will fix it" is not an answer.
-  const a = K(), b = K();
-  const [identA, identB] = await seatStewards(a, b);
-  const stale = a.pub > b.pub ? identA : identB;         // whoever ranks HIGHER holds the out-of-date view
-  const fresh = a.pub > b.pub ? identB : identA;
-  const child = K();
-  const roster = [a.pub, b.pub];
+test('AUDIT-8 #2: the CHURCH key outranks a steward whichever way the pubkeys sort', async () => {
+  // WHAT THIS REPLACED, and why. AUDIT-7 shipped a version stamp so that "whoever derived their copy from the
+  // newer safeguarding list wins" — right instinct, wrong instrument. The stamp was a public tag the writer
+  // chose for itself and nobody verified, so a steward asserting a large number outranked the church for ever
+  // with the owner's console reporting a clean run; and because two consoles reading the same relay derive the
+  // SAME number, the ordinary equal case fell through to "concede" and whoever wrote last won by accident.
+  //
+  // The rule is back to author rank. What that guarantees is THIS: the church key always wins, and the pubkey
+  // ordering cannot change it. Pinned in both directions because a rule that only holds when the church key
+  // happens to sort higher is not a rule.
+  //
+  // NOT GUARANTEED, deliberately: between two STEWARDS the hex pubkey still breaks the tie, so a steward with
+  // a stale view and a higher pubkey can pin a child. That is unreachable through the shipped console — a
+  // delegated console is kept out of safeguarding entirely (app/stew-dashboard.jsx:3293 and :3496) — and it is
+  // the case stage 2 exists to solve properly, by having the RELAY refuse a clearance derived from a stale
+  // list revision. A referee that can see both copies, rather than a number one of them asserts.
+  for (const higherIsChurch of [true, false]) {
+    let steward = K();
+    while ((steward.pub > church.pub) === higherIsChurch) steward = K();   // force each ordering in turn
+    const ident = await seatSteward(steward);
+    const child = K();
+    const roster = [steward.pub];
 
-  const s1 = await authenticate(consoleSide([WS_URL], null, fresh, null, { sourceTs: now(), roster }));
-  await s1.refreshClearances([child.pub], [child.pub], []);
-  s1.close();
-  assert.equal((await memberSees(child)).minor, true, 'fixture: the child was never marked');
+    const owner = await authenticate(consoleSide([WS_URL], null, null, null, { roster }));
+    await owner.refreshClearances([child.pub], [child.pub], []);
+    owner.close();
+    assert.equal((await memberSees(child)).minor, true, 'fixture: the child was never marked');
 
-  await sleep(1200);
-  const s2 = await authenticate(consoleSide([WS_URL], null, stale, null, { sourceTs: now() - 900, roster }));
-  await s2.refreshClearances([child.pub], [], []);       // an older view of the lists: not a minor
-  s2.close();
-  assert.equal((await memberSees(child)).minor, false, 'fixture: the stale write did not take');
+    await sleep(1200);
+    const stew = await authenticate(consoleSide([WS_URL], null, ident, null, { roster }));
+    await stew.refreshClearances([child.pub], [], []);          // the steward writes "not a minor" on top
+    stew.close();
+    assert.equal((await memberSees(child)).minor, false, 'fixture: the steward write did not take');
 
-  await sleep(1200);
-  const s3 = await authenticate(consoleSide([WS_URL], null, fresh, null, { sourceTs: now(), roster }));
-  const r = await s3.refreshClearances([child.pub], [child.pub], []);
-  s3.close();
-  assert.equal((await memberSees(child)).minor, true,
-    `the child is still reading as an adult. The console holding the CURRENT safeguarding lists gave way to `
-    + `one holding an older view, because the other steward's pubkey sorts higher. ${r.skipped} skipped, `
-    + `${r.failed} failed, ${s3.banners().length} banners — nothing will ever retry this.`);
-
-  // SABOTAGE: decide by author rank instead of by which view the copy came from — the previous rule exactly.
-  const kid2 = K();
-  const t1 = await authenticate(consoleSide([WS_URL], null, fresh, null, { sourceTs: now(), roster }));
-  await t1.refreshClearances([kid2.pub], [kid2.pub], []);
-  t1.close();
-  await sleep(1200);
-  const t2 = await authenticate(consoleSide([WS_URL], null, stale, null, { sourceTs: now() - 900, roster }));
-  await t2.refreshClearances([kid2.pub], [], []);
-  t2.close();
-  await sleep(1200);
-  const t3 = await authenticate(consoleSide([WS_URL], null, fresh,
-    (src) => src.replace(/if \(theirs === null \|\| mine === null\) return _clearanceOutranks/,
-                         'if (true) return _clearanceOutranks'), { sourceTs: now(), roster }));
-  await t3.refreshClearances([kid2.pub], [kid2.pub], []);
-  t3.close();
-  assert.equal((await memberSees(kid2)).minor, false,
-    'with the version stamp ignored and the author ranking restored, the stale copy should still be pinning '
-    + 'the child as an adult — if it is not, the ranking was never the problem and this test proves nothing');
+    await sleep(1200);
+    const owner2 = await authenticate(consoleSide([WS_URL], null, null, null, { roster }));
+    const r = await owner2.refreshClearances([child.pub], [child.pub], []);
+    owner2.close();
+    assert.equal((await memberSees(child)).minor, true,
+      `the child is still reading as an adult with the church key holding the correct view and the steward's `
+      + `pubkey sorting ${steward.pub > church.pub ? 'HIGHER' : 'LOWER'}. ${r.skipped} skipped, ${r.failed} `
+      + `failed, ${owner2.banners().length} banners — nothing will ever retry this.`);
+  }
 });
 
 test('AUDIT-7 #3: a read cut short must not authorise a skip', async () => {
@@ -1391,14 +1389,14 @@ test('AUDIT-7 #3: a read cut short must not authorise a skip', async () => {
   // copy exists" — and that is exactly what a truncated read cannot establish.
   const steward = K();
   const ident = await seatSteward(steward);
-  const VIEW = { sourceTs: now(), roster: [steward.pub] };
+  const VIEW = { roster: [steward.pub] };
   const child = K();
 
   const owner = await authenticate(consoleSide([WS_URL], null, null, null, VIEW));
   await owner.refreshClearances([child.pub], [child.pub], []);
   owner.close();
   await sleep(1200);
-  const stew = await authenticate(consoleSide([WS_URL], null, ident, null, { sourceTs: now() - 900, roster: [steward.pub] }));
+  const stew = await authenticate(consoleSide([WS_URL], null, ident, null, { roster: [steward.pub] }));
   await stew.refreshClearances([child.pub], [], []);
   stew.close();
   assert.equal((await memberSees(child)).minor, false, 'fixture: the stale write did not take');
@@ -1427,34 +1425,68 @@ test('AUDIT-7 #3: a read cut short must not authorise a skip', async () => {
     + 'does not, something else is preventing the skip and the assertion above is not testing this guard');
 });
 
-test('AUDIT-7 #4: a relay cannot manufacture a disagreement out of nothing', async () => {
+test('AUDIT-8 #4: a relay cannot manufacture a disagreement, NOR hide a real one', async () => {
   // A seized or compelled relay is this product's stated adversary. Serving one validly-signed clearance per
   // member from a keypair with no roster seat cost the console a full-roster false alarm AND a full-roster
   // republish on every visit — while the members' phones ignored that author completely.
   //
-  // Tested directly against the shipped filter rather than through an injecting proxy: it is a pure function
-  // of the event, and driving it directly states the rule exactly. The integration path it guards is covered
-  // by #1 and #2 above.
+  // Part A drives the shipped predicate directly: it is a pure function of the event, so this states the rule
+  // exactly. Part B is the integration case AUDIT-8 found missing, and it covers the harder direction — the
+  // author test used to be applied AFTER the newest copy had been chosen, so a stray newer event DISPLACED
+  // the copy that mattered and the console went blind rather than noisy. Filtering while choosing the maximum
+  // is the fix, and only an end-to-end run can show it.
   const steward = K(), stranger = K(), other = K();
   const s = consoleSide([WS_URL], null, null, null, { roster: [steward.pub] });
   const mk = (signer, tags, at) => finalizeEvent({ kind: 30078, created_at: at || now(),
     tags: [['d', CLEAR_D + other.pub], ['t', 'trinityone'], ...tags], content: 'x' }, signer.sk);
-  const ours = mk(church, [['church', church.pub]], now() - 100);
-  const ask = (top) => s._topWeMustAnswer({ top }, ours, church.pub);
+  const honours = (e) => s._memberHonours(e, church.pub);
   s.close();
 
-  assert.equal(ask(mk(stranger, [['church', church.pub]])), null,
-    'a copy from a key with no roster seat was allowed to invalidate ours. The member ignores that author '
-    + 'entirely, so acting on it lets any relay force a permanent false alarm and endless republishing.');
-  assert.equal(ask(mk(steward, [['church', other.pub]])), null,
+  assert.equal(honours(mk(stranger, [['church', church.pub]])), false,
+    'a copy from a key with no roster seat was treated as one the member honours. The member ignores that '
+    + 'author entirely, so acting on it lets any relay force a permanent false alarm and endless republishing.');
+  assert.equal(honours(mk(steward, [['church', other.pub]])), false,
     'a copy tagged for a DIFFERENT church was accepted — that is the cross-tenant shape this codebase has '
     + 'already been bitten by twice');
-  assert.equal(ask(mk(steward, [['church', church.pub]], now() + 4000)), null,
+  assert.equal(honours(mk(steward, [['church', church.pub]], now() + 4000)), false,
     'a future-dated copy was accepted. Every other safeguarding document rejects those, because one that '
-    + 'cannot be outdated pins its state for ever');
-  assert.ok(ask(mk(steward, [['church', church.pub]])),
-    'a CURRENT steward\'s properly-tagged, newer copy must still be seen — otherwise the filter has simply '
+    + 'cannot be outdated pins its state for ever — and the member app now applies the SAME bound, so the two '
+    + 'can no longer disagree about which copies exist');
+  assert.equal(honours(mk(steward, [['church', church.pub]])), true,
+    'a CURRENT steward\'s properly-tagged copy must still be honoured — otherwise the filter has simply '
     + 'turned the whole check off and every test above passes for the wrong reason');
+  assert.equal(honours(mk(church, [['church', church.pub]])), true, 'the church key must always be honoured');
+
+  // PART B — the displacement case, end to end against the live relay.
+  const seated = K();
+  const ident = await seatSteward(seated);
+  const child = K();
+  const roster = [seated.pub];
+
+  const owner = await authenticate(consoleSide([WS_URL], null, null, null, { roster }));
+  await owner.refreshClearances([child.pub], [child.pub], []);
+  owner.close();
+  await sleep(1200);
+  const stew = await authenticate(consoleSide([WS_URL], null, ident, null, { roster }));
+  await stew.refreshClearances([child.pub], [], []);          // a seated steward's WRONG copy, on top
+  stew.close();
+  assert.equal((await memberSees(child)).minor, false, 'fixture: the steward write did not take');
+
+  // Now a stranger publishes a NEWER event for the same document. The relay stores nothing from an unseated
+  // key, so put it on the wire the way a compelled relay would: served to the console, honoured by nobody.
+  await sleep(1200);
+  const junk = mk(stranger, [['church', church.pub]], now() + 1);
+  const owner2 = await authenticate(consoleSide([WS_URL], null, null, null, { roster }));
+  const realSub = owner2.pool.subscribeMany.bind(owner2.pool);
+  owner2.pool.subscribeMany = (u, f, h) => realSub(u, f, { ...h,
+    onevent(e) { h.onevent(e); if ((e.tags.find(t => t[0] === 'd') || [])[1] === CLEAR_D + child.pub)
+      h.onevent({ ...junk, tags: [['d', CLEAR_D + child.pub], ['t', 'trinityone'], ['church', church.pub]] }); } });
+  const r = await owner2.refreshClearances([child.pub], [child.pub], []);
+  owner2.close();
+  assert.equal((await memberSees(child)).minor, true,
+    `a newer copy from an author the member ignores hid the seated steward's wrong copy from the console, so `
+    + `the child was left reading "adult". ${r.skipped} skipped, ${r.failed} failed. The stray event must not `
+    + `be able to occupy the top slot at all — filter the authors WHILE choosing the newest, never after.`);
 });
 
 test('AUDIT-7 #5: a definite loss is not softened by an unrelated unknown', async () => {

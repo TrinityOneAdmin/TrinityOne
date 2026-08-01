@@ -168,13 +168,12 @@ let _careKeyDocKeys = null;      // the envelope's wrapped-per-member map (to de
 let _careKeyRev = 0;             // envelope revision — rotation is NOT wired yet, but readers must tolerate it
 let _careKeyChecked = false;     // have we actually LOOKED for an envelope? mint gate — see (1) above
 let _careRoster = new Set();     // the church's current steward pubkeys — who may author the envelope
-// THE VERSION OF THE TRUTH a clearance was derived from: the newest created_at across the church's minors:
-// and approved: documents, which are OWNER-ONLY and therefore the single source both consoles mirror. Stamped
-// on every clearance we write, so any other authorised writer can tell a copy written from an OLDER view of
-// the lists from one written from the same view or newer — without being able to read it. That is what lets
-// two consoles settle a disagreement they can otherwise only guess at: each copy is sealed to the member with
-// its author's own key, so nobody but the author and the member can see what it says. AUDIT-7 (2026-08-01).
-let _sgSourceTs = 0;
+// HAVE WE ACTUALLY SEEN A ROSTER, as opposed to simply not having one yet? An empty set means both, and the
+// difference decides whether a steward-authored clearance is "an author the member honours" or "nobody".
+// Reading it as the latter during the boot race turned the cross-author check off and skipped the member.
+// Set only when a roster DOCUMENT has been read — not on the React round-trip through setCareRoster, whose
+// initial value is [] and which therefore cannot distinguish the two. AUDIT-8 (2026-08-01).
+let _careRosterKnown = false;
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key (= ring[0])
 let _mediaKeyRing = [];                        // current key first, then superseded — rotation must never orphan an encrypted sermon
@@ -1209,7 +1208,15 @@ function _one(filters, ms = 4000) {
 // relay — and callers then read "this record is absent" from what is really "I don't know yet". That is the
 // same mistake as treating an unauthenticated read as proof of absence, one level down, and it produced a
 // false "6 of 8 children did not receive their record" on a satellite link where every record had landed.
-function _newestByD(filters, ms = 6000, urls = null, mineHex = null) {
+// `topOk` decides which events may occupy the `top` slot. It MUST be applied while choosing the maximum, not
+// afterwards. AUDIT-8: `top` used to be the newest event from ANY author, filtered for authorship by the
+// caller once the maximum had already been taken — so a single newer event from a key the member ignores
+// DISPLACED the copy that mattered, the caller then discarded it, saw nothing on top, and skipped the member.
+// No adversary is needed: a since-removed steward's copy is still stored and still served, and roster churn
+// produces those routinely. The member's app has never had this bug — src/fellowship.src.js:2560 rejects
+// unhonoured authors BEFORE its newest-wins comparison — so the console was going blind to exactly the copy
+// the child's phone was applying.
+function _newestByD(filters, ms = 6000, urls = null, mineHex = null, topOk = null) {
   return new Promise((resolve) => {
     const best = new Map();
     let done = false;
@@ -1220,14 +1227,58 @@ function _newestByD(filters, ms = 6000, urls = null, mineHex = null) {
         if (!d) return;
         const cur = best.get(d) || { ours: null, top: null };
         const at = e.created_at || 0;
-        if (!cur.top || at > (cur.top.created_at || 0)) cur.top = e;
+        if ((!topOk || topOk(e)) && (!cur.top || at > (cur.top.created_at || 0))) cur.top = e;
         if (mineHex && e.pubkey === mineHex && (!cur.ours || at > (cur.ours.created_at || 0))) cur.ours = e;
         best.set(d, cur);
       },
       oneose() { finish(true); },
+      // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER. nostr-tools arms its own EOSE timer and calls
+      // `oneose` when it expires, whether or not the relay ever sent the frame (lib/esm/index.js:1035, default
+      // `baseEoseTimeout` 4400ms). AUDIT-8 measured it: a relay that accepts the REQ and then says nothing for
+      // ever was recorded as `complete: true` after 4421ms, and a dead port after 3ms. Every caller that reads
+      // `complete` as "the relay finished answering" was therefore reading a lie — including the skip gate the
+      // previous commit added for exactly this reason. Pushing the library's timer well past our own bound
+      // means an EOSE arriving inside `ms` is a real one.
+      // RESIDUAL, deliberately left: `handleClose` calls `handleEose` first, so a relay that CLOSEs the
+      // subscription (e.g. refusing an oversized filter) still reports complete. subscribeMany overwrites any
+      // `onclose` we pass, so closing that needs a direct `relay.subscribe`. Tracked in the backlog.
+      maxWait: ms + 5000,
     });
     setTimeout(() => finish(false), ms);
   });
+}
+
+// WOULD THE MEMBER'S APP APPLY THIS COPY? Everything the member ignores, we must ignore too, or a relay can
+// manufacture a disagreement out of nothing — one validly-signed event per member from a keypair with no
+// roster seat, never stored, merely SERVED, and the console republishes the whole roster every visit for ever.
+// Mirrors src/fellowship.src.js:2560-2577: the church key, or a CURRENT roster steward, and nothing else.
+//
+// The future-date guard is applied on BOTH sides as of AUDIT-8. It used to be here only, which made this
+// console blind to precisely the copy a clock-skewed phone had pinned: the relay accepts created_at up to
+// +900s, this console rejected past +600s, and the member's app had no bound at all. In that band the child
+// applied a copy the console could not see, and the console reported a clean run.
+//
+// UNKNOWN ROSTER IS NOT AN EMPTY ROSTER. `_careRoster` arrives asynchronously, and the back-fill does not wait
+// for it. Treating "not loaded yet" as "this author is nobody" made every steward-authored copy invisible, so
+// the console skipped — and because that run reported no failures it claimed the session's back-fill marker
+// and nothing retried. Default-deny: until we have actually seen a roster document we must assume the member
+// might honour this author, and answer it. Rewriting a copy we did not need to is cheap and self-correcting;
+// skipping one we did need to leaves a child reading "adult" indefinitely.
+function _memberHonours(e, churchHex) {
+  if (!e || _authFuture(e)) return false;
+  if (((e.tags.find(t => t[0] === 'church') || [])[1] || '') !== churchHex) return false;   // another church's document
+  if (e.pubkey === churchHex) return true;
+  return _careRosterKnown ? _careRoster.has(e.pubkey) : true;
+}
+
+// Is there a copy on top of ours that we have to answer? `rec.top` is already restricted to copies the member
+// would honour (see _memberHonours, passed into _newestByD as the top-slot predicate), so the only questions
+// left are whether it is someone else's and whether it is newer.
+function _topWeMustAnswer(rec, ours) {
+  const top = rec && rec.top;
+  if (!top || top.pubkey === ours.pubkey) return null;
+  if ((top.created_at || 0) <= (ours.created_at || 0)) return null;
+  return top;
 }
 
 // Who wins when two authorised writers disagree about a member's clearance. The member's app takes the NEWEST,
@@ -1236,50 +1287,23 @@ function _newestByD(filters, ms = 6000, urls = null, mineHex = null) {
 // which is exactly the load read-before-write exists to remove.
 //
 // So the rule is by AUTHOR, not by clock, and it is asymmetric on purpose: a console only rewrites over a
-// newer copy it OUTRANKS. The church key outranks every steward — the minors: and approved: lists it derives
-// from are owner-only documents (scripts/gateway.mjs), so the owner's console is the authority by
-// construction, and a steward's console is only ever mirroring. Between two stewards the hex pubkey breaks the
-// tie, which is arbitrary but stable, and stable is the whole requirement: exactly one of the pair gives way.
-// Is `top` a copy the member's app would actually apply, and newer than ours? Everything the member ignores,
-// we must ignore too, or a relay can manufacture a disagreement out of nothing. AUDIT-7 measured the
-// seized-relay case: one validly-signed event per member from a keypair with no roster seat, never stored,
-// merely SERVED — and the console reported a full-roster failure and republished everything, every visit. The
-// phones ignored that author completely (src/fellowship.src.js accepts the church key or a CURRENT roster
-// steward and nothing else), so the console applies the same tests the member does, plus the future-date guard
-// that every other safeguarding document already has.
-function _topWeMustAnswer(rec, ours, churchHex) {
-  const top = rec && rec.top;
-  if (!top || top.pubkey === ours.pubkey) return null;
-  if ((top.created_at || 0) <= (ours.created_at || 0)) return null;
-  if (_authFuture(top)) return null;                                          // no future-dated pins
-  if (top.pubkey !== churchHex && !_careRoster.has(top.pubkey)) return null;  // not a writer the member honours
-  const ct = (top.tags.find(t => t[0] === 'church') || [])[1] || '';
-  if (ct !== churchHex) return null;                                          // another church's document
-  return top;
-}
-
-// Is the copy on top STALER than ours — written from an older view of the church's safeguarding lists?
-// `sv` is the created_at of the minors:/approved: documents the writer derived it from (see _sgSourceTs).
-// Both consoles mirror the same owner-only source, so a copy stamped with the same version or newer was
-// written from a view at least as good as ours and there is nothing to correct. Only an OLDER stamp means the
-// writer had not caught up, and only then do we overrule it.
+// newer copy it OUTRANKS. The church key outranks every steward — minors: and approved: are owner-only
+// documents (scripts/gateway.mjs:1206), so the owner's console is the authority by construction and a
+// steward's is only ever mirroring. Between two stewards the hex pubkey breaks the tie: arbitrary, but stable,
+// and stable is the whole requirement — exactly one of the pair gives way.
 //
-// This TERMINATES, which "rewrite whenever somebody else is on top" does not: that rule is symmetric, and
-// symmetric means a fight — each console rewrites to get above the other, for ever, republishing the whole
-// roster on every visit, which is the exact cost read-before-write was added to remove.
+// AUDIT-8 RESTORED THIS as the only rule, reverting the version stamp that briefly replaced it. The stamp said
+// "whoever derived their copy from the newer safeguarding list wins", which is the right INSTINCT and the
+// wrong INSTRUMENT: the stamp was a public tag the writer chose for itself, checked by nobody. Measured, both
+// halves failed. A steward key writing sv=4102444800 outranked the church for ever, with the owner's console
+// reporting a clean run; and because two consoles reading the same relay derive the SAME stamp, the ordinary
+// equal case fell through to "concede", so whoever wrote last won by accident.
 //
-// Legacy copies carry no `sv` (a church still running an older console). Fall back to the author ranking
-// there, and only there — it settles who gives way but it cannot tell who is RIGHT, which is why it is the
-// fallback and not the rule. AUDIT-7 measured what it costs as a rule: between two stewards the higher hex
-// pubkey won regardless of which one held the current lists, pinning a child as "not a minor" with no banner
-// and nothing left to retry.
-function _clearanceStale(top, ours, churchHex) {
-  const sv = (e) => { const t = (e.tags.find(x => x[0] === 'sv') || [])[1]; return t == null ? null : (parseInt(t, 10) || 0); };
-  const theirs = sv(top), mine = sv(ours);
-  if (theirs === null || mine === null) return _clearanceOutranks(ours.pubkey, top.pubkey, churchHex);
-  return theirs < mine;
-}
-
+// This rule is correct while the church key is the only legitimate writer, which is what the console actually
+// permits today (app/stew-dashboard.jsx:3293 and :3496 keep a delegated console out of safeguarding entirely).
+// When delegated stewards are given safeguarding properly, the referee must be the RELAY — which holds the
+// minors: list and can refuse a clearance derived from a stale revision — and not a number the writer asserts
+// about itself. See reference/BACKLOG.md.
 function _clearanceOutranks(a, b, churchHex) {
   if (a === b) return false;
   if (a === churchHex) return true;
@@ -1327,8 +1351,12 @@ async function _clearancesMatching(pubs, wantFor) {
     // intended, and skips — reporting 1 skipped, 0 failed, no banner, while the child's phone reads "not a
     // minor" and nothing will ever retry. The console was checking its own work; the member reads the newest
     // copy from ANY authorised writer.
+    const churchHex = actingChurch || pub;
+    // The top-slot predicate is applied WHILE choosing the newest, never after — see _newestByD and
+    // _memberHonours. Filtering afterwards let one newer copy from an author the member ignores displace the
+    // copy that mattered, leaving the console to conclude nothing was on top at all.
     const perRelay = await Promise.all(readFrom.map(u =>
-      _newestByD([{ kinds: [30078], '#d': ds }], readMs, [u], mine)
+      _newestByD([{ kinds: [30078], '#d': ds }], readMs, [u], mine, (e) => _memberHonours(e, churchHex))
         .then(r => r, () => ({ byD: new Map(), complete: false }))));
     // DEFAULT-DENY. The per-member loop below decides by NOT finding a reason to object, so an empty
     // `perRelay` would settle — and therefore skip — every member on the roster. `readFrom.length` above makes
@@ -1336,7 +1364,6 @@ async function _clearancesMatching(pubs, wantFor) {
     // holds every other read gate to. AUDIT-7 (carried from AUDIT-5, where it was noted and left).
     if (!perRelay.length) return null;
     const definitive = perRelay.every(r => r.complete);
-    const churchHex = actingChurch || pub;
     const ok = new Set();
     // TWO QUESTIONS, NOT ONE. Folding them into a single boolean is the defect AUDIT-7 found in the previous
     // commit, and it produced the exact false banner this branch exists to remove:
@@ -1350,26 +1377,41 @@ async function _clearancesMatching(pubs, wantFor) {
     // steward's copies on top — "3 of 3 members did not receive their updated safeguarding record", while all
     // three children read correctly on their phones throughout.
     const wrong = new Set();     // our copy is present and its CONTENT is wrong — the only DEFINITE failure
+    let scanned = 0;
     for (const p of pubs) {
       const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
+      // ONE ECDH PER MEMBER, not one per member per relay. The conversation key depends only on (our key, this
+      // member), so recomputing it inside the relay loop multiplied the cost by the relay count for nothing.
+      // AUDIT-8 measured secp256k1 ECDH at 4.37ms/op on a workstation: a 400-member roster across 3 relays was
+      // 5.3 SECONDS of unbroken main thread, and 17.6s at 800 members across 5 — on a cheap Android, several
+      // times worse. Hoisting it removes the relay factor outright; the yield below removes the freeze.
+      let ck = null;
+      try { ck = nip44ck(sk, h); } catch (x) { continue; }
       let settled = true, contentWrong = false;
       for (const { byD: held } of perRelay) {
         const rec = held.get(key);
         const e = rec && rec.ours;
-        if (!e) { settled = false; break; }              // never saw our copy here — unknown, not failed
+        // NO `break` ON ABSENCE. Leaving the loop at the first relay that lacks our copy means a later relay
+        // holding a WRONG one is never decrypted — so whether a definite loss got the definite wording came
+        // down to which relay answered first. AUDIT-8 measured it: our copy absent on A and wrong on B
+        // reported `wrong=0` asked as [A,B] and `wrong=1` asked as [B,A], same data both runs. Absence is
+        // "unknown" and must not stop us looking for proof elsewhere.
+        if (!e) { settled = false; continue; }
         let got = null;
-        try { got = JSON.parse(nip44d(e.content, nip44ck(sk, h))); } catch (x) { settled = false; contentWrong = true; break; }
+        try { got = JSON.parse(nip44d(e.content, ck)); } catch (x) { settled = false; contentWrong = true; continue; }
         const w = wantFor(p);
-        if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) { settled = false; contentWrong = true; break; }
+        if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) { settled = false; contentWrong = true; continue; }
         // Our copy is right. But the member's app applies the NEWEST copy from any authorised writer, and we
-        // cannot open theirs — it is sealed with their conversation key with the member, not ours. So compare
-        // the one thing both copies state in the clear: which version of the church's owner-only
-        // minors:/approved: lists each was written from.
-        const top = _topWeMustAnswer(rec, e, churchHex);
-        if (top && _clearanceStale(top, e, churchHex)) { settled = false; break; }
+        // cannot open theirs — it is sealed with THEIR conversation key with the member, not ours. We can only
+        // decide whether it is ours to overrule.
+        const top = _topWeMustAnswer(rec, e);
+        if (top && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) settled = false;
       }
       if (settled) ok.add(h);
       if (contentWrong) wrong.add(h);
+      // Let the console breathe. Without this the whole roster is one unbroken task and the UI is frozen for
+      // its duration — on the largest rosters, long enough for Android to offer to kill the app.
+      if ((++scanned % 25) === 0) await null;
     }
     return { matching: ok, wrong, definitive };
   } catch (e) { return null; }
@@ -2181,7 +2223,18 @@ window.Steward = {
   careKeyChecked() { return _careKeyChecked; },
   // the console feeds the live steward roster in, so the envelope's author check stays current when a
   // steward is revoked (a revoked steward's envelope must stop being accepted, same as their content)
-  setCareRoster(list) { _careRoster = new Set((list || []).filter(Boolean)); _reCheckCareKeyPending(); },   // roster just changed — adopt any buffered envelope it now verifies
+  // roster just changed — adopt any buffered envelope it now verifies.
+  // An EMPTY list from this entry point is ignored once the engine's own subscription has read a real roster
+  // (see subscribeStewards). The caller is a React effect whose hook starts at [] and re-fires [] on every
+  // remount, so an empty list here means "I have nothing yet" far more often than "this church has no
+  // stewards" — and blanking the roster silently switches off the check that decides whether another writer's
+  // copy is one the member honours. A genuine removal arrives through the subscription, which does set it
+  // empty. AUDIT-8.
+  setCareRoster(list) {
+    const next = new Set((list || []).filter(Boolean));
+    if (next.size || !_careRosterKnown) _careRoster = next;
+    _reCheckCareKeyPending();
+  },
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
     if (!pub) return () => {};
@@ -2670,8 +2723,8 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; if (tMinors > _sgSourceTs) _sgSourceTs = tMinors; loaded = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
-        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; if (tApproved > _sgSourceTs) _sgSourceTs = tApproved; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; loaded = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
         else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, nophoto, loaded }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -2729,10 +2782,13 @@ window.Steward = {
     // next Members visit retries with a fresh created_at that wins cleanly. Noisy beats silently wrong here.
     // The COLLISION ITSELF is removed at source by refreshClearances' read-before-write (item 7), so a
     // tie-break refusal is now a rare, genuine signal rather than routine noise.
-    // ['sv', <source version>] — see _sgSourceTs. PUBLIC on purpose and it leaks nothing new: it is the
-    // created_at of the church's own minors:/approved: documents, which the relay already stores and stamps.
-    // It says WHICH VIEW this copy was written from, never what it says.
-    return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp], ['sv', String(_sgSourceTs || 0)]], content: ct })))
+    // NO VERSION STAMP. A public ['sv', …] tag naming the safeguarding-list revision this copy came from was
+    // added and then removed: the writer chose the number itself and nobody checked it, so it decided the
+    // ranking in favour of whoever asserted the largest value. It also told any reader of the relay the exact
+    // second a church last edited its list of children, and told the member themselves — a fact the read gate
+    // deliberately withholds from them. When delegated stewards get safeguarding, the revision check belongs
+    // on the RELAY, which holds the list and can refuse a stale write outright. AUDIT-8.
+    return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct })))
       .then(r => {
         // Remember what we just put on the wire, so a second writer moments later can tell it is redundant
         // WITHOUT waiting for the relay to echo it back. The read-before-write below closes the steady-state
@@ -3255,6 +3311,13 @@ window.Steward = {
         if (e.created_at < latest) return; latest = e.created_at;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) cur = [];
         else { try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; } }
+        // Adopt it HERE, not only via the UI's setCareRoster round-trip. The safeguarding back-fill needs to
+        // know who the member honours, and it does not wait for React: the roster hook starts at [] and only
+        // fills on the first emit, so a console that reached Members first judged every steward-authored copy
+        // as unauthored-by-anyone and skipped the member. The engine's own subscription is the earliest honest
+        // moment this is knowable. AUDIT-8.
+        _careRoster = new Set(cur.filter(Boolean));
+        _careRosterKnown = true;
         onList(cur);
       },
       oneose() { onList(cur); },
@@ -3878,6 +3941,12 @@ window.Steward = {
     // its 15s window — and church B would never receive their clearance. Same family as the name-key note
     // below; that one cost church B's members the key to every sealed name. AUDIT-4.
     _clearanceSent.clear();
+    // The steward roster is per-CHURCH and decides which authors a member honours. Carried across a switch, it
+    // judged church B's clearances against church A's stewards — admitting writers B never appointed and
+    // dismissing the ones it did. Cleared to UNKNOWN rather than empty, so the back-fill defaults to answering
+    // a competing copy instead of silently skipping it until B's own roster arrives. AUDIT-8, same family as
+    // the name-key note below.
+    _careRoster = new Set(); _careRosterKnown = false;
     // The name key is per-church and MUST NOT survive an identity switch. It was a bare module global, and
     // subscribeNameKey is mounted once with an empty dependency list, so switching from your own church to one
     // you steward carried church A's ring across — and the roster effect then published it as church B's name

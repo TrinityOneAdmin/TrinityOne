@@ -118,7 +118,7 @@ function consoleSide(ws) {
   // would assert my description of when that refusal fires rather than the console's.
   const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
   const matching = skewDecl + futureDecl + netViewDecl
-    + grabMethod(STEWARD, 'function _topWeMustAnswer(') + grabMethod(STEWARD, 'function _clearanceStale(')
+    + grabMethod(STEWARD, 'function _memberHonours(') + grabMethod(STEWARD, 'function _topWeMustAnswer(')
     + grabMethod(STEWARD, 'async function _clearancesMatching(')
     + grabMethod(STEWARD, 'function _clearanceOutranks(');
   const decName = (matching.match(/\b(decrypt\d*)\(/) || [])[1];
@@ -136,7 +136,7 @@ function consoleSide(ws) {
     // This device's OWN church key. The console refuses the clearance back-fill when `pub` is neither
     // churchPub nor a church it is acting for — that is a NETWORK identity, which has no members.
     churchPub: church.pub,
-    _sgSourceTs: 0, _careRoster: new Set(),
+    _careRoster: new Set(), _careRosterKnown: true,
     now, publish,
     feChurch: (t) => finalizeEvent(t, church.sk),
     toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
@@ -158,14 +158,25 @@ function consoleSide(ws) {
 
 const conn = () => new Promise((res, rej) => { const w = new WebSocket(WS_URL); w.on('open', () => res(w)); w.on('error', rej); });
 
-async function storedCount(pubs) {
+async function storedCount(pubs, minorsOut) {
   const w = await conn();
   const seen = new Set();
+  const minors = minorsOut || new Set();
   await new Promise(res => {
     const on = d => {
       const m = JSON.parse(d);
       if (m[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', WS_URL], ['challenge', m[1]]], content: '' }, church.sk)]));
-      if (m[0] === 'EVENT' && m[1] === 'q') seen.add((m[2].tags.find(t => t[0] === 'd') || [])[1]);
+      // DECRYPT IT, do not merely count it. AUDIT-8 sabotaged publishClearance to hardcode `minor: false` —
+      // 40 children sealed as adults — and this file stayed 14/14 green, because a d-tag is present whatever
+      // the record says. Presence is not the invariant; a child's app reading "child" is. Same defect the
+      // handoff flagged in the sibling file's `assert.equal(stored, 12)`, still live one file over.
+      if (m[0] === 'EVENT' && m[1] === 'q') {
+        const d = (m[2].tags.find(t => t[0] === 'd') || [])[1];
+        const who = String(d || '').slice(CLEAR_D.length);
+        let body = null;
+        try { body = JSON.parse(nip44v2.decrypt(m[2].content, nip44v2.utils.getConversationKey(church.sk, who))); } catch (x) {}
+        if (body) { seen.add(d); if (body.minor) minors.add(d); }
+      }
       if (m[0] === 'EOSE' && m[1] === 'q') { w.off('message', on); res(); }
     };
     w.on('message', on);
@@ -207,13 +218,24 @@ test('every member on a 150-strong roster gets a clearance', async (t) => {
     new Promise(res => setTimeout(() => res({ timedOut: true }), 60000)),
   ]);
   await sleep(500);
-  const stored = await storedCount(members.map(m => m.pub));
+  const storedMinors = new Set();
+  const stored = await storedCount(members.map(m => m.pub), storedMinors);
   w.close();
   t.diagnostic(`OK=${side.ok()} refused=${side.refused.length} ${side.refused.slice(0,2).join('|')}`);
-  t.diagnostic(`stored ${stored}/${ROSTER}, refreshClearances reported failed=${r && r.failed}`);
+  t.diagnostic(`stored ${stored}/${ROSTER} (${storedMinors.size} marked minor), reported failed=${r && r.failed}`);
   assert.equal(stored, ROSTER,
     `${ROSTER - stored} members have NO clearance document. Their app falls back to the minors list, which the ` +
     'relay does not serve to ordinary members — so every child among them is treated as an adult, silently');
+  // AND WHAT THEY SAY. Counting documents let a sabotage that sealed all 40 children as `minor: false` pass
+  // this file 14/14. The batching path this test exists for is exactly where a slice or index defect would
+  // send the wrong body to the right member, which a presence check cannot see. Spans both batch boundaries:
+  // the children are members 0-39 and the batch size is 20.
+  assert.equal(storedMinors.size, minors.length,
+    `${minors.length - storedMinors.size} of the ${minors.length} children stored a clearance that does NOT say `
+    + 'they are a child. The document is present, so a count-only check passes, and every one of those children '
+    + 'is treated as an adult by their own app.');
+  for (const p of minors) assert.ok(storedMinors.has(CLEAR_D + p),
+    'a specific child stored the wrong record — the batching sent the right body to the wrong member');
 });
 
 test('and it reports how many it reached, instead of returning nothing', async () => {
