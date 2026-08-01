@@ -14777,6 +14777,7 @@ zoo`.split("\n");
       return next;
     },
     async _refreshClearancesNow(memberPubs, minors, approved) {
+      if (_viewingNetwork()) return { results: [], failed: 0, skipped: 0, total: 0, unverified: false };
       const mins = new Set((minors || []).map((x) => String(x || "").toLowerCase()));
       const appr = new Set((approved || []).map((x) => String(x || "").toLowerCase()));
       let pubs = [...new Set((memberPubs || []).filter(Boolean))];

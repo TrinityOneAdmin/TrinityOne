@@ -218,7 +218,7 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   // The whole program, INCLUDING the methods in the return expression — refreshClearances and
   // _refreshClearancesNow live there, and a sabotage hook that could not reach them silently matched nothing.
   let body = sentDecl + queueDecl + touchWiring + authWiring + isAuthed + newest + connected + matching + publishSrc
-    + `\nreturn ({ publish, _isRelayAuthed, _topWeMustAnswer, _memberHonours, ${pubClearance},\n ${refresh},\n ${refreshNow} });`;
+    + `\nreturn ({ publish, _isRelayAuthed, _topWeMustAnswer, _memberHonours, _newestByD, ${pubClearance},\n ${refresh},\n ${refreshNow} });`;
   if (mutate) {
     const before = body;
     body = mutate(body);
@@ -1523,4 +1523,61 @@ test('AUDIT-7 #5: a definite loss is not softened by an unrelated unknown', asyn
   assert.doesNotMatch(t.banners()[0].detail.message, /wrong record is saved/,
     'with a single flag choosing the wording, the definitely-wrong record should be swallowed by the softer '
     + 'sentence — if it is not, the split wording is not what fixed this');
+});
+
+// ── AUDIT-8: the two fixes that shipped with no test behind them ──────────────────────────────────────────
+
+test('AUDIT-8: a client timeout is not an answer', async () => {
+  // `complete` decides whether the console may SKIP a member, and it was true in every failure mode. The
+  // cause is in the library, not this file: nostr-tools arms its own EOSE timer (baseEoseTimeout 4400ms) and
+  // calls `oneose` when it expires whether or not the relay ever sent the frame, so a relay that accepts the
+  // REQ and then says nothing for ever was recorded as having answered fully and held nothing.
+  //
+  // Measured directly against a mute socket before the fix: complete=true after 4421ms. So the skip gate the
+  // previous commit added for exactly this reason did nothing, and the comment claiming `complete`
+  // distinguishes a real EOSE from "we stopped waiting" was false.
+  const PORT = 8997;   // free across scripts/ — `npm test` runs files in PARALLEL, so this must not be shared
+  await requireFreePort(PORT, 'console-publish-honesty.test.mjs (its mute relay)');
+  const { WebSocketServer } = await import('ws');
+  const wss = new WebSocketServer({ port: PORT });
+  wss.on('connection', (ws) => { ws.on('message', () => {}); });   // accepts the REQ, and never says anything
+  const URL_MUTE = `ws://127.0.0.1:${PORT}/relay`;
+  try {
+    const s = consoleSide([URL_MUTE]);
+    const r = await s._newestByD([{ kinds: [30078], '#d': ['probe'] }], 3000, [URL_MUTE], null, null);
+    s.close();
+    assert.equal(r.complete, false,
+      'a relay that never answered was recorded as having finished answering. Everything downstream reads '
+      + '`complete` as proof the relay had nothing, so this authorises skipping a member the console has in '
+      + 'fact learned nothing about.');
+
+    // SABOTAGE: drop the maxWait that holds the library's synthetic EOSE past our own bound. The read window
+    // is deliberately longer than the library's 4400ms default here, so the synthetic one lands inside it —
+    // which is precisely the shape that made this true in the field.
+    const t = consoleSide([URL_MUTE], null, null, (src) => src.replace(/maxWait: ms \+ 5e3,?/, ''));
+    const r2 = await t._newestByD([{ kinds: [30078], '#d': ['probe'] }], 8000, [URL_MUTE], null, null);
+    t.close();
+    assert.equal(r2.complete, true,
+      'the sabotage did not take, so the assertion above is not testing the guard it names — re-anchor it');
+  } finally { await new Promise(res => wss.close(res)); }
+});
+
+test('AUDIT-8: a network identity has no members, and writes none', async () => {
+  // A network view is not a church: it has no roster and no safeguarding lists, and `actingChurch || pub`
+  // resolves to a key that is nobody's church. That made this console outrank everyone including the real
+  // church key, and compare competing copies against the wrong church entirely. The back-fill has no business
+  // running here at all — but nothing exercised it: all three harnesses set `pub === churchPub`, so the guard
+  // was constant-false and hardcoding it to false left the whole file green.
+  const net = K();
+  const s = await authenticate(consoleSide([WS_URL], null, { sk: net.sk, pub: net.pub, actingChurch: '' }));
+  const kid = K();
+  const before = s.ok();
+  const r = await s.refreshClearances([kid.pub], [kid.pub], []);
+  const wrote = await s.publishClearance(kid.pub, { minor: true, cleared: false });
+  s.close();
+  assert.equal(wrote, null, 'a network identity published a clearance for a member it does not have');
+  assert.equal(s.ok() - before, 0, 'a network view put safeguarding events on the wire');
+  assert.equal(r && r.failed, 0,
+    'the refusal was reported as a FAILURE, which would raise a safeguarding alarm about members who do not '
+    + 'exist in this view');
 });

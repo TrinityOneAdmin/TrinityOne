@@ -2853,6 +2853,13 @@ window.Steward = {
     return next;
   },
   async _refreshClearancesNow(memberPubs, minors, approved) {
+    // A NETWORK VIEW HAS NO MEMBERS, so there is nothing to back-fill and nothing to report. Without this the
+    // refusal cascaded into a false alarm: publishClearance returns null here, every member landed in
+    // `unconfirmed`, _clearancesMatching also refuses, and the run ended with failed === roster and a
+    // "couldn't confirm the record saved" banner about people who do not exist in this view. Found by the
+    // AUDIT-8 test written to cover _viewingNetwork — which nothing had exercised, because all three harnesses
+    // set `pub === churchPub` and the guard was constant-false.
+    if (_viewingNetwork()) return { results: [], failed: 0, skipped: 0, total: 0, unverified: false };
     const mins = new Set((minors || []).map(x => String(x || '').toLowerCase()));
     const appr = new Set((approved || []).map(x => String(x || '').toLowerCase()));
     let pubs = [...new Set((memberPubs || []).filter(Boolean))];
