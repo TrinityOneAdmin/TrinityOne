@@ -112,7 +112,14 @@ function consoleSide(ws) {
   // path. It must be LIFTED, not stubbed: _refreshClearancesNow calls it by name, so a scope without it throws
   // ReferenceError on the first back-fill. Both stubs above make it return null on its first line — this file
   // measures the cold-roster publish path — but the real function has to be present to be called at all.
-  const matching = grabMethod(STEWARD, 'async function _clearancesMatching(')
+  const skewDecl = (STEWARD.match(/var _CLOCK_SKEW = [^\n]*\n/) || [])[0];
+  const futureDecl = (STEWARD.match(/var _authFuture = [^\n]*\n/) || [])[0];
+  // The console refuses the clearance back-fill in a NETWORK view — lifted, not stubbed, because a stub
+  // would assert my description of when that refusal fires rather than the console's.
+  const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
+  const matching = skewDecl + futureDecl + netViewDecl
+    + grabMethod(STEWARD, 'function _topWeMustAnswer(') + grabMethod(STEWARD, 'function _clearanceStale(')
+    + grabMethod(STEWARD, 'async function _clearancesMatching(')
     + grabMethod(STEWARD, 'function _clearanceOutranks(');
   const decName = (matching.match(/\b(decrypt\d*)\(/) || [])[1];
   assert.ok(decName, 'the clearance read no longer decrypts a stored record — re-anchor this test');
@@ -126,6 +133,10 @@ function consoleSide(ws) {
     [decName]: (c, k) => nip44v2.decrypt(c, k),
     sk: church.sk, pub: church.pub, actingChurch: '',
     CLEARANCE_D: CLEAR_D, NET: 'trinityone',
+    // This device's OWN church key. The console refuses the clearance back-fill when `pub` is neither
+    // churchPub nor a church it is acting for — that is a NETWORK identity, which has no members.
+    churchPub: church.pub,
+    _sgSourceTs: 0, _careRoster: new Set(),
     now, publish,
     feChurch: (t) => finalizeEvent(t, church.sk),
     toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),

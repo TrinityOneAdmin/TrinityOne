@@ -11743,6 +11743,7 @@ zoo`.split("\n");
   var _careKeyRev = 0;
   var _careKeyChecked = false;
   var _careRoster = /* @__PURE__ */ new Set();
+  var _sgSourceTs = 0;
   var MEDIAKEY_D = "trinityone/mediakey:";
   var _mediaKeyHex = null;
   var _mediaKeyRing = [];
@@ -11800,6 +11801,7 @@ zoo`.split("\n");
   var _authFuture = (e) => e.created_at > now() + _CLOCK_SKEW;
   var _byChurch = (e) => e.pubkey === pub;
   var _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
+  var _viewingNetwork = () => pub !== churchPub && !actingChurch;
   function _requireTrustedView(what) {
     if (_isRelayAuthed()) return;
     const err2 = new Error("Can\u2019t save the " + what + " yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t see the current list. Wait a moment and try again.");
@@ -12797,6 +12799,25 @@ zoo`.split("\n");
       setTimeout(() => finish(false), ms);
     });
   }
+  function _topWeMustAnswer(rec, ours, churchHex) {
+    const top = rec && rec.top;
+    if (!top || top.pubkey === ours.pubkey) return null;
+    if ((top.created_at || 0) <= (ours.created_at || 0)) return null;
+    if (_authFuture(top)) return null;
+    if (top.pubkey !== churchHex && !_careRoster.has(top.pubkey)) return null;
+    const ct = (top.tags.find((t) => t[0] === "church") || [])[1] || "";
+    if (ct !== churchHex) return null;
+    return top;
+  }
+  function _clearanceStale(top, ours, churchHex) {
+    const sv = (e) => {
+      const t = (e.tags.find((x) => x[0] === "sv") || [])[1];
+      return t == null ? null : parseInt(t, 10) || 0;
+    };
+    const theirs = sv(top), mine = sv(ours);
+    if (theirs === null || mine === null) return _clearanceOutranks(ours.pubkey, top.pubkey, churchHex);
+    return theirs < mine;
+  }
   function _clearanceOutranks(a, b, churchHex) {
     if (a === b) return false;
     if (a === churchHex) return true;
@@ -12804,7 +12825,7 @@ zoo`.split("\n");
     return String(a) > String(b);
   }
   async function _clearancesMatching(pubs, wantFor) {
-    if (!pubs.length || !sk || !_isRelayAuthed()) return null;
+    if (!pubs.length || !sk || !_isRelayAuthed() || _viewingNetwork()) return null;
     const readFrom = _connectedRelays();
     if (!readFrom.length) return null;
     try {
@@ -12816,43 +12837,45 @@ zoo`.split("\n");
       }
       const readMs = (pool.maxWaitForConnection || 3e3) + 9e3;
       const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], "#d": ds }], readMs, [u], mine).then((r) => r, () => ({ byD: /* @__PURE__ */ new Map(), complete: false }))));
+      if (!perRelay.length) return null;
       const definitive = perRelay.every((r) => r.complete);
       const churchHex = actingChurch || pub;
       const ok = /* @__PURE__ */ new Set();
-      const seen = /* @__PURE__ */ new Set();
+      const wrong = /* @__PURE__ */ new Set();
       for (const p of pubs) {
         const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
-        let every = true, sawAll = true;
+        let settled = true, contentWrong = false;
         for (const { byD: held } of perRelay) {
           const rec = held.get(key);
           const e = rec && rec.ours;
           if (!e) {
-            every = false;
-            sawAll = false;
+            settled = false;
             break;
           }
           let got = null;
           try {
             got = JSON.parse(decrypt3(e.content, getConversationKey(sk, h)));
           } catch (x) {
-            every = false;
+            settled = false;
+            contentWrong = true;
             break;
           }
           const w = wantFor(p);
           if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) {
-            every = false;
+            settled = false;
+            contentWrong = true;
             break;
           }
-          const top = rec.top;
-          if (top && top.pubkey !== e.pubkey && (top.created_at || 0) > (e.created_at || 0) && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) {
-            every = false;
+          const top = _topWeMustAnswer(rec, e, churchHex);
+          if (top && _clearanceStale(top, e, churchHex)) {
+            settled = false;
             break;
           }
         }
-        if (every) ok.add(h);
-        if (sawAll) seen.add(h);
+        if (settled) ok.add(h);
+        if (contentWrong) wrong.add(h);
       }
-      return { matching: ok, seen, definitive };
+      return { matching: ok, wrong, definitive };
     } catch (e) {
       return null;
     }
@@ -14603,6 +14626,7 @@ zoo`.split("\n");
             if (!_byChurch(e)) return;
             if (e.created_at < tMinors) return;
             tMinors = e.created_at;
+            if (tMinors > _sgSourceTs) _sgSourceTs = tMinors;
             loaded = true;
             try {
               minors = JSON.parse(e.content).pubkeys || [];
@@ -14614,6 +14638,7 @@ zoo`.split("\n");
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
             tApproved = e.created_at;
+            if (tApproved > _sgSourceTs) _sgSourceTs = tApproved;
             try {
               approved = JSON.parse(e.content).pubkeys || [];
             } catch {
@@ -14662,7 +14687,7 @@ zoo`.split("\n");
     // an open-join church is a single self-signed publish, so that list was one frame away from any stranger.
     // AUDIT-2026-07-27. Church-tagged so the relay can check the author is that church or one of its stewards.
     publishClearance(memberPub, status) {
-      if (!sk) return Promise.resolve(null);
+      if (!sk || _viewingNetwork()) return Promise.resolve(null);
       const mp = toPubHex(memberPub) || memberPub;
       if (!/^[0-9a-f]{64}$/i.test(mp || "")) return Promise.resolve(null);
       const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
@@ -14673,7 +14698,7 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const cp = actingChurch || pub;
-      return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }))).then((r) => {
+      return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp], ["sv", String(_sgSourceTs || 0)]], content: ct }))).then((r) => {
         if (r) {
           try {
             _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now() });
@@ -14767,7 +14792,7 @@ zoo`.split("\n");
         return true;
       });
       const already = await _clearancesMatching(pubs, want);
-      if (already) {
+      if (already && already.definitive) {
         pubs = pubs.filter((p) => {
           if (already.matching.has(String(p).toLowerCase())) {
             skipped++;
@@ -14793,7 +14818,7 @@ zoo`.split("\n");
         }
         if (i3 + BATCH < pubs.length) await new Promise((r) => setTimeout(r, GAP_MS));
       }
-      let unverified = false;
+      let unverified = false, lost = 0;
       if (unconfirmed.length) {
         const landed = await _clearancesMatching(unconfirmed, want);
         if (!landed) {
@@ -14802,13 +14827,15 @@ zoo`.split("\n");
         } else {
           const missing = unconfirmed.filter((p) => !landed.matching.has(String(p).toLowerCase()));
           failed = missing.length;
-          const condemned = missing.filter((p) => landed.seen.has(String(p).toLowerCase()));
-          unverified = missing.length > condemned.length || missing.length > 0 && !landed.definitive;
+          lost = missing.filter((p) => landed.wrong.has(String(p).toLowerCase())).length;
+          unverified = failed > lost;
         }
       }
       if (failed) {
         try {
-          const message = unverified ? "Couldn't confirm the safeguarding record saved for " + failed + " of " + total + " members \u2014 your connection dropped before your relay answered. They may well have saved. Open the Members tab again while connected to check." : failed + " of " + total + " members did not receive their updated safeguarding record. Until they do, their app cannot tell that they are a child. Open the Members tab again while connected to your relay to retry.";
+          const soft = "Couldn't confirm the safeguarding record saved for " + (failed - lost) + " of " + total + " members \u2014 your connection dropped before your relay answered. They may well have saved. Open the Members tab again while connected to check.";
+          const hard = lost + " of " + total + " members did not receive their updated safeguarding record. Until they do, their app cannot tell that they are a child. Open the Members tab again while connected to your relay to retry.";
+          const message = !lost ? soft : unverified ? hard + " " + soft : hard;
           window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what: "safeguarding clearances", message } }));
         } catch (e) {
         }
@@ -16229,7 +16256,7 @@ zoo`.split("\n");
       return true;
     },
     isViewingNetwork() {
-      return pub !== churchPub && !actingChurch;
+      return _viewingNetwork();
     },
     isDelegated() {
       return !!actingChurch;

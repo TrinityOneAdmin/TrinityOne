@@ -168,6 +168,13 @@ let _careKeyDocKeys = null;      // the envelope's wrapped-per-member map (to de
 let _careKeyRev = 0;             // envelope revision — rotation is NOT wired yet, but readers must tolerate it
 let _careKeyChecked = false;     // have we actually LOOKED for an envelope? mint gate — see (1) above
 let _careRoster = new Set();     // the church's current steward pubkeys — who may author the envelope
+// THE VERSION OF THE TRUTH a clearance was derived from: the newest created_at across the church's minors:
+// and approved: documents, which are OWNER-ONLY and therefore the single source both consoles mirror. Stamped
+// on every clearance we write, so any other authorised writer can tell a copy written from an OLDER view of
+// the lists from one written from the same view or newer — without being able to read it. That is what lets
+// two consoles settle a disagreement they can otherwise only guess at: each copy is sealed to the member with
+// its author's own key, so nobody but the author and the member can see what it says. AUDIT-7 (2026-08-01).
+let _sgSourceTs = 0;
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key (= ring[0])
 let _mediaKeyRing = [];                        // current key first, then superseded — rotation must never orphan an encrypted sermon
@@ -238,6 +245,14 @@ const _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
 // blocked member, returns the whole congregation to "waiting for approval", or revokes every steward.
 // Fail CLOSED: refuse the write while our view is untrustworthy. A refused edit is visible and retryable; a
 // wiped safeguarding list is silent and permanent. (Sibling of the care-key mint gate above.)
+// Are we looking at a NETWORK identity rather than a church? A network has no members and no safeguarding
+// lists, and setActiveIdentity's network branch sets `pub` to the network's own key with no actingChurch — so
+// `actingChurch || pub` resolves to a key that is nobody's church. AUDIT-7: that made the clearance ranking
+// treat this console as outranking everyone including the real church key, and made the "is this copy from a
+// writer the member honours" filter compare against the wrong church entirely. The honest answer is that the
+// clearance back-fill has no business running at all in this view.
+const _viewingNetwork = () => pub !== churchPub && !actingChurch;
+
 function _requireTrustedView(what) {
   if (_isRelayAuthed()) return;
   const err = new Error('Can’t save the ' + what + ' yet — this device hasn’t finished connecting to your church’s relay, so it can’t see the current list. Wait a moment and try again.');
@@ -1225,6 +1240,46 @@ function _newestByD(filters, ms = 6000, urls = null, mineHex = null) {
 // from are owner-only documents (scripts/gateway.mjs), so the owner's console is the authority by
 // construction, and a steward's console is only ever mirroring. Between two stewards the hex pubkey breaks the
 // tie, which is arbitrary but stable, and stable is the whole requirement: exactly one of the pair gives way.
+// Is `top` a copy the member's app would actually apply, and newer than ours? Everything the member ignores,
+// we must ignore too, or a relay can manufacture a disagreement out of nothing. AUDIT-7 measured the
+// seized-relay case: one validly-signed event per member from a keypair with no roster seat, never stored,
+// merely SERVED — and the console reported a full-roster failure and republished everything, every visit. The
+// phones ignored that author completely (src/fellowship.src.js accepts the church key or a CURRENT roster
+// steward and nothing else), so the console applies the same tests the member does, plus the future-date guard
+// that every other safeguarding document already has.
+function _topWeMustAnswer(rec, ours, churchHex) {
+  const top = rec && rec.top;
+  if (!top || top.pubkey === ours.pubkey) return null;
+  if ((top.created_at || 0) <= (ours.created_at || 0)) return null;
+  if (_authFuture(top)) return null;                                          // no future-dated pins
+  if (top.pubkey !== churchHex && !_careRoster.has(top.pubkey)) return null;  // not a writer the member honours
+  const ct = (top.tags.find(t => t[0] === 'church') || [])[1] || '';
+  if (ct !== churchHex) return null;                                          // another church's document
+  return top;
+}
+
+// Is the copy on top STALER than ours — written from an older view of the church's safeguarding lists?
+// `sv` is the created_at of the minors:/approved: documents the writer derived it from (see _sgSourceTs).
+// Both consoles mirror the same owner-only source, so a copy stamped with the same version or newer was
+// written from a view at least as good as ours and there is nothing to correct. Only an OLDER stamp means the
+// writer had not caught up, and only then do we overrule it.
+//
+// This TERMINATES, which "rewrite whenever somebody else is on top" does not: that rule is symmetric, and
+// symmetric means a fight — each console rewrites to get above the other, for ever, republishing the whole
+// roster on every visit, which is the exact cost read-before-write was added to remove.
+//
+// Legacy copies carry no `sv` (a church still running an older console). Fall back to the author ranking
+// there, and only there — it settles who gives way but it cannot tell who is RIGHT, which is why it is the
+// fallback and not the rule. AUDIT-7 measured what it costs as a rule: between two stewards the higher hex
+// pubkey won regardless of which one held the current lists, pinning a child as "not a minor" with no banner
+// and nothing left to retry.
+function _clearanceStale(top, ours, churchHex) {
+  const sv = (e) => { const t = (e.tags.find(x => x[0] === 'sv') || [])[1]; return t == null ? null : (parseInt(t, 10) || 0); };
+  const theirs = sv(top), mine = sv(ours);
+  if (theirs === null || mine === null) return _clearanceOutranks(ours.pubkey, top.pubkey, churchHex);
+  return theirs < mine;
+}
+
 function _clearanceOutranks(a, b, churchHex) {
   if (a === b) return false;
   if (a === churchHex) return true;
@@ -1235,10 +1290,15 @@ function _clearanceOutranks(a, b, churchHex) {
 // relay has it" is not the invariant a church needs — see the note in _refreshClearancesNow.
 // Do these members ALREADY hold a clearance matching what we would write — on every relay we can reach?
 //
-// Returns a Set of member pubkeys that do, or NULL meaning "could not check". Those two answers must never be
-// confused: an empty Set says "we looked and nobody has it", null says "we could not look". Treating the
-// second as the first is the mistake that has cost this codebase a care key once already, and it is the whole
-// reason read-before-write is gated on an authenticated read.
+// Returns `{ matching, wrong, definitive }`, or NULL meaning "could not check". Null and an empty `matching`
+// must never be confused: the empty set says "we looked and nobody has it", null says "we could not look".
+// Treating the second as the first is the mistake that has cost this codebase a care key once already, and it
+// is the whole reason read-before-write is gated on an authenticated read.
+//
+//   matching   — settled: our copy is right and nothing staler sits on top. Safe to SKIP.
+//   wrong      — our copy is present and its CONTENT is wrong. The only thing worth alarming about.
+//   definitive — every relay finished answering. Required before a skip, because a skip now rests on not
+//                having found a newer copy, and a read cut short cannot establish that.
 //
 // Used twice, deliberately sharing one implementation: to SKIP redundant writes before publishing, and to
 // VERIFY before telling a steward that a child did not receive their record. Two copies of this logic would
@@ -1250,7 +1310,7 @@ function _clearanceOutranks(a, b, churchHex) {
 // Keeping these apart is the whole point: conflating them either skips a write that never happened, or tells a
 // steward a child lost their record when the truth is the link was too thin to check.
 async function _clearancesMatching(pubs, wantFor) {
-  if (!pubs.length || !sk || !_isRelayAuthed()) return null;
+  if (!pubs.length || !sk || !_isRelayAuthed() || _viewingNetwork()) return null;
   const readFrom = _connectedRelays();
   if (!readFrom.length) return null;
   try {
@@ -1270,36 +1330,48 @@ async function _clearancesMatching(pubs, wantFor) {
     const perRelay = await Promise.all(readFrom.map(u =>
       _newestByD([{ kinds: [30078], '#d': ds }], readMs, [u], mine)
         .then(r => r, () => ({ byD: new Map(), complete: false }))));
+    // DEFAULT-DENY. The per-member loop below decides by NOT finding a reason to object, so an empty
+    // `perRelay` would settle — and therefore skip — every member on the roster. `readFrom.length` above makes
+    // that unreachable today; this makes it unreachable by construction, which is the standard this codebase
+    // holds every other read gate to. AUDIT-7 (carried from AUDIT-5, where it was noted and left).
+    if (!perRelay.length) return null;
     const definitive = perRelay.every(r => r.complete);
     const churchHex = actingChurch || pub;
     const ok = new Set();
-    // Members whose copy we actually SAW on every relay, whether or not it says the right thing. The verify
-    // path needs this to tell "we read it back and it is wrong" from "the read found nothing" — see the note
-    // there. Only the first is a member who definitely does not have their record.
-    const seen = new Set();
+    // TWO QUESTIONS, NOT ONE. Folding them into a single boolean is the defect AUDIT-7 found in the previous
+    // commit, and it produced the exact false banner this branch exists to remove:
+    //
+    //   "should I write this member?"          — yes if our copy is missing, wrong, or beneath a STALER one.
+    //   "does this member HAVE their record?"  — a different question with a different answer, because a copy
+    //                                            from another authorised writer sitting on top of ours is an
+    //                                            excellent reason to rewrite and NO reason to raise an alarm.
+    //
+    // Measured with the two conflated: an owner and one delegated steward holding the SAME correct view, the
+    // steward's copies on top — "3 of 3 members did not receive their updated safeguarding record", while all
+    // three children read correctly on their phones throughout.
+    const wrong = new Set();     // our copy is present and its CONTENT is wrong — the only DEFINITE failure
     for (const p of pubs) {
       const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
-      let every = true, sawAll = true;
+      let settled = true, contentWrong = false;
       for (const { byD: held } of perRelay) {
         const rec = held.get(key);
         const e = rec && rec.ours;
-        if (!e) { every = false; sawAll = false; break; }
+        if (!e) { settled = false; break; }              // never saw our copy here — unknown, not failed
         let got = null;
-        try { got = JSON.parse(nip44d(e.content, nip44ck(sk, h))); } catch (x) { every = false; break; }
+        try { got = JSON.parse(nip44d(e.content, nip44ck(sk, h))); } catch (x) { settled = false; contentWrong = true; break; }
         const w = wantFor(p);
-        if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) { every = false; break; }
-        // Our copy says the right thing — but is it the one the member's app will apply? Another authorised
-        // writer's copy sitting on top of ours is what the phone reads. We cannot open it (it is sealed with
-        // THEIR conversation key with the member, not ours), so we cannot know whether it agrees; we can only
-        // know whether it is ours to overrule. If it is, this member is not settled and must be rewritten.
-        const top = rec.top;
-        if (top && top.pubkey !== e.pubkey && (top.created_at || 0) > (e.created_at || 0)
-            && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) { every = false; break; }
+        if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) { settled = false; contentWrong = true; break; }
+        // Our copy is right. But the member's app applies the NEWEST copy from any authorised writer, and we
+        // cannot open theirs — it is sealed with their conversation key with the member, not ours. So compare
+        // the one thing both copies state in the clear: which version of the church's owner-only
+        // minors:/approved: lists each was written from.
+        const top = _topWeMustAnswer(rec, e, churchHex);
+        if (top && _clearanceStale(top, e, churchHex)) { settled = false; break; }
       }
-      if (every) ok.add(h);
-      if (sawAll) seen.add(h);
+      if (settled) ok.add(h);
+      if (contentWrong) wrong.add(h);
     }
-    return { matching: ok, seen, definitive };
+    return { matching: ok, wrong, definitive };
   } catch (e) { return null; }
 }
 
@@ -2598,8 +2670,8 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; loaded = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
-        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; if (tMinors > _sgSourceTs) _sgSourceTs = tMinors; loaded = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, nophoto, loaded }); }
+        else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; if (tApproved > _sgSourceTs) _sgSourceTs = tApproved; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } onLists({ minors, approved, nophoto, loaded }); }
         else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, nophoto, loaded }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -2624,7 +2696,7 @@ window.Steward = {
   // an open-join church is a single self-signed publish, so that list was one frame away from any stranger.
   // AUDIT-2026-07-27. Church-tagged so the relay can check the author is that church or one of its stewards.
   publishClearance(memberPub, status) {
-    if (!sk) return Promise.resolve(null);
+    if (!sk || _viewingNetwork()) return Promise.resolve(null);   // a network identity has no members
     const mp = toPubHex(memberPub) || memberPub;
     if (!/^[0-9a-f]{64}$/i.test(mp || '')) return Promise.resolve(null);
     const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
@@ -2657,7 +2729,10 @@ window.Steward = {
     // next Members visit retries with a fresh created_at that wins cleanly. Noisy beats silently wrong here.
     // The COLLISION ITSELF is removed at source by refreshClearances' read-before-write (item 7), so a
     // tie-break refusal is now a rare, genuine signal rather than routine noise.
-    return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct })))
+    // ['sv', <source version>] — see _sgSourceTs. PUBLIC on purpose and it leaks nothing new: it is the
+    // created_at of the church's own minors:/approved: documents, which the relay already stores and stamps.
+    // It says WHICH VIEW this copy was written from, never what it says.
+    return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp], ['sv', String(_sgSourceTs || 0)]], content: ct })))
       .then(r => {
         // Remember what we just put on the wire, so a second writer moments later can tell it is redundant
         // WITHOUT waiting for the relay to echo it back. The read-before-write below closes the steady-state
@@ -2771,9 +2846,15 @@ window.Steward = {
     // was down at write time still needs reconciling when it returns; that is what the _clearanceSent clear
     // on a connection change below is for, and a full per-relay outbox is the real cure.
     const already = await _clearancesMatching(pubs, want);
-    // `.matching` only — a skip needs POSITIVE proof, and a partial read simply proves less, so the worst it
-    // can do is republish. `definitive` is deliberately ignored here; it matters only where absence is claimed.
-    if (already) { pubs = pubs.filter(p => { if (already.matching.has(String(p).toLowerCase())) { skipped++; return false; } return true; }); }
+    // A COMPLETED READ IS NOW REQUIRED TO SKIP, and the comment that used to sit here — "a partial read simply
+    // proves less, so the worst it can do is republish" — was true until this branch and is now false. Since
+    // the check began asking whether anyone else's copy sits on top of ours, skipping rests on a NEGATIVE:
+    // "no newer copy from another writer exists". That is precisely what a read cut short cannot establish.
+    // AUDIT-7 reproduced it: truncate the read before the steward's event arrives and the owner's console
+    // skips a child it should have corrected — 0 failed, no banner, the child's phone still reading "adult".
+    if (already && already.definitive) {
+      pubs = pubs.filter(p => { if (already.matching.has(String(p).toLowerCase())) { skipped++; return false; } return true; });
+    }
 
     for (let i = 0; i < pubs.length; i += BATCH) {
       const slice = pubs.slice(i, i + BATCH);
@@ -2804,39 +2885,45 @@ window.Steward = {
     // `unverified` is the third answer and it must stay distinct from the other two. If the link is too poor
     // to read back, we do NOT know, and both "they failed" and "they are fine" would be lies. Never treat it
     // as fine: an unverifiable answer is the one this codebase has mistaken for good news before.
-    let unverified = false;
+    let unverified = false, lost = 0;
     if (unconfirmed.length) {
       const landed = await _clearancesMatching(unconfirmed, want);
       if (!landed) { failed = unconfirmed.length; unverified = true; } else {
         const missing = unconfirmed.filter(p => !landed.matching.has(String(p).toLowerCase()));
         failed = missing.length;
-        // WHAT KIND OF "MISSING" IS THIS? Two very different things, and only one of them is a lost record.
+        // WHAT KIND OF "MISSING" IS THIS? Three kinds, and only one of them is a lost record.
         //
-        //   read it back and it is WRONG  — definite. Their copy exists and says something else, or someone
-        //                                   we cannot overrule has put a copy on top of ours. Say so plainly.
-        //   the read found NOTHING        — unknown. The write we are checking never confirmed, so it may
-        //                                   still be in flight; a read that overtakes it gets an honest EOSE
-        //                                   from a relay that has genuinely not received it YET. Measured on
-        //                                   the satellite profile: 7 of 8 reported lost, every one of them
-        //                                   stored moments later.
-        //
-        // So a completed read is not enough on its own — it also has to have SEEN the record to condemn it.
-        const condemned = missing.filter(p => landed.seen.has(String(p).toLowerCase()));
-        unverified = missing.length > condemned.length || (missing.length > 0 && !landed.definitive);
+        //   read it back and the CONTENT is wrong — definite. Say so plainly; this is what the banner is for.
+        //   the read found NOTHING                — unknown. The write we are checking never confirmed, so it
+        //                                           may still be in flight; a read that overtakes it gets an
+        //                                           honest EOSE from a relay that has genuinely not received
+        //                                           it YET. Measured on satellite: 7 of 8 reported lost, every
+        //                                           one stored moments later.
+        //   somebody else's copy is on top        — unknown, and NOT a failure. We rewrite it because we can
+        //                                           see it was written from an older view of the lists, not
+        //                                           because we know it is wrong; we cannot read it at all.
+        //                                           Conflating this with the first told an owner "3 of 3
+        //                                           members did not receive their record" while all three
+        //                                           children read correctly on their phones. AUDIT-7.
+        lost = missing.filter(p => landed.wrong.has(String(p).toLowerCase())).length;
+        unverified = failed > lost;
       }
     }
     // NOT SILENT. The whole point of a clearance is that a child's own app knows it is a child; a back-fill
     // that half-worked and said nothing is how they were treated as adults for a day.
     if (failed) {
       try {
-        // Two different sentences, because they mean two different things to whoever reads them.
-        const message = unverified
-          ? 'Couldn\'t confirm the safeguarding record saved for ' + failed + ' of ' + total + ' members — '
-            + 'your connection dropped before your relay answered. They may well have saved. Open the Members '
-            + 'tab again while connected to check.'
-          : failed + ' of ' + total + ' members did not receive their updated safeguarding record. '
-            + 'Until they do, their app cannot tell that they are a child. Open the Members tab again while '
-            + 'connected to your relay to retry.';
+        // THREE sentences, not two, because a run can produce both answers at once and the softer one must not
+        // speak for the definite one. AUDIT-7: with a single flag, one member whose record was read back and
+        // found WRONG was reported as "may well have saved" because another member in the same run had merely
+        // not been seen. Each member is now counted under the wording that is true of them.
+        const soft = 'Couldn\'t confirm the safeguarding record saved for ' + (failed - lost) + ' of ' + total
+          + ' members — your connection dropped before your relay answered. They may well have saved. Open the '
+          + 'Members tab again while connected to check.';
+        const hard = lost + ' of ' + total + ' members did not receive their updated safeguarding record. '
+          + 'Until they do, their app cannot tell that they are a child. Open the Members tab again while '
+          + 'connected to your relay to retry.';
+        const message = !lost ? soft : (unverified ? hard + ' ' + soft : hard);
         window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'safeguarding clearances', message } }));
       } catch (e) {}
     }
@@ -3807,7 +3894,7 @@ window.Steward = {
     window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch } }));
     return true;
   },
-  isViewingNetwork() { return pub !== churchPub && !actingChurch; },
+  isViewingNetwork() { return _viewingNetwork(); },
   isDelegated() { return !!actingChurch; },
   // discover churches whose owner-signed roster lists OUR key → we can act as their steward. Re-emits on change.
   subscribeStewardedChurches(cb) {

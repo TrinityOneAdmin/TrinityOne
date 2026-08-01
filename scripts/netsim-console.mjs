@@ -84,7 +84,14 @@ function consoleSide(urls) {
   const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved)');
   const newest = grab('function _newestByD(');
   const connected = grab('function _connectedRelays(');
-  const matching = grab('async function _clearancesMatching(')
+  const skewDecl = (STEWARD.match(/var _CLOCK_SKEW = [^\n]*\n/) || [])[0];
+  const futureDecl = (STEWARD.match(/var _authFuture = [^\n]*\n/) || [])[0];
+  // The console refuses the clearance back-fill in a NETWORK view — lifted, not stubbed, because a stub
+  // would assert my description of when that refusal fires rather than the console's.
+  const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
+  const matching = skewDecl + futureDecl + netViewDecl
+    + grab('function _topWeMustAnswer(') + grab('function _clearanceStale(')
+    + grab('async function _clearancesMatching(')
     // The cross-author ranking rule lives beside it and is called from inside it. Unlifted, the call
     // throws ReferenceError into _clearancesMatching's own catch, which returns null — "could not
     // check" — so the harness would quietly measure the no-read path and skip nothing.
@@ -104,7 +111,11 @@ function consoleSide(urls) {
   }
   const scope = {
     pool, relays: () => urls, sk: church.sk, pub: church.pub, actingChurch: '',
-    CLEARANCE_D: CLEAR_D, NET: 'trinityone', now,
+    CLEARANCE_D: CLEAR_D, NET: 'trinityone',
+    // This device's OWN church key. The console refuses the clearance back-fill when `pub` is neither
+    // churchPub nor a church it is acting for — that is a NETWORK identity, which has no members.
+    churchPub: church.pub,
+    _sgSourceTs: 0, _careRoster: new Set(), now,
     feChurch: (t) => finalizeEvent(t, church.sk),
     toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
     [encName]: (a, k) => nip44v2.encrypt(a, k),
