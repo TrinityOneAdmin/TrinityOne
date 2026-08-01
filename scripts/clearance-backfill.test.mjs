@@ -108,9 +108,19 @@ function consoleSide(ws) {
   // read-before-write's purposes either. Both stubs say the same thing: this file measures the cold-roster
   // publish path, where nothing is stored yet and nothing would be skipped anyway.
   const _connectedRelays = () => [];
-  const decName = (refreshNow.match(/\b(decrypt\d*)\(/) || [])[1];
-  assert.ok(decName, 'refreshClearances no longer decrypts a stored clearance — re-anchor this test');
+  // The read-and-compare step now lives in its own helper, shared by the skip path and the verify-before-alarm
+  // path. It must be LIFTED, not stubbed: _refreshClearancesNow calls it by name, so a scope without it throws
+  // ReferenceError on the first back-fill. Both stubs above make it return null on its first line — this file
+  // measures the cold-roster publish path — but the real function has to be present to be called at all.
+  const matching = grabMethod(STEWARD, 'async function _clearancesMatching(');
+  const decName = (matching.match(/\b(decrypt\d*)\(/) || [])[1];
+  assert.ok(decName, 'the clearance read no longer decrypts a stored record — re-anchor this test');
   const scope = {
+    // The batch bound is now DERIVED from the pool's connection timeout rather than hardcoded at 8s, because a
+    // fixed bound is what made the console report lost children on every link slower than a datacentre. An
+    // empty pool object exercises the shipped `|| 3000` fallback, which is the path the real console takes —
+    // it constructs SimplePool without setting maxWaitForConnection.
+    pool: {},
     _isRelayAuthed, _connectedRelays, Map, Date,
     [decName]: (c, k) => nip44v2.decrypt(c, k),
     sk: church.sk, pub: church.pub, actingChurch: '',
@@ -129,7 +139,7 @@ function consoleSide(ws) {
   const queueDecl = (STEWARD.match(/var _clearanceQueue = [^\n]*\n/) || [])[0];
   assert.ok(sentDecl && queueDecl, 'the clearance just-sent cache / serialisation queue are gone — re-anchor');
   const api = new Function(...args,
-    sentDecl + queueDecl + `return ({ ${pubClearance},\n    ${refresh},\n    ${refreshNow} });`)(...args.map(k => scope[k]));
+    sentDecl + queueDecl + matching + `\nreturn ({ ${pubClearance},\n    ${refresh},\n    ${refreshNow} });`)(...args.map(k => scope[k]));
   Object.assign(scope.window.Steward, api);
   return { api, blocked, refused, ok: () => okCount };
 }

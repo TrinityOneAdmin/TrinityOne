@@ -1176,19 +1176,24 @@ function _one(filters, ms = 4000) {
     const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(best); };
     const sub = pool.subscribeMany(relays(), filters, {
       onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
-      oneose() { finish(); },
+      oneose() { finish(true); },
     });
-    setTimeout(finish, ms);
+    setTimeout(() => finish(false), ms);
   });
 }
 
 // One-shot read of the NEWEST event per d-tag across a set of d-tags. Returns a Map d -> event.
 // Bounded like _one: an unanswered relay must not hang the caller. HANDOFF-2026-07-31 item 7.
+// Resolves { byD, complete }. `complete` is the important half: it says whether the relay actually finished
+// answering (EOSE) or whether we simply stopped waiting. Without it a slow link looks identical to an empty
+// relay — and callers then read "this record is absent" from what is really "I don't know yet". That is the
+// same mistake as treating an unauthenticated read as proof of absence, one level down, and it produced a
+// false "6 of 8 children did not receive their record" on a satellite link where every record had landed.
 function _newestByD(filters, ms = 6000, urls = null) {
   return new Promise((resolve) => {
     const best = new Map();
     let done = false;
-    const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(best); };
+    const finish = (complete) => { if (done) return; done = true; try { sub.close(); } catch {} resolve({ byD: best, complete: !!complete }); };
     const sub = pool.subscribeMany(urls || relays(), filters, {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -1203,6 +1208,56 @@ function _newestByD(filters, ms = 6000, urls = null) {
 }
 // The relays we are CURRENTLY connected to. Read-before-write asks each of them separately, because "some
 // relay has it" is not the invariant a church needs — see the note in _refreshClearancesNow.
+// Do these members ALREADY hold a clearance matching what we would write — on every relay we can reach?
+//
+// Returns a Set of member pubkeys that do, or NULL meaning "could not check". Those two answers must never be
+// confused: an empty Set says "we looked and nobody has it", null says "we could not look". Treating the
+// second as the first is the mistake that has cost this codebase a care key once already, and it is the whole
+// reason read-before-write is gated on an authenticated read.
+//
+// Used twice, deliberately sharing one implementation: to SKIP redundant writes before publishing, and to
+// VERIFY before telling a steward that a child did not receive their record. Two copies of this logic would
+// drift, and the second copy is the one that decides whether a safeguarding alarm is true.
+// Returns { matching, definitive } — or null when no authenticated read was possible at all.
+//   matching   — members whose stored record already equals what we want. A found, decrypting, matching event
+//                is PROOF, and proof does not stop being proof because some other relay was slow.
+//   definitive — every relay finished answering (EOSE). Only then does "not in `matching`" mean "absent".
+// Keeping these apart is the whole point: conflating them either skips a write that never happened, or tells a
+// steward a child lost their record when the truth is the link was too thin to check.
+async function _clearancesMatching(pubs, wantFor) {
+  if (!pubs.length || !sk || !_isRelayAuthed()) return null;
+  const readFrom = _connectedRelays();
+  if (!readFrom.length) return null;
+  try {
+    const ds = pubs.map(p => CLEARANCE_D + String(p).toLowerCase());
+    let mine = pub; try { mine = getPublicKey(sk); } catch (e) {}
+    // The read bound is DERIVED too, and generously: this is the read that decides whether a steward is told
+    // children lost their safeguarding record, and it runs on exactly the link that just struggled to write.
+    // A flat 6s left satellite still alarming — the writes had landed, and the check to prove it timed out.
+    // Too short here does not fail safe; it manufactures the very alarm the check exists to prevent.
+    const readMs = (pool.maxWaitForConnection || 3000) + 9000;
+    const perRelay = await Promise.all(readFrom.map(u =>
+      _newestByD([{ kinds: [30078], authors: [mine], '#d': ds }], readMs, [u])
+        .then(r => r, () => ({ byD: new Map(), complete: false }))));
+    const definitive = perRelay.every(r => r.complete);
+    const ok = new Set();
+    for (const p of pubs) {
+      const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
+      let every = true;
+      for (const { byD: held } of perRelay) {
+        const e = held.get(key);
+        if (!e) { every = false; break; }
+        let got = null;
+        try { got = JSON.parse(nip44d(e.content, nip44ck(sk, h))); } catch (x) { every = false; break; }
+        const w = wantFor(p);
+        if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) { every = false; break; }
+      }
+      if (every) ok.add(h);
+    }
+    return { matching: ok, definitive };
+  } catch (e) { return null; }
+}
+
 function _connectedRelays() {
   try {
     const st = pool.listConnectionStatus();
@@ -2626,8 +2681,15 @@ window.Steward = {
     const appr = new Set((approved || []).map(x => String(x || '').toLowerCase()));
     let pubs = [...new Set((memberPubs || []).filter(Boolean))];
     const BATCH = 20, GAP_MS = 250;   // ≤80/s, comfortably under the relay's 100/s per-connection cap
+    // Derived from the timeouts it actually contains, not a round number. 8000ms was racing a worst case of
+    // maxWaitForConnection (3000) + the relay's publishTimeout (4400) = 7400ms — a coin flip on a slow link,
+    // and every lost toss became a false "this child did not receive their record". Still bounded, because a
+    // dropped message produces a promise that never settles and one of those must not stall the roster.
+    let _pubMs = 4400; try { _pubMs = (pool.relays.values().next().value || {}).publishTimeout || 4400; } catch (e) {}
+    const _BATCH_MS = (pool.maxWaitForConnection || 3000) + _pubMs + 3000;
     const out = [];
     let failed = 0, skipped = 0;
+    const unconfirmed = [];   // written but not acknowledged — verified below before anyone is alarmed
     const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h) }; };
     const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared;
 
@@ -2663,39 +2725,10 @@ window.Steward = {
     // write amplification back at exactly the moment the link is worst. The residual is that a relay which
     // was down at write time still needs reconciling when it returns; that is what the _clearanceSent clear
     // on a connection change below is for, and a full per-relay outbox is the real cure.
-    const readFrom = _connectedRelays();
-    if (pubs.length && sk && _isRelayAuthed() && readFrom.length) {
-      try {
-        const ds = pubs.map(p => CLEARANCE_D + String(p).toLowerCase());
-        // AUTHORED BY WHOEVER IS SIGNING, not by the church. AUDIT-4 B5: a DELEGATED steward console signs
-        // with its own key (setActiveIdentity: sk = the steward, pub = the church, actingChurch = the church),
-        // so filtering on the church never matched its own writes — it skipped nothing and republished the
-        // whole roster on every Members visit, for ever. That is the console fellowship.src.js calls "who
-        // marks a child in practice", so the cure was missing exactly where it matters most.
-        //
-        // Our own signing key is also the only author we CAN verify: the seal is nip44ck(sk, member), so a
-        // clearance written by the church owner is opaque to a delegated steward. Unreadable means unverified
-        // means republish — the safe direction, and the reason this filter is deliberately narrow.
-        let mine = pub; try { mine = getPublicKey(sk); } catch (e) {}
-        const perRelay = await Promise.all(readFrom.map(u =>
-          _newestByD([{ kinds: [30078], authors: [mine], '#d': ds }], 6000, [u])
-            .then(m => m, () => new Map())));
-        pubs = pubs.filter(p => {
-          const h = String(p).toLowerCase();
-          const key = CLEARANCE_D + h;
-          // Only skip if EVERY relay we can reach holds a matching record. One missing copy means the write
-          // still has to go out, which is the whole point.
-          for (const held of perRelay) {
-            const e = held.get(key);
-            if (!e) return true;
-            let got = null;
-            try { got = JSON.parse(nip44d(e.content, nip44ck(sk, h))); } catch (x) { return true; }
-            if (!same(got, want(p))) return true;
-          }
-          skipped++; return false;
-        });
-      } catch (e) { /* read failed → publish everything, exactly as before */ }
-    }
+    const already = await _clearancesMatching(pubs, want);
+    // `.matching` only — a skip needs POSITIVE proof, and a partial read simply proves less, so the worst it
+    // can do is republish. `definitive` is deliberately ignored here; it matters only where absence is claimed.
+    if (already) { pubs = pubs.filter(p => { if (already.matching.has(String(p).toLowerCase())) { skipped++; return false; } return true; }); }
 
     for (let i = 0; i < pubs.length; i += BATCH) {
       const slice = pubs.slice(i, i + BATCH);
@@ -2705,27 +2738,57 @@ window.Steward = {
       }));
       // A dropped message produces a promise that never settles, so an unbounded await here would hang the
       // whole back-fill on the first one — turning a partial failure into a total one.
-      const rs = await Promise.race([settle, new Promise(r => setTimeout(() => r(null), 8000))]);
-      if (!rs) { failed += slice.length; } else {
+      const rs = await Promise.race([settle, new Promise(r => setTimeout(() => r(null), _BATCH_MS))]);
+      // UNCONFIRMED, not failed. Everything below is a member whose write we did not see acknowledged — which
+      // is not the same as a member who did not receive their record, and conflating the two is what makes the
+      // safeguarding banner cry wolf on every real connection (measured: 3 of 8 reported lost on 2G, 6 of 8 on
+      // satellite, with every record actually stored). They are checked after the loop.
+      if (!rs) { unconfirmed.push(...slice); } else {
         out.push(...rs);
-        failed += rs.filter(r => r.status === 'rejected' || r.value === false || r.value === null).length;
+        rs.forEach((r, k) => { if (r.status === 'rejected' || r.value === false || r.value === null) unconfirmed.push(slice[k]); });
       }
       if (i + BATCH < pubs.length) await new Promise(r => setTimeout(r, GAP_MS));
+    }
+    // VERIFY BEFORE ALARMING. A write we did not see acknowledged is not a child who did not receive their
+    // record — on a slow link it is usually a confirmation that arrived after we stopped waiting. So go and
+    // LOOK before saying anything: read the unconfirmed members back and keep only the ones genuinely missing
+    // or wrong. Measured before this: 3 of 8 reported lost on 2G and 6 of 8 on satellite, with every record
+    // actually stored, on a banner that has no dismiss timer. Alarm fatigue on the safeguarding screen is the
+    // harm — a real failure then looks identical and gets waved away.
+    //
+    // `unverified` is the third answer and it must stay distinct from the other two. If the link is too poor
+    // to read back, we do NOT know, and both "they failed" and "they are fine" would be lies. Never treat it
+    // as fine: an unverifiable answer is the one this codebase has mistaken for good news before.
+    let unverified = false;
+    if (unconfirmed.length) {
+      const landed = await _clearancesMatching(unconfirmed, want);
+      if (!landed) { failed = unconfirmed.length; unverified = true; } else {
+        const missing = unconfirmed.filter(p => !landed.matching.has(String(p).toLowerCase()));
+        failed = missing.length;
+        // Missing from an INCOMPLETE read is not missing. One slow relay out of two must not turn a member
+        // whose record we simply could not look up into a member whose record is gone.
+        unverified = missing.length > 0 && !landed.definitive;
+      }
     }
     // NOT SILENT. The whole point of a clearance is that a child's own app knows it is a child; a back-fill
     // that half-worked and said nothing is how they were treated as adults for a day.
     if (failed) {
       try {
-        window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'safeguarding clearances',
-          message: failed + ' of ' + total + ' members did not receive their updated safeguarding record. '
+        // Two different sentences, because they mean two different things to whoever reads them.
+        const message = unverified
+          ? 'Couldn\'t confirm the safeguarding record saved for ' + failed + ' of ' + total + ' members — '
+            + 'your connection dropped before your relay answered. They may well have saved. Open the Members '
+            + 'tab again while connected to check.'
+          : failed + ' of ' + total + ' members did not receive their updated safeguarding record. '
             + 'Until they do, their app cannot tell that they are a child. Open the Members tab again while '
-            + 'connected to your relay to retry.' } }));
+            + 'connected to your relay to retry.';
+        window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'safeguarding clearances', message } }));
       } catch (e) {}
     }
     // `total` is the ROSTER, not what we ended up publishing — the steward counts people, not writes. `skipped`
     // is the members already holding the right record; it is the measure of how much work read-before-write
     // saved, and on a healthy repeat visit it should equal `total`.
-    return { results: out, failed, skipped, total };
+    return { results: out, failed, skipped, total, unverified };
   },
   // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
   // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —

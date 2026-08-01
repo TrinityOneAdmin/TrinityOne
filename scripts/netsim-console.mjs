@@ -84,6 +84,7 @@ function consoleSide(urls) {
   const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved)');
   const newest = grab('function _newestByD(');
   const connected = grab('function _connectedRelays(');
+  const matching = grab('async function _clearancesMatching(');
   const isAuthed = grab('function _isRelayAuthed(');
   const healthy = grab('relaysHealthy() {');
   const authWiring = span('var _authedRelays = ', 'pool.automaticallyAuth = ');
@@ -92,7 +93,7 @@ function consoleSide(urls) {
   const queueDecl = (STEWARD.match(/var _clearanceQueue = [^\n]*\n/) || [])[0];
   const feName = pick(authWiring, 'finalizeEvent'), normName = pick(authWiring, 'normalizeURL') || 'normalizeURL';
   const encName = pick(pubClearance, 'encrypt'), ckName = pick(pubClearance, 'getConversationKey');
-  const decName = pick(refreshNow, 'decrypt'), gpName = pick(refreshNow, 'getPublicKey');
+  const decName = pick(matching, 'decrypt'), gpName = pick(matching, 'getPublicKey');
   for (const [n, v] of [['finalizeEvent', feName], ['encrypt', encName], ['getConversationKey', ckName],
                         ['decrypt', decName], ['getPublicKey', gpName]]) {
     if (!v) throw new Error('could not bind ' + n + ' from the bundle — esbuild renamed it again');
@@ -113,7 +114,7 @@ function consoleSide(urls) {
   };
   const args = Object.keys(scope);
   const built = new Function(...args,
-    sentDecl + queueDecl + touchWiring + authWiring + isAuthed + newest + connected + publishSrc +
+    sentDecl + queueDecl + touchWiring + authWiring + isAuthed + newest + connected + matching + publishSrc +
     `\nreturn ({ publish, _isRelayAuthed, ${healthy}, ${pubClearance},\n ${refresh},\n ${refreshNow} });`
   )(...args.map(k => scope[k]));
   Object.assign(scope.window.Steward, built);
@@ -186,14 +187,21 @@ async function scenario(name, link, body) {
     r.delivered = minors.filter(p => { const h = held.get(p.toLowerCase()); return h && h.minor === true; }).length;
     // "Lied" = the console reported zero failures while a child's record is missing or wrong.
     r.lied = (out && out.failed === 0) && r.delivered < r.expected;
-    r.falseAlarm = (r.delivered === r.expected && s.banners().length) ? s.banners().length : 0;
+    // TWO KINDS of banner, and only one is a false alarm. "N members did not receive their record" is a claim
+    // of failure; "couldn't confirm these saved" is an admission of ignorance. On a link too poor to read back,
+    // the second is the honest thing to say and must not be scored as crying wolf — but it must also never be
+    // allowed to masquerade as the first.
+    const wolves = s.banners().filter(b2 => !/Couldn.t confirm/.test((b2.detail || {}).message || ''));
+    const unsure = s.banners().length - wolves.length;
+    r.falseAlarm = (r.delivered === r.expected) ? wolves.length : 0;
+    r.unsure = (r.delivered === r.expected) ? unsure : 0;
     r.bytes = shim.stats.bytesUp + shim.stats.bytesDown;
     r.note = out && out.note || '';
   } catch (e) { r.note = 'threw: ' + String(e).slice(0, 60); }
   s.close();
   await shim.close();
   results.push(r);
-  console.log(`  ${r.delivered === r.expected ? '✓' : '✗'} ${name.padEnd(34)} children ${r.delivered}/${r.expected}  lied=${r.lied}  falseAlarms=${r.falseAlarm}  ${(r.bytes / 1024).toFixed(0)}kB  ${r.note}`);
+  console.log(`  ${r.delivered === r.expected ? '✓' : '✗'} ${name.padEnd(34)} children ${r.delivered}/${r.expected}  lied=${r.lied}  criedWolf=${r.falseAlarm}  unsure=${r.unsure || 0}  ${(r.bytes / 1024).toFixed(0)}kB  ${r.note}`);
 }
 
 // A STRAY GATEWAY ON THIS PORT ANSWERS /status WITH A DIFFERENT CHURCH KEY, so every write is refused and a
@@ -241,7 +249,9 @@ const alarms = results.filter(r => r.falseAlarm);
 console.log(`scenarios: ${results.length}`);
 console.log(`told the steward "saved" while a child's record was missing: ${lies.length ? lies.map(r => r.name).join(', ') : 'NONE'}`);
 console.log(`children left without a correct record:                     ${lost.length ? lost.map(r => `${r.name} (${r.delivered}/3)`).join(', ') : 'NONE'}`);
-console.log(`false alarms while everything landed:                       ${alarms.length ? alarms.map(r => r.name).join(', ') : 'NONE'}`);
+console.log(`CRIED WOLF (claimed children lost their record, wrongly):    ${alarms.length ? alarms.map(r => r.name).join(', ') : 'NONE'}`);
+const unsures = results.filter(r => r.unsure);
+console.log(`said "couldn't confirm" while everything landed (honest):   ${unsures.length ? unsures.map(r => r.name).join(', ') : 'NONE'}`);
 
 try { relay.kill('SIGKILL'); } catch {}
 try { rmSync(dataDir, { recursive: true, force: true }); } catch {}

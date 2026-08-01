@@ -12761,24 +12761,24 @@ zoo`.split("\n");
           if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
         },
         oneose() {
-          finish();
+          finish(true);
         }
       });
-      setTimeout(finish, ms);
+      setTimeout(() => finish(false), ms);
     });
   }
   function _newestByD(filters, ms = 6e3, urls = null) {
     return new Promise((resolve) => {
       const best = /* @__PURE__ */ new Map();
       let done = false;
-      const finish = () => {
+      const finish = (complete) => {
         if (done) return;
         done = true;
         try {
           sub.close();
         } catch {
         }
-        resolve(best);
+        resolve({ byD: best, complete: !!complete });
       };
       const sub = pool.subscribeMany(urls || relays(), filters, {
         onevent(e) {
@@ -12793,6 +12793,50 @@ zoo`.split("\n");
       });
       setTimeout(finish, ms);
     });
+  }
+  async function _clearancesMatching(pubs, wantFor) {
+    if (!pubs.length || !sk || !_isRelayAuthed()) return null;
+    const readFrom = _connectedRelays();
+    if (!readFrom.length) return null;
+    try {
+      const ds = pubs.map((p) => CLEARANCE_D + String(p).toLowerCase());
+      let mine = pub;
+      try {
+        mine = getPublicKey2(sk);
+      } catch (e) {
+      }
+      const readMs = (pool.maxWaitForConnection || 3e3) + 9e3;
+      const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], authors: [mine], "#d": ds }], readMs, [u]).then((r) => r, () => ({ byD: /* @__PURE__ */ new Map(), complete: false }))));
+      const definitive = perRelay.every((r) => r.complete);
+      const ok = /* @__PURE__ */ new Set();
+      for (const p of pubs) {
+        const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
+        let every = true;
+        for (const { byD: held } of perRelay) {
+          const e = held.get(key);
+          if (!e) {
+            every = false;
+            break;
+          }
+          let got = null;
+          try {
+            got = JSON.parse(decrypt3(e.content, getConversationKey(sk, h)));
+          } catch (x) {
+            every = false;
+            break;
+          }
+          const w = wantFor(p);
+          if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) {
+            every = false;
+            break;
+          }
+        }
+        if (every) ok.add(h);
+      }
+      return { matching: ok, definitive };
+    } catch (e) {
+      return null;
+    }
   }
   function _connectedRelays() {
     try {
@@ -14679,8 +14723,15 @@ zoo`.split("\n");
       const appr = new Set((approved || []).map((x) => String(x || "").toLowerCase()));
       let pubs = [...new Set((memberPubs || []).filter(Boolean))];
       const BATCH = 20, GAP_MS = 250;
+      let _pubMs = 4400;
+      try {
+        _pubMs = (pool.relays.values().next().value || {}).publishTimeout || 4400;
+      } catch (e) {
+      }
+      const _BATCH_MS = (pool.maxWaitForConnection || 3e3) + _pubMs + 3e3;
       const out = [];
       let failed = 0, skipped = 0;
+      const unconfirmed = [];
       const want = (p) => {
         const h = String(p).toLowerCase();
         return { minor: mins.has(h), cleared: appr.has(h) };
@@ -14696,35 +14747,15 @@ zoo`.split("\n");
         }
         return true;
       });
-      const readFrom = _connectedRelays();
-      if (pubs.length && sk && _isRelayAuthed() && readFrom.length) {
-        try {
-          const ds = pubs.map((p) => CLEARANCE_D + String(p).toLowerCase());
-          let mine = pub;
-          try {
-            mine = getPublicKey2(sk);
-          } catch (e) {
-          }
-          const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], authors: [mine], "#d": ds }], 6e3, [u]).then((m) => m, () => /* @__PURE__ */ new Map())));
-          pubs = pubs.filter((p) => {
-            const h = String(p).toLowerCase();
-            const key = CLEARANCE_D + h;
-            for (const held of perRelay) {
-              const e = held.get(key);
-              if (!e) return true;
-              let got = null;
-              try {
-                got = JSON.parse(decrypt3(e.content, getConversationKey(sk, h)));
-              } catch (x) {
-                return true;
-              }
-              if (!same(got, want(p))) return true;
-            }
+      const already = await _clearancesMatching(pubs, want);
+      if (already) {
+        pubs = pubs.filter((p) => {
+          if (already.matching.has(String(p).toLowerCase())) {
             skipped++;
             return false;
-          });
-        } catch (e) {
-        }
+          }
+          return true;
+        });
       }
       for (let i3 = 0; i3 < pubs.length; i3 += BATCH) {
         const slice = pubs.slice(i3, i3 + BATCH);
@@ -14732,25 +14763,37 @@ zoo`.split("\n");
           const h = String(p).toLowerCase();
           return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) });
         }));
-        const rs = await Promise.race([settle, new Promise((r) => setTimeout(() => r(null), 8e3))]);
+        const rs = await Promise.race([settle, new Promise((r) => setTimeout(() => r(null), _BATCH_MS))]);
         if (!rs) {
-          failed += slice.length;
+          unconfirmed.push(...slice);
         } else {
           out.push(...rs);
-          failed += rs.filter((r) => r.status === "rejected" || r.value === false || r.value === null).length;
+          rs.forEach((r, k) => {
+            if (r.status === "rejected" || r.value === false || r.value === null) unconfirmed.push(slice[k]);
+          });
         }
         if (i3 + BATCH < pubs.length) await new Promise((r) => setTimeout(r, GAP_MS));
       }
+      let unverified = false;
+      if (unconfirmed.length) {
+        const landed = await _clearancesMatching(unconfirmed, want);
+        if (!landed) {
+          failed = unconfirmed.length;
+          unverified = true;
+        } else {
+          const missing = unconfirmed.filter((p) => !landed.matching.has(String(p).toLowerCase()));
+          failed = missing.length;
+          unverified = missing.length > 0 && !landed.definitive;
+        }
+      }
       if (failed) {
         try {
-          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
-            what: "safeguarding clearances",
-            message: failed + " of " + total + " members did not receive their updated safeguarding record. Until they do, their app cannot tell that they are a child. Open the Members tab again while connected to your relay to retry."
-          } }));
+          const message = unverified ? "Couldn't confirm the safeguarding record saved for " + failed + " of " + total + " members \u2014 your connection dropped before your relay answered. They may well have saved. Open the Members tab again while connected to check." : failed + " of " + total + " members did not receive their updated safeguarding record. Until they do, their app cannot tell that they are a child. Open the Members tab again while connected to your relay to retry.";
+          window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what: "safeguarding clearances", message } }));
         } catch (e) {
         }
       }
-      return { results: out, failed, skipped, total };
+      return { results: out, failed, skipped, total, unverified };
     },
     // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
     // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —

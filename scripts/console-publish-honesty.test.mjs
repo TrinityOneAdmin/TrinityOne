@@ -100,7 +100,9 @@ function grab(sig) {
 // The shipped publish() + publishClearance() + refreshClearances(), over a real pool pointed at `urls`.
 // `clock` overrides the console's now(). The relay's tie-break is decided by created_at, so a test that wants
 // a collision on purpose has to control the clock — see "the relay already holds a newer version" below.
-function consoleSide(urls, clock, ident) {
+// `mutate` rewrites the lifted source before it is compiled — used to SABOTAGE a specific guard and prove the
+// test fails without it. A guard nothing can break is a guard nothing is testing.
+function consoleSide(urls, clock, ident, mutate) {
   const pool = new SimplePool({ verifyEvent, websocketImplementation: WebSocket, maxWaitForConnection: 1500 });
   const events = [];                                    // every window event the console fired
 
@@ -113,6 +115,10 @@ function consoleSide(urls, clock, ident) {
   const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved)');
   const newest = grab('function _newestByD(');
   const connected = grab('function _connectedRelays(');
+  // The read-and-compare step now lives in one shared helper, used BOTH to skip redundant writes and to verify
+  // before alarming. Lifted here for the same reason: two copies would drift, and the second copy is the one
+  // that decides whether a safeguarding warning is true.
+  const matching = grab('async function _clearancesMatching(');
   // The connection wiring — _relaysTouched, _subbedOn, and the onRelayConnection* hooks. The reconciliation
   // that clears the just-published cache when a relay (re)connects lives in onRelayConnectionSuccess, so a
   // harness without this block does not contain the mechanism at all and cannot test it.
@@ -145,12 +151,12 @@ function consoleSide(urls, clock, ident) {
   const pick = (src, base) => (src.match(new RegExp('\\b(' + base + '\\d*)\\(')) || [])[1];
   const encName = pick(pubClearance, 'encrypt');
   const ckName = pick(pubClearance, 'getConversationKey');
-  const decName = pick(refreshNow, 'decrypt');
+  const decName = pick(matching, 'decrypt');
   const feName = pick(authWiring, 'finalizeEvent');
   // NO SILENT DEFAULT. The shipped code wraps its getPublicKey call in a try/catch that falls back to the
   // church pubkey — the safe direction in production, but in a harness with the wrong binding it silently
   // reproduces the exact bug under test and the delegated tests fail for the wrong reason. (They did.)
-  const gpName = pick(refreshNow, 'getPublicKey');
+  const gpName = pick(matching, 'getPublicKey');
   assert.ok(gpName, 'refreshClearances no longer resolves its own signing pubkey — re-anchor this test');
   const normName = pick(authWiring, 'normalizeURL') || pick(isAuthed, 'normalizeURL') || 'normalizeURL';
   for (const [n, v] of [['encrypt', encName], ['getConversationKey', ckName], ['decrypt', decName], ['finalizeEvent', feName]]) {
@@ -186,9 +192,15 @@ function consoleSide(urls, clock, ident) {
     setTimeout, Promise, Set, Map, String, JSON, Date,
   };
   const args = Object.keys(scope);
+  let body = sentDecl + queueDecl + touchWiring + authWiring + isAuthed + newest + connected + matching + publishSrc;
+  if (mutate) {
+    const before = body;
+    body = mutate(body);
+    assert.notEqual(body, before, 'the sabotage did not match the shipped source — re-anchor it, or it is ' +
+      'proving nothing while staying green');
+  }
   const built = new Function(...args,
-    sentDecl + queueDecl + touchWiring + authWiring + isAuthed + newest + connected + publishSrc +
-    `\nreturn ({ publish, _isRelayAuthed, ${pubClearance},\n ${refresh},\n ${refreshNow} });`)(...args.map(k => scope[k]));
+    body + `\nreturn ({ publish, _isRelayAuthed, ${pubClearance},\n ${refresh},\n ${refreshNow} });`)(...args.map(k => scope[k]));
   Object.assign(scope.window.Steward, built);
   return {
     ...built, pool, urls,
@@ -930,4 +942,73 @@ test('publish() checks the prefix rather than rejecting every string it is hande
     'OK with a reason string turns every successful save into a reported failure.');
   assert.ok(!/typeof v === "string"[^&]*\)\s*throw/.test(fn.replace(/\s+/g, ' ')) || /startsWith/.test(fn),
     're-anchor: the guard shape changed');
+});
+
+// ── an unconfirmed write is not a lost child ──────────────────────────────────────────────────────────────
+// Measured on the network simulator (scripts/netsim-console.mjs) before this existed: on 2G the console told
+// the steward 3 of 8 members had not received their safeguarding record, and on satellite 6 of 8 — while every
+// single record was on the relay. The batch loop waits a bounded time for each write to be acknowledged, and
+// on a thin link the acknowledgement simply arrives after we stopped listening. Counting that as a lost child
+// is how a safeguarding banner becomes noise, and a banner that is usually wrong is worse than no banner: the
+// one time it is right, it looks the same.
+//
+// Make the writes REACH THE RELAY but never resolve, which is exactly what a slow link produces.
+function neverConfirms(s) {
+  const real = s.pool.publish.bind(s.pool);
+  s.pool.publish = (urls2, evt) => { real(urls2, evt).forEach(p => p.catch(() => {})); return [new Promise(() => {})]; };
+  return s;
+}
+// A read that returns nothing and never finishes — the saturated-link case. Note it swallows onevent AS WELL
+// as oneose: a read that merely lacks its EOSE still delivers the events, and would confirm the writes.
+function readsNothing(s) {
+  const real = s.pool.subscribeMany.bind(s.pool);
+  s.pool.subscribeMany = (urls2, filters, h) => real(urls2, filters, { ...h, onevent() {}, oneose() {} });
+  return s;
+}
+
+test('A WRITE THAT LANDED BUT WAS NEVER ACKNOWLEDGED RAISES NO ALARM', async () => {
+  const s = neverConfirms(await authenticate(consoleSide([WS_URL])));
+  const pubs = members.slice(12, 18).map(m => m.pub);
+  const r = await s.refreshClearances(pubs, pubs.slice(0, 3), []);
+  s.close();
+  assert.equal(r.failed, 0,
+    `${r.failed} of ${r.total} members were reported as having lost their safeguarding record, when every ` +
+    'record is on the relay and the only thing missing was the acknowledgement. This is the false banner that ' +
+    'the network simulation measured on every realistic link.');
+  assert.equal(r.unverified, false, 'the records were read back successfully, so nothing is unverified');
+  assert.equal(s.banners().length, 0, 'and the steward must not be warned about a write that succeeded');
+});
+
+test('A READ TOO POOR TO FINISH IS "COULDN\'T CONFIRM", NOT "DID NOT RECEIVE"', async () => {
+  // Both halves of this matter. Saying nothing would be a lie in the other direction — we genuinely do not
+  // know — but claiming the records are lost is the lie that trains stewards to ignore the banner.
+  const s = readsNothing(neverConfirms(await authenticate(consoleSide([WS_URL]))));
+  const pubs = members.slice(18, 22).map(m => m.pub);
+  const r = await s.refreshClearances(pubs, pubs.slice(0, 2), []);
+  s.close();
+  assert.equal(r.unverified, true,
+    'the console could not read a single record back, yet reported a verified answer. An unverifiable read ' +
+    'has been mistaken for a definite one on this codebase before, and both possible definite answers are wrong.');
+  assert.equal(s.banners().length, 1, 'the steward must still be told something is unconfirmed');
+  const msg = s.banners()[0].detail.message;
+  assert.match(msg, /Couldn.t confirm/, 'the banner must admit ignorance rather than assert failure: ' + msg);
+  assert.doesNotMatch(msg, /did not receive/,
+    'the banner claims the members did not receive their record, which is not known and is usually false: ' + msg);
+});
+
+test('…and that distinction is load-bearing, not decorative', async () => {
+  // SABOTAGE. Force the read to call itself complete — the exact bug the `definitive` flag exists to prevent,
+  // and the shape the code had two commits ago. Without the flag the same run must accuse the members.
+  // Anchored on the BUNDLE's text, not the source's: esbuild parenthesises the arrow parameter.
+  const t = readsNothing(neverConfirms(await authenticate(consoleSide([WS_URL], null, null,
+    (src) => src.replace(/const definitive = perRelay\.every\([^)]*\) => r\.complete\);/, 'const definitive = true;')))));
+  // The roster is 21, so this deliberately overlaps earlier tests. Safe: readsNothing() means the skip read
+  // returns nothing, so every member is written again regardless of what is already on the relay.
+  const pubs = members.slice(14, 18).map(m => m.pub);
+  const r = await t.refreshClearances(pubs, pubs.slice(0, 2), []);
+  t.close();
+  assert.equal(r.unverified, false, 'the sabotage did not take effect, so this test proves nothing');
+  assert.match(t.banners()[0].detail.message, /did not receive/,
+    'with the completeness flag forced true the console should wrongly accuse the members — if it does not, ' +
+    'the flag is not what is preventing the false banner and this guard is untested');
 });
