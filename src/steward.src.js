@@ -131,6 +131,7 @@ const CLEARANCE_D = 'trinityone/clearance:';   // a member's OWN safeguarding st
 // (refreshClearances) covers what the relay already holds; this covers the second or two before the relay has
 // echoed it back, which is exactly the window in which the toggle path and the roster back-fill collide.
 const _clearanceSent = new Map();
+const _returnAnnounced = new Map();   // url -> the relay instance whose return we have already announced
 // refreshClearances runs strictly one at a time (see the note on that method). Module scope, so the toggle
 // path and the roster back-fill share the queue even though they are called from different places.
 let _clearanceQueue = Promise.resolve();
@@ -614,7 +615,19 @@ pool.onRelayConnectionSuccess = (url) => {
     // unchanged, so a relay coming back mid-session was never reconciled until the console was reloaded. The
     // handoff described same-session healing as something that "often will not" work; AUDIT-8 measured that it
     // never did by itself. A returning relay is precisely when a re-check is worth doing.
-    if (fresh) { _clearanceSent.clear(); try { window.dispatchEvent(new CustomEvent('steward-relay-returned', { detail: { url } })); } catch (e) {} }
+    // ONCE PER RETURN, not once per subscribe. nostr-tools calls onRelayConnectionSuccess from subscribeMap
+    // unconditionally — on every subscription, not only on a new socket — and `_subbedOn` is refreshed only by
+    // the 90s reconnect ticker. So after a single drop this fired on every chunk read, and since the listener
+    // also cleared the back-fill cooldown, read-before-write cancelled its own completion marker and looped:
+    // measured at 8 full-roster re-seals against 1. Keyed on the live relay INSTANCE, so a genuine reconnect
+    // (which creates a new AbstractRelay) announces exactly once. AUDIT-9.
+    if (fresh) {
+      _clearanceSent.clear();
+      if (_returnAnnounced.get(url) !== live) {
+        _returnAnnounced.set(url, live);
+        try { window.dispatchEvent(new CustomEvent('steward-relay-returned', { detail: { url } })); } catch (e) {}
+      }
+    }
   } catch (e) {}
 };
 pool.onRelayConnectionFailure = (url) => { try { _relaysTouched.add(url); } catch (e) {} };
@@ -1182,7 +1195,15 @@ async function publish(evt) {
 // member into the unconfirmed list and sends them through the verify read — where the truth is established by
 // looking rather than asserted by the writer.
 async function _publishToRelays(evt, urls) {
-  const targets = (urls && urls.length) ? urls : relays();
+  // CONNECTED, not configured. With the all-must-accept rule below, targeting every CONFIGURED relay means a
+  // single unreachable one makes `accepted < targets.length` for every member, always — a full-roster
+  // safeguarding alarm while every record is safely stored. That is not hypothetical: CANONICAL_RELAYS ships a
+  // tailnet address no ordinary steward's phone can route to, and the fallback fires whenever the read could
+  // not run — which is the whole window after any socket reconnect, and every toggle, since _reseal has no
+  // auth gate. AUDIT-9. Falling back to `relays()` only when nothing is connected keeps a fully-offline
+  // console reporting honestly rather than silently doing nothing.
+  const live = _connectedRelays();
+  const targets = (urls && urls.length) ? urls : (live.length ? live : relays());
   if (!targets.length) return false;
   let rs = [];
   try {
@@ -1445,6 +1466,7 @@ async function _clearancesMatching(pubs, wantFor) {
     // steward's copies on top — "3 of 3 members did not receive their updated safeguarding record", while all
     // three children read correctly on their phones throughout.
     const wrong = new Set();     // our copy is present and its CONTENT is wrong — the only DEFINITE failure
+    const minorBad = new Set();  // …and specifically the MINOR field is wrong for someone who IS a child
     let scanned = 0;
     for (const p of pubs) {
       const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
@@ -1453,30 +1475,55 @@ async function _clearancesMatching(pubs, wantFor) {
       // AUDIT-8 measured secp256k1 ECDH at 4.37ms/op on a workstation: a 400-member roster across 3 relays was
       // 5.3 SECONDS of unbroken main thread, and 17.6s at 800 members across 5 — on a cheap Android, several
       // times worse. Hoisting it removes the relay factor outright; the yield below removes the freeze.
-      let ck = null;
-      try { ck = nip44ck(sk, h); } catch (x) { continue; }
+      // LAZY. Hoisting this out of the relay loop removed the per-relay multiplier, but it also moved it ABOVE
+      // the "did we even find our copy" check — so a church's FIRST back-fill, where the relay holds nothing,
+      // paid 400 ECDH operations to decrypt records that do not exist. Measured at 400 members: 34ms before
+      // the hoist, 1760ms after. Computed once per member, on first actual use. AUDIT-9.
+      let ck = null, ckBad = false;
+      const conv = () => { if (ck || ckBad) return ck; try { ck = nip44ck(sk, h); } catch (x) { ckBad = true; } return ck; };
       let settled = true, contentWrong = false, knownEverywhere = true;
       for (const { url, byD: held, covered } of perRelay) {
         const rec = held.get(key);
         const e = rec && rec.ours;
         let needHere = false;
+        // DID THIS RELAY ACTUALLY FINISH ANSWERING ABOUT THIS MEMBER? Asked FIRST, and unconditionally.
+        // AUDIT-9: this used to live inside the `if (!e)` branch below — a branch that also sets
+        // `needHere = true` and therefore `settled = false`. So `knownEverywhere` could only ever be false
+        // when `settled` was already false, which made `if (settled && knownEverywhere)` identical to
+        // `if (settled)` and the completeness requirement dead code. The case it exists for is the exact
+        // opposite one: our copy IS present and correct, nothing objects, and the read simply never got far
+        // enough to reveal the competing copy sitting on top of it. The relay serves matched events
+        // oldest-first, so what a cut-short chunk loses is precisely the NEWEST events — the ones a skip
+        // asserts do not exist. Reproduced: owner's copy delivered and perfect, a seated steward's "not a
+        // minor" withheld by the truncation, member skipped, nothing retried, child's phone reads adult.
+        if (!covered.has(key)) knownEverywhere = false;
         // NO `break` ON ABSENCE. Leaving the loop at the first relay that lacks our copy means a later relay
         // holding a WRONG one is never decrypted — so whether a definite loss got the definite wording came
         // down to which relay answered first. AUDIT-8 measured it: our copy absent on A and wrong on B
         // reported `wrong=0` asked as [A,B] and `wrong=1` asked as [B,A], same data both runs. Absence is
         // "unknown" and must not stop us looking for proof elsewhere.
         if (!e) {
+          // Absent on a FINISHED chunk is genuinely not there; absent on a truncated one is merely unknown.
+          // Either way it is worth writing: one write to a relay we are unsure about is cheap, and leaving a
+          // child without their record is not.
           needHere = true;
-          // Absent AND the chunk finished = genuinely not there. Absent on a chunk that did NOT finish is
-          // simply unknown, and must not authorise a skip — but it is still worth writing, because writing to
-          // one relay we are unsure about is cheap and leaving a child without their record is not.
-          if (!covered.has(key)) knownEverywhere = false;
         } else {
           let got = null;
-          try { got = JSON.parse(nip44d(e.content, ck)); } catch (x) { needHere = true; contentWrong = true; }
+          const k = conv();
+          if (!k) { needHere = true; }   // cannot open our own copy at all — rewrite it
+          else try { got = JSON.parse(nip44d(e.content, k)); } catch (x) { needHere = true; contentWrong = true; }
           if (!needHere) {
             const w = wantFor(p);
-            if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) { needHere = true; contentWrong = true; }
+            // TWO FIELDS, AND ONLY ONE OF THEM IS ABOUT BEING A CHILD. The banner's "their app will treat them
+            // as an adult" was fired for ANY content mismatch — so a 16-year-old youth helper whose `minor`
+            // was stored correctly and only whose youth clearance was stale had the console announce that
+            // their phone did not know they were a child. It did. Track the minor field separately so the
+            // claim is only made about people it is actually true of. AUDIT-9.
+            const minorWrong = !got || !!got.minor !== !!w.minor;
+            if (minorWrong || !!got.cleared !== !!w.cleared) {
+              needHere = true; contentWrong = true;
+              if (minorWrong && w.minor) minorBad.add(h);
+            }
             else {
               // Our copy is right. But the member's app applies the NEWEST copy from any authorised writer,
               // and we cannot open theirs — it is sealed with THEIR conversation key with the member, not
@@ -1493,11 +1540,13 @@ async function _clearancesMatching(pubs, wantFor) {
       // whole-roster flag a single unfinished chunk on a single relay disabled every skip in the church.
       if (settled && knownEverywhere) ok.add(h);
       if (contentWrong) wrong.add(h);
-      // Let the console breathe. Without this the whole roster is one unbroken task and the UI is frozen for
-      // its duration — on the largest rosters, long enough for Android to offer to kill the app.
-      if ((++scanned % 25) === 0) await null;
+      // Let the console breathe — with a REAL yield. `await null` resolves in a microtask, and the microtask
+      // queue drains before the event loop turns, so the loop stayed one unbroken task and the comment claimed
+      // the opposite of what the code did. Measured over 400 iterations: with `await null`, ZERO timer
+      // callbacks ran during the loop; with a 0ms timer, 16 did. AUDIT-9.
+      if ((++scanned % 25) === 0) await new Promise(r => setTimeout(r, 0));
     }
-    return { matching: ok, wrong, needBy };
+    return { matching: ok, wrong, minorBad, needBy };
   } catch (e) { return null; }
 }
 
@@ -2959,7 +3008,7 @@ window.Steward = {
     let _pubMs = 4400; try { _pubMs = (pool.relays.values().next().value || {}).publishTimeout || 4400; } catch (e) {}
     const _BATCH_MS = (pool.maxWaitForConnection || 3000) + _pubMs + 3000;
     const out = [];
-    let failed = 0, skipped = 0;
+    let failed = 0, skipped = 0, pending = 0;
     const unconfirmed = [];   // written but not acknowledged — verified below before anyone is alarmed
     const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h) }; };
     const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared;
@@ -3025,6 +3074,15 @@ window.Steward = {
         const h = String(p).toLowerCase();
         return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }, targetsFor(h));
       }));
+      // NOTHING TO WRITE, AND NOTHING TO CONFIRM. A member can be correct on every relay we heard from while
+      // the read still did not finish — so they are not skippable (an unfinished read cannot prove no newer
+      // copy exists) and yet there is no write to make. Publishing to nobody returns null, and null used to
+      // mean "unconfirmed", which sent a perfectly healthy member into the verify read and, on a poor link,
+      // into a "we couldn't check whether the record saved" banner about a write that was never attempted.
+      // Count them as PENDING instead: no write, no alarm, and — via `pending` in the result — no completion
+      // marker either, so the next Members visit genuinely re-checks them. AUDIT-9; this became reachable only
+      // once the completeness guard started working.
+      slice.forEach(p => { const t = targetsFor(String(p).toLowerCase()); if (t && !t.length) pending++; });
       // A dropped message produces a promise that never settles, so an unbounded await here would hang the
       // whole back-fill on the first one — turning a partial failure into a total one.
       const rs = await Promise.race([settle, new Promise(r => setTimeout(() => r(null), _BATCH_MS))]);
@@ -3034,7 +3092,11 @@ window.Steward = {
       // satellite, with every record actually stored). They are checked after the loop.
       if (!rs) { unconfirmed.push(...slice); } else {
         out.push(...rs);
-        rs.forEach((r, k) => { if (r.status === 'rejected' || r.value === false || r.value === null) unconfirmed.push(slice[k]); });
+        rs.forEach((r, k) => {
+          const t = targetsFor(String(slice[k]).toLowerCase());
+          if (t && !t.length) return;                       // pending, not unconfirmed — see above
+          if (r.status === 'rejected' || r.value === false || r.value === null) unconfirmed.push(slice[k]);
+        });
       }
       if (i + BATCH < pubs.length) await new Promise(r => setTimeout(r, GAP_MS));
     }
@@ -3070,7 +3132,9 @@ window.Steward = {
         //                                           children read correctly on their phones. AUDIT-7.
         const lostPubs = missing.filter(p => landed.wrong.has(String(p).toLowerCase()));
         lost = lostPubs.length;
-        lostKids = lostPubs.filter(p => mins.has(String(p).toLowerCase())).length;
+        // Not "is a child" — "is a child whose stored record gets that WRONG". An undecryptable copy is a
+        // definite failure but tells us nothing about what it says, so it never reaches this count.
+        lostKids = lostPubs.filter(p => landed.minorBad && landed.minorBad.has(String(p).toLowerCase())).length;
         unverified = failed > lost;
       }
     }
@@ -3115,7 +3179,7 @@ window.Steward = {
     // `total` is the ROSTER, not what we ended up publishing — the steward counts people, not writes. `skipped`
     // is the members already holding the right record; it is the measure of how much work read-before-write
     // saved, and on a healthy repeat visit it should equal `total`.
-    return { results: out, failed, skipped, total, unverified };
+    return { results: out, failed, skipped, total, unverified, pending };
   },
   // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
   // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —
@@ -3449,7 +3513,18 @@ window.Steward = {
         _careRosterKnown = true;
         onList(cur);
       },
-      oneose() { onList(cur); },
+      oneose() {
+        // "WE ASKED AND THERE IS NO ROSTER" IS KNOWABLE, and it is the ordinary state of a single-owner pilot
+        // church. Setting `_careRosterKnown` only from an event meant such a church NEVER learned it had no
+        // stewards, so _memberHonours fell back to "any author might be honoured" for ever — which reinstates
+        // the seized-relay amplification AUDIT-7 closed: one forged clearance per member from an unrostered
+        // key is admitted to the top slot and the console republishes the whole roster on every visit. The
+        // member's app ignores that author, so it is invisible write amplification. Gated on an authenticated
+        // read, because an unauthenticated one is served an empty answer indistinguishable from "no roster".
+        // AUDIT-9.
+        try { if (_isRelayAuthed()) _careRosterKnown = true; } catch (e) {}
+        onList(cur);
+      },
     });
     return () => { try { sub.close(); } catch {} };
   },

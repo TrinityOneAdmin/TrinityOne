@@ -482,7 +482,10 @@ test('…and a run that lost the tie-break is NOT recorded as done', async () =>
   const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const at = D.indexOf('let clearanceBackfillDone');
   const body = D.slice(D.indexOf('if (!sg.loaded) return', at), D.indexOf('}, [sg.loaded', at));
-  assert.match(body, /if \(!r \|\| r\.failed\) release\(\)/,
+  // `r.pending` joined the condition in AUDIT-9: members that needed no write but whose read never finished
+  // must release the marker too, WITHOUT a banner — no write was attempted, so there is nothing to warn about,
+  // but the run is not complete and the next visit has to look again.
+  assert.match(body, /if \(!r \|\| r\.failed \|\| r\.pending\) release\(\)/,
     'the back-fill no longer gives its claim back on failure, so a refused clearance is remembered as delivered');
 });
 
@@ -1549,7 +1552,10 @@ test('AUDIT-8: a client timeout is not an answer', async () => {
   const URL_MUTE = `ws://127.0.0.1:${PORT}/relay`;
   try {
     const s = consoleSide([URL_MUTE]);
-    const r = await s._newestByD([{ kinds: [30078], '#d': ['probe'] }], 3000, [URL_MUTE], null, null);
+    // 8000, NOT 3000. The library's own EOSE timer defaults to 4400ms, so a bound BELOW that fires first and
+    // `complete` is false whether or not the fix is present — the assertion passed against the broken code.
+    // Production calls this with maxWaitForConnection + 9000 (~12s), squarely in the window where it bites.
+    const r = await s._newestByD([{ kinds: [30078], '#d': ['probe'] }], 8000, [URL_MUTE], null, null);
     s.close();
     assert.equal(r.complete, false,
       'a relay that never answered was recorded as having finished answering. Everything downstream reads '
@@ -1646,6 +1652,122 @@ test('AUDIT-8: a record is written only to the relays that are missing it', asyn
     s3.close();
     assert.equal(r3.skipped, 1, 'with both relays holding the right record the member must be skipped entirely');
     assert.equal(s3.ok(), 0, 'and nothing should have gone on the wire');
+  } finally {
+    try { relayB && relayB.kill('SIGKILL'); } catch {}
+    try { rmSync(bDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('AUDIT-9: a truncated read must not authorise a skip, even when OUR copy looks perfect', async () => {
+  // THE PREVIOUS TEST OF THIS PROVED NOTHING, and that is the finding. It truncated the read but still let
+  // the competing copy arrive, so the member was unsettled for an unrelated reason and `skipped === 0` held
+  // whatever the completeness guard did. This one withholds exactly what a truncated chunk actually loses.
+  //
+  // The relay serves matched events OLDEST-FIRST, so the events a cut-short chunk drops are the NEWEST ones —
+  // precisely the competing copy the skip rests on not existing. Our own copy arrives, decrypts, and is
+  // correct; the steward copy sitting on top of it never does. If completeness is not consulted here, the
+  // console skips a child it should have corrected and nothing ever retries.
+  const steward = K();
+  const ident = await seatSteward(steward);
+  const child = K();
+  const roster = [steward.pub];
+
+  const owner = await authenticate(consoleSide([WS_URL], null, null, null, { roster }));
+  await owner.refreshClearances([child.pub], [child.pub], []);
+  owner.close();
+  await sleep(1200);
+  const stew = await authenticate(consoleSide([WS_URL], null, ident, null, { roster }));
+  await stew.refreshClearances([child.pub], [], []);          // a seated steward writes "not a minor", on top
+  stew.close();
+  assert.equal((await memberSees(child)).minor, false, 'fixture: the steward write did not take');
+
+  // The owner returns on a link where the chunk is cut short before the newest events arrive: our own copy is
+  // delivered, the steward's is not, and no EOSE lands.
+  await sleep(1200);
+  const owner2 = await authenticate(consoleSide([WS_URL], null, null, null, { roster }));
+  const real = owner2.pool.subscribeMany.bind(owner2.pool);
+  owner2.pool.subscribeMany = (u, f, h) => real(u, f, { ...h,
+    onevent(e) { if (e.pubkey !== steward.pub) h.onevent(e); },   // the newest event is lost in the truncation
+    oneose() {} });                                               // …and the read never finishes
+  const r = await owner2.refreshClearances([child.pub], [child.pub], []);
+  owner2.close();
+
+  assert.equal(r.skipped, 0,
+    'the console skipped a child on the strength of a read that never finished. Our copy was present and '
+    + 'correct, so nothing OBJECTED — but a skip also asserts that no newer copy from another writer exists, '
+    + 'and a truncated read cannot establish that. The steward copy is still on top: the child\'s phone reads '
+    + `"adult", ${r.failed} failed, ${owner2.banners().length} banners, and nothing will retry this session.`);
+});
+
+test('AUDIT-9: the chunked read works ACROSS chunks, not just within the first', async () => {
+  // CHUNK = 60, and until now the largest roster reaching _clearancesMatching anywhere was 21 — so every test
+  // ran with exactly one chunk and the whole cross-chunk bookkeeping was unexercised. Replacing the loop with
+  // "read only the first chunk, ever" left the file 38/38 green. Chunking exists precisely for the 200-400
+  // member churches this product is built for, so it has to be tested past its own boundary.
+  const many = Array.from({ length: 65 }, K);          // 65 > CHUNK, so a second chunk is mandatory
+  const pubs = many.map(m => m.pub);
+  const kids = pubs.slice(0, 3);
+
+  const s1 = await authenticate(consoleSide([WS_URL]));
+  const w1 = await s1.refreshClearances(pubs, kids, []);
+  s1.close();
+  assert.equal(w1.failed, 0, 'fixture: the cold write of a 65-member roster did not land');
+
+  // A fresh console, so nothing is skipped from memory — the skip has to come from reading BOTH chunks back.
+  await sleep(1400);
+  const s2 = await authenticate(consoleSide([WS_URL]));
+  const r = await s2.refreshClearances(pubs, kids, []);
+  s2.close();
+  assert.equal(r.skipped, pubs.length,
+    `only ${r.skipped} of ${pubs.length} were skipped on a repeat visit. Members past the first chunk were `
+    + 'never verified, so every visit rewrites them — for a 400-member church that is the permanent full-roster '
+    + 'republish chunking was introduced to remove.');
+  assert.equal(s2.ok(), 0, 'and nothing should have gone on the wire at all');
+  // …and the members in the SECOND chunk are genuinely correct, not merely assumed.
+  const last = many[many.length - 1];
+  assert.ok((await memberSees(many[0])).minor === true, 'fixture: a first-chunk child is wrong');
+  assert.equal((await memberSees(last)).minor, false, 'a last-chunk member stored the wrong record');
+});
+
+test('AUDIT-9: a targeted write does not let the cache suppress the relay it skipped', async () => {
+  // The 15s just-published cache is keyed by member. Once writes are targeted, a member written only to relay
+  // B must NOT be treated as "already published" when relay A — which still holds nothing — comes back inside
+  // that window. `coversAll` is the guard; replacing it with `true` left the whole file green, so nothing was
+  // holding it.
+  const B_PORT = 8999;   // free across scripts/ — `npm test` runs files in PARALLEL
+  await requireFreePort(B_PORT, 'console-publish-honesty.test.mjs (its cache-window relay)');
+  const child = K();
+  const bDir = mkdtempSync(join(tmpdir(), 'trin-relayCache-'));
+  const bUrl = `ws://127.0.0.1:${B_PORT}/relay`;
+  let relayB = null;
+  try {
+    // ONE console, both relays configured, but B is not up yet — so the first run targets A alone and the
+    // cache records a write that covered only A.
+    const s = await authenticate(consoleSide([WS_URL, bUrl]));
+    await s.refreshClearances([child.pub], [child.pub], []);
+    assert.equal((await memberSees(child)).minor, true, 'fixture: relay A never got the record');
+
+    // B joins INSIDE the 15s cache window.
+    relayB = spawn(process.execPath, ['scripts/gateway.mjs', String(B_PORT)], {
+      cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
+      env: { ...process.env, TRINITY_DATA_DIR: bDir, RELAY_MAX_EVENTS: '20000', CHURCH_NPUB: npubEncode(church.pub) },
+    });
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${B_PORT}/status`)).ok) break; } catch {} await sleep(150); }
+    // The pool only dials on demand, so nothing has contacted B yet. Dial it explicitly — this is what the
+    // reconnect ticker does in the real console, and it is the state the cache guard exists for: a relay that
+    // is connected NOW but was not when the member was last written.
+    try { await s.pool.ensureRelay(bUrl); } catch (e) {}
+    await requireConnected(s, [WS_URL, bUrl]);
+
+    await s.refreshClearances([child.pub], [child.pub], []);   // still inside the 15s window
+    s.close();
+    await sleep(600);
+    const onB = await memberSees(child, bUrl);
+    assert.ok(onB && onB.minor === true,
+      'the newly-returned relay holds no safeguarding record. The just-published cache suppressed the write '
+      + 'because the member had been written moments earlier — to a DIFFERENT relay. A member whose phone '
+      + 'reads only that relay finds nothing and is treated as an adult.');
   } finally {
     try { relayB && relayB.kill('SIGKILL'); } catch {}
     try { rmSync(bDir, { recursive: true, force: true }); } catch {}

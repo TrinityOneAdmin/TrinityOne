@@ -210,7 +210,9 @@ test('a partial backfill is not remembered as done', () => {
   assert.ok(call !== -1 && guard !== -1 && mark > guard && mark < call,
     'the signature is no longer claimed between the guard and the call, so a second roster emit arriving ' +
     'mid-run starts a duplicate whole-roster back-fill');
-  assert.match(body, /if \(!r \|\| r\.failed\) release\(\)/,
+  // AUDIT-9 added `r.pending`: a member needing no write, on a read that never finished, releases the marker
+  // too — silently, because no write was attempted and there is nothing to warn a steward about.
+  assert.match(body, /if \(!r \|\| r\.failed \|\| r\.pending\) release\(\)/,
     'a run that missed members no longer gives the signature back, so the back-fill is remembered as done and ' +
     'those members are never retried — the failure this test has always existed to catch');
   assert.match(body, /clearanceBackfillDone === sig\) clearanceBackfillDone = ''/,

@@ -204,12 +204,24 @@ function PublishErrorBanner() {
   // 360px — measured with elementFromPoint, every control including the Members tab the message tells you to
   // open. `top: 64` clears the header, and pointerEvents:none on the wrapper means the gap either side of the
   // card stays clickable rather than swallowing taps on whatever is behind it.
+  // …and it must never EAT THE PAGE. In flow with `flexShrink: 0` the card consumed real height, and the
+  // scrolling content region (flex:1, minHeight:0) absorbed all of it: measured at 360x520 the content region
+  // was 38px tall and entirely below the fold — a volunteer saw the header, the tabs, and a wall of pink text,
+  // with zero church content. Capped and scrollable instead, so a long message never costs more than 40% of a
+  // short screen. AUDIT-9.
+  //
+  // …and it must still outrank MODALS. Moving it into flow dropped its stacking context: every console modal
+  // is a full-viewport overlay with a dim + blur at z-index 50-220, so the banner was painted underneath them,
+  // greyed and untappable. That is not a safeguarding-only problem — FinanceShareStatement and the first-run
+  // wizard both publish while their modal is still open, so a relay refusal explained itself behind a blur.
+  // 240 clears the highest overlay (220). AUDIT-9 caught this by comparing against the base commit.
+  //
   // IN FLOW, NOT OVER THE TOP. Absolutely positioned it covered the entire tab strip at 360px — measured with
   // elementFromPoint: every control including the Members tab the message tells you to open. Rendered as a
   // normal row between the header and the scrolling content, it pushes the page down instead, so the one
   // action the text asks for stays reachable while the warning is up. AUDIT-8.
   return (
-    <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' }}>
+    <div style={{ flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' }}>
       {sgMsg ? card(sgMsg, 'sg', () => setSgMsg(''), 'sg') : null}
       {msg ? card(msg, 'gen', () => setMsg(''), 'gen') : null}
     </div>
@@ -3275,7 +3287,11 @@ let clearanceBackfillFailedAt = 0;
 // Releasing the session marker lets the next Members visit re-read and repair, instead of early-returning on
 // an unchanged roster signature until the console is reloaded. AUDIT-8 measured same-session healing never
 // happening without this. Registered once at module scope, not per mount, so it survives tab switches.
-try { window.addEventListener('steward-relay-returned', () => { clearanceBackfillDone = ''; clearanceBackfillFailedAt = 0; }); } catch (e) {}
+// NOTE it releases the completion marker ONLY. Zeroing `clearanceBackfillFailedAt` as well removed the single
+// brake on the hot loop this very cooldown was added to stop — measured at 8 full-roster re-seals where the
+// pre-change behaviour did 1, on exactly the flapping thin link this product is built for. Releasing the
+// marker is already enough to force the next Members visit to re-read. AUDIT-9.
+try { window.addEventListener('steward-relay-returned', () => { clearanceBackfillDone = ''; }); } catch (e) {}
 
 let clearanceBackfillLastSig = '';   // which signature that failure belonged to — a CHANGED roster skips the wait
 const CLEARANCE_RETRY_MS = 60000;
@@ -3367,7 +3383,10 @@ function DashMembers() {
     // would discard that newer run's result and re-publish it from scratch.
     const release = () => { clearanceBackfillFailedAt = Date.now(); if (clearanceBackfillDone === sig) clearanceBackfillDone = ''; };
     Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || []))
-      .then(r => { if (!r || r.failed) release(); })
+      // `pending` releases the marker WITHOUT a banner: those members needed no write, so there is nothing to
+      // warn about — but the read that would have proved them settled never finished, so the run is not
+      // complete and the next visit must look again. AUDIT-9.
+      .then(r => { if (!r || r.failed || r.pending) release(); })
       .catch(() => { release(); });
   }, [sg.loaded, sg.minors, sg.approved, members]);
   const toggleMinor = (pk) => {

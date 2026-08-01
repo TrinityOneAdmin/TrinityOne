@@ -2574,12 +2574,28 @@ window.Fellowship = {
         // reported `skipped=1, failed=0` with no banner for the whole skew window. Newest-wins also makes a
         // far-future copy permanent: it pins `_clrTs` where no honest correction can ever reach it.
         // Two programs that must agree cannot run different rulebooks.
-        if (_ts > Math.floor(Date.now() / 1000) + 600) return;
+        // NARROWED to the clearance branch. Applying it to every safeguarding document meant a member's phone
+        // more than ten minutes SLOW — commonplace on a cheap Android with no NTP — silently rejected fresh
+        // `nophoto:` and `guardians:` docs too, so avatars across Chat/Groups/Today and the whole family view
+        // went stale with no banner and no way to tell. Those carry no pinning hazard; the clearance does,
+        // because newest-wins means a far-future copy can never be corrected. This bound is measured against
+        // the MEMBER's clock, which is the one thing here nobody controls, so it is kept as narrow as the
+        // hazard. AUDIT-9. The remaining clock question — that this drops rather than clamps, and that a slow
+        // phone therefore fails OPEN to "adult" — is tracked; it needs the same treatment on both sides at
+        // once, because console and member disagreeing is how the worst defect of the last round happened.
         if (d === 'trinityone/minors:' + pubk) { if (_ts < _sgTs.minors) return; _sgTs.minors = _ts; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
         else if (d === 'trinityone/approved:' + pubk) { if (_ts < _sgTs.approved) return; _sgTs.approved = _ts; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
         else if (d === 'trinityone/guardians:' + pubk) { if (_ts < _sgTs.guardians) return; _sgTs.guardians = _ts; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
         else if (d === 'trinityone/nophoto:' + pubk) { if (_ts < _sgTs.nophoto) return; _sgTs.nophoto = _ts; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } emit(); }
         else if (me && d === 'trinityone/clearance:' + me) {
+          // NO FUTURE-DATED CLEARANCE, with the SAME bound the console uses (600s, `_CLOCK_SKEW` in
+          // src/steward.src.js). This side had none while the console rejected past +600s and the relay
+          // accepted to +900s — so in that band a clearance existed that this app APPLIED and the church's
+          // console could not see. Measured: a steward's phone 11 minutes fast wrote "not a minor" for a
+          // child, this app obeyed it, and the owner's console reported skipped=1, failed=0, no banner, for
+          // the whole skew window. Newest-wins also makes a far-future copy permanent: it pins `_clrTs` where
+          // no honest correction can reach it. Two programs that must agree cannot run different rulebooks.
+          if (_ts > Math.floor(Date.now() / 1000) + 600) return;
           if (_ts < _clrTs) return; _clrTs = _ts;
           try { clr = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch (x) { return; }   // sealed to me by the church
           emit();

@@ -11725,6 +11725,7 @@ zoo`.split("\n");
   var NAME_D = "trinityone/name:";
   var CLEARANCE_D = "trinityone/clearance:";
   var _clearanceSent = /* @__PURE__ */ new Map();
+  var _returnAnnounced = /* @__PURE__ */ new Map();
   var _clearanceQueue = Promise.resolve();
   var GUARDIANS_D = "trinityone/guardians:";
   var GUARDNOTICE_D = "trinityone/guardnotice:";
@@ -12287,9 +12288,12 @@ zoo`.split("\n");
       if (live && !_subbedOn.has(url)) _subbedOn.set(url, live);
       if (fresh) {
         _clearanceSent.clear();
-        try {
-          window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url } }));
-        } catch (e) {
+        if (_returnAnnounced.get(url) !== live) {
+          _returnAnnounced.set(url, live);
+          try {
+            window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url } }));
+          } catch (e) {
+          }
         }
       }
     } catch (e) {
@@ -12734,7 +12738,8 @@ zoo`.split("\n");
     return evt;
   }
   async function _publishToRelays(evt, urls) {
-    const targets = urls && urls.length ? urls : relays();
+    const live = _connectedRelays();
+    const targets = urls && urls.length ? urls : live.length ? live : relays();
     if (!targets.length) return false;
     let rs = [];
     try {
@@ -12902,36 +12907,46 @@ zoo`.split("\n");
       const ok = /* @__PURE__ */ new Set();
       const needBy = new Map(readFrom.map((u) => [u, /* @__PURE__ */ new Set()]));
       const wrong = /* @__PURE__ */ new Set();
+      const minorBad = /* @__PURE__ */ new Set();
       let scanned = 0;
       for (const p of pubs) {
         const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
-        let ck = null;
-        try {
-          ck = getConversationKey(sk, h);
-        } catch (x) {
-          continue;
-        }
+        let ck = null, ckBad = false;
+        const conv = () => {
+          if (ck || ckBad) return ck;
+          try {
+            ck = getConversationKey(sk, h);
+          } catch (x) {
+            ckBad = true;
+          }
+          return ck;
+        };
         let settled = true, contentWrong = false, knownEverywhere = true;
         for (const { url, byD: held, covered } of perRelay) {
           const rec = held.get(key);
           const e = rec && rec.ours;
           let needHere = false;
+          if (!covered.has(key)) knownEverywhere = false;
           if (!e) {
             needHere = true;
-            if (!covered.has(key)) knownEverywhere = false;
           } else {
             let got = null;
-            try {
-              got = JSON.parse(decrypt3(e.content, ck));
+            const k = conv();
+            if (!k) {
+              needHere = true;
+            } else try {
+              got = JSON.parse(decrypt3(e.content, k));
             } catch (x) {
               needHere = true;
               contentWrong = true;
             }
             if (!needHere) {
               const w = wantFor(p);
-              if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) {
+              const minorWrong = !got || !!got.minor !== !!w.minor;
+              if (minorWrong || !!got.cleared !== !!w.cleared) {
                 needHere = true;
                 contentWrong = true;
+                if (minorWrong && w.minor) minorBad.add(h);
               } else {
                 const top = _topWeMustAnswer(rec, e);
                 if (top && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) needHere = true;
@@ -12946,9 +12961,9 @@ zoo`.split("\n");
         }
         if (settled && knownEverywhere) ok.add(h);
         if (contentWrong) wrong.add(h);
-        if (++scanned % 25 === 0) await null;
+        if (++scanned % 25 === 0) await new Promise((r) => setTimeout(r, 0));
       }
-      return { matching: ok, wrong, needBy };
+      return { matching: ok, wrong, minorBad, needBy };
     } catch (e) {
       return null;
     }
@@ -14854,7 +14869,7 @@ zoo`.split("\n");
       }
       const _BATCH_MS = (pool.maxWaitForConnection || 3e3) + _pubMs + 3e3;
       const out = [];
-      let failed = 0, skipped = 0;
+      let failed = 0, skipped = 0, pending = 0;
       const unconfirmed = [];
       const want = (p) => {
         const h = String(p).toLowerCase();
@@ -14895,12 +14910,18 @@ zoo`.split("\n");
           const h = String(p).toLowerCase();
           return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }, targetsFor(h));
         }));
+        slice.forEach((p) => {
+          const t = targetsFor(String(p).toLowerCase());
+          if (t && !t.length) pending++;
+        });
         const rs = await Promise.race([settle, new Promise((r) => setTimeout(() => r(null), _BATCH_MS))]);
         if (!rs) {
           unconfirmed.push(...slice);
         } else {
           out.push(...rs);
           rs.forEach((r, k) => {
+            const t = targetsFor(String(slice[k]).toLowerCase());
+            if (t && !t.length) return;
             if (r.status === "rejected" || r.value === false || r.value === null) unconfirmed.push(slice[k]);
           });
         }
@@ -14917,7 +14938,7 @@ zoo`.split("\n");
           failed = missing.length;
           const lostPubs = missing.filter((p) => landed.wrong.has(String(p).toLowerCase()));
           lost = lostPubs.length;
-          lostKids = lostPubs.filter((p) => mins.has(String(p).toLowerCase())).length;
+          lostKids = lostPubs.filter((p) => landed.minorBad && landed.minorBad.has(String(p).toLowerCase())).length;
           unverified = failed > lost;
         }
       }
@@ -14932,7 +14953,7 @@ zoo`.split("\n");
         } catch (e) {
         }
       }
-      return { results: out, failed, skipped, total, unverified };
+      return { results: out, failed, skipped, total, unverified, pending };
     },
     // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
     // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —
@@ -15332,6 +15353,10 @@ zoo`.split("\n");
           onList(cur);
         },
         oneose() {
+          try {
+            if (_isRelayAuthed()) _careRosterKnown = true;
+          } catch (e) {
+          }
           onList(cur);
         }
       });
