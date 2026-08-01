@@ -8865,7 +8865,7 @@
       const me = window.Fellowship.myPubkey || pub;
       const _sgTs = { minors: 0, approved: 0, guardians: 0, nophoto: 0 };
       let clr = null;
-      let _clrTs = 0;
+      let _clrTs = 0, _clrId = "";
       const emit = () => {
         _noPhoto = pubSet(nophoto);
         const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
@@ -8914,8 +8914,11 @@
             }
             emit();
           } else if (me && d === "trinityone/clearance:" + me) {
+            if (_ts > Math.floor(Date.now() / 1e3) + 600) return;
             if (_ts < _clrTs) return;
+            if (_ts === _clrTs && !(String(e.id || "") > _clrId)) return;
             _clrTs = _ts;
+            _clrId = String(e.id || "");
             try {
               clr = JSON.parse(decrypt(e.content, getConversationKey(sk, e.pubkey)));
             } catch (x) {

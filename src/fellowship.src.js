@@ -2546,7 +2546,7 @@ window.Fellowship = {
     // about themselves. Fall back to the list when we do have it (stewards, and older churches that have not
     // published clearances yet), so this degrades rather than breaks.
     let clr = null;   // { minor, cleared } from my own sealed doc, or null if none has arrived
-    let _clrTs = 0;
+    let _clrTs = 0, _clrId = '';   // …and which event won, for the same-second tiebreak below
     const emit = () => {
       _noPhoto = pubSet(nophoto);   // normalised on the way in — see scripts/trinity-rules.mjs
       const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
@@ -2566,12 +2566,45 @@ window.Fellowship = {
         // (with a note on exactly why safeguarding is the worst place to let a stale copy win); the member side
         // never got it. One timestamp PER DOCUMENT, so a fresh minors list can't suppress a current approved one.
         const _ts = e.created_at || 0;
+        // NO FUTURE-DATED SAFEGUARDING DOCUMENT, and the bound must be the SAME ONE THE CONSOLE USES (600s,
+        // `_CLOCK_SKEW` in src/steward.src.js). This side had no bound at all while the console rejected past
+        // +600s and the relay accepted to +900s — so in that band a clearance existed that this app APPLIED
+        // and the church's console could not see. AUDIT-8 measured the consequence: a steward's phone running
+        // 11 minutes fast wrote "not a minor" for a child, this app obeyed it, and the owner's console
+        // reported `skipped=1, failed=0` with no banner for the whole skew window. Newest-wins also makes a
+        // far-future copy permanent: it pins `_clrTs` where no honest correction can ever reach it.
+        // Two programs that must agree cannot run different rulebooks.
+        // NARROWED to the clearance branch. Applying it to every safeguarding document meant a member's phone
+        // more than ten minutes SLOW — commonplace on a cheap Android with no NTP — silently rejected fresh
+        // `nophoto:` and `guardians:` docs too, so avatars across Chat/Groups/Today and the whole family view
+        // went stale with no banner and no way to tell. Those carry no pinning hazard; the clearance does,
+        // because newest-wins means a far-future copy can never be corrected. This bound is measured against
+        // the MEMBER's clock, which is the one thing here nobody controls, so it is kept as narrow as the
+        // hazard. AUDIT-9. The remaining clock question — that this drops rather than clamps, and that a slow
+        // phone therefore fails OPEN to "adult" — is tracked; it needs the same treatment on both sides at
+        // once, because console and member disagreeing is how the worst defect of the last round happened.
         if (d === 'trinityone/minors:' + pubk) { if (_ts < _sgTs.minors) return; _sgTs.minors = _ts; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
         else if (d === 'trinityone/approved:' + pubk) { if (_ts < _sgTs.approved) return; _sgTs.approved = _ts; try { approved = (JSON.parse(e.content).pubkeys) || []; } catch { approved = []; } emit(); }
         else if (d === 'trinityone/guardians:' + pubk) { if (_ts < _sgTs.guardians) return; _sgTs.guardians = _ts; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
         else if (d === 'trinityone/nophoto:' + pubk) { if (_ts < _sgTs.nophoto) return; _sgTs.nophoto = _ts; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } emit(); }
         else if (me && d === 'trinityone/clearance:' + me) {
-          if (_ts < _clrTs) return; _clrTs = _ts;
+          // NO FUTURE-DATED CLEARANCE, with the SAME bound the console uses (600s, `_CLOCK_SKEW` in
+          // src/steward.src.js). This side had none while the console rejected past +600s and the relay
+          // accepted to +900s — so in that band a clearance existed that this app APPLIED and the church's
+          // console could not see. Measured: a steward's phone 11 minutes fast wrote "not a minor" for a
+          // child, this app obeyed it, and the owner's console reported skipped=1, failed=0, no banner, for
+          // the whole skew window. Newest-wins also makes a far-future copy permanent: it pins `_clrTs` where
+          // no honest correction can reach it. Two programs that must agree cannot run different rulebooks.
+          if (_ts > Math.floor(Date.now() / 1000) + 600) return;
+          // SAME SECOND: the higher event id wins, NOT whichever arrived last. `created_at` is whole seconds,
+          // so two authorised writers colliding in one is ordinary; and a compelled relay may reorder what it
+          // serves, so "last one in" hands the decision to the adversary. Measured before this: the same two
+          // copies delivered one way made the child read "adult" and the other way "child". The console
+          // applies the identical rule (`_beatsDoc` in src/steward.src.js) — they must stay in step, because
+          // one side seeing a copy the other cannot is how the worst defect of the previous round happened.
+          if (_ts < _clrTs) return;
+          if (_ts === _clrTs && !(String(e.id || '') > _clrId)) return;
+          _clrTs = _ts; _clrId = String(e.id || '');
           try { clr = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch (x) { return; }   // sealed to me by the church
           emit();
         }

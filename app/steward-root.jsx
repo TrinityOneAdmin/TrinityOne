@@ -26,10 +26,71 @@ window.useStewardIdv = useStewardIdv;
 // which would otherwise each register 3 listeners + a 90s timer). It bumps a monotonic counter ONLY when a relay
 // this console opened has actually dropped (relaysHealthy() === false) — so a healthy socket never fires the
 // full-corpus re-query storm; a real drop (every deploy restarts the relay) re-subscribes everything once to recover.
+//
+// AND IT ONLY RE-QUERIES WHEN A RELAY HAS ACTUALLY COME BACK. HANDOFF-2026-07-31 audit.
+//
+// relaysHealthy() is now honest about a relay that has dropped (before, it could never say so — that was the
+// bug). But "unhealthy" is not a condition that always clears: relays() is multi-entry by default — the
+// canonical pair, plus any relay the steward added, plus named-relay tunnel URLs that src/steward.src.js says
+// go dead as a matter of routine. One durably unreachable entry beside a perfectly healthy primary leaves it
+// false FOR EVER, and bumping on "false" then re-downloads the entire church every 90 seconds and on every
+// return-to-foreground, permanently, over exactly the metered and censored links this product is for.
+//
+// Backing off was the first attempt and it was wrong: the reset condition ("everything healthy") is
+// unreachable in precisely the configuration the backoff was written for, so it settled at four full-corpus
+// re-queries an hour for ever AND made a genuine drop wait up to fifteen minutes to recover. Measured.
+//
+// Opening a socket is cheap. Re-querying the whole church is not. So: probe the relays that are down, and
+// re-subscribe ONLY if one actually reconnected. A relay that is never coming back now costs one failed
+// connect attempt per heartbeat and nothing else. A relay that returns — the deploy-restart case, which is
+// the common one — is picked up on the next tick and re-subscribed exactly once.
 const _connListeners = new Set();
-let _connWired = false, _connLast = 0;
+let _connWired = false, _connLast = 0, _connBusy = false;
+const _CONN_FLOOR_MS = 20000;    // don't hammer the probe on rapid foreground/visibility churn
 function _stewardHealthy() { try { return !window.Steward || !window.Steward.relaysHealthy || window.Steward.relaysHealthy(); } catch (e) { return true; } }
-function _maybeBumpConn() { if (_stewardHealthy()) return; _connLast = Date.now(); _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} }); }
+async function _maybeBumpConn() {
+  if (_connBusy) return;
+  if (_stewardHealthy()) return;                                  // nothing we depend on is missing
+  if (_connLast && Date.now() - _connLast < _CONN_FLOOR_MS) return;
+  _connBusy = true;
+  _connLast = Date.now();
+  try {
+    // TWO DIFFERENT BROKEN STATES, and they need different answers. Conflating them is how this went wrong
+    // twice — first by re-querying on any unhealthy signal (a storm), then by re-querying only when a relay
+    // came back from DOWN (which never fires for the commonest fault). AUDIT-4.
+    //
+    //   REPLACED — the socket is UP but our subscriptions died with the old one, because a drop destroys them
+    //              and the next ordinary read or write silently re-opens the connection. Nothing is listening
+    //              and nothing has re-authenticated. Re-subscribe immediately: it fixes itself and then stops,
+    //              so there is no storm to guard against.
+    //   DOWN     — the relay is unreachable. Probe it cheaply and re-subscribe ONLY if it actually came back.
+    //              A relay that is never coming back must cost one connect attempt per heartbeat, no more.
+    let replaced = false;
+    try { replaced = !!window.Steward.relaysReplaced(); } catch (e) {}
+    let back = false;
+    if (!replaced) {
+      // BOUNDED. _connBusy is the re-entry guard for the console's ONLY reconnect ticker — 90s heartbeat,
+      // visibilitychange, focus, online — and holding it across an await that never settles disables
+      // reconnection for the whole session. AUDIT-3 measured the probe still pending at 12s against a socket
+      // that accepted and then said nothing. The probe bounds itself too; this is the backstop, because a
+      // guard that can latch must never depend on someone else's timeout.
+      try {
+        back = await Promise.race([
+          window.Steward.reconnectDownRelays(),
+          new Promise(r => setTimeout(() => r(false), 15000)),
+        ]);
+      } catch (e) {}
+    }
+    // Re-subscribing issues the gated REQs that provoke the relay's NIP-42 challenge, so this is also what
+    // unlocks writing again after a drop.
+    if (replaced || back) {
+      _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
+      // Record which sockets the rebuilt subscriptions live on. Only this counts — a bare successful connect
+      // does not, because one-shot reads produce those too and leave nothing listening (AUDIT-5).
+      try { window.Steward.markResubscribed(); } catch (e) {}
+    }
+  } finally { _connBusy = false; }
+}
 function _wireStewardConn() {
   if (_connWired || typeof document === 'undefined') return; _connWired = true;
   const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - _connLast > 2500) _maybeBumpConn(); };

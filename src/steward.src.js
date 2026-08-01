@@ -13,6 +13,10 @@
 // and reads the church's own published events back (so the dashboard shows real data, and members'
 // app can read the same church profile + funds).
 import { SimplePool } from 'nostr-tools/pool';
+// The pool keys its relay map by NORMALIZED url, so relaysHealthy() has to normalise the same way or every
+// lookup misses and the health check silently answers about nothing. Use the library's own function rather
+// than a hand-rolled one, so the two can never drift.
+import { normalizeURL } from 'nostr-tools/utils';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
@@ -123,6 +127,14 @@ const NAMEKEY_D = 'trinityone/namekey:';   // per-church name key, wrapped per m
 const NAME_RING_MAX = 12;   // same bound as the care key: the ring is sealed PER RECIPIENT, so it multiplies
 const NAME_D = 'trinityone/name:';         // a member's own display name for this church, sealed under it
 const CLEARANCE_D = 'trinityone/clearance:';   // a member's OWN safeguarding status, NIP-44 sealed to them
+// memberPubHex -> { minor, cleared, at } for clearances THIS console has just published. Read-before-write
+// (refreshClearances) covers what the relay already holds; this covers the second or two before the relay has
+// echoed it back, which is exactly the window in which the toggle path and the roster back-fill collide.
+const _clearanceSent = new Map();
+const _returnAnnounced = new Map();   // url -> the relay instance whose return we have already announced
+// refreshClearances runs strictly one at a time (see the note on that method). Module scope, so the toggle
+// path and the roster back-fill share the queue even though they are called from different places.
+let _clearanceQueue = Promise.resolve();
 const GUARDIANS_D = 'trinityone/guardians:'; // safeguarding v2: church-confirmed parent↔child map, d=guardians:<churchpub>
 const GUARDNOTICE_D = 'trinityone/guardnotice:'; // safeguarding v2: church->parent NOTICE that they were linked to a child, d=guardnotice:<parentpub>, p-tagged + content NIP-44-encrypted to the parent (the child link never appears in cleartext)
 const SERMON_D = 'trinityone/sermon:';   // Phase 5 Tier 2: a self-hosted media item referencing a content-addressed blob (sha256 + host)
@@ -157,6 +169,12 @@ let _careKeyDocKeys = null;      // the envelope's wrapped-per-member map (to de
 let _careKeyRev = 0;             // envelope revision — rotation is NOT wired yet, but readers must tolerate it
 let _careKeyChecked = false;     // have we actually LOOKED for an envelope? mint gate — see (1) above
 let _careRoster = new Set();     // the church's current steward pubkeys — who may author the envelope
+// HAVE WE ACTUALLY SEEN A ROSTER, as opposed to simply not having one yet? An empty set means both, and the
+// difference decides whether a steward-authored clearance is "an author the member honours" or "nobody".
+// Reading it as the latter during the boot race turned the cross-author check off and skipped the member.
+// Set only when a roster DOCUMENT has been read — not on the React round-trip through setCareRoster, whose
+// initial value is [] and which therefore cannot distinguish the two. AUDIT-8 (2026-08-01).
+let _careRosterKnown = false;
 const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church AES-GCM media key, wrapped to each member (mirrors the group-key envelope)
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key (= ring[0])
 let _mediaKeyRing = [];                        // current key first, then superseded — rotation must never orphan an encrypted sermon
@@ -215,7 +233,7 @@ const _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
 // Does this church already have care needs on the relay? If so a care key MUST exist (a need can't be sealed
 // without one), so minting a fresh key would orphan every one of them — refuse. Only ever runs on the mint
 // path (once per church in its life), so the bounded scan is cheap. An unreachable relay returns no rows and
-// this says "no needs" — but the _relayAuthed guard has already blocked that case before we get here.
+// this says "no needs" — but the _isRelayAuthed() guard has already blocked that case before we get here.
 // GUARD FOR WHOLE-LIST REPLACEMENTS (data-integrity critical, AUDIT-2026-07-24).
 // The church's authority lists — minors, cleared adults, guardians, blocklist, admitted members, stewards —
 // are each a SINGLE replaceable document, and every edit is read-modify-write: the console takes the list it
@@ -227,8 +245,16 @@ const _byChurchOrSteward = (e) => e.pubkey === pub || _careRoster.has(e.pubkey);
 // blocked member, returns the whole congregation to "waiting for approval", or revokes every steward.
 // Fail CLOSED: refuse the write while our view is untrustworthy. A refused edit is visible and retryable; a
 // wiped safeguarding list is silent and permanent. (Sibling of the care-key mint gate above.)
+// Are we looking at a NETWORK identity rather than a church? A network has no members and no safeguarding
+// lists, and setActiveIdentity's network branch sets `pub` to the network's own key with no actingChurch — so
+// `actingChurch || pub` resolves to a key that is nobody's church. AUDIT-7: that made the clearance ranking
+// treat this console as outranking everyone including the real church key, and made the "is this copy from a
+// writer the member honours" filter compare against the wrong church entirely. The honest answer is that the
+// clearance back-fill has no business running at all in this view.
+const _viewingNetwork = () => pub !== churchPub && !actingChurch;
+
 function _requireTrustedView(what) {
-  if (_relayAuthed) return;
+  if (_isRelayAuthed()) return;
   const err = new Error('Can’t save the ' + what + ' yet — this device hasn’t finished connecting to your church’s relay, so it can’t see the current list. Wait a moment and try again.');
   try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message: err.message } })); } catch (e) {}
   throw err;
@@ -541,6 +567,70 @@ function pickRelays(offers, n) {
 }
 
 const pool = new SimplePool();
+// HANDOFF-2026-07-31 (4). Relays this console has actually TRIED to open, by normalised url. relaysHealthy()
+// needs this because nostr-tools does not record a dead relay as down — `ensureRelay` sets
+// `relay.onclose = () => this.relays.delete(url)` and `enableReconnect` is false, so a dropped relay has no
+// entry in `listConnectionStatus()` at all and `st.get(url)` is `undefined`, never `false`.
+//
+// "Tried", not "succeeded", so a relay that has never once opened still counts as unhealthy — otherwise a
+// console pointed at a relay it cannot reach sits there believing it is fine and never retries.
+//
+// The set stays EMPTY until something is attempted, which is what keeps boot healthy. That matters more than
+// it looks: the reconnect ticker fires when relaysHealthy() is false, and the steward subscriptions are broad
+// and un-cursored, so a console that reads unhealthy at boot re-queries the entire church immediately and then
+// every 90 seconds. Blind-and-quiet and storming-the-relay are the same size of bug with opposite signs.
+const _relaysTouched = new Set();
+// WHICH SOCKET OUR SUBSCRIPTIONS LIVE ON, per normalised url. AUDIT-4, and this is the load-bearing detail:
+// nostr-tools fires onRelayConnectionSuccess ONLY from its subscribe path, never from publish. So a socket
+// re-opened by an ordinary write does not advance this — which is exactly the case that used to hide the
+// fault. relaysHealthy() compares it against the live instance, so "connected again" is not mistaken for
+// "listening again".
+const _subbedOn = new Map();
+pool.onRelayConnectionSuccess = (url) => {
+  try {
+    const live = pool.relays.get(url);
+    const fresh = live && _subbedOn.get(url) !== live;
+    _relaysTouched.add(url);
+    // FIRST CONNECT ONLY. AUDIT-5: this used to record on every successful connect, and the reasoning behind
+    // that — "nostr-tools fires this only from its subscribe path, never from publish" — was true but useless,
+    // because subscribeMap backs subscribeMany/subscribeEose/querySync/get as well. So every ONE-SHOT READ
+    // (_one(), _newestByD(), a roster refresh, read-before-write itself) re-opened the socket, recorded it as
+    // "this is where we are subscribed", and then CLOSED, leaving nothing listening. The console then called
+    // itself healthy, the ticker returned at its first line, and it stayed deaf and write-locked for the
+    // session — the exact state this machinery exists to prevent, reachable by the commonest user action
+    // after a relay restart.
+    //
+    // A read must not be able to claim "we are listening here". Only the initial connect seeds this, and only
+    // markResubscribed() — called by the ticker AFTER it has actually rebuilt the subscriptions — refreshes it.
+    // Never record `undefined`: the socket can close between ensureRelay resolving and this callback, and a
+    // stored undefined short-circuits the instance comparison for that url.
+    if (live && !_subbedOn.has(url)) _subbedOn.set(url, live);
+    // A RELAY JUST (RE)CONNECTED, so what we believe is stored may be incomplete: read-before-write only ever
+    // skipped members on the strength of the relays reachable AT THE TIME, and this one may have missed
+    // writes while it was away. Drop the just-published cache so the next back-fill genuinely re-reads rather
+    // than skipping from memory. Cheap — the cache is roster-sized and only suppresses redundant writes.
+    // AUDIT-4: this is the reconciliation trigger for a relay that was down when a clearance was written.
+    // …and tell the UI, so the back-fill's session marker is released. Clearing the cache alone was not enough:
+    // stew-dashboard records a completed run against the roster signature and early-returns while it is
+    // unchanged, so a relay coming back mid-session was never reconciled until the console was reloaded. The
+    // handoff described same-session healing as something that "often will not" work; AUDIT-8 measured that it
+    // never did by itself. A returning relay is precisely when a re-check is worth doing.
+    // ONCE PER RETURN, not once per subscribe. nostr-tools calls onRelayConnectionSuccess from subscribeMap
+    // unconditionally — on every subscription, not only on a new socket — and `_subbedOn` is refreshed only by
+    // the 90s reconnect ticker. So after a single drop this fired on every chunk read, and since the listener
+    // also cleared the back-fill cooldown, read-before-write cancelled its own completion marker and looped:
+    // measured at 8 full-roster re-seals against 1. Keyed on the live relay INSTANCE, so a genuine reconnect
+    // (which creates a new AbstractRelay) announces exactly once. AUDIT-9.
+    if (fresh) {
+      _clearanceSent.clear();
+      if (_returnAnnounced.get(url) !== live) {
+        _returnAnnounced.set(url, live);
+        try { window.dispatchEvent(new CustomEvent('steward-relay-returned', { detail: { url } })); } catch (e) {}
+      }
+    }
+  } catch (e) {}
+};
+pool.onRelayConnectionFailure = (url) => { try { _relaysTouched.add(url); } catch (e) {} };
 // decode a base64url VAPID key to the Uint8Array the Push API wants
 function _b64ToU8(base64) {
   const pad = '='.repeat((4 - base64.length % 4) % 4);
@@ -556,8 +646,57 @@ let sk = null, pub = null;                 // the ACTIVE signing identity (churc
 // the envelope is a PRIVATE doc, so an unauthenticated (or unreachable) relay answers "nothing" — which is
 // indistinguishable from "this church has no key yet". Minting on that answer creates a second key generation
 // and permanently orphans everything sealed with the first. See the mint gate in ensureCareKeyForMembers.
-let _relayAuthed = false;
-pool.automaticallyAuth = () => async (authEvent) => { if (!sk) throw new Error('no key'); _relayAuthed = true; return finalizeEvent(authEvent, sk); };
+// HANDOFF-2026-07-31 (5). This used to be a single `let _relayAuthed = false` set to true on the first signed
+// challenge and NEVER cleared — observed still true with the relay killed. After a drop the pool re-subscribes
+// on a fresh, unauthenticated socket while the flag still says authed, which is precisely the window every
+// comment below warns about: a private doc is served only to an authenticated reader, so an unauthenticated
+// connection answers "nothing" for a church that HAS a key. Minting on that answer orphans every sealed name
+// or care need; writing a list on it hard-deletes the real list.
+//
+// So there is no flag to forget to reset. Record WHICH SOCKET we authenticated on, and answer the question by
+// asking the pool whether that same socket is still the live one.
+//
+// KEYED ON THE RELAY OBJECT, NOT THE URL, and this is the whole point. Auth belongs to a connection, not a
+// hostname. A url-keyed version of this shipped for an afternoon and was caught by audit: kill the relay, let
+// the pool reconnect on a REQ the gateway's lazy NIP-42 does not challenge, and the new socket has never signed
+// anything — but the url is back in listConnectionStatus() as `true`, so it reported authed again. Measured:
+//     connected = true, relayAuthed() = true, challenge never sent.
+// Every mint gate and list write is open in that state, which is the destructive direction. `ensureRelay`
+// constructs a NEW AbstractRelay after a close, so comparing object identity makes a reconnect read
+// unauthenticated until it has actually re-authed.
+//
+// Note the honest limit, unchanged from before: this records that we SIGNED the challenge, not that the relay
+// accepted it. Narrowing that further would need the relay's OK on the auth event, which nostr-tools does not
+// surface here.
+const _authedRelays = new Map();   // normalised url -> the AbstractRelay instance that signed the challenge
+pool.automaticallyAuth = (url) => async (authEvent) => {
+  if (!sk) throw new Error('no key');
+  // SIGN FIRST, RECORD SECOND. Recording before signing means recording "this relay challenged us", not "we
+  // answered" — and if signing throws, nostr-tools logs `subscribe auth function failed`, never sends the AUTH
+  // frame, and the socket stays anonymous while the console reports itself authenticated. Not hypothetical:
+  // an identifier mismatch produced exactly that during testing on 2026-07-31 — `_isRelayAuthed()` returned
+  // true on a socket that had signed nothing, and every private read came back empty as a result.
+  const signed = finalizeEvent(authEvent, sk);
+  let k = url; try { k = normalizeURL(url); } catch (e) {}
+  try { _authedRelays.set(k, pool.relays.get(k)); } catch (e) {}
+  return signed;
+};
+// Are we currently connected, on the SAME socket we authenticated on, to a relay we are actually using?
+// Ambiguity resolves to FALSE — including the catch. A spurious false makes the guards refuse a write, which is
+// visible to the steward and retryable; a spurious true silently destroys a church's keys or its safeguarding
+// list. Intersected with relays() for the same reason relaysHealthy() is: a socket to a relay this console has
+// since stopped using must not vouch for the view we are reading now.
+function _isRelayAuthed() {
+  try {
+    const st = pool.listConnectionStatus();
+    for (const url of relays()) {
+      let k = url; try { k = normalizeURL(url); } catch (e) {}
+      const authedOn = _authedRelays.get(k);
+      if (authedOn && st.get(k) === true && pool.relays.get(k) === authedOn) return true;
+    }
+    return false;
+  } catch (e) { return false; }
+}
 // AUDIT-2026-07-28 F6. Pubkeys whose uploaded photo a steward has switched off. The MEMBER app has always
 // honoured this (fellowship.src.js _avSuppressPhoto, called inside displayFor so every surface inherits it);
 // the console had no equivalent, so a photo suppressed for safeguarding still drew on the steward's own
@@ -660,6 +799,9 @@ function setKey(mnemonic) {
 // written AND READ BACK matching. A silent Keystore no-op that we "trusted" would orphan the only copy of a
 // church's key — a far worse outcome than the exposure being fixed.
 const ENC_LS = 'trinityone.steward.church-key.enc';
+// Breadcrumb: a hardware-store removal was started and has not been confirmed finished. See encBlobRemove().
+const ENC_PENDING_LS = 'trinityone.steward.church-key.removing';
+
 const _encIsMarker = (raw) => { try { const o = JSON.parse(raw); return !!(o && o.native && !o.ct); } catch { return false; } };
 // NEVER return the Capacitor plugin object itself from an async function. `Capacitor.Plugins.SecureStorage` is a
 // PROXY: every property access becomes a native call, so when the await machinery probes the returned value for
@@ -794,12 +936,21 @@ async function encBlobRaw() {
 }
 // write the blob. Returns true only if it durably landed somewhere it can be read back.
 async function encBlobWrite(str) {
+  // INTENT FIRST, synchronously. Everything after this line can be interrupted, hang, or land late. This
+  // cannot, which is why every converge pass can trust it.
+  if (_isNative()) _encIntent = { have: str };
   if (_isNative()) {
     try {
       const { S } = await _secureStore();
       await S.set(ENC_LS, str);
       const v = await S.get(ENC_LS);
-      if (v != null && String(v) === str) { lsSet(ENC_LS, JSON.stringify({ native: 1 })); return true; }   // marker ONLY after read-back
+      if (v != null && String(v) === str) {
+        // Marker and breadcrumb come from a converge pass, not from this call's belief about what it just
+        // did: an operation still in flight elsewhere may yet change what the store holds. Awaited, so the
+        // caller sees a settled device, and the answer is read back from reality.
+        await _encConverge();
+        return _encIsMarker(lsGet(ENC_LS));
+      }
       console.warn('[steward] secure key read-back mismatch — keeping the localStorage copy');
     } catch (e) { console.warn('[steward] secure key set failed — keeping the localStorage copy', e); }
   }
@@ -818,10 +969,153 @@ async function encBlobWrite(str) {
   lsSet(ENC_LS, str);   // web/desktop fallback, or native when the hardware store is unavailable
   return true;
 }
+// "Remove this church from this device" is a panic button, so its failure must be RECOVERABLE, not silent.
+//
+// The order here is load-bearing. Clearing the localStorage marker first makes encBlobRaw() short-circuit, so
+// the next boot looks clean — while the church-key ciphertext is still sitting in the Android Keystore, and
+// nothing would ever try again: encBlobRemove() is only reached from removeKey() and forgetPin(), and both
+// then find nothing to do. The caller races this against a timeout (a native bridge call can hang rather than
+// throw), so "the reload won" is a case that WILL happen.
+//
+// So: leave a breadcrumb before touching anything, and clear it only once the hardware store has actually let
+// go. A boot that finds the breadcrumb finishes the job. AUDIT-2026-07-31.
+// DECLARED INTENT + CONVERGENCE. AUDIT-6 (verified independently by a second model) found FOUR defects in the
+// previous approach, one of which produced the exact state it was written to prevent. Recorded here because
+// the shape of the mistake matters more than the individual bugs:
+//
+//   • two overlapping removals with a write between them ended with the Keystore EMPTY and the marker PRESENT
+//     — correct PIN rejected for ever, surviving a reload;
+//   • a removal that hung and landed late RESURRECTED a key the steward had deliberately removed, so
+//     "Remove this church from this device" silently did not;
+//   • the repair's own stale write could clobber a newer one, locking the steward out AND leaving a
+//     superseded ciphertext at rest.
+//
+// The root cause was the strategy, not the details. The old `_encRepairIfClobbered` tried to COMPENSATE AFTER
+// THE FACT for native calls that cannot be cancelled, reasoning only about writes (via a generation) with no
+// notion of a competing removal. Every patch in that style — add a removal generation, add another re-check —
+// shrinks the windows and keeps the shape, and there is always one more interleaving. Three audits' worth of
+// evidence says so.
+//
+// So: stop compensating, and converge instead.
+//
+//   1. INTENT is recorded synchronously the moment the steward acts: `{ have: blob }` or `{ have: null }`.
+//      It never waits on a native call, so it cannot be stale.
+//   2. EVERY native operation, whenever it lands — including long after its caller gave up — ends by calling
+//      _encConverge(), which reads what the store ACTUALLY holds, compares it to the intent, and fixes the
+//      difference.
+//   3. The marker and the breadcrumb are written from the CONVERGED state, never from one operation's belief
+//      about what it just did.
+//
+// Ordering then stops mattering, which is the property you need when calls can land in any order: a late
+// delete is undone because intent says a key is wanted; a late write is undone because intent says none is; a
+// stale write loses to the next converge. Each of the four defects becomes unreachable by construction rather
+// than by a guard someone has to remember to check.
+//
+// The invariant, fuzzed over random interleavings in scripts/console-key-secure-store.test.mjs:
+//
+//     the marker says a key exists  IFF  the hardware store holds one, AND it is the one last asked for.
+//
+let _encIntent = { have: null };        // what the steward has asked for; updated synchronously
+let _encConverging = null;              // serialises converge passes so two cannot fight each other
+
+// Bring the hardware store into line with `_encIntent`, then set the marker + breadcrumb from what is ACTUALLY
+// there.
+//
+// BOUNDED, AND SELF-RETRIGGERING — both halves are load-bearing, and the first version of this had neither:
+//
+//   • BOUNDED, because converge passes are serialised (two must not fight over the same slot) and a native
+//     bridge call can hang. Without a bound, one hung removal blocks every later operation — the steward
+//     restores a church and the write simply never completes. That trades a destructive race for a dead
+//     console, which is better but still broken. A pass that gives up releases the queue and leaves the
+//     breadcrumb, so the state is known-unfinished rather than wrong.
+//   • SELF-RETRIGGERING, because a call we stopped waiting for still LANDS eventually, and when it does it
+//     changes the store behind our back. Every native call therefore schedules another converge on settle.
+//     That is what makes a late landing self-healing instead of catastrophic: whatever it did, the next pass
+//     compares the store against the intent again and fixes the difference.
+// Function declarations, not arrow consts: the tests lift these out of the bundle by brace-matching, and a
+// `const x = (p) => …` with no braces cannot be lifted — it would silently be missing and every converge pass
+// would throw into its own catch, reporting "could not reach the store" for a perfectly healthy device.
+function _encBound(p) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('keystore call timed out')), 3000))]);
+}
+// Attach a re-converge to a native call, so a call we stopped waiting for is noticed when it finally LANDS —
+// that is what makes a late arrival self-healing rather than catastrophic.
+//
+// ON SUCCESS ONLY, and the fuzzer found out why the hard way: retriggering on rejection is an infinite loop.
+// Converge tries a write, the store refuses, the rejection schedules another converge, which tries the same
+// write... The first version did that and the random-interleaving test hung the runner outright ("Map maximum
+// size exceeded"). A failed call changed nothing, so there is nothing new to reconcile; the breadcrumb is
+// already set and a later pass or boot will try again. A successful call DID change something, and the
+// converge it schedules either finds the store already matching the intent — and stops — or fixes it.
+function _encAfter(p) {
+  try { p.then(() => _encConverge(), () => {}); } catch (e) {}
+  return p;
+}
+
+function _encConverge() {
+  const run = async () => {
+    if (!_isNative()) return;
+    const want = _encIntent.have;
+    try {
+      const { S } = await _encBound(_secureStore());
+      const read = async () => { const v = await _encBound(S.get(ENC_LS)); return v == null ? null : String(v); };
+      let actual = await read();
+      if (want && actual !== want) { await _encBound(_encAfter(S.set(ENC_LS, want))); actual = await read(); }
+      else if (!want && actual !== null) { await _encBound(_encAfter(S.remove(ENC_LS))); actual = await read(); }
+      // The marker mirrors REALITY, not intention. A marker with no blob behind it is the lockout state; a
+      // blob with no marker is a key the console cannot see. Neither is ever written here.
+      if (want && actual === want) {
+        lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+        try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+      } else if (!want && actual === null) {
+        try { localStorage.removeItem(ENC_LS); } catch {}
+        try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+      } else {
+        // Did not reach the intent. Keep the breadcrumb so a later pass or boot tries again, and never leave
+        // localStorage claiming a key the store does not hold — "no key on this device" is recoverable from
+        // the phrase; "correct PIN rejected for ever" is not.
+        try { lsSet(ENC_PENDING_LS, '1'); } catch {}
+        if (actual === null) { try { localStorage.removeItem(ENC_LS); } catch {} }
+      }
+    } catch (e) {
+      // Could not reach the store, or a call outran its bound. We know nothing for certain, so change nothing
+      // beyond guaranteeing another attempt.
+      console.warn('[steward] could not converge the church key', e);
+      try { lsSet(ENC_PENDING_LS, '1'); } catch {}
+    }
+  };
+  _encConverging = (_encConverging || Promise.resolve()).then(run, run);
+  return _encConverging;
+}
 async function encBlobRemove() {
+  // Intent first and synchronously: from this instant the steward wants no key here, whatever any in-flight
+  // native call does afterwards. The breadcrumb goes down before anything is touched, so an interrupted
+  // removal is always finishable; the marker is cleared at once so the console stops offering to unlock a
+  // church it is forgetting.
+  if (_isNative()) _encIntent = { have: null };
+  try { lsSet(ENC_PENDING_LS, '1'); } catch {}
   try { localStorage.removeItem(ENC_LS); } catch {}
-  if (!_isNative()) return;
-  try { const { S } = await _secureStore(); await S.remove(ENC_LS); } catch (e) { console.warn('[steward] secure key remove failed', e); }
+  if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return; }
+  await _encConverge();
+}
+// Finish an operation that was cut off — by the reload racing it, a hung bridge call, or the app being
+// killed. Safe on every boot: does nothing without the breadcrumb.
+async function encBlobRemoveResume() {
+  if (!lsGet(ENC_PENDING_LS)) return false;
+  if (!_isNative()) { try { localStorage.removeItem(ENC_PENDING_LS); } catch {} return false; }
+  // Module state is gone after a restart, so recover the intent from what localStorage says: a marker means a
+  // key is wanted (a completed removal clears it), no marker means none is.
+  //
+  // A marker WITH no remembered blob is the one case converge cannot serve — it knows a key is wanted but not
+  // which one, and it must never invent or delete on a guess. Stop retrying and let unlock() read the store
+  // directly; that is the honest answer, and it is what the previous three versions of this function each got
+  // wrong in a different way.
+  if (_encIntent.have === null && _encIsMarker(lsGet(ENC_LS))) {
+    try { localStorage.removeItem(ENC_PENDING_LS); } catch {}
+    return false;
+  }
+  await _encConverge();
+  return !lsGet(ENC_PENDING_LS);
 }
 // One-time move of an EXISTING native install's blob out of localStorage. Deliberately does nothing unless the
 // read-back matches, so a device whose Keystore misbehaves simply stays as it was rather than losing the key.
@@ -851,8 +1145,29 @@ async function deriveAes(pin, salt, iterations) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iterations || PIN_ITER_LEGACY, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
+// HANDOFF-2026-07-31 (1). nostr-tools does NOT reject when it cannot open the socket — SimplePool.publish
+// RESOLVES that relay's promise with the plain string `"connection failure: " + err`. A resolution satisfies
+// Promise.any, so this fell straight through to the success path: it fired steward-publish-ok, returned the
+// event, and every caller above it — clearances, the minors list, the blocklist, group keys, the name-key
+// envelope — reported SAVED while nothing had left the device. Measured with the relay killed: a 21-member
+// back-fill returned {failed: 0, total: 21}, showed no banner, stored nothing, and the dashboard then recorded
+// the back-fill as done and never retried. On a thin or flapping link the console lied about every save.
+//
+// Turn that resolution back into a rejection so Promise.any sees it for what it is. PREFIX-SPECIFIC on
+// purpose: a genuine OK also resolves with a string (the relay's reason, usually ''), so anything broader
+// would turn every successful save into a reported failure — the same lie pointing the other way. The prefix
+// is pinned against the live library in scripts/console-publish-honesty.test.mjs, because a nostr-tools bump
+// that reworded it would otherwise silently restore the bug.
+// The prefix is written inline rather than hoisted to a constant so this function stays self-contained: the
+// tests lift it out of the bundle and run it, and a name resolved from the enclosing IIFE would be undefined
+// there — a green suite proving nothing.
 async function publish(evt) {
-  try { await Promise.any(pool.publish(relays(), evt)); }
+  try {
+    await Promise.any(pool.publish(relays(), evt).map(p => p.then(v => {
+      if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      return v;
+    })));
+  }
   catch (e) {
     console.warn('[steward] publish failed', e);
     // every relay rejected — surface it so the steward isn't left wondering why nothing saved
@@ -865,6 +1180,49 @@ async function publish(evt) {
   try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
   return evt;
 }
+// TARGETED PUBLISH, for the safeguarding write path only. The shared publish() above resolves on
+// Promise.any — success as soon as ONE relay accepts — which is right for a chat message and wrong for a
+// child's safeguarding record: the console reported "saved" while two of three relays held nothing, and the
+// skip check then required the record on EVERY relay, so it rewrote the whole roster for ever without ever
+// telling anyone which relay was the problem. AUDIT-8.
+//
+// Deliberately NOT a change to publish() itself, which has 77 call sites across Finance, groups, profile and
+// invites. Rewriting the semantics of every write in the console days before a pilot is how a codebase that
+// already specialises in silent failures acquires more of them. This path is where the harm is; this path is
+// what changes.
+//
+// Returns the event only when EVERY targeted relay accepted. A partial write returns false, which puts the
+// member into the unconfirmed list and sends them through the verify read — where the truth is established by
+// looking rather than asserted by the writer.
+async function _publishToRelays(evt, urls) {
+  // CONNECTED, not configured. With the all-must-accept rule below, targeting every CONFIGURED relay means a
+  // single unreachable one makes `accepted < targets.length` for every member, always — a full-roster
+  // safeguarding alarm while every record is safely stored. That is not hypothetical: CANONICAL_RELAYS ships a
+  // tailnet address no ordinary steward's phone can route to, and the fallback fires whenever the read could
+  // not run — which is the whole window after any socket reconnect, and every toggle, since _reseal has no
+  // auth gate. AUDIT-9. Falling back to `relays()` only when nothing is connected keeps a fully-offline
+  // console reporting honestly rather than silently doing nothing.
+  const live = _connectedRelays();
+  const targets = (urls && urls.length) ? urls : (live.length ? live : relays());
+  if (!targets.length) return false;
+  let rs = [];
+  try {
+    rs = await Promise.allSettled(pool.publish(targets, evt).map(p => p.then(v => {
+      if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      return v;
+    })));
+  } catch (e) { return false; }
+  const accepted = rs.filter(r => r.status === 'fulfilled').length;
+  if (!accepted) {
+    let reason = '';
+    try { const f = rs.find(r => r.status === 'rejected'); reason = (f && f.reason && (f.reason.message || String(f.reason))) || ''; } catch (x) {}
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    return false;
+  }
+  try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
+  return accepted === targets.length ? evt : false;
+}
+
 // resolve the signing key for a chosen publishing identity. asPub === church pub (or empty) -> church key;
 // asPub === an owned network's pub -> that network's key (so the doc is authored by the network).
 function skFor(asPub) {
@@ -899,6 +1257,322 @@ function _one(filters, ms = 4000) {
   });
 }
 
+// One-shot read per d-tag, keeping TWO events per document: the newest we wrote (`ours`) and the newest from
+// anyone at all (`top`). Both are needed because a replaceable event is keyed by (pubkey, kind, d), so the
+// church's copy of a member's clearance and a steward's copy are separate documents that never collide — and
+// the member's app applies whichever is newest across all of them. A reader that keeps only its own copy is
+// asking "did I write what I meant to", when the question is "does the member see what I meant".
+// Returns a Map d -> event.
+// Bounded like _one: an unanswered relay must not hang the caller. HANDOFF-2026-07-31 item 7.
+// Resolves { byD, complete }. `complete` is the important half: it says whether the relay actually finished
+// answering (EOSE) or whether we simply stopped waiting. Without it a slow link looks identical to an empty
+// relay — and callers then read "this record is absent" from what is really "I don't know yet". That is the
+// same mistake as treating an unauthenticated read as proof of absence, one level down, and it produced a
+// false "6 of 8 children did not receive their record" on a satellite link where every record had landed.
+// `topOk` decides which events may occupy the `top` slot. It MUST be applied while choosing the maximum, not
+// afterwards. AUDIT-8: `top` used to be the newest event from ANY author, filtered for authorship by the
+// caller once the maximum had already been taken — so a single newer event from a key the member ignores
+// DISPLACED the copy that mattered, the caller then discarded it, saw nothing on top, and skipped the member.
+// No adversary is needed: a since-removed steward's copy is still stored and still served, and roster churn
+// produces those routinely. The member's app has never had this bug — src/fellowship.src.js:2560 rejects
+// unhonoured authors BEFORE its newest-wins comparison — so the console was going blind to exactly the copy
+// the child's phone was applying.
+// WHICH OF TWO COPIES WINS. Newer second wins; on an EQUAL second the higher event id wins. `created_at` is
+// whole seconds, so a collision between two authorised writers is ordinary — and this product's threat model
+// grants a compelled relay the ability to REORDER what it serves, so "whichever arrived last" hands the
+// decision to the adversary. The member's app applies the identical rule (src/fellowship.src.js, the clearance
+// branch). They must stay identical: changing one side alone re-opens the divergence in the other direction,
+// which is exactly how the worst defect of the previous round happened. AUDIT-9.
+const _beatsDoc = (a, b) => {
+  if (!b) return true;
+  const aa = a.created_at || 0, bb = b.created_at || 0;
+  if (aa !== bb) return aa > bb;
+  return String(a.id || '') > String(b.id || '');
+};
+
+function _newestByD(filters, ms = 6000, urls = null, mineHex = null, topOk = null) {
+  return new Promise((resolve) => {
+    const best = new Map();
+    let done = false;
+    const finish = (complete) => { if (done) return; done = true; try { sub.close(); } catch {} resolve({ byD: best, complete: !!complete }); };
+    const sub = pool.subscribeMany(urls || relays(), filters, {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d) return;
+        const cur = best.get(d) || { ours: null, top: null };
+        const at = e.created_at || 0;
+        if ((!topOk || topOk(e)) && _beatsDoc(e, cur.top)) cur.top = e;
+        if (mineHex && e.pubkey === mineHex && _beatsDoc(e, cur.ours)) cur.ours = e;
+        best.set(d, cur);
+      },
+      oneose() { finish(true); },
+      // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER. nostr-tools arms its own EOSE timer and calls
+      // `oneose` when it expires, whether or not the relay ever sent the frame (lib/esm/index.js:1035, default
+      // `baseEoseTimeout` 4400ms). AUDIT-8 measured it: a relay that accepts the REQ and then says nothing for
+      // ever was recorded as `complete: true` after 4421ms, and a dead port after 3ms. Every caller that reads
+      // `complete` as "the relay finished answering" was therefore reading a lie — including the skip gate the
+      // previous commit added for exactly this reason. Pushing the library's timer well past our own bound
+      // means an EOSE arriving inside `ms` is a real one.
+      // RESIDUAL, deliberately left: `handleClose` calls `handleEose` first, so a relay that CLOSEs the
+      // subscription (e.g. refusing an oversized filter) still reports complete. subscribeMany overwrites any
+      // `onclose` we pass, so closing that needs a direct `relay.subscribe`. Tracked in the backlog.
+      maxWait: ms + 5000,
+    });
+    setTimeout(() => finish(false), ms);
+  });
+}
+
+// WOULD THE MEMBER'S APP APPLY THIS COPY? Everything the member ignores, we must ignore too, or a relay can
+// manufacture a disagreement out of nothing — one validly-signed event per member from a keypair with no
+// roster seat, never stored, merely SERVED, and the console republishes the whole roster every visit for ever.
+// Mirrors src/fellowship.src.js:2560-2577: the church key, or a CURRENT roster steward, and nothing else.
+//
+// The future-date guard is applied on BOTH sides as of AUDIT-8. It used to be here only, which made this
+// console blind to precisely the copy a clock-skewed phone had pinned: the relay accepts created_at up to
+// +900s, this console rejected past +600s, and the member's app had no bound at all. In that band the child
+// applied a copy the console could not see, and the console reported a clean run.
+//
+// UNKNOWN ROSTER IS NOT AN EMPTY ROSTER. `_careRoster` arrives asynchronously, and the back-fill does not wait
+// for it. Treating "not loaded yet" as "this author is nobody" made every steward-authored copy invisible, so
+// the console skipped — and because that run reported no failures it claimed the session's back-fill marker
+// and nothing retried. Default-deny: until we have actually seen a roster document we must assume the member
+// might honour this author, and answer it. Rewriting a copy we did not need to is cheap and self-correcting;
+// skipping one we did need to leaves a child reading "adult" indefinitely.
+function _memberHonours(e, churchHex) {
+  if (!e || _authFuture(e)) return false;
+  if (((e.tags.find(t => t[0] === 'church') || [])[1] || '') !== churchHex) return false;   // another church's document
+  if (e.pubkey === churchHex) return true;
+  return _careRosterKnown ? _careRoster.has(e.pubkey) : true;
+}
+
+// Is there a copy on top of ours that we have to answer? `rec.top` is already restricted to copies the member
+// would honour (see _memberHonours, passed into _newestByD as the top-slot predicate), so the only questions
+// left are whether it is someone else's and whether it is newer.
+function _topWeMustAnswer(rec, ours) {
+  const top = rec && rec.top;
+  if (!top || top.pubkey === ours.pubkey) return null;
+  // `<=` treated a SAME-SECOND copy as invisible, while the member's app accepted it — so a steward key
+  // stamping the church's own second was applied by the child's phone and never seen by the console, which
+  // reported skipped, 0 failed, no banner. Same rule both sides now.
+  if (!_beatsDoc(top, ours)) return null;
+  return top;
+}
+
+// Who wins when two authorised writers disagree about a member's clearance. The member's app takes the NEWEST,
+// so without a rule two consoles chase each other: each sees the other's copy on top, rewrites to get back on
+// top, and the next visit from the other console does the same — a full-roster rewrite per visit, for ever,
+// which is exactly the load read-before-write exists to remove.
+//
+// So the rule is by AUTHOR, not by clock, and it is asymmetric on purpose: a console only rewrites over a
+// newer copy it OUTRANKS. The church key outranks every steward — minors: and approved: are owner-only
+// documents (scripts/gateway.mjs:1206), so the owner's console is the authority by construction and a
+// steward's is only ever mirroring. Between two stewards the hex pubkey breaks the tie: arbitrary, but stable,
+// and stable is the whole requirement — exactly one of the pair gives way.
+//
+// AUDIT-8 RESTORED THIS as the only rule, reverting the version stamp that briefly replaced it. The stamp said
+// "whoever derived their copy from the newer safeguarding list wins", which is the right INSTINCT and the
+// wrong INSTRUMENT: the stamp was a public tag the writer chose for itself, checked by nobody. Measured, both
+// halves failed. A steward key writing sv=4102444800 outranked the church for ever, with the owner's console
+// reporting a clean run; and because two consoles reading the same relay derive the SAME stamp, the ordinary
+// equal case fell through to "concede", so whoever wrote last won by accident.
+//
+// This rule is correct while the church key is the only legitimate writer, which is what the console actually
+// permits today (app/stew-dashboard.jsx:3293 and :3496 keep a delegated console out of safeguarding entirely).
+// When delegated stewards are given safeguarding properly, the referee must be the RELAY — which holds the
+// minors: list and can refuse a clearance derived from a stale revision — and not a number the writer asserts
+// about itself. See reference/BACKLOG.md.
+function _clearanceOutranks(a, b, churchHex) {
+  if (a === b) return false;
+  if (a === churchHex) return true;
+  if (b === churchHex) return false;
+  return String(a) > String(b);
+}
+// The relays we are CURRENTLY connected to. Read-before-write asks each of them separately, because "some
+// relay has it" is not the invariant a church needs — see the note in _refreshClearancesNow.
+// Do these members ALREADY hold a clearance matching what we would write — on every relay we can reach?
+//
+// Returns `{ matching, wrong, needBy }`, or NULL meaning "could not check". Null and an empty `matching`
+// must never be confused: the empty set says "we looked and nobody has it", null says "we could not look".
+// Treating the second as the first is the mistake that has cost this codebase a care key once already, and it
+// is the whole reason read-before-write is gated on an authenticated read.
+//
+//   matching — settled EVERYWHERE, and proven so by a finished read on every relay. The only safe skip.
+//   wrong    — our copy is present and its CONTENT is wrong. The only thing worth alarming about.
+//   needBy   — relay url -> the members missing or wrong ON THAT RELAY. Drives targeted writes, so a member
+//              already correct on two of three relays is written only to the third.
+//
+// There is deliberately no whole-roster "definitive" flag any more. It was one global boolean covering every
+// member on every relay, so a single unfinished chunk on a single relay disabled every skip in the church and
+// the console rewrote the lot. Completeness is now carried per member, which is what makes a partial read
+// usable rather than worthless.
+//
+// Used twice, deliberately sharing one implementation: to SKIP redundant writes before publishing, and to
+// VERIFY before telling a steward that a child did not receive their record. Two copies of this logic would
+// drift, and the second copy is the one that decides whether a safeguarding alarm is true.
+async function _clearancesMatching(pubs, wantFor) {
+  if (!pubs.length || !sk || !_isRelayAuthed() || _viewingNetwork()) return null;
+  const readFrom = _connectedRelays();
+  if (!readFrom.length) return null;
+  try {
+    const ds = pubs.map(p => CLEARANCE_D + String(p).toLowerCase());
+    let mine = pub; try { mine = getPublicKey(sk); } catch (e) {}
+    // The read bound is DERIVED too, and generously: this is the read that decides whether a steward is told
+    // children lost their safeguarding record, and it runs on exactly the link that just struggled to write.
+    // A flat 6s left satellite still alarming — the writes had landed, and the check to prove it timed out.
+    // Too short here does not fail safe; it manufactures the very alarm the check exists to prevent.
+    const readMs = (pool.maxWaitForConnection || 3000) + 9000;
+    // NO `authors` FILTER. Reading only our own copy answers the wrong question. Measured: the owner marks a
+    // child, a steward's console then runs a back-fill from a roster view that has not caught up and writes
+    // its own copy saying "not a minor", and the owner's next visit reads its own copy, finds exactly what it
+    // intended, and skips — reporting 1 skipped, 0 failed, no banner, while the child's phone reads "not a
+    // minor" and nothing will ever retry. The console was checking its own work; the member reads the newest
+    // copy from ANY authorised writer.
+    const churchHex = actingChurch || pub;
+    // The top-slot predicate is applied WHILE choosing the newest, never after — see _newestByD and
+    // _memberHonours. Filtering afterwards let one newer copy from an author the member ignores displace the
+    // copy that mattered, leaving the console to conclude nothing was on top at all.
+    // CHUNKED, because the budget has to grow with the church. One question about the whole roster got ONE
+    // fixed ~12s window, while the work grows with the membership: at ~390 bytes a record on an 8 kB/s link
+    // that window cannot cover 200 people, ever. And the answer was all-or-nothing — a read that did not
+    // finish authorised no skips at all, so the console rewrote the ENTIRE roster. AUDIT-8 measured 190 kB per
+    // visit at 200 members, permanently, against 178 kB for a complete rewrite from scratch: the optimisation
+    // that exists to avoid rewriting everything ended up rewriting everything, plus the cost of asking first.
+    //
+    // Each chunk gets its own window, so the budget scales; and completeness is tracked PER MEMBER, so a chunk
+    // that does finish is usable even when a later one times out. Sorted, so chunk N is the same people every
+    // visit — the relay returns matched events oldest-first, so chunking in arrival order would re-truncate
+    // whichever half was rewritten last time and leave the same members permanently unverified.
+    const CHUNK = 60;
+    const sorted = [...ds].sort();
+    const slices = [];
+    for (let i = 0; i < sorted.length; i += CHUNK) slices.push(sorted.slice(i, i + CHUNK));
+    const perRelay = await Promise.all(readFrom.map(async (u) => {
+      const byD = new Map(), covered = new Set();
+      for (const slice of slices) {
+        let r = null;
+        try { r = await _newestByD([{ kinds: [30078], '#d': slice }], readMs, [u], mine, (e) => _memberHonours(e, churchHex)); }
+        catch (x) { r = null; }
+        if (!r) continue;                                   // this chunk is simply unknown on this relay
+        for (const [k, v] of r.byD) byD.set(k, v);
+        if (r.complete) for (const d of slice) covered.add(d);   // only a FINISHED chunk proves an absence
+      }
+      return { url: u, byD, covered };
+    }));
+    // DEFAULT-DENY. The per-member loop below decides by NOT finding a reason to object, so an empty
+    // `perRelay` would settle — and therefore skip — every member on the roster. `readFrom.length` above makes
+    // that unreachable today; this makes it unreachable by construction, which is the standard this codebase
+    // holds every other read gate to. AUDIT-7 (carried from AUDIT-5, where it was noted and left).
+    if (!perRelay.length) return null;
+    const ok = new Set();
+    // WHICH RELAYS IS THIS MEMBER MISSING FROM. The write path used to be all-or-nothing in the other
+    // direction: publish() succeeds when ANY relay accepts, while the skip required the record on EVERY relay.
+    // So one relay that acknowledged writes but never served them back disabled skipping for the whole church,
+    // silently, and the console rewrote every member to every relay on every visit. Now each member is written
+    // only where they are actually missing.
+    const needBy = new Map(readFrom.map(u => [u, new Set()]));
+    // TWO QUESTIONS, NOT ONE. Folding them into a single boolean is the defect AUDIT-7 found in the previous
+    // commit, and it produced the exact false banner this branch exists to remove:
+    //
+    //   "should I write this member?"          — yes if our copy is missing, wrong, or beneath a STALER one.
+    //   "does this member HAVE their record?"  — a different question with a different answer, because a copy
+    //                                            from another authorised writer sitting on top of ours is an
+    //                                            excellent reason to rewrite and NO reason to raise an alarm.
+    //
+    // Measured with the two conflated: an owner and one delegated steward holding the SAME correct view, the
+    // steward's copies on top — "3 of 3 members did not receive their updated safeguarding record", while all
+    // three children read correctly on their phones throughout.
+    const wrong = new Set();     // our copy is present and its CONTENT is wrong — the only DEFINITE failure
+    const minorBad = new Set();  // …and specifically the MINOR field is wrong for someone who IS a child
+    let scanned = 0;
+    for (const p of pubs) {
+      const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
+      // ONE ECDH PER MEMBER, not one per member per relay. The conversation key depends only on (our key, this
+      // member), so recomputing it inside the relay loop multiplied the cost by the relay count for nothing.
+      // AUDIT-8 measured secp256k1 ECDH at 4.37ms/op on a workstation: a 400-member roster across 3 relays was
+      // 5.3 SECONDS of unbroken main thread, and 17.6s at 800 members across 5 — on a cheap Android, several
+      // times worse. Hoisting it removes the relay factor outright; the yield below removes the freeze.
+      // LAZY. Hoisting this out of the relay loop removed the per-relay multiplier, but it also moved it ABOVE
+      // the "did we even find our copy" check — so a church's FIRST back-fill, where the relay holds nothing,
+      // paid 400 ECDH operations to decrypt records that do not exist. Measured at 400 members: 34ms before
+      // the hoist, 1760ms after. Computed once per member, on first actual use. AUDIT-9.
+      let ck = null, ckBad = false;
+      const conv = () => { if (ck || ckBad) return ck; try { ck = nip44ck(sk, h); } catch (x) { ckBad = true; } return ck; };
+      let settled = true, contentWrong = false, knownEverywhere = true;
+      for (const { url, byD: held, covered } of perRelay) {
+        const rec = held.get(key);
+        const e = rec && rec.ours;
+        let needHere = false;
+        // DID THIS RELAY ACTUALLY FINISH ANSWERING ABOUT THIS MEMBER? Asked FIRST, and unconditionally.
+        // AUDIT-9: this used to live inside the `if (!e)` branch below — a branch that also sets
+        // `needHere = true` and therefore `settled = false`. So `knownEverywhere` could only ever be false
+        // when `settled` was already false, which made `if (settled && knownEverywhere)` identical to
+        // `if (settled)` and the completeness requirement dead code. The case it exists for is the exact
+        // opposite one: our copy IS present and correct, nothing objects, and the read simply never got far
+        // enough to reveal the competing copy sitting on top of it. The relay serves matched events
+        // oldest-first, so what a cut-short chunk loses is precisely the NEWEST events — the ones a skip
+        // asserts do not exist. Reproduced: owner's copy delivered and perfect, a seated steward's "not a
+        // minor" withheld by the truncation, member skipped, nothing retried, child's phone reads adult.
+        if (!covered.has(key)) knownEverywhere = false;
+        // NO `break` ON ABSENCE. Leaving the loop at the first relay that lacks our copy means a later relay
+        // holding a WRONG one is never decrypted — so whether a definite loss got the definite wording came
+        // down to which relay answered first. AUDIT-8 measured it: our copy absent on A and wrong on B
+        // reported `wrong=0` asked as [A,B] and `wrong=1` asked as [B,A], same data both runs. Absence is
+        // "unknown" and must not stop us looking for proof elsewhere.
+        if (!e) {
+          // Absent on a FINISHED chunk is genuinely not there; absent on a truncated one is merely unknown.
+          // Either way it is worth writing: one write to a relay we are unsure about is cheap, and leaving a
+          // child without their record is not.
+          needHere = true;
+        } else {
+          let got = null;
+          const k = conv();
+          if (!k) { needHere = true; }   // cannot open our own copy at all — rewrite it
+          else try { got = JSON.parse(nip44d(e.content, k)); } catch (x) { needHere = true; contentWrong = true; }
+          if (!needHere) {
+            const w = wantFor(p);
+            // TWO FIELDS, AND ONLY ONE OF THEM IS ABOUT BEING A CHILD. The banner's "their app will treat them
+            // as an adult" was fired for ANY content mismatch — so a 16-year-old youth helper whose `minor`
+            // was stored correctly and only whose youth clearance was stale had the console announce that
+            // their phone did not know they were a child. It did. Track the minor field separately so the
+            // claim is only made about people it is actually true of. AUDIT-9.
+            const minorWrong = !got || !!got.minor !== !!w.minor;
+            if (minorWrong || !!got.cleared !== !!w.cleared) {
+              needHere = true; contentWrong = true;
+              if (minorWrong && w.minor) minorBad.add(h);
+            }
+            else {
+              // Our copy is right. But the member's app applies the NEWEST copy from any authorised writer,
+              // and we cannot open theirs — it is sealed with THEIR conversation key with the member, not
+              // ours. We can only decide whether it is ours to overrule.
+              const top = _topWeMustAnswer(rec, e);
+              if (top && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) needHere = true;
+            }
+          }
+        }
+        if (needHere) { settled = false; const n = needBy.get(url); if (n) n.add(h); }
+      }
+      // A SKIP NEEDS BOTH: nothing to correct anywhere, and a finished read everywhere to prove it. Carried
+      // per member rather than as one global flag, which is what makes a partial read usable — under the old
+      // whole-roster flag a single unfinished chunk on a single relay disabled every skip in the church.
+      if (settled && knownEverywhere) ok.add(h);
+      if (contentWrong) wrong.add(h);
+      // Let the console breathe — with a REAL yield. `await null` resolves in a microtask, and the microtask
+      // queue drains before the event loop turns, so the loop stayed one unbroken task and the comment claimed
+      // the opposite of what the code did. Measured over 400 iterations: with `await null`, ZERO timer
+      // callbacks ran during the loop; with a 0ms timer, 16 did. AUDIT-9.
+      if ((++scanned % 25) === 0) await new Promise(r => setTimeout(r, 0));
+    }
+    return { matching: ok, wrong, minorBad, needBy };
+  } catch (e) { return null; }
+}
+
+function _connectedRelays() {
+  try {
+    const st = pool.listConnectionStatus();
+    return relays().filter(u => { let k = u; try { k = normalizeURL(u); } catch (e) {} return st.get(k) === true; });
+  } catch (e) { return []; }
+}
+
 // Sequence for locally-minted event ids. Date.now() is identical across ids minted in one tick, so
 // uniqueness rested on the random tail alone — 36^4 for the member app, 36^5 for the console. Measured:
 // negligible at the scale these are actually used (0.004% for a dozen ids in one tick), but 2.6% for a
@@ -924,6 +1598,11 @@ window.Steward = {
   // PIN-setup modal whenever this is true.
   needsPin: false,
   init(mnemonicOverride) {
+    // Finish any hardware-store removal that was cut off — by the reload racing it, a hung native call, or the
+    // app being killed. Fire-and-forget and a no-op without the breadcrumb, so it costs a boot nothing; but
+    // without it, "Remove this church from this device" can leave the church key in the Keystore for ever with
+    // nothing left to notice. AUDIT-2026-07-31.
+    try { encBlobRemoveResume(); } catch (e) {}
     if (mnemonicOverride) {
       // test hook — keep behaviour but force PIN setup so an injected key never persists plaintext past first boot
       lsSet(KEY_LS, mnemonicOverride); setKey(mnemonicOverride);
@@ -1319,7 +1998,6 @@ window.Steward = {
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false; window.Steward.locked = false;
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
     return done;
-    return true;
   },
 
   // ---- web push: notify the steward's phone when someone joins (PWA only; Capacitor → local notifs) ----
@@ -1542,7 +2220,7 @@ window.Steward = {
     // sermon with it and REPLACED the envelope — every previously-encrypted sermon then undecryptable by the
     // church and every member, permanently. Refuse to mint on an untrustworthy read (fail closed: the steward
     // sees "try again in a moment"; the alternative is silent, unrecoverable loss of the church's archive).
-    if (!_mediaKeyHex && !_relayAuthed) throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key. Wait a moment and try again.');
+    if (!_mediaKeyHex && !_isRelayAuthed()) throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key. Wait a moment and try again.');
     if (!_mediaKeyHex) { _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32))); _mediaKeyRing = [_mediaKeyHex]; }
     const keys = {}; const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
     const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
@@ -1574,7 +2252,7 @@ window.Steward = {
   // already downloaded is theirs, and no key change alters that.
   async rotateMediaKey(memberPubs) {
     if (!sk || !pub) return false;
-    if (!_relayAuthed) return false;                              // never act on an untrusted view (see the mint gate)
+    if (!_isRelayAuthed()) return false;                          // never act on an untrusted view (see the mint gate)
     if (!_mediaKeyHex) return false;                              // no key yet — mediaEncryptor mints the first
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const ring = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 12);
@@ -1625,7 +2303,7 @@ window.Steward = {
       // notes and recipient are unrecoverable. Both guards below fail CLOSED: refusing to mint leaves a
       // visible, recoverable error ("care key hasn't reached this device"), whereas minting wrongly destroys
       // data silently.
-      if (!_relayAuthed) return false;                        // (1) never conclude "no key" from an unauthenticated read
+      if (!_isRelayAuthed()) return false;                    // (1) never conclude "no key" from an unauthenticated read
       if (await _churchHasCareNeeds()) return false;          // (2) needs exist → a key MUST exist; minting would orphan them
       _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
       _careKeyRing = [_careKeyHex];
@@ -1675,7 +2353,7 @@ window.Steward = {
   async rotateCareKey(memberPubs, stewardPubs) {
     const cp = actingChurch || pub;
     if (!sk || !cp || !churchPub) return false;
-    if (!_careKeyChecked || !_relayAuthed) return false;      // same trusted-view rule as minting
+    if (!_careKeyChecked || !_isRelayAuthed()) return false;  // same trusted-view rule as minting
     if (!_careKeyHex) return false;                            // nothing to rotate yet — ensureCareKeyForMembers mints the first
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const ring = [fresh, ...(_careKeyRing.length ? _careKeyRing : [_careKeyHex])].slice(0, 12);   // keep a bounded history
@@ -1689,12 +2367,23 @@ window.Steward = {
   },
   // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
   // from "the relay didn't serve it to us" before doing anything destructive. See _requireTrustedView.
-  relayAuthed() { return _relayAuthed; },
+  relayAuthed() { return _isRelayAuthed(); },
 
   careKeyChecked() { return _careKeyChecked; },
   // the console feeds the live steward roster in, so the envelope's author check stays current when a
   // steward is revoked (a revoked steward's envelope must stop being accepted, same as their content)
-  setCareRoster(list) { _careRoster = new Set((list || []).filter(Boolean)); _reCheckCareKeyPending(); },   // roster just changed — adopt any buffered envelope it now verifies
+  // roster just changed — adopt any buffered envelope it now verifies.
+  // An EMPTY list from this entry point is ignored once the engine's own subscription has read a real roster
+  // (see subscribeStewards). The caller is a React effect whose hook starts at [] and re-fires [] on every
+  // remount, so an empty list here means "I have nothing yet" far more often than "this church has no
+  // stewards" — and blanking the roster silently switches off the check that decides whether another writer's
+  // copy is one the member honours. A genuine removal arrives through the subscription, which does set it
+  // empty. AUDIT-8.
+  setCareRoster(list) {
+    const next = new Set((list || []).filter(Boolean));
+    if (next.size || !_careRosterKnown) _careRoster = next;
+    _reCheckCareKeyPending();
+  },
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
     if (!pub) return () => {};
@@ -1710,8 +2399,102 @@ window.Steward = {
   // true if every relay this console has opened is still connected. The console's reconnect ticker only
   // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
   // subs are broad + un-cursored, so blindly re-REQing every 90s would re-download the whole church every 90s).
+  // HANDOFF-2026-07-31 (4). This used to ask only `st.get(url) === false`, which a dead relay never is: the
+  // pool DELETES it from the map on close, so its status is `undefined`. The console therefore reported itself
+  // healthy with every socket gone, the ticker never fired, and nothing re-subscribed — measured as a Members
+  // list frozen at 6 while a 7th member joined, recoverable only by reloading.
+  //
+  // The rule is "a relay we have actually opened (or tried to) is not currently connected". Only relays still
+  // in relays() are considered, so one the steward has REMOVED cannot pin the console unhealthy for ever.
+  // Try to re-open every relay we EXPECT to be connected to and are not. Returns true only if at least one
+  // actually came back — which is the only thing that justifies re-subscribing.
+  //
+  // AUDIT-2026-07-31. The reconnect ticker used to re-subscribe whenever relaysHealthy() was false, and
+  // relaysHealthy() is an AND over every url in relays(). One durably-unreachable entry — a stale named-relay
+  // tunnel, a blocked canonical relay on a censored network — therefore made it re-download the entire church
+  // every 90 seconds, for ever. Adding a backoff only slowed that to four times an hour and made a GENUINE
+  // drop wait up to fifteen minutes, because the reset condition ("everything healthy") was unreachable in
+  // exactly the configuration it was written for.
+  //
+  // Opening a socket is cheap; re-querying the whole church is not. So probe first and re-subscribe only on
+  // success. A relay that is never coming back costs one failed connect attempt per heartbeat and nothing
+  // else; a relay that returns is picked up on the next tick.
+  async reconnectDownRelays() {
+    let back = false;
+    try {
+      const st = pool.listConnectionStatus();
+      // In PARALLEL. Sequentially, a slow or stalled relay delays — and previously blocked entirely — every
+      // relay listed after it, so a healthy relay could never be recovered because a dead one came first.
+      const probes = [];
+      for (const url of relays()) {
+        let k = url; try { k = normalizeURL(url); } catch (e) {}
+        if (st.get(k) === true) continue;             // already up
+        if (!_relaysTouched.has(k)) continue;         // never opened — ordinary subscription will handle it
+        // BOUNDED, and this is not optional. ensureRelay() only arms its timer when a timeout is passed
+        // (AbstractRelay.connect), and every other pool path passes pool.maxWaitForConnection — this was the
+        // one connect in the codebase without one. A middlebox that accepts the socket and says nothing, or a
+        // dropped SYN, then leaves this await pending for ever. AUDIT-3 measured it still hanging at 12s while
+        // an ordinary subscription gave up at 1.5s. The caller holds a re-entry flag across this await, so one
+        // stalled probe silently disables the console's ONLY reconnect ticker for the rest of the session —
+        // which is HANDOFF finding 4, the exact bug this whole mechanism exists to close, restored by its fix.
+        //
+        // Raced independently of the connect as well: a promise that never settles cannot be fixed by a
+        // parameter alone if a future nostr-tools drops the option.
+        const timeout = pool.maxWaitForConnection || 3000;
+        probes.push(Promise.race([
+          pool.ensureRelay(k, { connectionTimeout: timeout }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('probe timed out')), timeout + 500)),
+        ]).then(() => { back = true; }, () => {}));
+      }
+      await Promise.all(probes);
+    } catch (e) {}
+    return back;
+  },
+  // Is a relay CONNECTED but on a different socket than the one our subscriptions were established on? That
+  // is the "deaf but connected" state, and it is distinct from "a relay is down": re-subscribing fixes it
+  // immediately and then stops. Kept separate from relaysHealthy() so the ticker can tell the two apart — a
+  // relay that is simply DOWN must not trigger a re-subscribe on every heartbeat, which is the storm. AUDIT-4.
+  // The ticker calls this immediately after bumping, once it has caused every subscription hook to rebuild.
+  // That is the ONLY thing allowed to say "our subscriptions now live on these sockets" — see the note on
+  // onRelayConnectionSuccess for why a bare successful connect is not evidence of that.
+  markResubscribed() {
+    try {
+      for (const url of relays()) {
+        let k = url; try { k = normalizeURL(url); } catch (e) {}
+        const live = pool.relays.get(k);
+        if (live) _subbedOn.set(k, live);
+      }
+    } catch (e) {}
+  },
+  relaysReplaced() {
+    try {
+      const st = pool.listConnectionStatus();
+      for (const url of relays()) {
+        let k = url; try { k = normalizeURL(url); } catch (e) {}
+        const on = _subbedOn.get(k);
+        if (on && st.get(k) === true && pool.relays.get(k) !== on) return true;
+      }
+      return false;
+    } catch (e) { return false; }
+  },
   relaysHealthy() {
-    try { const st = pool.listConnectionStatus(); for (const url of relays()) { if (st.get(url) === false) return false; } return true; } catch (e) { return true; }
+    try {
+      const st = pool.listConnectionStatus();
+      for (const url of relays()) {
+        let k = url; try { k = normalizeURL(url); } catch (e) {}   // the pool's map is keyed normalised
+        const s = st.get(k);
+        if (s === false) return false;                              // present and reporting down
+        if (s !== true && _relaysTouched.has(k)) return false;      // we had this one open; now it is gone entirely
+        // CONNECTED IS NOT LISTENING. A drop destroys every subscription, and the next ordinary read or write
+        // re-opens the socket — so the url reads connected while nothing is subscribed on it and nothing has
+        // re-authenticated. Asking only "is a socket open?" reported that as healthy, which left the console
+        // deaf to new members AND refusing every safeguarding write with "wait a moment and try again", for
+        // the rest of the session. Compare the INSTANCE our subscriptions were established on. AUDIT-4.
+        const on = _subbedOn.get(k);
+        if (on && pool.relays.get(k) !== on) return false;          // same url, different socket
+      }
+      return true;
+    } catch (e) { return true; }
   },
   subscribeSermons(onSermons) {
     if (!pub) { onSermons([]); return () => {}; }
@@ -1995,7 +2778,7 @@ window.Steward = {
     // encrypted group — minted whenever `key` was missing, and `_skeys` is populated only when the envelope has
     // arrived. Adding a member before it landed re-keyed the group and orphaned every prior message in it,
     // permanently. A missing key is only safe to interpret as "new group" once we've had an authenticated read.
-    if (!opts.rotate && !key && !_relayAuthed) return Promise.resolve(null);
+    if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
     // ROTATION KEEPS THE OLD KEYS. Replacing the ring with one fresh key is what made a block erase the group's
     // whole readable history on every phone — _decEvt drops what it cannot open, so the messages simply vanish.
     // Carry the superseded keys along, newest first, exactly as the care key does. AUDIT-2026-07-27.
@@ -2114,8 +2897,9 @@ window.Steward = {
   // children to the whole congregation — the relay no longer serves `minors:` to ordinary members, and joining
   // an open-join church is a single self-signed publish, so that list was one frame away from any stranger.
   // AUDIT-2026-07-27. Church-tagged so the relay can check the author is that church or one of its stewards.
-  publishClearance(memberPub, status) {
-    if (!sk) return Promise.resolve(null);
+  publishClearance(memberPub, status, urls) {
+    if (!sk || _viewingNetwork()) return Promise.resolve(null);   // a network identity has no members
+    if (urls && !urls.length) return Promise.resolve(null);   // read says every relay already holds it: nothing to do
     const mp = toPubHex(memberPub) || memberPub;
     if (!/^[0-9a-f]{64}$/i.test(mp || '')) return Promise.resolve(null);
     const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
@@ -2127,7 +2911,46 @@ window.Steward = {
     // in every church. A safeguarding regression created by the change meant to protect them. The test missed
     // it by hand-building the event WITH the tag instead of calling this function. AUDIT-2026-07-27.
     const cp = actingChurch || pub;
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }));
+    // A REFUSED CLEARANCE IS A FAILURE, INCLUDING THE TIE-BREAK ONE. HANDOFF-2026-07-31 (2) proposed treating
+    // the relay's "a newer version of this is already stored" as success, on the grounds that the relay must
+    // then hold something at least as new. That was implemented, audited, and REVERTED on 2026-07-31 — the
+    // reasoning is wrong in a way that costs a child their clearance:
+    //
+    //   • The tie-break compares created_at, not CONTENT. `created_at` is whole seconds and the relay accepts
+    //     up to 900s of clock skew (scripts/event-store.mjs), so a steward whose phone clock runs fast can
+    //     write {minor:false} and win against the correct {minor:true} that follows. Reproduced: the correct
+    //     write came back have-newer, the run reported failed:0, no banner, and — because the back-fill records
+    //     a clean run as done — nothing ever retried. The child's app reads "not a minor". event-store.mjs says
+    //     it plainly: a future-dated doc "can NEVER be corrected — an honest-timestamped fix is rejected as
+    //     'have-newer', pinning the stale state".
+    //   • The string is free text chosen by the relay (scripts/gateway.mjs:3720), not a NIP-01 signal. Under
+    //     this product's threat model — a seized or compelled relay — accepting it as proof that a child's
+    //     safeguarding record is stored hands an adversary a way to suppress every clearance and have the
+    //     console report a clean save.
+    //
+    // Counting it as a failure is noisy and self-healing: the banner fires, the marker is not recorded, and the
+    // next Members visit retries with a fresh created_at that wins cleanly. Noisy beats silently wrong here.
+    // The COLLISION ITSELF is removed at source by refreshClearances' read-before-write (item 7), so a
+    // tie-break refusal is now a rare, genuine signal rather than routine noise.
+    // NO VERSION STAMP. A public ['sv', …] tag naming the safeguarding-list revision this copy came from was
+    // added and then removed: the writer chose the number itself and nobody checked it, so it decided the
+    // ranking in favour of whoever asserted the largest value. It also told any reader of the relay the exact
+    // second a church last edited its list of children, and told the member themselves — a fact the read gate
+    // deliberately withholds from them. When delegated stewards get safeguarding, the revision check belongs
+    // on the RELAY, which holds the list and can refuse a stale write outright. AUDIT-8.
+    return Promise.resolve(_publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }), urls))
+      .then(r => {
+        // Remember what we just put on the wire, so a second writer moments later can tell it is redundant
+        // WITHOUT waiting for the relay to echo it back. The read-before-write below closes the steady-state
+        // case; this closes the sub-second one, which is the common one: toggleMinor() calls _reseal for the
+        // member AND changes the safeguarding list, and the list echoing back re-runs the whole-roster
+        // back-fill — both writing this same doc inside one second.
+        // Record WHICH relays this write covered. The 15s skip below is a sub-second-collision guard, and
+        // once writes are targeted a member written to relay A must not have their relay-B write suppressed
+        // by a cache that only remembers "we wrote this member". `urls: null` means the full fan-out.
+        if (r) { try { _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now(), urls: (urls && urls.length) ? urls.slice() : null }); } catch (e) {} }
+        return r;
+      });
   },
   // Refresh the sealed clearance for a set of members — called whenever either safeguarding list changes, so a
   // member's own copy never lags the church's. Best-effort per member: one failure must not block the rest.
@@ -2143,39 +2966,236 @@ window.Steward = {
   // So: publish in small batches, paced under the cap, and never let the failure be quiet again. The batch
   // is awaited, which gives back-pressure for free; the wait is bounded so one publish that never resolves
   // (exactly what a dropped message looks like) cannot stall the rest of the roster.
-  async refreshClearances(memberPubs, minors, approved) {
+  // READ BEFORE WRITE. HANDOFF-2026-07-31 item 7 — the cure for everything findings 2 and 3 were patching.
+  //
+  // Two parts of the console write the SAME clearance doc within one second, routinely: toggleMinor() calls
+  // _reseal() for the member it touched, and it also changes the safeguarding list, which echoes back from the
+  // relay, changes the effect's signature, and re-runs the WHOLE-ROSTER back-fill. `created_at` is whole
+  // seconds, so both land in the same one and the relay refuses the loser on its NIP-01 tie-break. That
+  // refusal was being shown to the steward as "this child did not receive their safeguarding record" —
+  // measured at 8 of 12 toggles, with all 21 records actually stored, on a warning banner that has no dismiss
+  // timer. Alarm fatigue on the safeguarding screen is the harm: a REAL delivery failure looks identical.
+  //
+  // Two earlier attempts patched the symptom. Treating the refusal as success let a fast clock pin a child as
+  // an adult, silently and permanently (reverted). Guarding the double-fire helped but left the toggle path,
+  // which is the dominant source. The actual problem is that the console republishes documents it has no
+  // reason to send — 21 identical seals on every Members visit — so this stops sending them.
+  //
+  // The church can read its own clearances back: nip44 conversation keys are symmetric, so the same key that
+  // sealed it opens it. Fetch what the relay holds, decrypt, and skip every member whose {minor, cleared}
+  // already matches. A repeat Members visit becomes a no-op, the collision disappears at source, and a
+  // tie-break refusal goes back to meaning something.
+  //
+  // FAIL-SAFE DIRECTION, and this is the part that matters: a member is skipped ONLY on a positive match — we
+  // read a document, decrypted it, and it says what we were about to say. Anything else — no document, an
+  // unreachable relay, an unauthenticated read, a decrypt failure, unparseable content — falls through and
+  // publishes exactly as before. Never skip on an empty answer; that is the mistake that has cost this
+  // codebase a care key and nearly cost a child their clearance.
+  //
+  // AND IT RUNS ONE AT A TIME. Read-before-write only helps if the read can see the other writer's work, and
+  // the two writers here start together: toggleMinor() fires _reseal and changes the list in the same tick, so
+  // both runs read the OLD state, both conclude the member needs updating, and both publish into the same
+  // second. Measured: read-before-write alone took the false banner from 8 toggles in 12 down to 1 in 4 — the
+  // remainder being exactly this overlap. Queueing removes it: the second run reads after the first has
+  // written and finds nothing to do. Cheap, because in steady state that second run is now a no-op.
+  refreshClearances(memberPubs, minors, approved) {
+    const run = () => window.Steward._refreshClearancesNow(memberPubs, minors, approved);
+    // Never let one run's rejection break the chain for every later caller.
+    const next = _clearanceQueue.then(run, run);
+    _clearanceQueue = next.then(() => {}, () => {});
+    return next;
+  },
+  async _refreshClearancesNow(memberPubs, minors, approved) {
+    // A NETWORK VIEW HAS NO MEMBERS, so there is nothing to back-fill and nothing to report. Without this the
+    // refusal cascaded into a false alarm: publishClearance returns null here, every member landed in
+    // `unconfirmed`, _clearancesMatching also refuses, and the run ended with failed === roster and a
+    // "couldn't confirm the record saved" banner about people who do not exist in this view. Found by the
+    // AUDIT-8 test written to cover _viewingNetwork — which nothing had exercised, because all three harnesses
+    // set `pub === churchPub` and the guard was constant-false.
+    if (_viewingNetwork()) return { results: [], failed: 0, skipped: 0, total: 0, unverified: false };
     const mins = new Set((minors || []).map(x => String(x || '').toLowerCase()));
     const appr = new Set((approved || []).map(x => String(x || '').toLowerCase()));
-    const pubs = [...new Set((memberPubs || []).filter(Boolean))];
+    let pubs = [...new Set((memberPubs || []).filter(Boolean))];
     const BATCH = 20, GAP_MS = 250;   // ≤80/s, comfortably under the relay's 100/s per-connection cap
+    // Derived from the timeouts it actually contains, not a round number. 8000ms was racing a worst case of
+    // maxWaitForConnection (3000) + the relay's publishTimeout (4400) = 7400ms — a coin flip on a slow link,
+    // and every lost toss became a false "this child did not receive their record". Still bounded, because a
+    // dropped message produces a promise that never settles and one of those must not stall the roster.
+    let _pubMs = 4400; try { _pubMs = (pool.relays.values().next().value || {}).publishTimeout || 4400; } catch (e) {}
+    const _BATCH_MS = (pool.maxWaitForConnection || 3000) + _pubMs + 3000;
     const out = [];
-    let failed = 0;
+    let failed = 0, skipped = 0, pending = 0;
+    const unconfirmed = [];   // written but not acknowledged — verified below before anyone is alarmed
+    const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h) }; };
+    const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared;
+
+    // (a) Anything this console itself put on the wire in the last few seconds, still identical. Covers the
+    //     sub-second toggle race without depending on how fast the relay echoes.
+    const total = pubs.length;
+    const fresh = Date.now() - 15000;
+    const connNow = _connectedRelays();
+    pubs = pubs.filter(p => {
+      const sent = _clearanceSent.get(String(p).toLowerCase());
+      // Only a write that reached EVERY relay we can currently see earns the skip. A targeted write covered
+      // the relays that needed it at the time; a relay that has since reconnected still needs this member.
+      const coversAll = sent && (!sent.urls || connNow.every(u => sent.urls.indexOf(u) !== -1));
+      if (sent && sent.at >= fresh && same(sent, want(p)) && coversAll) { skipped++; return false; }
+      return true;
+    });
+
+    // (b) …and anything the relay already holds with the right answer. Bounded and wrapped: a read that fails
+    //     for ANY reason must leave every member in the publish list.
+    // Only read when we KNOW the read is trustworthy. A clearance is a private doc, so an unauthenticated
+    // connection is served an empty answer identical to "this church has no record" — and the relay's NIP-42
+    // challenge is lazy, so a fresh socket may still be anonymous when this runs. We never skip on an empty
+    // answer, so an unauthenticated read is merely useless rather than dangerous; gating it keeps the
+    // behaviour DETERMINISTIC instead of depending on whether the challenge round-trip beat the EOSE. Measured
+    // without this: the same test collided on some runs and not others.
+    //
+    // EVERY RELAY WE CAN REACH, ASKED SEPARATELY — not a union. AUDIT-4 measured the union version losing a
+    // child's record permanently: publish() succeeds via Promise.any as soon as ONE relay accepts, so with
+    // relay B down the doc lands on A alone; the next visit reads the union, sees it on A, and skips the
+    // member — so B never receives it, on that visit or any later one. Before read-before-write existed the
+    // unconditional republish healed that by accident. Measured: `stored on A 3/3, stored on B 0/3`, still
+    // 0/3 after a retry visit from a fresh console. A member whose phone reads B then finds no clearance,
+    // falls back to the minors: list the relay will not serve them, and is treated as an adult.
+    //
+    // Currently-CONNECTED relays rather than all configured ones: a relay that is down cannot be written to
+    // either, so holding it against the skip would just disable read-before-write for the whole outage — the
+    // write amplification back at exactly the moment the link is worst. The residual is that a relay which
+    // was down at write time still needs reconciling when it returns; that is what the _clearanceSent clear
+    // on a connection change below is for, and a full per-relay outbox is the real cure.
+    const already = await _clearancesMatching(pubs, want);
+    // A SKIP REQUIRES A FINISHED READ, and the comment that used to sit here — "a partial read simply proves
+    // less, so the worst it can do is republish" — was true until read-before-write started asking whether
+    // anyone ELSE's copy sits on top of ours. That makes a skip rest on a NEGATIVE: "no newer copy from
+    // another writer exists", which is precisely what a read cut short cannot establish. `matching` now
+    // carries that requirement per member, so a chunk that finished is usable even when a later one did not.
+    if (already) {
+      pubs = pubs.filter(p => { if (already.matching.has(String(p).toLowerCase())) { skipped++; return false; } return true; });
+    }
+    // WRITE ONLY WHERE IT IS MISSING. `needBy` says which relays actually lack each member's record, so a
+    // member already correct on two of three relays costs one write, not three. Falls back to every connected
+    // relay when the read could not run at all — with no information, writing everywhere is the safe default.
+    const targetsFor = (h) => {
+      if (!already || !already.needBy) return null;                 // no read: publish the normal way
+      const urls = [];
+      for (const [u, set] of already.needBy) if (set.has(h)) urls.push(u);
+      return urls;
+    };
+
     for (let i = 0; i < pubs.length; i += BATCH) {
       const slice = pubs.slice(i, i + BATCH);
       const settle = Promise.allSettled(slice.map(p => {
         const h = String(p).toLowerCase();
-        return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) });
+        return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }, targetsFor(h));
       }));
+      // NOTHING TO WRITE, AND NOTHING TO CONFIRM. A member can be correct on every relay we heard from while
+      // the read still did not finish — so they are not skippable (an unfinished read cannot prove no newer
+      // copy exists) and yet there is no write to make. Publishing to nobody returns null, and null used to
+      // mean "unconfirmed", which sent a perfectly healthy member into the verify read and, on a poor link,
+      // into a "we couldn't check whether the record saved" banner about a write that was never attempted.
+      // Count them as PENDING instead: no write, no alarm, and — via `pending` in the result — no completion
+      // marker either, so the next Members visit genuinely re-checks them. AUDIT-9; this became reachable only
+      // once the completeness guard started working.
+      slice.forEach(p => { const t = targetsFor(String(p).toLowerCase()); if (t && !t.length) pending++; });
       // A dropped message produces a promise that never settles, so an unbounded await here would hang the
       // whole back-fill on the first one — turning a partial failure into a total one.
-      const rs = await Promise.race([settle, new Promise(r => setTimeout(() => r(null), 8000))]);
-      if (!rs) { failed += slice.length; } else {
+      const rs = await Promise.race([settle, new Promise(r => setTimeout(() => r(null), _BATCH_MS))]);
+      // UNCONFIRMED, not failed. Everything below is a member whose write we did not see acknowledged — which
+      // is not the same as a member who did not receive their record, and conflating the two is what makes the
+      // safeguarding banner cry wolf on every real connection (measured: 3 of 8 reported lost on 2G, 6 of 8 on
+      // satellite, with every record actually stored). They are checked after the loop.
+      if (!rs) { unconfirmed.push(...slice); } else {
         out.push(...rs);
-        failed += rs.filter(r => r.status === 'rejected' || r.value === false || r.value === null).length;
+        rs.forEach((r, k) => {
+          const t = targetsFor(String(slice[k]).toLowerCase());
+          if (t && !t.length) return;                       // pending, not unconfirmed — see above
+          if (r.status === 'rejected' || r.value === false || r.value === null) unconfirmed.push(slice[k]);
+        });
       }
       if (i + BATCH < pubs.length) await new Promise(r => setTimeout(r, GAP_MS));
+    }
+    // VERIFY BEFORE ALARMING. A write we did not see acknowledged is not a child who did not receive their
+    // record — on a slow link it is usually a confirmation that arrived after we stopped waiting. So go and
+    // LOOK before saying anything: read the unconfirmed members back and keep only the ones genuinely missing
+    // or wrong. Measured before this: 3 of 8 reported lost on 2G and 6 of 8 on satellite, with every record
+    // actually stored, on a banner that has no dismiss timer. Alarm fatigue on the safeguarding screen is the
+    // harm — a real failure then looks identical and gets waved away.
+    //
+    // `unverified` is the third answer and it must stay distinct from the other two. If the link is too poor
+    // to read back, we do NOT know, and both "they failed" and "they are fine" would be lies. Never treat it
+    // as fine: an unverifiable answer is the one this codebase has mistaken for good news before.
+    let unverified = false, lost = 0, lostKids = 0;
+    if (unconfirmed.length) {
+      const landed = await _clearancesMatching(unconfirmed, want);
+      if (!landed) { failed = unconfirmed.length; unverified = true; } else {
+        const missing = unconfirmed.filter(p => !landed.matching.has(String(p).toLowerCase()));
+        failed = missing.length;
+        // WHAT KIND OF "MISSING" IS THIS? Three kinds, and only one of them is a lost record.
+        //
+        //   read it back and the CONTENT is wrong — definite. Say so plainly; this is what the banner is for.
+        //   the read found NOTHING                — unknown. The write we are checking never confirmed, so it
+        //                                           may still be in flight; a read that overtakes it gets an
+        //                                           honest EOSE from a relay that has genuinely not received
+        //                                           it YET. Measured on satellite: 7 of 8 reported lost, every
+        //                                           one stored moments later.
+        //   somebody else's copy is on top        — unknown, and NOT a failure. We rewrite it because we can
+        //                                           see it was written from an older view of the lists, not
+        //                                           because we know it is wrong; we cannot read it at all.
+        //                                           Conflating this with the first told an owner "3 of 3
+        //                                           members did not receive their record" while all three
+        //                                           children read correctly on their phones. AUDIT-7.
+        const lostPubs = missing.filter(p => landed.wrong.has(String(p).toLowerCase()));
+        lost = lostPubs.length;
+        // Not "is a child" — "is a child whose stored record gets that WRONG". An undecryptable copy is a
+        // definite failure but tells us nothing about what it says, so it never reaches this count.
+        lostKids = lostPubs.filter(p => landed.minorBad && landed.minorBad.has(String(p).toLowerCase())).length;
+        unverified = failed > lost;
+      }
     }
     // NOT SILENT. The whole point of a clearance is that a child's own app knows it is a child; a back-fill
     // that half-worked and said nothing is how they were treated as adults for a day.
     if (failed) {
       try {
-        window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'safeguarding clearances',
-          message: failed + ' of ' + pubs.length + ' members did not receive their updated safeguarding record. '
-            + 'Until they do, their app cannot tell that they are a child. Open the Members tab again while '
-            + 'connected to your relay to retry.' } }));
+        // TWO COUNTS, ONE INSTRUCTION. A run can produce both answers at once and the softer one must not speak
+        // for the definite one — with a single flag, a member whose record was read back and found WRONG was
+        // reported as "may well have saved" because someone else in the same run had merely not been seen.
+        //
+        // AUDIT-8 fixed what the sentences SAY. Two things were untrue as written:
+        //   - "their app cannot tell that they are a child" was printed for ADULTS. The back-fill writes a
+        //     record for every member on the roster, so `lost` counts adults whose "not a minor" record failed
+        //     just as readily as children. Being wrong about who is a child is the exact harm this whole path
+        //     exists to prevent, so the banner must not do it either. The child sentence is now conditional on
+        //     there actually being children among them.
+        //   - "1 of 1 members" — the single-child toggle is the commonest case of all, and it read as broken
+        //     English every time.
+        // The instruction is given ONCE at the end rather than in both halves, where it read as two different
+        // actions ("to retry" vs "to check") for the same tap.
+        // Counts lead, nouns follow, so nothing has to agree with a number that changes: "1 of 8 people" reads
+        // correctly for every value, where "1 person ... have" does not.
+        // A roster of one is the commonest case of all — it is what marking a single child produces — and
+        // "1 of 1 people" read as broken English every time it fired.
+        const who = (k) => total === 1 ? 'this person' : k + ' of ' + total + ' people';
+        const kids = total === 1
+          ? ' \u2014 they are marked as a child, so their app will treat them as an adult'
+          : lostKids === 1
+            ? ' \u2014 1 of them is marked as a child, so their app will treat them as an adult'
+            : ' \u2014 ' + lostKids + ' of them are marked as children, so their apps will treat them as adults';
+        const soft = 'we couldn\u2019t check whether the record saved for ' + who(failed - lost)
+          + ' \u2014 the connection dropped before your church\u2019s relay replied. '
+          + (total === 1 ? 'It may well be fine.' : 'They may well be fine.');
+        const hard = 'the wrong record is saved for ' + who(lost) + (lostKids ? kids : '') + '.';
+        const message = 'Safeguarding: '
+          + (!lost ? soft : (unverified ? hard + ' And ' + soft : hard))
+          + ' Reopen Members while connected to your relay to try again.';
+        window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'safeguarding clearances', message } }));
       } catch (e) {}
     }
-    return { results: out, failed, total: pubs.length };
+    // `total` is the ROSTER, not what we ended up publishing — the steward counts people, not writes. `skipped`
+    // is the members already holding the right record; it is the measure of how much work read-before-write
+    // saved, and on a healthy repeat visit it should equal `total`.
+    return { results: out, failed, skipped, total, unverified, pending };
   },
   // ── congregation name key ────────────────────────────────────────────────────────────────────────────────
   // A member's display name is what turns a pubkey into a person. Published in the clear it gave the relay —
@@ -2189,7 +3209,7 @@ window.Steward = {
     const cp = actingChurch || pub;
     // (1) NEVER act on a view we have not established. "The relay returned no envelope" is not proof that none
     // exists — the envelope is private, so an unauthenticated or unreachable relay gives the same empty answer.
-    if (!_nameKeyChecked || !_relayAuthed) return Promise.resolve(null);
+    if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);
     let ring = _nameKeyRing.slice();
     // (2) An envelope EXISTS and we are not in it: the church owner must add us. Minting here is what a
     // DELEGATED console did — it can never read the owner's envelope (its own key was not a recipient), so it
@@ -2500,9 +3520,27 @@ window.Steward = {
         if (e.created_at < latest) return; latest = e.created_at;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) cur = [];
         else { try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; } }
+        // Adopt it HERE, not only via the UI's setCareRoster round-trip. The safeguarding back-fill needs to
+        // know who the member honours, and it does not wait for React: the roster hook starts at [] and only
+        // fills on the first emit, so a console that reached Members first judged every steward-authored copy
+        // as unauthored-by-anyone and skipped the member. The engine's own subscription is the earliest honest
+        // moment this is knowable. AUDIT-8.
+        _careRoster = new Set(cur.filter(Boolean));
+        _careRosterKnown = true;
         onList(cur);
       },
-      oneose() { onList(cur); },
+      oneose() {
+        // "WE ASKED AND THERE IS NO ROSTER" IS KNOWABLE, and it is the ordinary state of a single-owner pilot
+        // church. Setting `_careRosterKnown` only from an event meant such a church NEVER learned it had no
+        // stewards, so _memberHonours fell back to "any author might be honoured" for ever — which reinstates
+        // the seized-relay amplification AUDIT-7 closed: one forged clearance per member from an unrostered
+        // key is admitted to the top slot and the console republishes the whole roster on every visit. The
+        // member's app ignores that author, so it is invisible write amplification. Gated on an authenticated
+        // read, because an unauthenticated one is served an empty answer indistinguishable from "no roster".
+        // AUDIT-9.
+        try { if (_isRelayAuthed()) _careRosterKnown = true; } catch (e) {}
+        onList(cur);
+      },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -3118,6 +4156,17 @@ window.Steward = {
       try { sk = privateKeyFromSeedWords(rec.mnemonic); pub = getPublicKey(sk); actingChurch = ''; } catch { return false; }
     }
     lastProfile = {}; _profileLoaded = false;   // don't carry one identity's profile fields — or its loaded-ness — into the other's edits
+    // The just-published clearance cache is per-CHURCH and must not survive the switch either: it is keyed by
+    // member pubkey alone, so a member who belongs to both churches could be skipped for the wrong one within
+    // its 15s window — and church B would never receive their clearance. Same family as the name-key note
+    // below; that one cost church B's members the key to every sealed name. AUDIT-4.
+    _clearanceSent.clear();
+    // The steward roster is per-CHURCH and decides which authors a member honours. Carried across a switch, it
+    // judged church B's clearances against church A's stewards — admitting writers B never appointed and
+    // dismissing the ones it did. Cleared to UNKNOWN rather than empty, so the back-fill defaults to answering
+    // a competing copy instead of silently skipping it until B's own roster arrives. AUDIT-8, same family as
+    // the name-key note below.
+    _careRoster = new Set(); _careRosterKnown = false;
     // The name key is per-church and MUST NOT survive an identity switch. It was a bare module global, and
     // subscribeNameKey is mounted once with an empty dependency list, so switching from your own church to one
     // you steward carried church A's ring across — and the roster effect then published it as church B's name
@@ -3134,7 +4183,7 @@ window.Steward = {
     window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch } }));
     return true;
   },
-  isViewingNetwork() { return pub !== churchPub && !actingChurch; },
+  isViewingNetwork() { return _viewingNetwork(); },
   isDelegated() { return !!actingChurch; },
   // discover churches whose owner-signed roster lists OUR key → we can act as their steward. Re-emits on change.
   subscribeStewardedChurches(cb) {

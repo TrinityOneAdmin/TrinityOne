@@ -157,6 +157,13 @@ function useRealMemberCount() {
 
 function PublishErrorBanner() {
   const [msg, setMsg] = React.useState('');
+  // SAFEGUARDING GETS ITS OWN SLOT. One shared `msg` meant last-event-wins across every producer — the generic
+  // publish error, Finance, block, join policy, _requireTrustedView — with no queue and no severity. AUDIT-8
+  // measured the consequence in the live console: with the safeguarding warning up, one ordinary
+  // `steward-publish-error` replaced it inside 400ms, and that replacement carries a 9s auto-clear, so the
+  // steward ended with silence. The link that produces the safeguarding banner is exactly the link that
+  // produces generic publish errors, so the child-safety message was the one most likely to be evicted.
+  const [sgMsg, setSgMsg] = React.useState('');
   React.useEffect(() => {
     const f = (e) => {
       const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '');
@@ -168,17 +175,55 @@ function PublishErrorBanner() {
     // `steward-write-blocked` had been fired for a while by _requireTrustedView and by Finance, and was
     // listened to NOWHERE — so the refusals the code believed were "visible and retryable" reached no screen
     // at all. Same banner, same dismiss, and these stay put: a refused write is always actionable.
-    const g = (e) => { const d = e.detail || {}; clearTimeout(f._t); setMsg(d.message || ('That change to the ' + (d.what || 'church') + ' could not be saved.')); };
+    const g = (e) => {
+      const d = e.detail || {};
+      const text = d.message || ('That change to the ' + (d.what || 'church') + ' could not be saved.');
+      if (d.what === 'safeguarding clearances') { setSgMsg(text); return; }
+      clearTimeout(f._t); setMsg(text);
+    };
     window.addEventListener('steward-publish-error', f);
     window.addEventListener('steward-write-blocked', g);
     return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
   }, []);
-  if (!msg) return null;
+  if (!msg && !sgMsg) return null;
+  // role="alert" + aria-live so a screen reader ANNOUNCES it. The console's only failure banner was the one
+  // surface in this codebase without it — app/ui.jsx, app/screens-today.jsx and app/stew-meals.jsx all get it
+  // right — so a TalkBack user got nothing at all when a child-safeguarding warning appeared. The dismiss
+  // button was a bare 15px icon measured at 27x17, below the WCAG 2.5.8 minimum of 24x24 and far below the
+  // 44x44 a cheap Android phone needs; padded out with a negative margin so it keeps its visual size.
+  const card = (text, key, clear, tone) => (
+    <div key={key} role="alert" aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
+      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
+      <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{text}</div>
+      <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
+        style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 14, margin: -14 }}><Icon name="x" size={16} /></button>
+    </div>
+  );
+  // BELOW the header, not over it. Absolutely positioned at top:12 the card covered the entire tab strip at
+  // 360px — measured with elementFromPoint, every control including the Members tab the message tells you to
+  // open. `top: 64` clears the header, and pointerEvents:none on the wrapper means the gap either side of the
+  // card stays clickable rather than swallowing taps on whatever is behind it.
+  // …and it must never EAT THE PAGE. In flow with `flexShrink: 0` the card consumed real height, and the
+  // scrolling content region (flex:1, minHeight:0) absorbed all of it: measured at 360x520 the content region
+  // was 38px tall and entirely below the fold — a volunteer saw the header, the tabs, and a wall of pink text,
+  // with zero church content. Capped and scrollable instead, so a long message never costs more than 40% of a
+  // short screen. AUDIT-9.
+  //
+  // …and it must still outrank MODALS. Moving it into flow dropped its stacking context: every console modal
+  // is a full-viewport overlay with a dim + blur at z-index 50-220, so the banner was painted underneath them,
+  // greyed and untappable. That is not a safeguarding-only problem — FinanceShareStatement and the first-run
+  // wizard both publish while their modal is still open, so a relay refusal explained itself behind a blur.
+  // 240 clears the highest overlay (220). AUDIT-9 caught this by comparing against the base commit.
+  //
+  // IN FLOW, NOT OVER THE TOP. Absolutely positioned it covered the entire tab strip at 360px — measured with
+  // elementFromPoint: every control including the Members tab the message tells you to open. Rendered as a
+  // normal row between the header and the scrolling content, it pushes the page down instead, so the one
+  // action the text asks for stays reachable while the warning is up. AUDIT-8.
   return (
-    <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 140, maxWidth: 560, width: 'calc(100% - 32px)', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
-      <Icon name="bolt" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
-      <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{msg}</div>
-      <button onClick={() => setMsg('')} title="Dismiss this message" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} /></button>
+    <div style={{ flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' }}>
+      {sgMsg ? card(sgMsg, 'sg', () => setSgMsg(''), 'sg') : null}
+      {msg ? card(msg, 'gen', () => setMsg(''), 'gen') : null}
     </div>
   );
 }
@@ -831,7 +876,7 @@ function StewDashboard({ initial = 'overview' }) {
         {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
         <MemberChatDock />
-        <PublishErrorBanner /><JoinNotifier /><KeyDistributor />
+        <JoinNotifier /><KeyDistributor />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
@@ -855,6 +900,7 @@ function StewDashboard({ initial = 'overview' }) {
               })}
             </div>
           </div>
+          <PublishErrorBanner />
           <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
             {content}
           </div>
@@ -869,7 +915,7 @@ function StewDashboard({ initial = 'overview' }) {
       {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
-        <PublishErrorBanner /><JoinNotifier /><KeyDistributor />
+        <JoinNotifier /><KeyDistributor />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
@@ -915,6 +961,7 @@ function StewDashboard({ initial = 'overview' }) {
             <div style={{ flex: 1 }} />
             {actions}
           </div>
+          <PublishErrorBanner />
           {/* content */}
           <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
             {content}
@@ -3227,6 +3274,27 @@ window.BulkInviteModal = BulkInviteModal;
 // (These files are classic scripts sharing ONE global scope, so this name must stay unique across app/*.jsx;
 // scripts/bundle-free-globals.test.mjs is the guard.)
 let clearanceBackfillDone = '';
+// When a back-fill last FAILED. HANDOFF-2026-07-31 audit. Releasing the claim on failure (below) is what keeps
+// a partial back-fill retryable — but the effect's deps are fresh array identities on every roster emit, so
+// without a cooldown the next emit restarts the whole thing at once. Before fix 4, an offline publish() lied
+// `failed: 0` and this stayed quiet; now that it tells the truth, an open Members tab on a down link would
+// re-seal and re-publish the entire roster in a continuous loop. Measured in audit: 4 roster emits, 4 full
+// runs. At 500 members that is ~500 NIP-44 seals and ~25s of paced publishing per cycle, on a cheap phone with
+// no connection — the exact device and the exact link this product is built for.
+let clearanceBackfillFailedAt = 0;
+// A RELAY CAME BACK, so what the last run verified is no longer the whole picture: it skipped members on the
+// strength of the relays reachable AT THE TIME, and this one may have missed writes while it was away.
+// Releasing the session marker lets the next Members visit re-read and repair, instead of early-returning on
+// an unchanged roster signature until the console is reloaded. AUDIT-8 measured same-session healing never
+// happening without this. Registered once at module scope, not per mount, so it survives tab switches.
+// NOTE it releases the completion marker ONLY. Zeroing `clearanceBackfillFailedAt` as well removed the single
+// brake on the hot loop this very cooldown was added to stop — measured at 8 full-roster re-seals where the
+// pre-change behaviour did 1, on exactly the flapping thin link this product is built for. Releasing the
+// marker is already enough to force the next Members visit to re-read. AUDIT-9.
+try { window.addEventListener('steward-relay-returned', () => { clearanceBackfillDone = ''; }); } catch (e) {}
+
+let clearanceBackfillLastSig = '';   // which signature that failure belonged to — a CHANGED roster skips the wait
+const CLEARANCE_RETRY_MS = 60000;
 
 function DashMembers() {
   // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
@@ -3285,12 +3353,41 @@ function DashMembers() {
     const sig = [window.Steward.churchPub || '', (sg.minors || []).join(','), (sg.approved || []).join(','),
       members.map(m => m.pubkey).sort().join(',')].join('|');
     if (clearanceBackfillDone === sig) return;   // idempotent: the roster re-emits on every tick
-    // Record only on FULL success. Marking it done up-front is what would turn a truncated back-fill into a
-    // permanent one — the members who got nothing would never be retried.
+    // CLAIM THE SIGNATURE SYNCHRONOUSLY, before anything is awaited. HANDOFF-2026-07-31 (3).
+    // The claim used to live in the `.then()` below, on the reasoning that recording it only on FULL success
+    // stops a truncated back-fill from being remembered as complete. That reasoning is right and is preserved
+    // — by GIVING THE CLAIM BACK on failure, a few lines down — but putting the only write after the await
+    // left the guard blind for the entire duration of a run, and a run takes at least GAP_MS (250 ms) per
+    // batch. The effect's deps are fresh array identities on every roster emit, so a second emit lands inside
+    // that window: measured on the device as two full-roster back-fills 96 ms apart, [[228,21],[324,21]].
+    //
+    // That double-fire caused both of the day's visible symptoms. `created_at` is whole seconds, so both runs
+    // stamp the same second for most members and the relay refuses the loser on its NIP-01 tie-break — and
+    // those refusals were shown to the steward as children who did not receive their safeguarding record.
+    // Worse, the marker is only recorded when `failed === 0`, which the duplicate run made impossible, so it
+    // was NEVER recorded: every Members visit re-sealed and republished the whole roster, permanently.
+    //
+    // Keyed on `sig` rather than a bare in-flight flag, so a roster that genuinely changes mid-run is a
+    // different signature and still gets its own back-fill.
+    // Not straight after a failed run. The release below makes a partial back-fill retryable; this stops that
+    // becoming a hot loop on a link that is simply down. A steward who wants it sooner can leave the tab and
+    // come back after the cooldown, and a genuinely-changed roster is a different signature — which SKIPS this,
+    // because a new child marked while offline must not wait a minute to be sealed.
+    if (clearanceBackfillFailedAt && Date.now() - clearanceBackfillFailedAt < CLEARANCE_RETRY_MS
+        && sig === clearanceBackfillLastSig) return;
+    clearanceBackfillLastSig = sig;
+    clearanceBackfillDone = sig;
     const roster = members.map(m => m.pubkey);
+    // Give the claim back if the run did not fully land, so the next Members open retries. Only ever clear our
+    // OWN claim: if the roster moved on and a later signature has already claimed the marker, blanking it here
+    // would discard that newer run's result and re-publish it from scratch.
+    const release = () => { clearanceBackfillFailedAt = Date.now(); if (clearanceBackfillDone === sig) clearanceBackfillDone = ''; };
     Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || []))
-      .then(r => { if (r && !r.failed) clearanceBackfillDone = sig; })
-      .catch(() => {});
+      // `pending` releases the marker WITHOUT a banner: those members needed no write, so there is nothing to
+      // warn about — but the read that would have proved them settled never finished, so the run is not
+      // complete and the next visit must look again. AUDIT-9.
+      .then(r => { if (!r || r.failed || r.pending) release(); })
+      .catch(() => { release(); });
   }, [sg.loaded, sg.minors, sg.approved, members]);
   const toggleMinor = (pk) => {
     const next = minorsSet.has(pk) ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
@@ -5281,7 +5378,18 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <div style={{ padding: 13, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))' }}>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>This forgets the church key on <b>this</b> device only — the church keeps running wherever its phrase is held. Make sure you’ve backed up the phrase or handed it on first, or this church is gone from here.</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => { window.Steward.removeKey(); window.location.reload(); }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="x" size={14} color="var(--on-clay)" /> Remove &amp; reload</button>
+              {/* AWAIT the removal. removeKey() clears localStorage synchronously but the Keystore half is a
+                  native round-trip, and reloading on top of it tears the WebView down mid-remove() — leaving the
+                  church-key ciphertext in the hardware store after we told the steward this device had forgotten
+                  it. A Keystore that throws must still reload, or the button looks dead. HANDOFF-2026-07-31 (1).
+                  BOUNDED, because a native bridge call can hang rather than throw, and an unbounded await here
+                  produces exactly the dead button the catch exists to avoid — no spinner, nothing disabled, so
+                  the steward taps it again and concludes the key was never forgotten. The localStorage copy is
+                  already gone by then, so reloading after the wait loses nothing. */}
+              <button onClick={async () => {
+                try { await Promise.race([window.Steward.removeKey(), new Promise(r => setTimeout(r, 3000))]); } catch (e) {}
+                window.location.reload();
+              }} className="sk-btn" style={{ padding: '8px 13px', fontSize: 13, background: 'var(--clay)', color: 'var(--on-clay)' }}><Icon name="x" size={14} color="var(--on-clay)" /> Remove &amp; reload</button>
               <button onClick={() => setConfirmRemove(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Cancel</button>
             </div>
           </div>

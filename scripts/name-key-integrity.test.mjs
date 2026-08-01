@@ -132,7 +132,7 @@ test('a delegated console cannot mint a name key over the owner’s', () => {
   const fn = STEWARD.slice(at, at + 2600);
   assert.match(fn, /if \(opts\.rotate && !ring\.length\) return/, 'a rotate with no ring still mints a replacement key');
   assert.match(fn, /if \(!ring\.length && _nameKeyDocKeys\) return/, 'an envelope exists and we are not in it — minting over it orphans every sealed name');
-  assert.match(fn, /if \(!_nameKeyChecked \|\| !_relayAuthed\) return/, 'the console will mint from a view it never established');
+  assert.match(fn, /if \(!_nameKeyChecked \|\| !_isRelayAuthed\(\)\) return/, 'the console will mint from a view it never established');
   assert.match(DASH, /!delegated && window\.Steward\.ensureNameKeyForMembers/, 'block() still rotates the name key while acting as a delegated steward');
 });
 
@@ -156,6 +156,26 @@ test('switching church resets the name key', () => {
   const at = STEWARD.search(/_nameKeyRing = \[\];\s*_nameKeyDocKeys = null/);
   const near = STEWARD.slice(Math.max(0, at - 700), at);
   assert.match(near, /lastProfile = \{\}/, 'the reset must sit in setActiveIdentity beside the other per-identity state');
+});
+
+test('switching church resets the just-published clearance cache too', () => {
+  // AUDIT-4 B6. Same family as the name-key reset above, and the same reasoning: setActiveIdentity clears
+  // every per-church global precisely because carrying one across leaks between churches. _clearanceSent was
+  // added by the read-before-write work and keyed by MEMBER PUBKEY ALONE — no church in the key — so within
+  // its 15s freshness window a member who belongs to both churches could be skipped for the wrong one, and
+  // church B would never receive their clearance. Their app for B then falls back to the minors: list the
+  // relay will not serve an ordinary member, and treats them as an adult.
+  //
+  // Structural, like the name-key guard beside it: the behavioural cost of driving a full identity switch
+  // through the bundle is high, and what matters is that the reset is present and sits in the right function.
+  assert.match(STEWARD, /_clearanceSent\.clear\(\)/,
+    'the just-published clearance cache is never cleared on an identity switch');
+  const at = STEWARD.search(/_nameKeyRing = \[\];\s*_nameKeyDocKeys = null/);
+  assert.ok(at > 0, 're-anchor: the identity-switch reset block moved');
+  const block = STEWARD.slice(Math.max(0, at - 1200), at + 1200);
+  assert.match(block, /_clearanceSent\.clear\(\)/,
+    'the clearance cache is cleared somewhere, but NOT in setActiveIdentity beside the other per-church state ' +
+    '— so a church switch still carries it across');
 });
 
 test('a member awaiting approval can still say what they are called', () => {
