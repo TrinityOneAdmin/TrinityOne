@@ -1277,6 +1277,19 @@ function _one(filters, ms = 4000) {
 // produces those routinely. The member's app has never had this bug — src/fellowship.src.js:2560 rejects
 // unhonoured authors BEFORE its newest-wins comparison — so the console was going blind to exactly the copy
 // the child's phone was applying.
+// WHICH OF TWO COPIES WINS. Newer second wins; on an EQUAL second the higher event id wins. `created_at` is
+// whole seconds, so a collision between two authorised writers is ordinary — and this product's threat model
+// grants a compelled relay the ability to REORDER what it serves, so "whichever arrived last" hands the
+// decision to the adversary. The member's app applies the identical rule (src/fellowship.src.js, the clearance
+// branch). They must stay identical: changing one side alone re-opens the divergence in the other direction,
+// which is exactly how the worst defect of the previous round happened. AUDIT-9.
+const _beatsDoc = (a, b) => {
+  if (!b) return true;
+  const aa = a.created_at || 0, bb = b.created_at || 0;
+  if (aa !== bb) return aa > bb;
+  return String(a.id || '') > String(b.id || '');
+};
+
 function _newestByD(filters, ms = 6000, urls = null, mineHex = null, topOk = null) {
   return new Promise((resolve) => {
     const best = new Map();
@@ -1288,8 +1301,8 @@ function _newestByD(filters, ms = 6000, urls = null, mineHex = null, topOk = nul
         if (!d) return;
         const cur = best.get(d) || { ours: null, top: null };
         const at = e.created_at || 0;
-        if ((!topOk || topOk(e)) && (!cur.top || at > (cur.top.created_at || 0))) cur.top = e;
-        if (mineHex && e.pubkey === mineHex && (!cur.ours || at > (cur.ours.created_at || 0))) cur.ours = e;
+        if ((!topOk || topOk(e)) && _beatsDoc(e, cur.top)) cur.top = e;
+        if (mineHex && e.pubkey === mineHex && _beatsDoc(e, cur.ours)) cur.ours = e;
         best.set(d, cur);
       },
       oneose() { finish(true); },
@@ -1338,7 +1351,10 @@ function _memberHonours(e, churchHex) {
 function _topWeMustAnswer(rec, ours) {
   const top = rec && rec.top;
   if (!top || top.pubkey === ours.pubkey) return null;
-  if ((top.created_at || 0) <= (ours.created_at || 0)) return null;
+  // `<=` treated a SAME-SECOND copy as invisible, while the member's app accepted it — so a steward key
+  // stamping the church's own second was applied by the child's phone and never seen by the console, which
+  // reported skipped, 0 failed, no banner. Same rule both sides now.
+  if (!_beatsDoc(top, ours)) return null;
   return top;
 }
 

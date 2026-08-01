@@ -12812,6 +12812,12 @@ zoo`.split("\n");
       setTimeout(finish, ms);
     });
   }
+  var _beatsDoc = (a, b) => {
+    if (!b) return true;
+    const aa = a.created_at || 0, bb = b.created_at || 0;
+    if (aa !== bb) return aa > bb;
+    return String(a.id || "") > String(b.id || "");
+  };
   function _newestByD(filters, ms = 6e3, urls = null, mineHex = null, topOk = null) {
     return new Promise((resolve) => {
       const best = /* @__PURE__ */ new Map();
@@ -12831,8 +12837,8 @@ zoo`.split("\n");
           if (!d) return;
           const cur = best.get(d) || { ours: null, top: null };
           const at = e.created_at || 0;
-          if ((!topOk || topOk(e)) && (!cur.top || at > (cur.top.created_at || 0))) cur.top = e;
-          if (mineHex && e.pubkey === mineHex && (!cur.ours || at > (cur.ours.created_at || 0))) cur.ours = e;
+          if ((!topOk || topOk(e)) && _beatsDoc(e, cur.top)) cur.top = e;
+          if (mineHex && e.pubkey === mineHex && _beatsDoc(e, cur.ours)) cur.ours = e;
           best.set(d, cur);
         },
         oneose() {
@@ -12862,7 +12868,7 @@ zoo`.split("\n");
   function _topWeMustAnswer(rec, ours) {
     const top = rec && rec.top;
     if (!top || top.pubkey === ours.pubkey) return null;
-    if ((top.created_at || 0) <= (ours.created_at || 0)) return null;
+    if (!_beatsDoc(top, ours)) return null;
     return top;
   }
   function _clearanceOutranks(a, b, churchHex) {

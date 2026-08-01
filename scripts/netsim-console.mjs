@@ -90,7 +90,7 @@ function consoleSide(urls) {
   // would assert my description of when that refusal fires rather than the console's.
   const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
   const matching = skewDecl + futureDecl + netViewDecl
-    + grab('function _memberHonours(') + grab('function _topWeMustAnswer(')
+    + grab('var _beatsDoc = ') + ';\n' + grab('function _memberHonours(') + grab('function _topWeMustAnswer(')
     + grab('async function _clearancesMatching(')
     // The cross-author ranking rule lives beside it and is called from inside it. Unlifted, the call
     // throws ReferenceError into _clearancesMatching's own catch, which returns null — "could not

@@ -122,7 +122,7 @@ function consoleSide(ws) {
   // would assert my description of when that refusal fires rather than the console's.
   const netViewDecl = (STEWARD.match(/var _viewingNetwork = [^\n]*\n/) || [])[0];
   const matching = skewDecl + futureDecl + netViewDecl
-    + grabMethod(STEWARD, 'function _memberHonours(') + grabMethod(STEWARD, 'function _topWeMustAnswer(')
+    + grabMethod(STEWARD, 'var _beatsDoc = ') + ';\n' + grabMethod(STEWARD, 'function _memberHonours(') + grabMethod(STEWARD, 'function _topWeMustAnswer(')
     + grabMethod(STEWARD, 'async function _clearancesMatching(')
     + grabMethod(STEWARD, 'function _clearanceOutranks(');
   const decName = (matching.match(/\b(decrypt\d*)\(/) || [])[1];

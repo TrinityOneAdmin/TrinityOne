@@ -2546,7 +2546,7 @@ window.Fellowship = {
     // about themselves. Fall back to the list when we do have it (stewards, and older churches that have not
     // published clearances yet), so this degrades rather than breaks.
     let clr = null;   // { minor, cleared } from my own sealed doc, or null if none has arrived
-    let _clrTs = 0;
+    let _clrTs = 0, _clrId = '';   // …and which event won, for the same-second tiebreak below
     const emit = () => {
       _noPhoto = pubSet(nophoto);   // normalised on the way in — see scripts/trinity-rules.mjs
       const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
@@ -2596,7 +2596,15 @@ window.Fellowship = {
           // the whole skew window. Newest-wins also makes a far-future copy permanent: it pins `_clrTs` where
           // no honest correction can reach it. Two programs that must agree cannot run different rulebooks.
           if (_ts > Math.floor(Date.now() / 1000) + 600) return;
-          if (_ts < _clrTs) return; _clrTs = _ts;
+          // SAME SECOND: the higher event id wins, NOT whichever arrived last. `created_at` is whole seconds,
+          // so two authorised writers colliding in one is ordinary; and a compelled relay may reorder what it
+          // serves, so "last one in" hands the decision to the adversary. Measured before this: the same two
+          // copies delivered one way made the child read "adult" and the other way "child". The console
+          // applies the identical rule (`_beatsDoc` in src/steward.src.js) — they must stay in step, because
+          // one side seeing a copy the other cannot is how the worst defect of the previous round happened.
+          if (_ts < _clrTs) return;
+          if (_ts === _clrTs && !(String(e.id || '') > _clrId)) return;
+          _clrTs = _ts; _clrId = String(e.id || '');
           try { clr = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch (x) { return; }   // sealed to me by the church
           emit();
         }

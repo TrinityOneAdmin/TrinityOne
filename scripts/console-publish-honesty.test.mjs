@@ -121,7 +121,7 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   // The version rule and the "would the member even honour this author" filter both live beside the read and
   // are called from inside it. Unlifted, the call throws ReferenceError into _clearancesMatching's own catch,
   // which returns null — "could not check" — so the harness would quietly measure the no-read path.
-  const guards = grab('function _topWeMustAnswer(') + grab('function _memberHonours(');
+  const guards = grab('var _beatsDoc = ') + ';\n' + grab('function _topWeMustAnswer(') + grab('function _memberHonours(');
   const skewDecl = (STEWARD.match(/var _CLOCK_SKEW = [^\n]*\n/) || [])[0];
   const futureDecl = (STEWARD.match(/var _authFuture = [^\n]*\n/) || [])[0];
   // The console refuses the clearance back-fill in a NETWORK view — lifted, not stubbed, because a stub
