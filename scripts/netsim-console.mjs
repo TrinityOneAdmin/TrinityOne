@@ -84,7 +84,11 @@ function consoleSide(urls) {
   const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved)');
   const newest = grab('function _newestByD(');
   const connected = grab('function _connectedRelays(');
-  const matching = grab('async function _clearancesMatching(');
+  const matching = grab('async function _clearancesMatching(')
+    // The cross-author ranking rule lives beside it and is called from inside it. Unlifted, the call
+    // throws ReferenceError into _clearancesMatching's own catch, which returns null — "could not
+    // check" — so the harness would quietly measure the no-read path and skip nothing.
+    + grab('function _clearanceOutranks(');
   const isAuthed = grab('function _isRelayAuthed(');
   const healthy = grab('relaysHealthy() {');
   const authWiring = span('var _authedRelays = ', 'pool.automaticallyAuth = ');

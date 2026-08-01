@@ -118,7 +118,11 @@ function consoleSide(urls, clock, ident, mutate) {
   // The read-and-compare step now lives in one shared helper, used BOTH to skip redundant writes and to verify
   // before alarming. Lifted here for the same reason: two copies would drift, and the second copy is the one
   // that decides whether a safeguarding warning is true.
-  const matching = grab('async function _clearancesMatching(');
+  const matching = grab('async function _clearancesMatching(')
+    // The cross-author ranking rule lives beside it and is called from inside it. Unlifted, the call
+    // throws ReferenceError into _clearancesMatching's own catch, which returns null — "could not
+    // check" — so the harness would quietly measure the no-read path and skip nothing.
+    + grab('function _clearanceOutranks(');
   // The connection wiring — _relaysTouched, _subbedOn, and the onRelayConnection* hooks. The reconciliation
   // that clears the just-published cache when a relay (re)connects lives in onRelayConnectionSuccess, so a
   // harness without this block does not contain the mechanism at all and cannot test it.
@@ -192,15 +196,17 @@ function consoleSide(urls, clock, ident, mutate) {
     setTimeout, Promise, Set, Map, String, JSON, Date,
   };
   const args = Object.keys(scope);
-  let body = sentDecl + queueDecl + touchWiring + authWiring + isAuthed + newest + connected + matching + publishSrc;
+  // The whole program, INCLUDING the methods in the return expression — refreshClearances and
+  // _refreshClearancesNow live there, and a sabotage hook that could not reach them silently matched nothing.
+  let body = sentDecl + queueDecl + touchWiring + authWiring + isAuthed + newest + connected + matching + publishSrc
+    + `\nreturn ({ publish, _isRelayAuthed, ${pubClearance},\n ${refresh},\n ${refreshNow} });`;
   if (mutate) {
     const before = body;
     body = mutate(body);
     assert.notEqual(body, before, 'the sabotage did not match the shipped source — re-anchor it, or it is ' +
       'proving nothing while staying green');
   }
-  const built = new Function(...args,
-    body + `\nreturn ({ publish, _isRelayAuthed, ${pubClearance},\n ${refresh},\n ${refreshNow} });`)(...args.map(k => scope[k]));
+  const built = new Function(...args, body)(...args.map(k => scope[k]));
   Object.assign(scope.window.Steward, built);
   return {
     ...built, pool, urls,
@@ -997,11 +1003,13 @@ test('A READ TOO POOR TO FINISH IS "COULDN\'T CONFIRM", NOT "DID NOT RECEIVE"', 
 });
 
 test('…and that distinction is load-bearing, not decorative', async () => {
-  // SABOTAGE. Force the read to call itself complete — the exact bug the `definitive` flag exists to prevent,
-  // and the shape the code had two commits ago. Without the flag the same run must accuse the members.
-  // Anchored on the BUNDLE's text, not the source's: esbuild parenthesises the arrow parameter.
+  // SABOTAGE. Collapse the three-way answer back to two — the shape the code had before, where anything the
+  // read did not return was a lost child. Deliberately sabotages the WHOLE distinction rather than one of its
+  // two guards (the read did not finish; the read never saw the record), because under this scenario either
+  // guard alone is enough to prevent the false banner. Isolating them needs a read that EOSEs while returning
+  // nothing, which the next test does.
   const t = readsNothing(neverConfirms(await authenticate(consoleSide([WS_URL], null, null,
-    (src) => src.replace(/const definitive = perRelay\.every\([^)]*\) => r\.complete\);/, 'const definitive = true;')))));
+    (src) => src.replace(/unverified = missing\.length[^;]*;/, 'unverified = false;')))));
   // The roster is 21, so this deliberately overlaps earlier tests. Safe: readsNothing() means the skip read
   // returns nothing, so every member is written again regardless of what is already on the relay.
   const pubs = members.slice(14, 18).map(m => m.pub);
@@ -1011,4 +1019,235 @@ test('…and that distinction is load-bearing, not decorative', async () => {
   assert.match(t.banners()[0].detail.message, /did not receive/,
     'with the completeness flag forced true the console should wrongly accuse the members — if it does not, ' +
     'the flag is not what is preventing the false banner and this guard is untested');
+});
+
+// ── another author's clearance can outrank ours, and we skip anyway ───────────────────────────────────────
+// What the MEMBER'S APP actually applies. It is the only assertion that matters here, because the console and
+// the member resolve this document differently and that difference IS the bug:
+//
+//   • the console reads `authors: [its own key]` — one replaceable slot, its own
+//   • the member reads d=clearance:<me> from the church key AND every current steward, then takes the newest
+//
+// Replaceable events are keyed by (pubkey, kind, d), so the church's copy and a steward's copy are two
+// SEPARATE documents that never collide on the relay. The console can therefore look at its own, find exactly
+// what it intended, skip the write as redundant — while the member's phone is applying somebody else's, older
+// or newer, saying the opposite. No error, no banner, no retry: the console is satisfied for ever.
+async function memberSees(m) {
+  const w = await new Promise((res, rej) => { const s = new WebSocket(WS_URL); s.on('open', () => res(s)); s.on('error', rej); });
+  let best = null;
+  await new Promise(res => {
+    const on = d => {
+      const msg = JSON.parse(d);
+      if (msg[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(),
+        tags: [['relay', WS_URL], ['challenge', msg[1]]], content: '' }, m.sk)]));
+      if (msg[0] === 'EVENT' && msg[1] === 'q') {
+        const e = msg[2];
+        if (best && (e.created_at || 0) < best.at) return;         // newest-wins, exactly as the member app does
+        try {
+          const body = JSON.parse(nip44v2.decrypt(e.content, nip44v2.utils.getConversationKey(m.sk, e.pubkey)));
+          best = { minor: !!body.minor, cleared: !!body.cleared, at: e.created_at || 0, by: e.pubkey };
+        } catch (x) {}
+      }
+      if (msg[0] === 'EOSE' && msg[1] === 'q') { w.off('message', on); res(); }
+    };
+    w.on('message', on);
+    w.send(JSON.stringify(['REQ', 'q', { kinds: [30078], '#d': [CLEAR_D + m.pub] }]));
+    setTimeout(res, 8000);
+  });
+  w.close();
+  return best;
+}
+
+// Put a steward on the church's roster, which is what the relay checks before accepting their clearance.
+async function seatSteward(steward) {
+  const w = await new Promise((res, rej) => { const x = new WebSocket(WS_URL); x.on('open', () => res(x)); x.on('error', rej); });
+  const doc = finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', 'trinityone/stewards:' + church.pub], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [steward.pub] }) }, church.sk);
+  const ok = await new Promise(res => {
+    const on = d => { const m = JSON.parse(d); if (m[0] === 'OK' && m[1] === doc.id) { w.off('message', on); res(m[2]); } };
+    w.on('message', on); w.send(JSON.stringify(['EVENT', doc])); setTimeout(() => res(false), 5000);
+  });
+  w.close();
+  assert.equal(ok, true, 'the steward roster was refused — fixture broken, not the code under test');
+  await sleep(400);
+  return { sk: steward.sk, pub: church.pub, actingChurch: church.pub };
+}
+
+test('A CHILD OUTRANKED BY ANOTHER STEWARD\'S OLDER VIEW IS PUT RIGHT', async () => {
+  const steward = K();
+  const ident = await seatSteward(steward);
+  const child = K();
+
+  // 1. The church owner marks the child. The member's app agrees.
+  const owner1 = await authenticate(consoleSide([WS_URL]));
+  await owner1.refreshClearances([child.pub], [child.pub], []);
+  owner1.close();
+  const afterOwner = await memberSees(child);
+  assert.ok(afterOwner && afterOwner.minor === true,
+    'the fixture never got the child marked in the first place — this is not the bug under test: '
+    + JSON.stringify(afterOwner));
+
+  // 2. A delegated steward's console runs a back-fill from a view that has not caught up — the child is not
+  //    in ITS minors list yet. Ordinary: the roster and the lists arrive over separate subscriptions, and this
+  //    console may have been open since before the change. It writes its own slot, and being newer, the
+  //    member's app now applies it.
+  await sleep(1200);                                  // created_at is whole seconds — clear of the last write
+  const stew = await authenticate(consoleSide([WS_URL], null, ident));
+  await stew.refreshClearances([child.pub], [], []);
+  stew.close();
+  const afterStew = await memberSees(child);
+  assert.equal(afterStew.minor, false,
+    'the stale steward write did not take effect, so the rest of this test proves nothing — re-check the fixture');
+
+  // 3. The owner's console opens Members again. Its own slot still says exactly what it wants, so it skips —
+  //    and the child's phone goes on treating them as an adult, permanently, with nothing reported.
+  await sleep(1200);
+  const owner2 = await authenticate(consoleSide([WS_URL]));
+  const r = await owner2.refreshClearances([child.pub], [child.pub], []);
+  owner2.close();
+  const finalView = await memberSees(child);
+  assert.equal(finalView.minor, true,
+    `the child's own app still reads "not a minor" after the church's console re-ran its safeguarding `
+    + `back-fill and reported ${r.skipped} skipped, ${r.failed} failed, no banner. The console checked its own `
+    + 'copy of the clearance and found it correct; the phone applies the newest copy from ANY authorised '
+    + 'writer, which is a steward\'s stale one. Nothing will ever retry.');
+});
+
+test('…and the steward\'s console gives way instead of fighting back', async () => {
+  // THE OTHER HALF, and the reason the rule is by author rather than by clock. "Rewrite whenever someone
+  // else's copy is on top" is symmetric, and symmetric means a fight: the owner rewrites to get above the
+  // steward, the steward's next visit rewrites to get above the owner, and every Members visit republishes
+  // the whole roster for ever — the exact cost read-before-write was added to remove, now permanent.
+  const steward = K();
+  const ident = await seatSteward(steward);
+  const child = K();
+
+  // The steward's own copy is correct and on top.
+  const s1 = await authenticate(consoleSide([WS_URL], null, ident));
+  const a = await s1.refreshClearances([child.pub], [child.pub], []);
+  s1.close();
+  assert.equal(a.failed, 0, 'the steward could not write at all — fixture, not the code under test');
+
+  // The owner writes the same thing, so now the CHURCH's copy is the one the member applies.
+  await sleep(1200);
+  const o = await authenticate(consoleSide([WS_URL]));
+  await o.refreshClearances([child.pub], [child.pub], []);
+  o.close();
+
+  // The steward's console visits again. Its own copy still says the right thing; a copy it does not outrank
+  // is above it. There is nothing to correct, and it must not try.
+  await sleep(1200);
+  const s2 = await authenticate(consoleSide([WS_URL], null, ident));
+  const b = await s2.refreshClearances([child.pub], [child.pub], []);
+  s2.close();
+  assert.equal(b.skipped, 1,
+    'the steward\'s console rewrote a clearance that was already correct, purely because the church\'s copy '
+    + 'was newer. Both consoles doing that is a permanent full-roster rewrite on every visit.');
+  assert.equal(s2.ok(), 0, 'and nothing should have gone on the wire at all');
+  assert.equal((await memberSees(child)).minor, true, 'the child must still read as a child throughout');
+});
+
+test('…and the ranking is what does both, not a coincidence', async () => {
+  // SABOTAGE, both directions. Rank-nobody-over-anybody must leave the child wrong; rank-everybody-over-
+  // everybody must produce the fight. If either sabotage behaves like the shipped code, the rule is inert.
+  const steward = K();
+  const ident = await seatSteward(steward);
+  const never = (src) => src.replace(/function _clearanceOutranks\(a, b, churchHex\) \{/, '$& return false;');
+  const always = (src) => src.replace(/function _clearanceOutranks\(a, b, churchHex\) \{/, '$& return true;');
+
+  // (a) never outranks → the owner leaves the steward's stale copy on top, which is the original bug.
+  const kid = K();
+  const o1 = await authenticate(consoleSide([WS_URL]));
+  await o1.refreshClearances([kid.pub], [kid.pub], []);
+  o1.close();
+  await sleep(1200);
+  const st = await authenticate(consoleSide([WS_URL], null, ident));
+  await st.refreshClearances([kid.pub], [], []);        // stale view: not a minor
+  st.close();
+  await sleep(1200);
+  const o2 = await authenticate(consoleSide([WS_URL], null, null, never));
+  const r = await o2.refreshClearances([kid.pub], [kid.pub], []);
+  o2.close();
+  assert.equal(r.skipped, 1, 'the sabotage did not take — this test proves nothing');
+  assert.equal((await memberSees(kid)).minor, false,
+    'with the ranking disabled the child must still be reading as an adult; if they are not, something other '
+    + 'than the ranking is fixing this and the shipped rule is untested');
+
+  // (b) always outranks → the steward stops giving way and rewrites a settled member.
+  const kid2 = K();
+  const s1 = await authenticate(consoleSide([WS_URL], null, ident));
+  await s1.refreshClearances([kid2.pub], [kid2.pub], []);
+  s1.close();
+  await sleep(1200);
+  const o3 = await authenticate(consoleSide([WS_URL]));
+  await o3.refreshClearances([kid2.pub], [kid2.pub], []);
+  o3.close();
+  await sleep(1200);
+  const s2 = await authenticate(consoleSide([WS_URL], null, ident, always));
+  const b = await s2.refreshClearances([kid2.pub], [kid2.pub], []);
+  s2.close();
+  assert.equal(b.skipped, 0,
+    'with the ranking forced symmetric the steward should rewrite a clearance that needs no rewriting — the '
+    + 'first step of the endless fight. It did not, so the asymmetry is not what prevents it.');
+});
+
+// A read that FINISHES and returns nothing. Isolates the "we never saw the record" guard from the "the read
+// did not finish" one: EOSE arrives, so completeness is not what saves the steward from a false accusation.
+function readsEmpty(s) {
+  const real = s.pool.subscribeMany.bind(s.pool);
+  s.pool.subscribeMany = (urls2, filters, h) => real(urls2, filters, { ...h, onevent() {} });
+  return s;
+}
+// The writes never leave the device AND never settle — so whatever is already on the relay stays there, and
+// the verify read finds a real, readable, WRONG record rather than nothing at all.
+function writesVanish(s) {
+  s.pool.publish = () => [new Promise(() => {})];
+  return s;
+}
+
+test('A RECORD READ BACK AND FOUND WRONG IS STILL NAMED PLAINLY', async () => {
+  // The softening must not swallow real alarms. When the console has looked and can see the member's record
+  // saying the wrong thing, "we couldn't confirm" would be its own kind of lie — this is precisely the case
+  // the banner exists for, and it has to keep its teeth.
+  const child = K();
+  const seed = await authenticate(consoleSide([WS_URL]));
+  await seed.refreshClearances([child.pub], [], []);            // stored: not a minor
+  seed.close();
+  assert.equal((await memberSees(child)).minor, false, 'fixture: the wrong record was not stored');
+
+  await sleep(1200);
+  const s = writesVanish(await authenticate(consoleSide([WS_URL])));
+  const r = await s.refreshClearances([child.pub], [child.pub], []);   // now they ARE a minor; the write vanishes
+  s.close();
+  assert.equal(r.failed, 1, 'a member whose stored record is visibly wrong was not counted');
+  assert.equal(r.unverified, false,
+    'the console read the record back and could see it was wrong, so there is nothing unverified about it');
+  assert.match(s.banners()[0].detail.message, /did not receive/,
+    'a record the console has READ and found wrong must be reported as such, not softened into "couldn\'t '
+    + 'confirm" — this is the case the banner exists for');
+});
+
+test('…but one it never saw is not, even when the read finished', async () => {
+  const s = readsEmpty(neverConfirms(await authenticate(consoleSide([WS_URL]))));
+  const pubs = Array.from({ length: 3 }, K).map(m => m.pub);
+  const r = await s.refreshClearances(pubs, [pubs[0]], []);
+  s.close();
+  assert.equal(r.unverified, true,
+    'the read completed and returned nothing, and the console concluded the records are gone. But the writes '
+    + 'it is checking never confirmed, so they may still be in flight — a read that overtakes a write gets an '
+    + 'honest EOSE from a relay that simply has not received it yet. Measured on satellite: 7 of 8 members '
+    + 'condemned, every record stored moments later.');
+  assert.match(s.banners()[0].detail.message, /Couldn.t confirm/);
+
+  // SABOTAGE, isolated: condemn everything the read did not return, regardless of whether it was ever seen.
+  const t = readsEmpty(neverConfirms(await authenticate(consoleSide([WS_URL], null, null,
+    (src) => src.replace(/if \(sawAll\) seen\.add\(h\);/, 'seen.add(h);')))));
+  const pubs2 = Array.from({ length: 3 }, K).map(m => m.pub);
+  const r2 = await t.refreshClearances(pubs2, [pubs2[0]], []);
+  t.close();
+  assert.equal(r2.unverified, false, 'the sabotage did not take effect, so this proves nothing');
+  assert.match(t.banners()[0].detail.message, /did not receive/,
+    'with the "did we actually see it" guard removed the console should wrongly accuse every member — if it '
+    + 'does not, that guard is not what prevents the satellite false alarm');
 });

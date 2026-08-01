@@ -12761,13 +12761,13 @@ zoo`.split("\n");
           if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
         },
         oneose() {
-          finish(true);
+          finish();
         }
       });
-      setTimeout(() => finish(false), ms);
+      setTimeout(finish, ms);
     });
   }
-  function _newestByD(filters, ms = 6e3, urls = null) {
+  function _newestByD(filters, ms = 6e3, urls = null, mineHex = null) {
     return new Promise((resolve) => {
       const best = /* @__PURE__ */ new Map();
       let done = false;
@@ -12784,15 +12784,24 @@ zoo`.split("\n");
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d) return;
-          const cur = best.get(d);
-          if (!cur || (e.created_at || 0) > (cur.created_at || 0)) best.set(d, e);
+          const cur = best.get(d) || { ours: null, top: null };
+          const at = e.created_at || 0;
+          if (!cur.top || at > (cur.top.created_at || 0)) cur.top = e;
+          if (mineHex && e.pubkey === mineHex && (!cur.ours || at > (cur.ours.created_at || 0))) cur.ours = e;
+          best.set(d, cur);
         },
         oneose() {
-          finish();
+          finish(true);
         }
       });
-      setTimeout(finish, ms);
+      setTimeout(() => finish(false), ms);
     });
+  }
+  function _clearanceOutranks(a, b, churchHex) {
+    if (a === b) return false;
+    if (a === churchHex) return true;
+    if (b === churchHex) return false;
+    return String(a) > String(b);
   }
   async function _clearancesMatching(pubs, wantFor) {
     if (!pubs.length || !sk || !_isRelayAuthed()) return null;
@@ -12806,16 +12815,20 @@ zoo`.split("\n");
       } catch (e) {
       }
       const readMs = (pool.maxWaitForConnection || 3e3) + 9e3;
-      const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], authors: [mine], "#d": ds }], readMs, [u]).then((r) => r, () => ({ byD: /* @__PURE__ */ new Map(), complete: false }))));
+      const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], "#d": ds }], readMs, [u], mine).then((r) => r, () => ({ byD: /* @__PURE__ */ new Map(), complete: false }))));
       const definitive = perRelay.every((r) => r.complete);
+      const churchHex = actingChurch || pub;
       const ok = /* @__PURE__ */ new Set();
+      const seen = /* @__PURE__ */ new Set();
       for (const p of pubs) {
         const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
-        let every = true;
+        let every = true, sawAll = true;
         for (const { byD: held } of perRelay) {
-          const e = held.get(key);
+          const rec = held.get(key);
+          const e = rec && rec.ours;
           if (!e) {
             every = false;
+            sawAll = false;
             break;
           }
           let got = null;
@@ -12830,10 +12843,16 @@ zoo`.split("\n");
             every = false;
             break;
           }
+          const top = rec.top;
+          if (top && top.pubkey !== e.pubkey && (top.created_at || 0) > (e.created_at || 0) && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) {
+            every = false;
+            break;
+          }
         }
         if (every) ok.add(h);
+        if (sawAll) seen.add(h);
       }
-      return { matching: ok, definitive };
+      return { matching: ok, seen, definitive };
     } catch (e) {
       return null;
     }
@@ -14783,7 +14802,8 @@ zoo`.split("\n");
         } else {
           const missing = unconfirmed.filter((p) => !landed.matching.has(String(p).toLowerCase()));
           failed = missing.length;
-          unverified = missing.length > 0 && !landed.definitive;
+          const condemned = missing.filter((p) => landed.seen.has(String(p).toLowerCase()));
+          unverified = missing.length > condemned.length || missing.length > 0 && !landed.definitive;
         }
       }
       if (failed) {

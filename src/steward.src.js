@@ -1176,20 +1176,25 @@ function _one(filters, ms = 4000) {
     const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(best); };
     const sub = pool.subscribeMany(relays(), filters, {
       onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
-      oneose() { finish(true); },
+      oneose() { finish(); },
     });
-    setTimeout(() => finish(false), ms);
+    setTimeout(finish, ms);
   });
 }
 
-// One-shot read of the NEWEST event per d-tag across a set of d-tags. Returns a Map d -> event.
+// One-shot read per d-tag, keeping TWO events per document: the newest we wrote (`ours`) and the newest from
+// anyone at all (`top`). Both are needed because a replaceable event is keyed by (pubkey, kind, d), so the
+// church's copy of a member's clearance and a steward's copy are separate documents that never collide — and
+// the member's app applies whichever is newest across all of them. A reader that keeps only its own copy is
+// asking "did I write what I meant to", when the question is "does the member see what I meant".
+// Returns a Map d -> event.
 // Bounded like _one: an unanswered relay must not hang the caller. HANDOFF-2026-07-31 item 7.
 // Resolves { byD, complete }. `complete` is the important half: it says whether the relay actually finished
 // answering (EOSE) or whether we simply stopped waiting. Without it a slow link looks identical to an empty
 // relay — and callers then read "this record is absent" from what is really "I don't know yet". That is the
 // same mistake as treating an unauthenticated read as proof of absence, one level down, and it produced a
 // false "6 of 8 children did not receive their record" on a satellite link where every record had landed.
-function _newestByD(filters, ms = 6000, urls = null) {
+function _newestByD(filters, ms = 6000, urls = null, mineHex = null) {
   return new Promise((resolve) => {
     const best = new Map();
     let done = false;
@@ -1198,13 +1203,33 @@ function _newestByD(filters, ms = 6000, urls = null) {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d) return;
-        const cur = best.get(d);
-        if (!cur || (e.created_at || 0) > (cur.created_at || 0)) best.set(d, e);
+        const cur = best.get(d) || { ours: null, top: null };
+        const at = e.created_at || 0;
+        if (!cur.top || at > (cur.top.created_at || 0)) cur.top = e;
+        if (mineHex && e.pubkey === mineHex && (!cur.ours || at > (cur.ours.created_at || 0))) cur.ours = e;
+        best.set(d, cur);
       },
-      oneose() { finish(); },
+      oneose() { finish(true); },
     });
-    setTimeout(finish, ms);
+    setTimeout(() => finish(false), ms);
   });
+}
+
+// Who wins when two authorised writers disagree about a member's clearance. The member's app takes the NEWEST,
+// so without a rule two consoles chase each other: each sees the other's copy on top, rewrites to get back on
+// top, and the next visit from the other console does the same — a full-roster rewrite per visit, for ever,
+// which is exactly the load read-before-write exists to remove.
+//
+// So the rule is by AUTHOR, not by clock, and it is asymmetric on purpose: a console only rewrites over a
+// newer copy it OUTRANKS. The church key outranks every steward — the minors: and approved: lists it derives
+// from are owner-only documents (scripts/gateway.mjs), so the owner's console is the authority by
+// construction, and a steward's console is only ever mirroring. Between two stewards the hex pubkey breaks the
+// tie, which is arbitrary but stable, and stable is the whole requirement: exactly one of the pair gives way.
+function _clearanceOutranks(a, b, churchHex) {
+  if (a === b) return false;
+  if (a === churchHex) return true;
+  if (b === churchHex) return false;
+  return String(a) > String(b);
 }
 // The relays we are CURRENTLY connected to. Read-before-write asks each of them separately, because "some
 // relay has it" is not the invariant a church needs — see the note in _refreshClearancesNow.
@@ -1236,25 +1261,45 @@ async function _clearancesMatching(pubs, wantFor) {
     // A flat 6s left satellite still alarming — the writes had landed, and the check to prove it timed out.
     // Too short here does not fail safe; it manufactures the very alarm the check exists to prevent.
     const readMs = (pool.maxWaitForConnection || 3000) + 9000;
+    // NO `authors` FILTER. Reading only our own copy answers the wrong question. Measured: the owner marks a
+    // child, a steward's console then runs a back-fill from a roster view that has not caught up and writes
+    // its own copy saying "not a minor", and the owner's next visit reads its own copy, finds exactly what it
+    // intended, and skips — reporting 1 skipped, 0 failed, no banner, while the child's phone reads "not a
+    // minor" and nothing will ever retry. The console was checking its own work; the member reads the newest
+    // copy from ANY authorised writer.
     const perRelay = await Promise.all(readFrom.map(u =>
-      _newestByD([{ kinds: [30078], authors: [mine], '#d': ds }], readMs, [u])
+      _newestByD([{ kinds: [30078], '#d': ds }], readMs, [u], mine)
         .then(r => r, () => ({ byD: new Map(), complete: false }))));
     const definitive = perRelay.every(r => r.complete);
+    const churchHex = actingChurch || pub;
     const ok = new Set();
+    // Members whose copy we actually SAW on every relay, whether or not it says the right thing. The verify
+    // path needs this to tell "we read it back and it is wrong" from "the read found nothing" — see the note
+    // there. Only the first is a member who definitely does not have their record.
+    const seen = new Set();
     for (const p of pubs) {
       const h = String(p).toLowerCase(), key = CLEARANCE_D + h;
-      let every = true;
+      let every = true, sawAll = true;
       for (const { byD: held } of perRelay) {
-        const e = held.get(key);
-        if (!e) { every = false; break; }
+        const rec = held.get(key);
+        const e = rec && rec.ours;
+        if (!e) { every = false; sawAll = false; break; }
         let got = null;
         try { got = JSON.parse(nip44d(e.content, nip44ck(sk, h))); } catch (x) { every = false; break; }
         const w = wantFor(p);
         if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) { every = false; break; }
+        // Our copy says the right thing — but is it the one the member's app will apply? Another authorised
+        // writer's copy sitting on top of ours is what the phone reads. We cannot open it (it is sealed with
+        // THEIR conversation key with the member, not ours), so we cannot know whether it agrees; we can only
+        // know whether it is ours to overrule. If it is, this member is not settled and must be rewritten.
+        const top = rec.top;
+        if (top && top.pubkey !== e.pubkey && (top.created_at || 0) > (e.created_at || 0)
+            && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) { every = false; break; }
       }
       if (every) ok.add(h);
+      if (sawAll) seen.add(h);
     }
-    return { matching: ok, definitive };
+    return { matching: ok, seen, definitive };
   } catch (e) { return null; }
 }
 
@@ -2765,9 +2810,19 @@ window.Steward = {
       if (!landed) { failed = unconfirmed.length; unverified = true; } else {
         const missing = unconfirmed.filter(p => !landed.matching.has(String(p).toLowerCase()));
         failed = missing.length;
-        // Missing from an INCOMPLETE read is not missing. One slow relay out of two must not turn a member
-        // whose record we simply could not look up into a member whose record is gone.
-        unverified = missing.length > 0 && !landed.definitive;
+        // WHAT KIND OF "MISSING" IS THIS? Two very different things, and only one of them is a lost record.
+        //
+        //   read it back and it is WRONG  — definite. Their copy exists and says something else, or someone
+        //                                   we cannot overrule has put a copy on top of ours. Say so plainly.
+        //   the read found NOTHING        — unknown. The write we are checking never confirmed, so it may
+        //                                   still be in flight; a read that overtakes it gets an honest EOSE
+        //                                   from a relay that has genuinely not received it YET. Measured on
+        //                                   the satellite profile: 7 of 8 reported lost, every one of them
+        //                                   stored moments later.
+        //
+        // So a completed read is not enough on its own — it also has to have SEEN the record to condemn it.
+        const condemned = missing.filter(p => landed.seen.has(String(p).toLowerCase()));
+        unverified = missing.length > condemned.length || (missing.length > 0 && !landed.definitive);
       }
     }
     // NOT SILENT. The whole point of a clearance is that a child's own app knows it is a child; a back-fill

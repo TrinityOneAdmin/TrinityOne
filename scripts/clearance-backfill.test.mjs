@@ -112,7 +112,8 @@ function consoleSide(ws) {
   // path. It must be LIFTED, not stubbed: _refreshClearancesNow calls it by name, so a scope without it throws
   // ReferenceError on the first back-fill. Both stubs above make it return null on its first line — this file
   // measures the cold-roster publish path — but the real function has to be present to be called at all.
-  const matching = grabMethod(STEWARD, 'async function _clearancesMatching(');
+  const matching = grabMethod(STEWARD, 'async function _clearancesMatching(')
+    + grabMethod(STEWARD, 'function _clearanceOutranks(');
   const decName = (matching.match(/\b(decrypt\d*)\(/) || [])[1];
   assert.ok(decName, 'the clearance read no longer decrypts a stored record — re-anchor this test');
   const scope = {
