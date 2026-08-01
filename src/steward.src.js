@@ -2941,7 +2941,7 @@ window.Steward = {
     // `unverified` is the third answer and it must stay distinct from the other two. If the link is too poor
     // to read back, we do NOT know, and both "they failed" and "they are fine" would be lies. Never treat it
     // as fine: an unverifiable answer is the one this codebase has mistaken for good news before.
-    let unverified = false, lost = 0;
+    let unverified = false, lost = 0, lostKids = 0;
     if (unconfirmed.length) {
       const landed = await _clearancesMatching(unconfirmed, want);
       if (!landed) { failed = unconfirmed.length; unverified = true; } else {
@@ -2961,7 +2961,9 @@ window.Steward = {
         //                                           Conflating this with the first told an owner "3 of 3
         //                                           members did not receive their record" while all three
         //                                           children read correctly on their phones. AUDIT-7.
-        lost = missing.filter(p => landed.wrong.has(String(p).toLowerCase())).length;
+        const lostPubs = missing.filter(p => landed.wrong.has(String(p).toLowerCase()));
+        lost = lostPubs.length;
+        lostKids = lostPubs.filter(p => mins.has(String(p).toLowerCase())).length;
         unverified = failed > lost;
       }
     }
@@ -2969,17 +2971,37 @@ window.Steward = {
     // that half-worked and said nothing is how they were treated as adults for a day.
     if (failed) {
       try {
-        // THREE sentences, not two, because a run can produce both answers at once and the softer one must not
-        // speak for the definite one. AUDIT-7: with a single flag, one member whose record was read back and
-        // found WRONG was reported as "may well have saved" because another member in the same run had merely
-        // not been seen. Each member is now counted under the wording that is true of them.
-        const soft = 'Couldn\'t confirm the safeguarding record saved for ' + (failed - lost) + ' of ' + total
-          + ' members — your connection dropped before your relay answered. They may well have saved. Open the '
-          + 'Members tab again while connected to check.';
-        const hard = lost + ' of ' + total + ' members did not receive their updated safeguarding record. '
-          + 'Until they do, their app cannot tell that they are a child. Open the Members tab again while '
-          + 'connected to your relay to retry.';
-        const message = !lost ? soft : (unverified ? hard + ' ' + soft : hard);
+        // TWO COUNTS, ONE INSTRUCTION. A run can produce both answers at once and the softer one must not speak
+        // for the definite one — with a single flag, a member whose record was read back and found WRONG was
+        // reported as "may well have saved" because someone else in the same run had merely not been seen.
+        //
+        // AUDIT-8 fixed what the sentences SAY. Two things were untrue as written:
+        //   - "their app cannot tell that they are a child" was printed for ADULTS. The back-fill writes a
+        //     record for every member on the roster, so `lost` counts adults whose "not a minor" record failed
+        //     just as readily as children. Being wrong about who is a child is the exact harm this whole path
+        //     exists to prevent, so the banner must not do it either. The child sentence is now conditional on
+        //     there actually being children among them.
+        //   - "1 of 1 members" — the single-child toggle is the commonest case of all, and it read as broken
+        //     English every time.
+        // The instruction is given ONCE at the end rather than in both halves, where it read as two different
+        // actions ("to retry" vs "to check") for the same tap.
+        // Counts lead, nouns follow, so nothing has to agree with a number that changes: "1 of 8 people" reads
+        // correctly for every value, where "1 person ... have" does not.
+        // A roster of one is the commonest case of all — it is what marking a single child produces — and
+        // "1 of 1 people" read as broken English every time it fired.
+        const who = (k) => total === 1 ? 'this person' : k + ' of ' + total + ' people';
+        const kids = total === 1
+          ? ' \u2014 they are marked as a child, so their app will treat them as an adult'
+          : lostKids === 1
+            ? ' \u2014 1 of them is marked as a child, so their app will treat them as an adult'
+            : ' \u2014 ' + lostKids + ' of them are marked as children, so their apps will treat them as adults';
+        const soft = 'we couldn\u2019t check whether the record saved for ' + who(failed - lost)
+          + ' \u2014 the connection dropped before your church\u2019s relay replied. '
+          + (total === 1 ? 'It may well be fine.' : 'They may well be fine.');
+        const hard = 'the wrong record is saved for ' + who(lost) + (lostKids ? kids : '') + '.';
+        const message = 'Safeguarding: '
+          + (!lost ? soft : (unverified ? hard + ' And ' + soft : hard))
+          + ' Reopen Members while connected to your relay to try again.';
         window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'safeguarding clearances', message } }));
       } catch (e) {}
     }

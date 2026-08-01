@@ -157,6 +157,13 @@ function useRealMemberCount() {
 
 function PublishErrorBanner() {
   const [msg, setMsg] = React.useState('');
+  // SAFEGUARDING GETS ITS OWN SLOT. One shared `msg` meant last-event-wins across every producer — the generic
+  // publish error, Finance, block, join policy, _requireTrustedView — with no queue and no severity. AUDIT-8
+  // measured the consequence in the live console: with the safeguarding warning up, one ordinary
+  // `steward-publish-error` replaced it inside 400ms, and that replacement carries a 9s auto-clear, so the
+  // steward ended with silence. The link that produces the safeguarding banner is exactly the link that
+  // produces generic publish errors, so the child-safety message was the one most likely to be evicted.
+  const [sgMsg, setSgMsg] = React.useState('');
   React.useEffect(() => {
     const f = (e) => {
       const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '');
@@ -168,17 +175,43 @@ function PublishErrorBanner() {
     // `steward-write-blocked` had been fired for a while by _requireTrustedView and by Finance, and was
     // listened to NOWHERE — so the refusals the code believed were "visible and retryable" reached no screen
     // at all. Same banner, same dismiss, and these stay put: a refused write is always actionable.
-    const g = (e) => { const d = e.detail || {}; clearTimeout(f._t); setMsg(d.message || ('That change to the ' + (d.what || 'church') + ' could not be saved.')); };
+    const g = (e) => {
+      const d = e.detail || {};
+      const text = d.message || ('That change to the ' + (d.what || 'church') + ' could not be saved.');
+      if (d.what === 'safeguarding clearances') { setSgMsg(text); return; }
+      clearTimeout(f._t); setMsg(text);
+    };
     window.addEventListener('steward-publish-error', f);
     window.addEventListener('steward-write-blocked', g);
     return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
   }, []);
-  if (!msg) return null;
+  if (!msg && !sgMsg) return null;
+  // role="alert" + aria-live so a screen reader ANNOUNCES it. The console's only failure banner was the one
+  // surface in this codebase without it — app/ui.jsx, app/screens-today.jsx and app/stew-meals.jsx all get it
+  // right — so a TalkBack user got nothing at all when a child-safeguarding warning appeared. The dismiss
+  // button was a bare 15px icon measured at 27x17, below the WCAG 2.5.8 minimum of 24x24 and far below the
+  // 44x44 a cheap Android phone needs; padded out with a negative margin so it keeps its visual size.
+  const card = (text, key, clear, tone) => (
+    <div key={key} role="alert" aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
+      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
+      <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{text}</div>
+      <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
+        style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 14, margin: -14 }}><Icon name="x" size={16} /></button>
+    </div>
+  );
+  // BELOW the header, not over it. Absolutely positioned at top:12 the card covered the entire tab strip at
+  // 360px — measured with elementFromPoint, every control including the Members tab the message tells you to
+  // open. `top: 64` clears the header, and pointerEvents:none on the wrapper means the gap either side of the
+  // card stays clickable rather than swallowing taps on whatever is behind it.
+  // IN FLOW, NOT OVER THE TOP. Absolutely positioned it covered the entire tab strip at 360px — measured with
+  // elementFromPoint: every control including the Members tab the message tells you to open. Rendered as a
+  // normal row between the header and the scrolling content, it pushes the page down instead, so the one
+  // action the text asks for stays reachable while the warning is up. AUDIT-8.
   return (
-    <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 140, maxWidth: 560, width: 'calc(100% - 32px)', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
-      <Icon name="bolt" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
-      <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{msg}</div>
-      <button onClick={() => setMsg('')} title="Dismiss this message" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} /></button>
+    <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' }}>
+      {sgMsg ? card(sgMsg, 'sg', () => setSgMsg(''), 'sg') : null}
+      {msg ? card(msg, 'gen', () => setMsg(''), 'gen') : null}
     </div>
   );
 }
@@ -831,7 +864,7 @@ function StewDashboard({ initial = 'overview' }) {
         {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
         <MemberChatDock />
-        <PublishErrorBanner /><JoinNotifier /><KeyDistributor />
+        <JoinNotifier /><KeyDistributor />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
@@ -855,6 +888,7 @@ function StewDashboard({ initial = 'overview' }) {
               })}
             </div>
           </div>
+          <PublishErrorBanner />
           <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
             {content}
           </div>
@@ -869,7 +903,7 @@ function StewDashboard({ initial = 'overview' }) {
       {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
-        <PublishErrorBanner /><JoinNotifier /><KeyDistributor />
+        <JoinNotifier /><KeyDistributor />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
@@ -915,6 +949,7 @@ function StewDashboard({ initial = 'overview' }) {
             <div style={{ flex: 1 }} />
             {actions}
           </div>
+          <PublishErrorBanner />
           {/* content */}
           <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
             {content}

@@ -14832,7 +14832,7 @@ zoo`.split("\n");
         }
         if (i3 + BATCH < pubs.length) await new Promise((r) => setTimeout(r, GAP_MS));
       }
-      let unverified = false, lost = 0;
+      let unverified = false, lost = 0, lostKids = 0;
       if (unconfirmed.length) {
         const landed = await _clearancesMatching(unconfirmed, want);
         if (!landed) {
@@ -14841,15 +14841,19 @@ zoo`.split("\n");
         } else {
           const missing = unconfirmed.filter((p) => !landed.matching.has(String(p).toLowerCase()));
           failed = missing.length;
-          lost = missing.filter((p) => landed.wrong.has(String(p).toLowerCase())).length;
+          const lostPubs = missing.filter((p) => landed.wrong.has(String(p).toLowerCase()));
+          lost = lostPubs.length;
+          lostKids = lostPubs.filter((p) => mins.has(String(p).toLowerCase())).length;
           unverified = failed > lost;
         }
       }
       if (failed) {
         try {
-          const soft = "Couldn't confirm the safeguarding record saved for " + (failed - lost) + " of " + total + " members \u2014 your connection dropped before your relay answered. They may well have saved. Open the Members tab again while connected to check.";
-          const hard = lost + " of " + total + " members did not receive their updated safeguarding record. Until they do, their app cannot tell that they are a child. Open the Members tab again while connected to your relay to retry.";
-          const message = !lost ? soft : unverified ? hard + " " + soft : hard;
+          const who = (k) => total === 1 ? "this person" : k + " of " + total + " people";
+          const kids = total === 1 ? " \u2014 they are marked as a child, so their app will treat them as an adult" : lostKids === 1 ? " \u2014 1 of them is marked as a child, so their app will treat them as an adult" : " \u2014 " + lostKids + " of them are marked as children, so their apps will treat them as adults";
+          const soft = "we couldn\u2019t check whether the record saved for " + who(failed - lost) + " \u2014 the connection dropped before your church\u2019s relay replied. " + (total === 1 ? "It may well be fine." : "They may well be fine.");
+          const hard = "the wrong record is saved for " + who(lost) + (lostKids ? kids : "") + ".";
+          const message = "Safeguarding: " + (!lost ? soft : unverified ? hard + " And " + soft : hard) + " Reopen Members while connected to your relay to try again.";
           window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what: "safeguarding clearances", message } }));
         } catch (e) {
         }

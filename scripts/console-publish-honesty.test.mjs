@@ -1015,8 +1015,8 @@ test('A READ TOO POOR TO FINISH IS "COULDN\'T CONFIRM", NOT "DID NOT RECEIVE"', 
     'has been mistaken for a definite one on this codebase before, and both possible definite answers are wrong.');
   assert.equal(s.banners().length, 1, 'the steward must still be told something is unconfirmed');
   const msg = s.banners()[0].detail.message;
-  assert.match(msg, /Couldn.t confirm/, 'the banner must admit ignorance rather than assert failure: ' + msg);
-  assert.doesNotMatch(msg, /did not receive/,
+  assert.match(msg, /couldn.t check whether/, 'the banner must admit ignorance rather than assert failure: ' + msg);
+  assert.doesNotMatch(msg, /wrong record is saved/,
     'the banner claims the members did not receive their record, which is not known and is usually false: ' + msg);
 });
 
@@ -1026,13 +1026,13 @@ test('…and that distinction is load-bearing, not decorative', async () => {
   // by the COUNT of members the console can actually condemn, not by a separate flag, so there is no way to
   // produce the accusing sentence without producing a member to accuse.
   const t = readsNothing(neverConfirms(await authenticate(consoleSide([WS_URL], null, null,
-    (src) => src.replace(/lost = missing\.filter\([^;]*;/, 'lost = missing.length;')))));
+    (src) => src.replace(/lost = lostPubs\.length;/, 'lost = missing.length;')))));
   // The roster is 21, so this deliberately overlaps earlier tests. Safe: readsNothing() means the skip read
   // returns nothing, so every member is written again regardless of what is already on the relay.
   const pubs = members.slice(14, 18).map(m => m.pub);
   await t.refreshClearances(pubs, pubs.slice(0, 2), []);
   t.close();
-  assert.match(t.banners()[0].detail.message, /did not receive/,
+  assert.match(t.banners()[0].detail.message, /wrong record is saved/,
     'with every unaccounted-for member counted as lost the console should wrongly accuse them — if it does ' +
     'not, that count is not what is preventing the false banner and this guard is untested');
 });
@@ -1254,7 +1254,7 @@ test('A RECORD READ BACK AND FOUND WRONG IS STILL NAMED PLAINLY', async () => {
   assert.equal(r.failed, 1, 'a member whose stored record is visibly wrong was not counted');
   assert.equal(r.unverified, false,
     'the console read the record back and could see it was wrong, so there is nothing unverified about it');
-  assert.match(s.banners()[0].detail.message, /did not receive/,
+  assert.match(s.banners()[0].detail.message, /wrong record is saved/,
     'a record the console has READ and found wrong must be reported as such, not softened into "couldn\'t '
     + 'confirm" — this is the case the banner exists for');
 });
@@ -1269,7 +1269,7 @@ test('…but one it never saw is not, even when the read finished', async () => 
     + 'it is checking never confirmed, so they may still be in flight — a read that overtakes a write gets an '
     + 'honest EOSE from a relay that simply has not received it yet. Measured on satellite: 7 of 8 members '
     + 'condemned, every record stored moments later.');
-  assert.match(s.banners()[0].detail.message, /Couldn.t confirm/);
+  assert.match(s.banners()[0].detail.message, /couldn.t check whether/);
 
   // SABOTAGE, isolated: condemn everything the read did not return, regardless of whether it was ever seen.
   const t = readsEmpty(neverConfirms(await authenticate(consoleSide([WS_URL], null, null,
@@ -1278,7 +1278,7 @@ test('…but one it never saw is not, even when the read finished', async () => 
   const r2 = await t.refreshClearances(pubs2, [pubs2[0]], []);
   t.close();
   assert.equal(r2.unverified, false, 'the sabotage did not take effect, so this proves nothing');
-  assert.match(t.banners()[0].detail.message, /did not receive/,
+  assert.match(t.banners()[0].detail.message, /wrong record is saved/,
     'with the "did we actually see it" guard removed the console should wrongly accuse every member — if it '
     + 'does not, that guard is not what prevents the satellite false alarm');
 });
@@ -1319,12 +1319,12 @@ test('AUDIT-7 #1: another console\'s copy on top is not a lost child', async () 
   again.close();
   const msg = (again.banners()[0] || { detail: {} }).detail.message || '';
   assert.equal(r.skipped, 0, 'fixture: the owner should have had all three to rewrite');
-  assert.doesNotMatch(msg, /did not receive/,
+  assert.doesNotMatch(msg, /wrong record is saved/,
     `the console told the steward three children had lost their safeguarding record. Its own copies of all `
     + `three are present and correct; what it could not do was overrule somebody else's copy sitting on top — `
     + `which it cannot even read. Needing to rewrite and knowing a record is lost are two different `
     + `questions. Banner: ${msg}`);
-  assert.match(msg, /Couldn.t confirm/, 'and the honest sentence must still be shown: ' + msg);
+  assert.match(msg, /couldn.t check whether/, 'and the honest sentence must still be shown: ' + msg);
 
   // SABOTAGE: put the two questions back into one boolean, which is what the previous commit did.
   await sleep(1200);
@@ -1333,7 +1333,7 @@ test('AUDIT-7 #1: another console\'s copy on top is not a lost child', async () 
   await bad.refreshClearances(pubs, pubs, []);
   void r;
   bad.close();
-  assert.match((bad.banners()[0] || { detail: {} }).detail.message || '', /did not receive/,
+  assert.match((bad.banners()[0] || { detail: {} }).detail.message || '', /wrong record is saved/,
     'with the two questions conflated the console should raise the false alarm again — if it does not, the '
     + 'separation is not what fixed this and the test above passes for some other reason');
 });
@@ -1503,9 +1503,9 @@ test('AUDIT-7 #5: a definite loss is not softened by an unrelated unknown', asyn
   const r = await s.refreshClearances([wrongOne.pub, unseenOne.pub], [wrongOne.pub, unseenOne.pub], []);
   s.close();
   const msg = s.banners()[0].detail.message;
-  assert.match(msg, /1 of 2 members did not receive/,
+  assert.match(msg, /the wrong record is saved for 1 of 2 people/,
     'the member whose record the console READ and found wrong must be named plainly. Banner: ' + msg);
-  assert.match(msg, /Couldn.t confirm the safeguarding record saved for 1 of 2/,
+  assert.match(msg, /couldn.t check whether the record saved for 1 of 2 people/,
     'and the member it never saw must be reported as unconfirmed, separately. Banner: ' + msg);
   assert.equal(r.failed, 2, 'both are still counted');
 
@@ -1517,10 +1517,10 @@ test('AUDIT-7 #5: a definite loss is not softened by an unrelated unknown', asyn
   seed2.close();
   await sleep(1200);
   const t = writesVanish(await authenticate(consoleSide([WS_URL], null, null,
-    (src) => src.replace(/const message = !lost \?[^;]*;/, 'const message = unverified ? soft : hard;'))));
+    (src) => src.replace(/\(!lost \? soft : unverified \? hard \+ " And " \+ soft : hard\)/, '(unverified ? soft : hard)'))));
   await t.refreshClearances([w2.pub, u2.pub], [w2.pub, u2.pub], []);
   t.close();
-  assert.doesNotMatch(t.banners()[0].detail.message, /did not receive/,
+  assert.doesNotMatch(t.banners()[0].detail.message, /wrong record is saved/,
     'with a single flag choosing the wording, the definitely-wrong record should be swallowed by the softer '
     + 'sentence — if it is not, the split wording is not what fixed this');
 });

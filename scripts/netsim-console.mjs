@@ -206,7 +206,7 @@ async function scenario(name, link, body) {
     // of failure; "couldn't confirm these saved" is an admission of ignorance. On a link too poor to read back,
     // the second is the honest thing to say and must not be scored as crying wolf — but it must also never be
     // allowed to masquerade as the first.
-    const wolves = s.banners().filter(b2 => !/Couldn.t confirm/.test((b2.detail || {}).message || ''));
+    const wolves = s.banners().filter(b2 => !/couldn.t check whether/.test((b2.detail || {}).message || ''));
     const unsure = s.banners().length - wolves.length;
     r.falseAlarm = (r.delivered === r.expected) ? wolves.length : 0;
     r.unsure = (r.delivered === r.expected) ? unsure : 0;
