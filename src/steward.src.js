@@ -609,7 +609,12 @@ pool.onRelayConnectionSuccess = (url) => {
     // writes while it was away. Drop the just-published cache so the next back-fill genuinely re-reads rather
     // than skipping from memory. Cheap — the cache is roster-sized and only suppresses redundant writes.
     // AUDIT-4: this is the reconciliation trigger for a relay that was down when a clearance was written.
-    if (fresh) _clearanceSent.clear();
+    // …and tell the UI, so the back-fill's session marker is released. Clearing the cache alone was not enough:
+    // stew-dashboard records a completed run against the roster signature and early-returns while it is
+    // unchanged, so a relay coming back mid-session was never reconciled until the console was reloaded. The
+    // handoff described same-session healing as something that "often will not" work; AUDIT-8 measured that it
+    // never did by itself. A returning relay is precisely when a re-check is worth doing.
+    if (fresh) { _clearanceSent.clear(); try { window.dispatchEvent(new CustomEvent('steward-relay-returned', { detail: { url } })); } catch (e) {} }
   } catch (e) {}
 };
 pool.onRelayConnectionFailure = (url) => { try { _relaysTouched.add(url); } catch (e) {} };
@@ -1162,6 +1167,41 @@ async function publish(evt) {
   try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
   return evt;
 }
+// TARGETED PUBLISH, for the safeguarding write path only. The shared publish() above resolves on
+// Promise.any — success as soon as ONE relay accepts — which is right for a chat message and wrong for a
+// child's safeguarding record: the console reported "saved" while two of three relays held nothing, and the
+// skip check then required the record on EVERY relay, so it rewrote the whole roster for ever without ever
+// telling anyone which relay was the problem. AUDIT-8.
+//
+// Deliberately NOT a change to publish() itself, which has 77 call sites across Finance, groups, profile and
+// invites. Rewriting the semantics of every write in the console days before a pilot is how a codebase that
+// already specialises in silent failures acquires more of them. This path is where the harm is; this path is
+// what changes.
+//
+// Returns the event only when EVERY targeted relay accepted. A partial write returns false, which puts the
+// member into the unconfirmed list and sends them through the verify read — where the truth is established by
+// looking rather than asserted by the writer.
+async function _publishToRelays(evt, urls) {
+  const targets = (urls && urls.length) ? urls : relays();
+  if (!targets.length) return false;
+  let rs = [];
+  try {
+    rs = await Promise.allSettled(pool.publish(targets, evt).map(p => p.then(v => {
+      if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      return v;
+    })));
+  } catch (e) { return false; }
+  const accepted = rs.filter(r => r.status === 'fulfilled').length;
+  if (!accepted) {
+    let reason = '';
+    try { const f = rs.find(r => r.status === 'rejected'); reason = (f && f.reason && (f.reason.message || String(f.reason))) || ''; } catch (x) {}
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    return false;
+  }
+  try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
+  return accepted === targets.length ? evt : false;
+}
+
 // resolve the signing key for a chosen publishing identity. asPub === church pub (or empty) -> church key;
 // asPub === an owned network's pub -> that network's key (so the doc is authored by the network).
 function skFor(asPub) {
@@ -1314,25 +1354,24 @@ function _clearanceOutranks(a, b, churchHex) {
 // relay has it" is not the invariant a church needs — see the note in _refreshClearancesNow.
 // Do these members ALREADY hold a clearance matching what we would write — on every relay we can reach?
 //
-// Returns `{ matching, wrong, definitive }`, or NULL meaning "could not check". Null and an empty `matching`
+// Returns `{ matching, wrong, needBy }`, or NULL meaning "could not check". Null and an empty `matching`
 // must never be confused: the empty set says "we looked and nobody has it", null says "we could not look".
 // Treating the second as the first is the mistake that has cost this codebase a care key once already, and it
 // is the whole reason read-before-write is gated on an authenticated read.
 //
-//   matching   — settled: our copy is right and nothing staler sits on top. Safe to SKIP.
-//   wrong      — our copy is present and its CONTENT is wrong. The only thing worth alarming about.
-//   definitive — every relay finished answering. Required before a skip, because a skip now rests on not
-//                having found a newer copy, and a read cut short cannot establish that.
+//   matching — settled EVERYWHERE, and proven so by a finished read on every relay. The only safe skip.
+//   wrong    — our copy is present and its CONTENT is wrong. The only thing worth alarming about.
+//   needBy   — relay url -> the members missing or wrong ON THAT RELAY. Drives targeted writes, so a member
+//              already correct on two of three relays is written only to the third.
+//
+// There is deliberately no whole-roster "definitive" flag any more. It was one global boolean covering every
+// member on every relay, so a single unfinished chunk on a single relay disabled every skip in the church and
+// the console rewrote the lot. Completeness is now carried per member, which is what makes a partial read
+// usable rather than worthless.
 //
 // Used twice, deliberately sharing one implementation: to SKIP redundant writes before publishing, and to
 // VERIFY before telling a steward that a child did not receive their record. Two copies of this logic would
 // drift, and the second copy is the one that decides whether a safeguarding alarm is true.
-// Returns { matching, definitive } — or null when no authenticated read was possible at all.
-//   matching   — members whose stored record already equals what we want. A found, decrypting, matching event
-//                is PROOF, and proof does not stop being proof because some other relay was slow.
-//   definitive — every relay finished answering (EOSE). Only then does "not in `matching`" mean "absent".
-// Keeping these apart is the whole point: conflating them either skips a write that never happened, or tells a
-// steward a child lost their record when the truth is the link was too thin to check.
 async function _clearancesMatching(pubs, wantFor) {
   if (!pubs.length || !sk || !_isRelayAuthed() || _viewingNetwork()) return null;
   const readFrom = _connectedRelays();
@@ -1355,16 +1394,45 @@ async function _clearancesMatching(pubs, wantFor) {
     // The top-slot predicate is applied WHILE choosing the newest, never after — see _newestByD and
     // _memberHonours. Filtering afterwards let one newer copy from an author the member ignores displace the
     // copy that mattered, leaving the console to conclude nothing was on top at all.
-    const perRelay = await Promise.all(readFrom.map(u =>
-      _newestByD([{ kinds: [30078], '#d': ds }], readMs, [u], mine, (e) => _memberHonours(e, churchHex))
-        .then(r => r, () => ({ byD: new Map(), complete: false }))));
+    // CHUNKED, because the budget has to grow with the church. One question about the whole roster got ONE
+    // fixed ~12s window, while the work grows with the membership: at ~390 bytes a record on an 8 kB/s link
+    // that window cannot cover 200 people, ever. And the answer was all-or-nothing — a read that did not
+    // finish authorised no skips at all, so the console rewrote the ENTIRE roster. AUDIT-8 measured 190 kB per
+    // visit at 200 members, permanently, against 178 kB for a complete rewrite from scratch: the optimisation
+    // that exists to avoid rewriting everything ended up rewriting everything, plus the cost of asking first.
+    //
+    // Each chunk gets its own window, so the budget scales; and completeness is tracked PER MEMBER, so a chunk
+    // that does finish is usable even when a later one times out. Sorted, so chunk N is the same people every
+    // visit — the relay returns matched events oldest-first, so chunking in arrival order would re-truncate
+    // whichever half was rewritten last time and leave the same members permanently unverified.
+    const CHUNK = 60;
+    const sorted = [...ds].sort();
+    const slices = [];
+    for (let i = 0; i < sorted.length; i += CHUNK) slices.push(sorted.slice(i, i + CHUNK));
+    const perRelay = await Promise.all(readFrom.map(async (u) => {
+      const byD = new Map(), covered = new Set();
+      for (const slice of slices) {
+        let r = null;
+        try { r = await _newestByD([{ kinds: [30078], '#d': slice }], readMs, [u], mine, (e) => _memberHonours(e, churchHex)); }
+        catch (x) { r = null; }
+        if (!r) continue;                                   // this chunk is simply unknown on this relay
+        for (const [k, v] of r.byD) byD.set(k, v);
+        if (r.complete) for (const d of slice) covered.add(d);   // only a FINISHED chunk proves an absence
+      }
+      return { url: u, byD, covered };
+    }));
     // DEFAULT-DENY. The per-member loop below decides by NOT finding a reason to object, so an empty
     // `perRelay` would settle — and therefore skip — every member on the roster. `readFrom.length` above makes
     // that unreachable today; this makes it unreachable by construction, which is the standard this codebase
     // holds every other read gate to. AUDIT-7 (carried from AUDIT-5, where it was noted and left).
     if (!perRelay.length) return null;
-    const definitive = perRelay.every(r => r.complete);
     const ok = new Set();
+    // WHICH RELAYS IS THIS MEMBER MISSING FROM. The write path used to be all-or-nothing in the other
+    // direction: publish() succeeds when ANY relay accepts, while the skip required the record on EVERY relay.
+    // So one relay that acknowledged writes but never served them back disabled skipping for the whole church,
+    // silently, and the console rewrote every member to every relay on every visit. Now each member is written
+    // only where they are actually missing.
+    const needBy = new Map(readFrom.map(u => [u, new Set()]));
     // TWO QUESTIONS, NOT ONE. Folding them into a single boolean is the defect AUDIT-7 found in the previous
     // commit, and it produced the exact false banner this branch exists to remove:
     //
@@ -1387,33 +1455,49 @@ async function _clearancesMatching(pubs, wantFor) {
       // times worse. Hoisting it removes the relay factor outright; the yield below removes the freeze.
       let ck = null;
       try { ck = nip44ck(sk, h); } catch (x) { continue; }
-      let settled = true, contentWrong = false;
-      for (const { byD: held } of perRelay) {
+      let settled = true, contentWrong = false, knownEverywhere = true;
+      for (const { url, byD: held, covered } of perRelay) {
         const rec = held.get(key);
         const e = rec && rec.ours;
+        let needHere = false;
         // NO `break` ON ABSENCE. Leaving the loop at the first relay that lacks our copy means a later relay
         // holding a WRONG one is never decrypted — so whether a definite loss got the definite wording came
         // down to which relay answered first. AUDIT-8 measured it: our copy absent on A and wrong on B
         // reported `wrong=0` asked as [A,B] and `wrong=1` asked as [B,A], same data both runs. Absence is
         // "unknown" and must not stop us looking for proof elsewhere.
-        if (!e) { settled = false; continue; }
-        let got = null;
-        try { got = JSON.parse(nip44d(e.content, ck)); } catch (x) { settled = false; contentWrong = true; continue; }
-        const w = wantFor(p);
-        if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) { settled = false; contentWrong = true; continue; }
-        // Our copy is right. But the member's app applies the NEWEST copy from any authorised writer, and we
-        // cannot open theirs — it is sealed with THEIR conversation key with the member, not ours. We can only
-        // decide whether it is ours to overrule.
-        const top = _topWeMustAnswer(rec, e);
-        if (top && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) settled = false;
+        if (!e) {
+          needHere = true;
+          // Absent AND the chunk finished = genuinely not there. Absent on a chunk that did NOT finish is
+          // simply unknown, and must not authorise a skip — but it is still worth writing, because writing to
+          // one relay we are unsure about is cheap and leaving a child without their record is not.
+          if (!covered.has(key)) knownEverywhere = false;
+        } else {
+          let got = null;
+          try { got = JSON.parse(nip44d(e.content, ck)); } catch (x) { needHere = true; contentWrong = true; }
+          if (!needHere) {
+            const w = wantFor(p);
+            if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) { needHere = true; contentWrong = true; }
+            else {
+              // Our copy is right. But the member's app applies the NEWEST copy from any authorised writer,
+              // and we cannot open theirs — it is sealed with THEIR conversation key with the member, not
+              // ours. We can only decide whether it is ours to overrule.
+              const top = _topWeMustAnswer(rec, e);
+              if (top && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) needHere = true;
+            }
+          }
+        }
+        if (needHere) { settled = false; const n = needBy.get(url); if (n) n.add(h); }
       }
-      if (settled) ok.add(h);
+      // A SKIP NEEDS BOTH: nothing to correct anywhere, and a finished read everywhere to prove it. Carried
+      // per member rather than as one global flag, which is what makes a partial read usable — under the old
+      // whole-roster flag a single unfinished chunk on a single relay disabled every skip in the church.
+      if (settled && knownEverywhere) ok.add(h);
       if (contentWrong) wrong.add(h);
       // Let the console breathe. Without this the whole roster is one unbroken task and the UI is frozen for
       // its duration — on the largest rosters, long enough for Android to offer to kill the app.
       if ((++scanned % 25) === 0) await null;
     }
-    return { matching: ok, wrong, definitive };
+    return { matching: ok, wrong, needBy };
   } catch (e) { return null; }
 }
 
@@ -2748,8 +2832,9 @@ window.Steward = {
   // children to the whole congregation — the relay no longer serves `minors:` to ordinary members, and joining
   // an open-join church is a single self-signed publish, so that list was one frame away from any stranger.
   // AUDIT-2026-07-27. Church-tagged so the relay can check the author is that church or one of its stewards.
-  publishClearance(memberPub, status) {
+  publishClearance(memberPub, status, urls) {
     if (!sk || _viewingNetwork()) return Promise.resolve(null);   // a network identity has no members
+    if (urls && !urls.length) return Promise.resolve(null);   // read says every relay already holds it: nothing to do
     const mp = toPubHex(memberPub) || memberPub;
     if (!/^[0-9a-f]{64}$/i.test(mp || '')) return Promise.resolve(null);
     const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
@@ -2788,14 +2873,17 @@ window.Steward = {
     // second a church last edited its list of children, and told the member themselves — a fact the read gate
     // deliberately withholds from them. When delegated stewards get safeguarding, the revision check belongs
     // on the RELAY, which holds the list and can refuse a stale write outright. AUDIT-8.
-    return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct })))
+    return Promise.resolve(_publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }), urls))
       .then(r => {
         // Remember what we just put on the wire, so a second writer moments later can tell it is redundant
         // WITHOUT waiting for the relay to echo it back. The read-before-write below closes the steady-state
         // case; this closes the sub-second one, which is the common one: toggleMinor() calls _reseal for the
         // member AND changes the safeguarding list, and the list echoing back re-runs the whole-roster
         // back-fill — both writing this same doc inside one second.
-        if (r) { try { _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now() }); } catch (e) {} }
+        // Record WHICH relays this write covered. The 15s skip below is a sub-second-collision guard, and
+        // once writes are targeted a member written to relay A must not have their relay-B write suppressed
+        // by a cache that only remembers "we wrote this member". `urls: null` means the full fan-out.
+        if (r) { try { _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now(), urls: (urls && urls.length) ? urls.slice() : null }); } catch (e) {} }
         return r;
       });
   },
@@ -2880,9 +2968,13 @@ window.Steward = {
     //     sub-second toggle race without depending on how fast the relay echoes.
     const total = pubs.length;
     const fresh = Date.now() - 15000;
+    const connNow = _connectedRelays();
     pubs = pubs.filter(p => {
       const sent = _clearanceSent.get(String(p).toLowerCase());
-      if (sent && sent.at >= fresh && same(sent, want(p))) { skipped++; return false; }
+      // Only a write that reached EVERY relay we can currently see earns the skip. A targeted write covered
+      // the relays that needed it at the time; a relay that has since reconnected still needs this member.
+      const coversAll = sent && (!sent.urls || connNow.every(u => sent.urls.indexOf(u) !== -1));
+      if (sent && sent.at >= fresh && same(sent, want(p)) && coversAll) { skipped++; return false; }
       return true;
     });
 
@@ -2909,21 +3001,29 @@ window.Steward = {
     // was down at write time still needs reconciling when it returns; that is what the _clearanceSent clear
     // on a connection change below is for, and a full per-relay outbox is the real cure.
     const already = await _clearancesMatching(pubs, want);
-    // A COMPLETED READ IS NOW REQUIRED TO SKIP, and the comment that used to sit here — "a partial read simply
-    // proves less, so the worst it can do is republish" — was true until this branch and is now false. Since
-    // the check began asking whether anyone else's copy sits on top of ours, skipping rests on a NEGATIVE:
-    // "no newer copy from another writer exists". That is precisely what a read cut short cannot establish.
-    // AUDIT-7 reproduced it: truncate the read before the steward's event arrives and the owner's console
-    // skips a child it should have corrected — 0 failed, no banner, the child's phone still reading "adult".
-    if (already && already.definitive) {
+    // A SKIP REQUIRES A FINISHED READ, and the comment that used to sit here — "a partial read simply proves
+    // less, so the worst it can do is republish" — was true until read-before-write started asking whether
+    // anyone ELSE's copy sits on top of ours. That makes a skip rest on a NEGATIVE: "no newer copy from
+    // another writer exists", which is precisely what a read cut short cannot establish. `matching` now
+    // carries that requirement per member, so a chunk that finished is usable even when a later one did not.
+    if (already) {
       pubs = pubs.filter(p => { if (already.matching.has(String(p).toLowerCase())) { skipped++; return false; } return true; });
     }
+    // WRITE ONLY WHERE IT IS MISSING. `needBy` says which relays actually lack each member's record, so a
+    // member already correct on two of three relays costs one write, not three. Falls back to every connected
+    // relay when the read could not run at all — with no information, writing everywhere is the safe default.
+    const targetsFor = (h) => {
+      if (!already || !already.needBy) return null;                 // no read: publish the normal way
+      const urls = [];
+      for (const [u, set] of already.needBy) if (set.has(h)) urls.push(u);
+      return urls;
+    };
 
     for (let i = 0; i < pubs.length; i += BATCH) {
       const slice = pubs.slice(i, i + BATCH);
       const settle = Promise.allSettled(slice.map(p => {
         const h = String(p).toLowerCase();
-        return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) });
+        return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }, targetsFor(h));
       }));
       // A dropped message produces a promise that never settles, so an unbounded await here would hang the
       // whole back-fill on the first one — turning a partial failure into a total one.

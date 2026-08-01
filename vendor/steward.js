@@ -12285,7 +12285,13 @@ zoo`.split("\n");
       const fresh = live && _subbedOn.get(url) !== live;
       _relaysTouched.add(url);
       if (live && !_subbedOn.has(url)) _subbedOn.set(url, live);
-      if (fresh) _clearanceSent.clear();
+      if (fresh) {
+        _clearanceSent.clear();
+        try {
+          window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url } }));
+        } catch (e) {
+        }
+      }
     } catch (e) {
     }
   };
@@ -12727,6 +12733,38 @@ zoo`.split("\n");
     }
     return evt;
   }
+  async function _publishToRelays(evt, urls) {
+    const targets = urls && urls.length ? urls : relays();
+    if (!targets.length) return false;
+    let rs = [];
+    try {
+      rs = await Promise.allSettled(pool.publish(targets, evt).map((p) => p.then((v) => {
+        if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        return v;
+      })));
+    } catch (e) {
+      return false;
+    }
+    const accepted = rs.filter((r) => r.status === "fulfilled").length;
+    if (!accepted) {
+      let reason = "";
+      try {
+        const f = rs.find((r) => r.status === "rejected");
+        reason = f && f.reason && (f.reason.message || String(f.reason)) || "";
+      } catch (x) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
+      } catch (x) {
+      }
+      return false;
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("steward-publish-ok", { detail: { evt } }));
+    } catch (x) {
+    }
+    return accepted === targets.length ? evt : false;
+  }
   function skFor(asPub) {
     if (!asPub || asPub === pub) return sk;
     const rec = netKeys().find((x) => x.pub === asPub);
@@ -12841,10 +12879,28 @@ zoo`.split("\n");
       }
       const readMs = (pool.maxWaitForConnection || 3e3) + 9e3;
       const churchHex = actingChurch || pub;
-      const perRelay = await Promise.all(readFrom.map((u) => _newestByD([{ kinds: [30078], "#d": ds }], readMs, [u], mine, (e) => _memberHonours(e, churchHex)).then((r) => r, () => ({ byD: /* @__PURE__ */ new Map(), complete: false }))));
+      const CHUNK = 60;
+      const sorted = [...ds].sort();
+      const slices = [];
+      for (let i3 = 0; i3 < sorted.length; i3 += CHUNK) slices.push(sorted.slice(i3, i3 + CHUNK));
+      const perRelay = await Promise.all(readFrom.map(async (u) => {
+        const byD = /* @__PURE__ */ new Map(), covered = /* @__PURE__ */ new Set();
+        for (const slice of slices) {
+          let r = null;
+          try {
+            r = await _newestByD([{ kinds: [30078], "#d": slice }], readMs, [u], mine, (e) => _memberHonours(e, churchHex));
+          } catch (x) {
+            r = null;
+          }
+          if (!r) continue;
+          for (const [k, v] of r.byD) byD.set(k, v);
+          if (r.complete) for (const d of slice) covered.add(d);
+        }
+        return { url: u, byD, covered };
+      }));
       if (!perRelay.length) return null;
-      const definitive = perRelay.every((r) => r.complete);
       const ok = /* @__PURE__ */ new Set();
+      const needBy = new Map(readFrom.map((u) => [u, /* @__PURE__ */ new Set()]));
       const wrong = /* @__PURE__ */ new Set();
       let scanned = 0;
       for (const p of pubs) {
@@ -12855,36 +12911,44 @@ zoo`.split("\n");
         } catch (x) {
           continue;
         }
-        let settled = true, contentWrong = false;
-        for (const { byD: held } of perRelay) {
+        let settled = true, contentWrong = false, knownEverywhere = true;
+        for (const { url, byD: held, covered } of perRelay) {
           const rec = held.get(key);
           const e = rec && rec.ours;
+          let needHere = false;
           if (!e) {
-            settled = false;
-            continue;
+            needHere = true;
+            if (!covered.has(key)) knownEverywhere = false;
+          } else {
+            let got = null;
+            try {
+              got = JSON.parse(decrypt3(e.content, ck));
+            } catch (x) {
+              needHere = true;
+              contentWrong = true;
+            }
+            if (!needHere) {
+              const w = wantFor(p);
+              if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) {
+                needHere = true;
+                contentWrong = true;
+              } else {
+                const top = _topWeMustAnswer(rec, e);
+                if (top && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) needHere = true;
+              }
+            }
           }
-          let got = null;
-          try {
-            got = JSON.parse(decrypt3(e.content, ck));
-          } catch (x) {
+          if (needHere) {
             settled = false;
-            contentWrong = true;
-            continue;
+            const n = needBy.get(url);
+            if (n) n.add(h);
           }
-          const w = wantFor(p);
-          if (!got || !!got.minor !== !!w.minor || !!got.cleared !== !!w.cleared) {
-            settled = false;
-            contentWrong = true;
-            continue;
-          }
-          const top = _topWeMustAnswer(rec, e);
-          if (top && _clearanceOutranks(e.pubkey, top.pubkey, churchHex)) settled = false;
         }
-        if (settled) ok.add(h);
+        if (settled && knownEverywhere) ok.add(h);
         if (contentWrong) wrong.add(h);
         if (++scanned % 25 === 0) await null;
       }
-      return { matching: ok, wrong, definitive };
+      return { matching: ok, wrong, needBy };
     } catch (e) {
       return null;
     }
@@ -14700,8 +14764,9 @@ zoo`.split("\n");
     // children to the whole congregation — the relay no longer serves `minors:` to ordinary members, and joining
     // an open-join church is a single self-signed publish, so that list was one frame away from any stranger.
     // AUDIT-2026-07-27. Church-tagged so the relay can check the author is that church or one of its stewards.
-    publishClearance(memberPub, status) {
+    publishClearance(memberPub, status, urls) {
       if (!sk || _viewingNetwork()) return Promise.resolve(null);
+      if (urls && !urls.length) return Promise.resolve(null);
       const mp = toPubHex(memberPub) || memberPub;
       if (!/^[0-9a-f]{64}$/i.test(mp || "")) return Promise.resolve(null);
       const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
@@ -14712,10 +14777,10 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const cp = actingChurch || pub;
-      return Promise.resolve(publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }))).then((r) => {
+      return Promise.resolve(_publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }), urls)).then((r) => {
         if (r) {
           try {
-            _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now() });
+            _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now(), urls: urls && urls.length ? urls.slice() : null });
           } catch (e) {
           }
         }
@@ -14798,16 +14863,18 @@ zoo`.split("\n");
       const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared;
       const total = pubs.length;
       const fresh = Date.now() - 15e3;
+      const connNow = _connectedRelays();
       pubs = pubs.filter((p) => {
         const sent = _clearanceSent.get(String(p).toLowerCase());
-        if (sent && sent.at >= fresh && same(sent, want(p))) {
+        const coversAll = sent && (!sent.urls || connNow.every((u) => sent.urls.indexOf(u) !== -1));
+        if (sent && sent.at >= fresh && same(sent, want(p)) && coversAll) {
           skipped++;
           return false;
         }
         return true;
       });
       const already = await _clearancesMatching(pubs, want);
-      if (already && already.definitive) {
+      if (already) {
         pubs = pubs.filter((p) => {
           if (already.matching.has(String(p).toLowerCase())) {
             skipped++;
@@ -14816,11 +14883,17 @@ zoo`.split("\n");
           return true;
         });
       }
+      const targetsFor = (h) => {
+        if (!already || !already.needBy) return null;
+        const urls = [];
+        for (const [u, set] of already.needBy) if (set.has(h)) urls.push(u);
+        return urls;
+      };
       for (let i3 = 0; i3 < pubs.length; i3 += BATCH) {
         const slice = pubs.slice(i3, i3 + BATCH);
         const settle = Promise.allSettled(slice.map((p) => {
           const h = String(p).toLowerCase();
-          return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) });
+          return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }, targetsFor(h));
         }));
         const rs = await Promise.race([settle, new Promise((r) => setTimeout(() => r(null), _BATCH_MS))]);
         if (!rs) {

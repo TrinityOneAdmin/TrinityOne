@@ -85,7 +85,11 @@ function consoleSide(ws) {
   // The real publish(): resolves on OK, and NEVER resolves if the relay says nothing — which is exactly the
   // shape a rate-limited drop has, and why the fix needs its own bound.
   const publish = (evt) => new Promise(res => { pending.set(evt.id, res); ws.send(JSON.stringify(['EVENT', evt])); });
-  const pubClearance = grabMethod(STEWARD, 'publishClearance(memberPub, status)');
+  // publishClearance now writes to a TARGETED relay list (a member already correct on two of three relays is
+  // written only to the third). This file drives one raw socket and measures PACING, so the targeting is not
+  // what is under test here — shim it onto the same single-socket publish, exactly as `publish` itself is.
+  const _publishToRelays = (evt) => publish(evt);
+  const pubClearance = grabMethod(STEWARD, 'publishClearance(memberPub, status, urls)');
   const refresh = grabMethod(STEWARD, 'refreshClearances(memberPubs, minors, approved)');
   // refreshClearances is now a thin serialising wrapper around _refreshClearancesNow — lift both, and anchor
   // the inner one on `async ` because its first textual occurrence is the CALL inside the wrapper.
@@ -129,7 +133,7 @@ function consoleSide(ws) {
     // empty pool object exercises the shipped `|| 3000` fallback, which is the path the real console takes —
     // it constructs SimplePool without setting maxWaitForConnection.
     pool: {},
-    _isRelayAuthed, _connectedRelays, Map, Date,
+    _isRelayAuthed, _connectedRelays, _publishToRelays, Map, Date,
     [decName]: (c, k) => nip44v2.decrypt(c, k),
     sk: church.sk, pub: church.pub, actingChurch: '',
     CLEARANCE_D: CLEAR_D, NET: 'trinityone',

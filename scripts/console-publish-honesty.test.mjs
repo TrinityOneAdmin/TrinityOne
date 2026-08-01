@@ -107,8 +107,8 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   const events = [];                                    // every window event the console fired
 
   // ── lift everything first, THEN build the scope ────────────────────────────────────────────────────────
-  const publishSrc = grab('async function publish(evt)');
-  const pubClearance = grab('publishClearance(memberPub, status)');
+  const publishSrc = grab('async function publish(evt)') + grab('async function _publishToRelays(evt, urls)');
+  const pubClearance = grab('publishClearance(memberPub, status, urls)');
   const refresh = grab('refreshClearances(memberPubs, minors, approved)');
   // NOT grab('_refreshClearancesNow(...)'): its first occurrence is the CALL inside the refreshClearances
   // wrapper, so brace-matching from there returns the wrapper's tail. Anchor on the `async ` declaration.
@@ -1048,14 +1048,15 @@ test('…and that distinction is load-bearing, not decorative', async () => {
 // SEPARATE documents that never collide on the relay. The console can therefore look at its own, find exactly
 // what it intended, skip the write as redundant — while the member's phone is applying somebody else's, older
 // or newer, saying the opposite. No error, no banner, no retry: the console is satisfied for ever.
-async function memberSees(m) {
-  const w = await new Promise((res, rej) => { const s = new WebSocket(WS_URL); s.on('open', () => res(s)); s.on('error', rej); });
+async function memberSees(m, url) {
+  const URL_ = url || WS_URL;
+  const w = await new Promise((res, rej) => { const s = new WebSocket(URL_); s.on('open', () => res(s)); s.on('error', rej); });
   let best = null;
   await new Promise(res => {
     const on = d => {
       const msg = JSON.parse(d);
       if (msg[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(),
-        tags: [['relay', WS_URL], ['challenge', msg[1]]], content: '' }, m.sk)]));
+        tags: [['relay', URL_], ['challenge', msg[1]]], content: '' }, m.sk)]));
       if (msg[0] === 'EVENT' && msg[1] === 'q') {
         const e = msg[2];
         if (best && (e.created_at || 0) < best.at) return;         // newest-wins, exactly as the member app does
@@ -1387,6 +1388,10 @@ test('AUDIT-7 #3: a read cut short must not authorise a skip', async () => {
   // Skipping used to rest on positive proof ("our copy is correct"), which a partial read can only understate.
   // Since the check began asking whether anyone else's copy sits on top, it rests on a NEGATIVE — "no newer
   // copy exists" — and that is exactly what a truncated read cannot establish.
+  //
+  // AUDIT-8 moved the requirement from one whole-roster flag to a per-member one, because the global version
+  // meant a single unfinished chunk on a single relay disabled every skip in the church and the console
+  // rewrote the lot. The sabotage below now targets that per-member guard.
   const steward = K();
   const ident = await seatSteward(steward);
   const VIEW = { roster: [steward.pub] };
@@ -1415,7 +1420,7 @@ test('AUDIT-7 #3: a read cut short must not authorise a skip', async () => {
 
   // SABOTAGE: skip on a partial read, as the code did before this audit.
   const owner3 = await authenticate(consoleSide([WS_URL], null, null,
-    (src) => src.replace('if (already && already.definitive) {', 'if (already) {'), VIEW));
+    (src) => src.replace('if (settled && knownEverywhere) ok.add(h);', 'if (settled) ok.add(h);'), VIEW));
   const real3 = owner3.pool.subscribeMany.bind(owner3.pool);
   owner3.pool.subscribeMany = (u, f, h) => real3(u, f, { ...h, oneose() {} });
   const r3 = await owner3.refreshClearances([child.pub], [child.pub], []);
@@ -1580,4 +1585,69 @@ test('AUDIT-8: a network identity has no members, and writes none', async () => 
   assert.equal(r && r.failed, 0,
     'the refusal was reported as a FAILURE, which would raise a safeguarding alarm about members who do not '
     + 'exist in this view');
+});
+
+test('AUDIT-8: a record is written only to the relays that are missing it', async () => {
+  // publish() resolves on Promise.any — success as soon as ONE relay accepts — while the skip required the
+  // record on EVERY relay. So a relay that was down at write time never got the record, and the console
+  // rewrote the WHOLE roster to EVERY relay on every visit trying to fix it, telling nobody which relay was
+  // the problem. Measured at 200 members: 0 skipped and a full republish, permanently.
+  //
+  // Written as "relay B was down when the child was marked, and comes back afterwards", which is the ordinary
+  // way a church ends up in this state.
+  const B_PORT = 8998;   // free across scripts/ — `npm test` runs files in PARALLEL
+  await requireFreePort(B_PORT, 'console-publish-honesty.test.mjs (its late-joining relay)');
+  const child = K();
+
+  // 1. Only relay A exists. The child is marked, and the record lands there.
+  const s1 = await authenticate(consoleSide([WS_URL]));
+  await s1.refreshClearances([child.pub], [child.pub], []);
+  s1.close();
+  const onA = await memberSees(child);
+  assert.ok(onA && onA.minor === true, 'fixture: the child was never marked on relay A');
+
+  // 2. Relay B joins the church, holding nothing.
+  const bDir = mkdtempSync(join(tmpdir(), 'trin-relayLate-'));
+  const bUrl = `ws://127.0.0.1:${B_PORT}/relay`;
+  const relayB = spawn(process.execPath, ['scripts/gateway.mjs', String(B_PORT)], {
+    cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore',
+    env: { ...process.env, TRINITY_DATA_DIR: bDir, RELAY_MAX_EVENTS: '20000', CHURCH_NPUB: npubEncode(church.pub) },
+  });
+  try {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) { try { if ((await fetch(`http://127.0.0.1:${B_PORT}/status`)).ok) break; } catch {} await sleep(150); }
+    assert.equal(await memberSees(child, bUrl), null, 'fixture: the late relay should start with nothing');
+
+    // 3. A visit with BOTH relays connected. B must receive the record; A must NOT be rewritten.
+    await sleep(1200);
+    const s2 = await authenticate(consoleSide([WS_URL, bUrl]));
+    await requireConnected(s2, [WS_URL, bUrl]);
+    await s2.refreshClearances([child.pub], [child.pub], []);
+    s2.close();
+    await sleep(600);
+
+    const nowOnB = await memberSees(child, bUrl);
+    assert.ok(nowOnB && nowOnB.minor === true,
+      'the relay that was down when the child was marked still holds no safeguarding record. A member whose '
+      + 'phone reads only that relay finds nothing, falls back to a minors list the relay will not serve them, '
+      + 'and is treated as an adult.');
+
+    const nowOnA = await memberSees(child);
+    assert.equal(nowOnA.at, onA.at,
+      `relay A's copy was rewritten (created_at ${onA.at} -> ${nowOnA.at}) even though it was already correct. `
+      + 'Writes must go only where the record is missing — rewriting every member to every relay on every '
+      + 'visit is the amplification read-before-write exists to remove.');
+
+    // 4. …and with both relays now holding it, the next visit writes nothing at all.
+    await sleep(1200);
+    const s3 = await authenticate(consoleSide([WS_URL, bUrl]));
+    await requireConnected(s3, [WS_URL, bUrl]);
+    const r3 = await s3.refreshClearances([child.pub], [child.pub], []);
+    s3.close();
+    assert.equal(r3.skipped, 1, 'with both relays holding the right record the member must be skipped entirely');
+    assert.equal(s3.ok(), 0, 'and nothing should have gone on the wire');
+  } finally {
+    try { relayB && relayB.kill('SIGKILL'); } catch {}
+    try { rmSync(bDir, { recursive: true, force: true }); } catch {}
+  }
 });

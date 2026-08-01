@@ -138,7 +138,7 @@ test('a member cannot forge their own clearance', async () => {
 // asserted against its own idea of the event rather than the one the console sends. AUDIT-2026-07-27.
 test('the tag shape the console really publishes is accepted by the relay', () => {
   const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
-  const at = S.indexOf('publishClearance(memberPub, status)');
+  const at = S.indexOf('publishClearance(memberPub, status, urls)');
   assert.notEqual(at, -1, 'publishClearance is gone from the shipped console bundle');
   const body = S.slice(at, at + 1200);
   assert.match(body, /\[\s*["']church["']\s*,\s*cp\s*\]/,

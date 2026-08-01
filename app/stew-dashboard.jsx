@@ -3270,6 +3270,13 @@ let clearanceBackfillDone = '';
 // runs. At 500 members that is ~500 NIP-44 seals and ~25s of paced publishing per cycle, on a cheap phone with
 // no connection — the exact device and the exact link this product is built for.
 let clearanceBackfillFailedAt = 0;
+// A RELAY CAME BACK, so what the last run verified is no longer the whole picture: it skipped members on the
+// strength of the relays reachable AT THE TIME, and this one may have missed writes while it was away.
+// Releasing the session marker lets the next Members visit re-read and repair, instead of early-returning on
+// an unchanged roster signature until the console is reloaded. AUDIT-8 measured same-session healing never
+// happening without this. Registered once at module scope, not per mount, so it survives tab switches.
+try { window.addEventListener('steward-relay-returned', () => { clearanceBackfillDone = ''; clearanceBackfillFailedAt = 0; }); } catch (e) {}
+
 let clearanceBackfillLastSig = '';   // which signature that failure belonged to — a CHANGED roster skips the wait
 const CLEARANCE_RETRY_MS = 60000;
 

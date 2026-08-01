@@ -78,8 +78,8 @@ const pick = (src, base) => (src.match(new RegExp('\\b(' + base + '\\d*)\\(')) |
 function consoleSide(urls) {
   const pool = new SimplePool({ verifyEvent, websocketImplementation: WebSocket, maxWaitForConnection: 3000 });
   const events = [];
-  const publishSrc = grab('async function publish(evt)');
-  const pubClearance = grab('publishClearance(memberPub, status)');
+  const publishSrc = grab('async function publish(evt)') + grab('async function _publishToRelays(evt, urls)');
+  const pubClearance = grab('publishClearance(memberPub, status, urls)');
   const refresh = grab('refreshClearances(memberPubs, minors, approved)');
   const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved)');
   const newest = grab('function _newestByD(');
