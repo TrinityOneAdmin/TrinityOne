@@ -77,6 +77,29 @@ test('the media key is not minted from an untrusted view', () => {
     'every member, forever');
 });
 
+test('…nor before the console has actually LOOKED for an existing envelope', () => {
+  // AUTHENTICATION IS NOT AN ANSWER. NIP-42 auth is one round trip; the church's document corpus is not. A
+  // console restored from the 12 words can be authenticated and writing while the media-key envelope is still
+  // in flight — and on that link it minted a fresh key and replaced the church's envelope, destroying every
+  // sermon the church had ever encrypted. Reproduced deterministically by holding the envelope back 30s.
+  // The care key has carried this flag since AUDIT-2026-07-24; the media key is the same bug verbatim.
+  assert.match(body('mediaEncryptor(', BUNDLE), /_mediaKeyChecked/,
+    'mediaEncryptor mints when it has no key and the relay is merely AUTHENTICATED. It must also have '
+    + 'positively observed that no envelope exists — otherwise a slow link mints over the church\'s archive.');
+  assert.match(body('subscribeMediaKey(', BUNDLE), /oneose\(\)\s*\{\s*_mediaKeyChecked = true/,
+    'nothing ever sets _mediaKeyChecked, so the guard above can never open and encrypted uploads are blocked '
+    + 'for ever — a flag that is only ever false is not a fix');
+});
+
+test('an envelope arriving late does not discard a key this device already holds', () => {
+  // The other half of the same loss. If this console minted a key and the church's real envelope arrives
+  // afterwards, replacing the ring outright orphans whatever was encrypted in that window. Rotation must
+  // never drop a key that has already sealed something.
+  assert.match(body('subscribeMediaKey(', BUNDLE), /_mediaKeyRing\.filter/,
+    'subscribeMediaKey overwrites the ring with whatever the envelope carries, so anything this device '
+    + 'encrypted before the envelope arrived becomes undecryptable');
+});
+
 test('an encrypted group key is not minted from an untrusted view', () => {
   assert.match(body('publishGroupKey(', BUNDLE), /_isRelayAuthed\(\)/,
     'minting over an existing group key orphans that group’s entire encrypted history. The reuseOnly path ' +

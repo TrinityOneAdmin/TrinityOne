@@ -97,6 +97,19 @@ self.addEventListener('fetch', (e) => {
     try {
       const u = new URL(req.url);
       let dirty = false;
+      // THE FRAGMENT TOO, unconditionally. `inviteUrlFor` deliberately puts a member's 12 words after the #
+      // "precisely so it never persists" — a fragment is not sent to the server, which is right, but Cache
+      // Storage keys on the FULL request URL, so the whole phrase was written to disk and readable for ever
+      // via caches.keys(). The app scrubs the address bar a moment later; the cache keeps it. Measured on a
+      // real profile: a cache key of `http://host/#invite=<12 words>`. Anyone who later reaches that browser
+      // profile — DevTools, an extension, a seized laptop — IS that member, permanently, because the key
+      // cannot be rotated without losing their place in the church. AUDIT 2026-08-02.
+      //
+      // Cleared for every request rather than only the ones we recognise: a cache key never needs a fragment
+      // (the server never saw it), so there is nothing to lose, and the next parameter someone invents in a
+      // fragment is covered before it is written. The named-query list stays as it is — those DO reach the
+      // server, so removing one changes what is fetched, not merely what is remembered.
+      if (u.hash) { u.hash = ''; dirty = true; }
       for (const k of SENSITIVE_QS) { if (u.searchParams.has(k)) { u.searchParams.delete(k); dirty = true; } }
       return dirty ? new Request(u.toString(), { method: req.method, headers: req.headers, mode: 'no-cors', credentials: req.credentials }) : req;
     } catch (_) { return req; }

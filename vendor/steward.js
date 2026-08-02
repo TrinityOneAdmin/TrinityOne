@@ -11749,6 +11749,7 @@ zoo`.split("\n");
   var _mediaKeyHex = null;
   var _mediaKeyRing = [];
   var _mediaKeyDocKeys = null;
+  var _mediaKeyChecked = false;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -13786,7 +13787,7 @@ zoo`.split("\n");
     // so the host (and any cloud backup) only ever holds ciphertext; only members hold the key to decrypt.
     async mediaEncryptor(memberPubs) {
       if (!sk) throw new Error("no key");
-      if (!_mediaKeyHex && !_isRelayAuthed()) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
+      if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
       if (!_mediaKeyHex) {
         _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
         _mediaKeyRing = [_mediaKeyHex];
@@ -14057,14 +14058,17 @@ zoo`.split("\n");
                 if (Array.isArray(q)) r = q.filter((k) => typeof k === "string" && k);
               } catch (x2) {
               }
-              _mediaKeyRing = r && r.length ? r : [plain];
+              const incoming = r && r.length ? r : [plain];
+              _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter((k) => incoming.indexOf(k) === -1)];
               _mediaKeyHex = _mediaKeyRing[0];
             }
           } catch (x) {
           }
         },
         oneose() {
+          _mediaKeyChecked = true;
         }
+        // no envelope came back → it is safe to mint one
       });
       return () => {
         try {
