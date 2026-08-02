@@ -6,7 +6,7 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync, statfsSync } from 'fs';
 import { Transform } from 'stream';
 import { gzipSync } from 'node:zlib';
 import { extname, normalize, join, sep } from 'path';
@@ -73,6 +73,9 @@ const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');              
 const ANDROID_CERT_SHA256 = process.env.ANDROID_CERT_SHA256 || '9A:51:21:F0:9D:60:6B:83:E7:0F:19:22:06:CD:C6:17:05:2A:49:41:79:97:B8:24:C6:BB:97:97:AD:8C:A6:00';
 const SQLITE_DB = process.env.RELAY_SQLITE || join(DATA_DIR,'relay.sqlite');       // durable event store
 const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 20000;   // ephemeral budget; raise on a shared/public relay
+// Set when the store refuses a write, cleared when one succeeds. /status reports ok:false while it is set, so
+// an ordinary health check catches a relay that is up, listening, and losing everything it is sent.
+let STORE_DEGRADED = null;
 // FEDERATION Phase 3a — relay OFFER (opt-in): an operator willing to host OTHER churches sets RELAY_OPEN=1,
 // so this relay advertises itself (in its NIP-11 doc) as accepting new churches. Default OFF: a private/home
 // relay never offers itself, so discovery/auto-pick can't surface it (FEDERATION-PLAN risk #4). operator =
@@ -2156,8 +2159,23 @@ function serveStatic(req, res) {
   }
   if (route === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
+    // OK MEANS "THIS RELAY IS DOING ITS JOB", not "the process is running". A relay that is up, listening and
+    // refusing every write is the worst state to report as healthy: nothing is saved, the clients are told
+    // nothing, and every dashboard stays green. AUDIT 2026-08-02.
     res.end(JSON.stringify({
-      ok: true, port: PORT, uptimeMs: Date.now() - STARTED_AT,
+      ok: !STORE_DEGRADED, port: PORT, uptimeMs: Date.now() - STARTED_AT,
+      ...(STORE_DEGRADED ? { degraded: { since: STORE_DEGRADED.at, reason: STORE_DEGRADED.why, what: 'storage' } } : {}),
+      // FREE SPACE, because the retention cull cannot prevent a full disk. That budget counts EPHEMERAL
+      // EVENTS per church — it never touches members, rosters, groups, care, safeguarding or finance (kept
+      // for ever by design) and it cannot see media files at all, which are the largest thing on the disk.
+      // Nothing anywhere watched actual space, so the first sign of a full disk was silence.
+      storage: (() => {
+        try {
+          const st = statfsSync(DATA_DIR);
+          const total = Number(st.blocks) * Number(st.bsize), free = Number(st.bavail) * Number(st.bsize);
+          return { freeBytes: free, totalBytes: total, usedPct: total ? Math.round((1 - free / total) * 100) : null };
+        } catch (e) { return null; }
+      })(),
       version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN,   // for the dashboard's update check
       // C1: on a RELEASE HOST, what this box would hand the fleet if a relay pulled right now. Absent on an
       // ordinary relay. Surfaced so "which code is being released?" is answerable without shell access —
@@ -3698,7 +3716,23 @@ wss.on('connection', (ws, req) => {
       const wasMember = _mdD.startsWith(MEMBER_D) && (MEMBER_DOCS.get(_mdD.slice(MEMBER_D.length)) || new Set()).has(evt.pubkey);
       // durable store handles replaceable dedup + smart retention (structure kept, oldest ephemeral culled).
       // 'have-newer' / 'duplicate' → acknowledge but don't re-broadcast.
-      const putRes = store.put(evt, resolveChurch(evt));
+      // A STORAGE FAILURE MUST NOT BE SILENT. store.put THROWS when the database cannot accept a write — a
+      // full disk, a read-only volume, a per-file limit, a malformed image. That throw used to escape into the
+      // process-wide uncaughtException handler, which logs and carries on BY DESIGN, so three things happened
+      // at once: the event was lost, the client got NO reply at all (not a rejection — silence, so its publish
+      // simply never completes and the app waits for ever), and /status kept answering ok:true, so a health
+      // check, an uptime monitor and the control dashboard all stayed green. Measured: 44 events stored under
+      // a 1 MB file ceiling, then 4 publishes that vanished with no reply and no operator signal anywhere
+      // except one line on stderr. AUDIT 2026-08-02.
+      let putRes;
+      try { putRes = store.put(evt, resolveChurch(evt)); }
+      catch (err) {
+        STORE_DEGRADED = { at: Date.now(), why: String((err && err.message) || err).slice(0, 200) };
+        try { console.error('[relay] STORAGE FAILURE — refusing writes:', STORE_DEGRADED.why); } catch (e) {}
+        ws.send(JSON.stringify(['OK', evt.id, false, 'error: relay storage unavailable — nothing was saved']));
+        return;
+      }
+      if (STORE_DEGRADED) STORE_DEGRADED = null;   // a write got through: whatever it was has cleared
       // AUDIT 2026-07-26 (CRITICAL): note() used to run BEFORE put(), so a write the relay then REFUSED had
       // already rewritten the live maps — MEMBER_DOCS, BLOCKED_BY, ADMITTED_BY, STEWARDS_BY, MINORS_BY,
       // GUARDIANS_BY, GROUP_MEMBERS, GROUP_VIS, ROSTER_PEOPLE. Replay is not author-gated (any socket may send

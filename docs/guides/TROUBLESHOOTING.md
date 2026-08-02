@@ -9,7 +9,17 @@ Find your symptom. Most things here are quick.
 ### The app is blank / stuck on a spinner
 - **Reload it.** Web: pull to refresh or reopen the tab. App: close and reopen.
 - **You may be offline.** The Bible reader works with no connection, but chat/church content needs the internet. Check your signal.
-- **Still blank after a reload?** Clear the app's cache/data (Android: App info → Storage → Clear cache), or reinstall. Your identity survives a reinstall on the same device — but this is exactly why your **12 recovery words** matter.
+- **Still blank after a reload?** Clear the app's **cache** — Android: App info → Storage → **Clear cache**. This
+  is safe: it throws away downloaded files, not your account.
+- **⚠️ Do NOT tap "Clear storage", and do not uninstall, unless you have your 12 recovery words in front of
+  you.** TrinityOne deliberately does not copy your account to Google's cloud backup (that is the point — your
+  church's data is not on someone else's server). So clearing storage or uninstalling **deletes your account
+  from this phone, permanently**. Nobody can undo it: not you, not your church, not us.
+  - **Have your 12 words?** You're fine. Reinstall, open the app, and choose **"I've used it before"** on the
+    first screen to restore.
+  - **Don't have them?** Stop. Do not uninstall. Open the app, go to **You → Recovery key**, and write the 12
+    words down first. If the app won't open at all, ask your steward before you touch anything — they can put
+    you back in your place in the church on a new account, but your old private messages cannot come back.
 
 ### Church content is slow to appear (but the Bible is instant)
 That's expected on a weak connection. The Bible is on your device; chat, prayer and announcements come from your church's relay over the network. On a thin pipe, give it a few seconds on first open. If it's *always* slow, your church may be on a distant/overloaded relay — a steward can point it at a closer one (see below).
