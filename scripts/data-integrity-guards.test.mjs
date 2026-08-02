@@ -48,19 +48,24 @@ function body(name, src = BUNDLE) {
 
 // Whole-list replacements: the console republishes the ENTIRE list on every edit, so acting on an empty read
 // wipes it. Wiping `minors` is the worst — the relay stops blocking adult↔minor DMs for every child on it.
+// ANCHOR ON THE DECLARATION, not the bare name. `body('setAdmitted(')` finds the first textual match, and
+// once anything CALLS setAdmitted before it is declared — as reseatMember now does, carrying a member's seat
+// across — that match is the call site and the guard silently checks the wrong function. This file exists to
+// prove a `_requireTrustedView` is present; an anchor that can drift onto a caller would pass while the guard
+// it names had been deleted. AUDIT 2026-08-02, caught by this test failing on exactly that change.
 const WHOLE_LIST_WRITERS = [
   ['setBlocked', 'every banned member is silently unbanned'],
   ['setNoPhoto', 'photo suppression is lifted for every child'],
   ['setMinors', 'every other child stops being a minor — the relay stops blocking adult↔minor DMs'],
-  ['setApproved', 'every youth-cleared adult loses clearance'],
-  ['setGuardians', 'every parent↔child link is dropped'],
-  ['setAdmitted', 'the whole congregation returns to "waiting for approval"'],
-  ['setStewards', 'every delegated steward is revoked'],
+  ['setApproved', 'every youth-cleared adult loses clearance', 'setApproved(pubkeys)'],
+  ['setGuardians', 'every parent↔child link is dropped', 'setGuardians(links)'],
+  ['setAdmitted', 'the whole congregation returns to "waiting for approval"', 'setAdmitted(pubkeys)'],
+  ['setStewards', 'every delegated steward is revoked', 'setStewards(pubkeys)'],
 ];
 
-for (const [name, consequence] of WHOLE_LIST_WRITERS) {
+for (const [name, consequence, decl] of WHOLE_LIST_WRITERS) {
   test(`${name} refuses to publish from an untrusted view`, () => {
-    assert.match(body(name + '(', BUNDLE), /_requireTrustedView/,
+    assert.match(body(decl || (name + '('), BUNDLE), /_requireTrustedView/,
       `${name} replaces the whole list. Without the guard, editing one entry while the relay is ` +
       `unreachable/unauthenticated publishes a list built from an EMPTY read: ${consequence}. Permanent.`);
   });

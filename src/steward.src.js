@@ -3499,6 +3499,66 @@ window.Steward = {
     // church would keep showing two of the same person and the reconnect would look like it did nothing.
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RESEAT_D + pub], ['t', NET]], content: JSON.stringify({ pairs: clean }) }));
   },
+  // RECONNECT A MEMBER ONTO A NEW KEY, as one action. Lives here rather than in the modal because a re-seat
+  // is not two writes — it is a seat MOVING, and everything attached to the seat has to move with it. Every
+  // piece of that was previously left to whoever wrote the UI to remember, and none of it was remembered.
+  //
+  // WHAT MOVES WITH THE SEAT, and why each one has to:
+  //   minors: / approved:   name a PUBKEY. Left behind, the child's phone finds no record and falls back to a
+  //                         list the relay refuses to serve ordinary members — so absence reads as adulthood,
+  //                         and the relay opens too (safeguardAllows lets anyone DM a key no church calls a
+  //                         minor). Worse, the next Members visit then SEALS "not a minor" to the new key, and
+  //                         read-before-write skips that member for ever after.
+  //   guardians:            names a pubkey on both sides. This is the half a steward CANNOT repair by hand:
+  //                         re-ticking "child" restores the marking and still leaves the parent unable to
+  //                         message their own child.
+  //   the clearance         is SEALED to a pubkey, so it has to be re-issued, not moved.
+  //   the old key           keeps full access unless blocked — and the console filters it out of the roster
+  //                         the moment the re-seat lands, so a steward cannot revoke a STOLEN phone
+  //                         afterwards even if they realise. Hence `blockOld`, asked at the point of decision.
+  //
+  // The old key stays ON the safeguarding lists rather than being removed: that half fails closed, and a key
+  // nobody holds costs nothing. AUDIT 2026-08-02.
+  async reseatMember(oldPub, newPub, o) {
+    o = o || {};
+    const oldH = (toPubHex(oldPub) || oldPub || '').toLowerCase();
+    const newH = (toPubHex(newPub) || newPub || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(oldH) || !/^[0-9a-f]{64}$/.test(newH)) throw new Error('That doesn\u2019t look like a member code.');
+    if (oldH === newH) throw new Error('That is the same key they already have.');
+    // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
+    // while the church still showed two of them; this order fails the safer way round.
+    const pairs = [...(o.reseats || []).filter(p => p && p.new !== newH), { old: oldH, new: newH, name: o.name || '', at: now() }];
+    await window.Steward.setReseats(pairs);
+    await window.Steward.setAdmitted([...new Set([...(o.admitted || []), newH])]);
+
+    const low = (a) => (a || []).map(x => String(x || '').toLowerCase()).filter(Boolean);
+    const mins = low(o.minors), appr = low(o.approved);
+    const wasMinor = mins.indexOf(oldH) !== -1, wasCleared = appr.indexOf(oldH) !== -1;
+    let nextMins = mins, nextAppr = appr;
+    if (wasMinor && mins.indexOf(newH) === -1) { nextMins = [...mins, newH]; await window.Steward.setMinors(nextMins); }
+    if (wasCleared && appr.indexOf(newH) === -1) { nextAppr = [...appr, newH]; await window.Steward.setApproved(nextAppr); }
+
+    // The seat may be the CHILD (an entry keyed by them) or a PARENT (named in some child's list). Both break.
+    const g = o.guardians || {};
+    let nextG = null;
+    if ((g[oldH] || []).length) { nextG = { ...g }; nextG[newH] = [...new Set([...low(g[newH]), ...low(g[oldH])])]; }
+    for (const childK of Object.keys(g)) {
+      const parents = low(g[childK]);
+      if (parents.indexOf(oldH) !== -1 && parents.indexOf(newH) === -1) {
+        nextG = nextG || { ...g };
+        nextG[childK] = [...new Set([...low(nextG[childK] || parents), newH])];
+      }
+    }
+    if (nextG) await window.Steward.setGuardians(nextG);
+
+    // Re-issue the record the member's OWN phone reads — always, not only for children. This member has been
+    // assessed; the new key simply has not been told the answer yet. Sealing it here is what stops the
+    // back-fill later inferring "no marking, therefore an adult" for someone who was never re-assessed.
+    await window.Steward.refreshClearances([newH], nextMins, nextAppr);
+
+    if (o.blockOld) await window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]);
+    return { minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG, blockedOld: !!o.blockOld };
+  },
   setAdmitted(pubkeys) {   // replace the whole admitted list (pass hex pubkeys)
     _requireTrustedView('approved-members list');
     if (!sk) return Promise.resolve(null);

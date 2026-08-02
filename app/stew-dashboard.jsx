@@ -3095,6 +3095,13 @@ window.DashResources = DashResources;
 // falls back to "this member" for the prose. Only a real name may be vouched across with the seat; writing
 // a placeholder into the re-seat doc would publish "this member" as somebody's profile name.
 function ReseatModal({ member, memberName, realName, isMinor, admittedList, onClose }) {
+  // A re-seat is a SEAT MOVING, and everything attached to the seat has to move with it — the child marking,
+  // the youth clearance, the parent link, and the record the member's own phone reads. Those lists live in
+  // the console's subscriptions, so they are read here and handed to the engine, which owns the ordering.
+  const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
+  const guardiansNow = window.useStewardGuardians ? window.useStewardGuardians() : {};
+  const blockedNow = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const [taken, setTaken] = React.useState(false);   // "lost, or taken?" — see the note by the checkbox
   const [scan, setScan] = React.useState(false);
   const [text, setText] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -3110,9 +3117,11 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
     try {
       // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
       // while the church still showed two of them; this order fails the safer way round.
-      const pairs = [...(reseats || []).filter(p => p && p.new !== newPub), { old: member, new: newPub, name: realName || '', at: Math.floor(Date.now() / 1000) }];
-      await window.Steward.setReseats(pairs);
-      await window.Steward.setAdmitted([...new Set([...(admittedList || []), newPub])]);
+      await window.Steward.reseatMember(member, newPub, {
+        name: realName || '', reseats, admitted: admittedList,
+        minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow,
+        blocked: blockedNow, blockOld: taken,
+      });
       setDone(true);
     } catch (e) { setErr((e && e.message) || 'Couldn’t save that — try again.'); }
     setBusy(false);
@@ -3130,6 +3139,8 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             new key is not in them. Telling the steward now costs one sentence; leaving them to find out means
             the member sits outside their own small group wondering why. AUDIT-2026-07-26 CRITICAL 3. */}
         <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-3)', margin: '0 0 14px' }}>
+          {isMinor ? <React.Fragment>Their <b>child marking, youth clearance and parent link</b> moved across with
+          them, and their new phone has been told. </React.Fragment> : null}
           One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
           again. Ordinary groups need nothing — they are already back in those.
         </p>
@@ -3146,6 +3157,15 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             This member is marked as a child. Confirm with their parent or guardian before you reconnect them.
           </div>
         ) : null}
+        {/* ASKED HERE, because it cannot be asked later: the moment the re-seat lands, the old key is filtered
+            out of the roster (src/steward.src.js, reseatOld) and with it the only Block control in the
+            console. A phone that was TAKEN otherwise keeps reading the church, posting to it, and holding the
+            group keys, for ever. AUDIT 2026-08-02. */}
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 12px', cursor: 'pointer' }}>
+          <input type="checkbox" checked={taken} onChange={e => setTaken(e.target.checked)} style={{ marginTop: 2, width: 17, height: 17, flexShrink: 0 }} />
+          <span>Their old phone was <b>stolen or taken</b>, not just lost or broken.<br />
+            <span style={{ color: 'var(--ink-3)' }}>Blocks the old key so it can no longer read this church. Do this now — once they are reconnected, the old entry leaves your Members list and you cannot block it afterwards.</span></span>
+        </label>
         {scan ? (
           <StewQRScanner onResult={(t) => { setText(t); setScan(false); setErr(''); }} onCancel={() => setScan(false)} />
         ) : (
