@@ -85,7 +85,7 @@ function RecoverySheet({ open, onClose, ctx }) {
     // which makes a 6-digit PIN genuinely costly to brute-force even against a leaked/cloud-stored file — the
     // GPU-cheapness of PBKDF2 was what forced the old 10-char floor. The UI still nudges toward a longer
     // passphrase, which is meaningfully stronger for anyone who stores the backup somewhere it could be seized.
-    if (pass.length < 6) { setBkErr('Use at least 6 characters. A few words are much stronger than a short PIN — worth it if this backup will live in the cloud.'); return; }
+    try { window.TrinityBackup.checkPass(pass); } catch (e) { setBkErr(e.message); return; }
     setBusy('export'); setBkErr('');
     try {
       const obj = await window.TrinityBackup.collectMember();

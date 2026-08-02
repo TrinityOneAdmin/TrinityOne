@@ -145,12 +145,16 @@ function BackupCard({ ctx }) {
   { ic: 'pen', label: 'Journals & notes' },
   { ic: 'marker', label: 'Highlights' },
   { ic: 'bookmark', label: 'Bookmarks' },
-  { ic: 'books', label: 'Downloaded books' }];
+  { ic: 'refresh', label: 'Your notes come back on their own', sub: 'once this phone reconnects to your church' }];
 
+  // NO "OK" RUNG. This file holds the member's twelve words, so it is not a document that a six-character
+  // code protects — an attacker who has it guesses offline, on their own hardware, for as long as they like.
+  // The floor is enforced in app/backup.jsx (checkPass); this only describes what they have typed.
+  const PMIN = (window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12;
   const strength = pass.length === 0 ? null
-    : pass.length < 4 ? { t: 'Too short', c: 'var(--ink-3)' }
-    : /^\d+$/.test(pass) && pass.length < 6 ? { t: 'PIN — easy to use, easier to guess', c: 'var(--clay)' }
-    : pass.length < 8 ? { t: 'OK', c: 'var(--gold)' }
+    : /^\d+$/.test(pass) ? { t: 'Numbers only — quick to guess', c: 'var(--clay)' }
+    : pass.length < PMIN ? { t: 'Too short for this file', c: 'var(--clay)' }
+    : pass.length < 20 ? { t: 'Good', c: 'var(--sage)' }
     : { t: 'Strong', c: 'var(--sage)' };
 
   const run = async (mode) => {
@@ -158,7 +162,9 @@ function BackupCard({ ctx }) {
     // SECURITY-AUDIT-2026-07-20 M1: this floor was 4 while the recovery-sheet path requires 6. This file
     // contains the member's SEED (collectMember embeds `identity`) — the card calling it "your data" does
     // not make it less of a key file. Same floor, same reasoning, everywhere.
-    if (pass.length < 6) { ctx.toast('Use at least 6 characters — this file can restore your whole account'); return; }
+    // Ask the engine rather than inventing a number here — three screens invented three different ones (6, 6
+    // and 4) and none of them was the rule that actually applied.
+    try { window.TrinityBackup.checkPass(pass); } catch (e) { ctx.toast(e.message); return; }
     setBusy(mode);
     try {
       // SECURITY-AUDIT-2026-07-20 C3 (SILENT DATA LOSS): collectMember() is async and was NOT awaited.
@@ -216,7 +222,7 @@ function BackupCard({ ctx }) {
           <Icon name="cloud" size={21} stroke={1.9} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>Back up your data</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.35 }}>An encrypted copy of your notes, journals, highlights & books — restore on a new phone in seconds.</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.35 }}>This file contains your 12 words. Anyone who opens it is you — keep it like a spare front-door key.</div>
         </div>
         {!picking ? <button onClick={() => setPicking(true)} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
           fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', padding: '9px 14px', borderRadius: 11, flexShrink: 0 }}>Back up</button> : null}
@@ -236,7 +242,7 @@ function BackupCard({ ctx }) {
       {/* security note — always visible */}
       <div style={{ display: 'flex', gap: 8, padding: '0 15px 13px', fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>
         <Icon name="shield" size={14} color="var(--sage)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <span>Sealed on this phone with a passphrase only you know — restore it later from a file on your device or cloud drive. If you lose the passphrase, no one can open it. <b style={{ color: 'var(--ink-2)' }}>Your paper recovery key still matters</b> — it restores your account even without this file.</span>
+        <span>Sealed with your passphrase. Nobody <i>without that passphrase</i> can open it — but anyone who has both the file and the passphrase becomes you, and can read your church's private messages. Where you keep it matters. <b style={{ color: 'var(--ink-2)' }}>Your 12 words on paper still matter most</b> — they bring your account back with no file at all.</span>
       </div>
 
       {picking ? (
@@ -256,11 +262,11 @@ function BackupCard({ ctx }) {
         {strength ? <div style={{ fontSize: 11.5, color: strength.c, fontWeight: 600, padding: '0 3px' }}>{strength.t}</div> : null}
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => run('local')} disabled={!!busy || pass.length < 4 || !secure} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '12px', borderRadius: 12,
-            border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || pass.length < 4 || !secure) ? 0.55 : 1 }}>
+          <button onClick={() => run('local')} disabled={!!busy || pass.length < PMIN || !secure} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '12px', borderRadius: 12,
+            border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (busy || pass.length < PMIN || !secure) ? 0.55 : 1 }}>
             <Icon name={done === 'device' || done === 'downloads' ? 'check' : 'arrowUp'} size={16} color="var(--clay)" style={done === 'device' || done === 'downloads' ? null : { transform: 'rotate(180deg)' }} /> {busy === 'local' ? 'Saving…' : (done === 'device' || done === 'downloads') ? 'Saved' : 'Save to device'}</button>
-          <button onClick={() => run('cloud')} disabled={!!busy || pass.length < 4 || !secure} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '12px', borderRadius: 12,
-            border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', opacity: (busy || pass.length < 4 || !secure) ? 0.55 : 1 }}>
+          <button onClick={() => run('cloud')} disabled={!!busy || pass.length < PMIN || !secure} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '12px', borderRadius: 12,
+            border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', opacity: (busy || pass.length < PMIN || !secure) ? 0.55 : 1 }}>
             <Icon name={done === 'cloud' ? 'check' : 'cloud'} size={16} color="#fff" /> {busy === 'cloud' ? 'Sealing…' : done === 'cloud' ? 'Ready' : 'Save to cloud'}</button>
         </div>
         <button onClick={() => fileRef.current && fileRef.current.click()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px', borderRadius: 12,

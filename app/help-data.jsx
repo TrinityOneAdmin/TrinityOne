@@ -278,7 +278,7 @@ window.HelpData = {
         ] },
         { type: 'note', text: 'Your notes, journal and highlights live only on the old phone. Restore your backup file afterwards to bring those across too — the 12 words bring back who you are, the file brings back what you wrote.' },
         { type: 'callout', tone: 'sage', text: 'Lost the words AND the old phone? Ask a steward. Choose “I’ve lost my 12 words”, show them the code on your screen, and your church can put you back in your place. Your old private messages stay locked — nobody can open those, which is the point of them being private.' },
-        { type: 'tech', text: 'The backup file holds your BIP-39 identity plus your local study data, encrypted with your passphrase (AES-GCM via PBKDF2). Restoring re-derives the same key, so you are the same person to your church. Note that your followed churches are stored on this device, so re-following is a manual step today.' },
+        { type: 'tech', text: 'The backup file holds your BIP-39 identity plus your local study data, encrypted with your passphrase (AES-GCM, key stretched with memory-hard Argon2id; older files still open with the PBKDF2 they were made with). Restoring re-derives the same key, so you are the same person to your church. Note that your followed churches are stored on this device, so re-following is a manual step today.' },
       ],
     },
     {

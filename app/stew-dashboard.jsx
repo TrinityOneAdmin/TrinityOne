@@ -3825,12 +3825,12 @@ function StewBackupModal({ church, onClose }) {
   const [done, setDone] = React.useState(false);
   const secure = (typeof window !== 'undefined') && window.isSecureContext && (typeof crypto !== 'undefined') && crypto.subtle;
   const strength = pass.length === 0 ? null
-    : pass.length < 4 ? { t: 'Too short', c: 'var(--ink-3)' }
+    : pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) ? { t: 'Too short for this file', c: 'var(--clay)' }
     : /^\d+$/.test(pass) && pass.length < 6 ? { t: 'PIN — easy to use, easier to guess', c: 'var(--clay)' }
     : pass.length < 8 ? { t: 'OK', c: 'var(--gold)' }
     : { t: 'Strong', c: 'var(--sage)' };
   const make = async () => {
-    if (pass.length < 4) { setErr('Use at least 4 characters (a numeric PIN is fine).'); return; }
+    if (pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12)) { setErr('Use at least 4 characters (a numeric PIN is fine).'); return; }
     setBusy(true); setErr('');
     try {
       const obj = window.TrinityBackup.collectSteward();
