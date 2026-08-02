@@ -396,5 +396,15 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     try { oldest = (qOldest.get() || {}).t | 0; } catch {}
     return { days: n, daily, kinds, churches, oldest };
   }
-  return { db, put, query, eachKind, count, countKind, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, close: () => { try { db.close(); } catch {} }, replKey, matchFilter };
+  // FOLD THE SIDE FILE IN. In WAL mode new rows land in `relay.sqlite-wal` and are folded into the main file
+  // later, so on a small church the whole corpus can sit in the -wal indefinitely: `relay.sqlite` was 4 KB
+  // while `-wal` held 1.1 MB of a live 27-event church. A hand-copied `relay.sqlite` then opens WITHOUT ERROR
+  // and contains NOTHING — the "I could not read it" / "there is nothing there" confusion this codebase has
+  // been burned by, except worse, because nothing complains. reference/PILOT-CHECKLIST.md names that exact
+  // file as the one holding all church data. AUDIT 2026-08-02.
+  //
+  // /relay-backup already checkpoints before it tars, so the official path was always correct; this makes a
+  // clean shutdown correct too, which is what a runbook, a snapshot or a `systemctl stop` relies on.
+  const checkpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };
+  return { db, put, query, eachKind, count, countKind, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
 }

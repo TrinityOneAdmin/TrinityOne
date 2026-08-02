@@ -440,6 +440,26 @@ function loadChurches() {
   } catch {}
 }
 loadChurches();
+// WRITE THE SEED TO DISK, ONCE. CHURCH_NPUB is a seed migrated into church.json — but the migration only ran
+// when something else happened to save. A relay set up the way RELAY-SETUP.md documents (env var, never
+// touched the dashboard) therefore had NO church.json at all, and /relay-backup tars the data dir — so the
+// archive could not contain what was never written.
+//
+// Restore that archive onto a new box without remembering to set the variable again and the relay comes up
+// not knowing which church it serves: the write policy is OFF (an open relay — anyone on the internet may
+// write), and the congregation cannot read its own membership documents, because note() returns early when
+// CHURCH_PUBS is empty. It reports itself perfectly healthy throughout. Measured: 14 documents before,
+// 10 after, all three member: docs and the care slot invisible, "write policy OFF".
+//
+// Stamping it here means the very next backup carries the church. Idempotent: persistChurches() writes
+// envMigrated, and loadChurches() stops folding the env var in once it sees that stamp. AUDIT 2026-08-02.
+try {
+  if (CHURCH_PUBS.size) {
+    let stamped = false;
+    try { stamped = !!JSON.parse(readFileSync(CHURCH_FILE, 'utf8')).envMigrated; } catch { stamped = false; }
+    if (!stamped) { persistChurches(); console.log('  church registration written to church.json (so a backup can carry it)'); }
+  }
+} catch (e) {}
 // admin token — gates the browser config endpoint (/config), which changes the write policy. Generated
 // once and stored 0600. Loopback requests (you're on the box) are trusted; LAN/tunnel must present it.
 const ADMIN_FILE = join(DATA_DIR,'admin.json');
@@ -3460,6 +3480,18 @@ function serveStatic(req, res) {
 
 // ---- relay (NIP-01) — events live in SQLite (node:sqlite); REQ reads are indexed queries ----
 const store = openStore(SQLITE_DB, { maxEvents: MAX_EVENTS });
+// NOTHING USED TO CLOSE THE STORE. There was no SIGTERM/SIGINT handler and no store.close() anywhere, so an
+// ordinary `systemctl stop` left the church's data in the -wal side file — see the note on checkpoint() in
+// event-store.mjs. Registered once, idempotent, and it re-raises the signal so the exit code stays honest.
+let _shuttingDown = false;
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    if (_shuttingDown) return; _shuttingDown = true;
+    try { store.close(); } catch (e) {}
+    try { process.removeAllListeners(sig); } catch (e) {}
+    try { process.kill(process.pid, sig); } catch (e) { process.exit(0); }
+  });
+}
 // one-time migration from the legacy JSON array store (then retire the file so it can't re-import)
 if (store.count() === 0 && existsSync(DB)) {
   try {
