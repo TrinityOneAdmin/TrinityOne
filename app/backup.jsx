@@ -44,11 +44,20 @@
     return p;
   }
 
-  // Deliberately costlier than the interactive default (19 MiB / t=2, tuned for a login on a thin device).
-  // This runs ONCE when a member saves a backup and once when they restore it, so a second or two is cheap —
-  // while every extra megabyte multiplies what an attacker pays per guess, for ever. Kept well short of the
-  // OWASP high-end so it still completes on a low-end Android WebView, which is the audience.
-  const BACKUP_ARGON = { t: 3, m: 65536, p: 1 };
+  // MEASURED ON A REAL PHONE, and the reason this is NOT raised. An earlier version of this used 64 MiB / t=3
+  // to make offline guessing costlier. On an Oppo CPH2477 — mid-range, not the cheapest device this product
+  // targets — that took 14.9 SECONDS, against 2.8 seconds for the interactive profile below. Fifteen seconds
+  // to save a backup and fifteen more to restore it is not a backup people will make; it pushes them to skip
+  // it, and a backup nobody makes protects nobody.
+  //
+  // It is also the wrong lever. Attacker cost is dominated by the PASSPHRASE, not the KDF: moving from a
+  // 6-digit PIN (about a million possibilities) to four random words (tens of trillions) multiplies the work
+  // by millions, where 19 MiB → 64 MiB multiplies it by about three. checkPass above is what actually
+  // protects this file; this only has to stay memory-hard so a GPU cannot parallelise the guessing cheaply.
+  //
+  // Note the code comment in src/recovery.src.js estimates ~600ms for this profile — that is a workstation
+  // number. The phone is five times slower. Measure on a device before changing it.
+  const BACKUP_ARGON = null;   // null → argon2Raw uses ARGON2_DEFAULT (19 MiB / t=2)
   // …and CLAMPED on the way back in, because these come out of an untrusted file. Unbounded, a crafted
   // envelope asking for 4 GiB kills the tab; a carefully-chosen 512 MiB just hangs a cheap phone.
   const clampArgon = (env) => ({
@@ -64,7 +73,7 @@
     const payload = TE.encode(JSON.stringify(obj));
     let env;
     if (haveArgon()) {
-      const { raw, params } = await window.TrinityRecovery.argon2Raw(pass, salt, BACKUP_ARGON);
+      const { raw, params } = await window.TrinityRecovery.argon2Raw(pass, salt, BACKUP_ARGON || undefined);
       const key = await importAesKey(raw);
       const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload);
       env = { v: 2, app: 'trinityone-backup', kdf: 'argon2id', t: params.t, m: params.m, p: params.p, salt: b64(salt), iv: b64(iv), data: b64(ct) };
