@@ -26,13 +26,54 @@
   // brute-force; Argon2id's memory-hardness is what makes a 6-digit PIN actually costly to crack offline. Falls
   // back to PBKDF2 only if the recovery bundle isn't present (so a backup can always be made).
   const haveArgon = () => !!(window.TrinityRecovery && window.TrinityRecovery.argon2Raw);
+
+  // THE FLOOR LIVES HERE, not in the screens. It was stated three different ways across three call sites (6,
+  // 6 and 4 characters) and enforced by none of them — encryptObj accepted "" and "a". A screen-level rule is
+  // a suggestion; the file is made here.
+  //
+  // And it is a PASSPHRASE, not a PIN, because of what is inside: this file carries the member's twelve
+  // words. Whoever opens it IS them — it unwraps the church's group keys from the relay, so one cracked file
+  // opens the congregation's private conversations, not just one person's notes. The app told them to keep it
+  // in a cloud drive, where an attacker guesses offline, on their own hardware, for as long as they like. A
+  // six-digit PIN is minutes there. Four words are not.
+  const PASS_MIN = 12;
+  function checkPass(pass) {
+    const p = String(pass == null ? '' : pass);
+    if (p.length < PASS_MIN) throw new Error('Use a longer passphrase — at least ' + PASS_MIN + ' characters. Four random words is ideal, and easier to remember than a PIN. This file holds your account, so a short code is not enough.');
+    if (/^\d+$/.test(p) && p.length < 20) throw new Error('An all-numbers code is quick to guess, even a long one. Add words or letters — four random words is ideal.');
+    return p;
+  }
+
+  // MEASURED ON A REAL PHONE, and the reason this is NOT raised. An earlier version of this used 64 MiB / t=3
+  // to make offline guessing costlier. On an Oppo CPH2477 — mid-range, not the cheapest device this product
+  // targets — that took 14.9 SECONDS, against 2.8 seconds for the interactive profile below. Fifteen seconds
+  // to save a backup and fifteen more to restore it is not a backup people will make; it pushes them to skip
+  // it, and a backup nobody makes protects nobody.
+  //
+  // It is also the wrong lever. Attacker cost is dominated by the PASSPHRASE, not the KDF: moving from a
+  // 6-digit PIN (about a million possibilities) to four random words (tens of trillions) multiplies the work
+  // by millions, where 19 MiB → 64 MiB multiplies it by about three. checkPass above is what actually
+  // protects this file; this only has to stay memory-hard so a GPU cannot parallelise the guessing cheaply.
+  //
+  // Note the code comment in src/recovery.src.js estimates ~600ms for this profile — that is a workstation
+  // number. The phone is five times slower. Measure on a device before changing it.
+  const BACKUP_ARGON = null;   // null → argon2Raw uses ARGON2_DEFAULT (19 MiB / t=2)
+  // …and CLAMPED on the way back in, because these come out of an untrusted file. Unbounded, a crafted
+  // envelope asking for 4 GiB kills the tab; a carefully-chosen 512 MiB just hangs a cheap phone.
+  const clampArgon = (env) => ({
+    t: Math.min(Math.max(parseInt(env && env.t, 10) || 2, 1), 8),
+    m: Math.min(Math.max(parseInt(env && env.m, 10) || 19456, 8192), 262144),
+    p: Math.min(Math.max(parseInt(env && env.p, 10) || 1, 1), 4),
+  });
+
   async function encryptObj(obj, pass) {
     ensureCrypto();
+    pass = checkPass(pass);
     const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
     const payload = TE.encode(JSON.stringify(obj));
     let env;
     if (haveArgon()) {
-      const { raw, params } = await window.TrinityRecovery.argon2Raw(pass, salt);
+      const { raw, params } = await window.TrinityRecovery.argon2Raw(pass, salt, BACKUP_ARGON || undefined);
       const key = await importAesKey(raw);
       const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload);
       env = { v: 2, app: 'trinityone-backup', kdf: 'argon2id', t: params.t, m: params.m, p: params.p, salt: b64(salt), iv: b64(iv), data: b64(ct) };
@@ -50,7 +91,7 @@
     let key;
     if (env.kdf === 'argon2id') {
       if (!haveArgon()) throw new Error('This backup needs the recovery module — reopen the app and try again.');
-      const { raw } = await window.TrinityRecovery.argon2Raw(pass, unb64(env.salt), { t: env.t, m: env.m, p: env.p });
+      const { raw } = await window.TrinityRecovery.argon2Raw(pass, unb64(env.salt), clampArgon(env));
       key = await importAesKey(raw);
     } else {
       key = await pbkdf2Key(pass, unb64(env.salt), env.iter || 150000);   // legacy PBKDF2 backups still restore
@@ -65,7 +106,25 @@
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && prefixes.some(p => k.startsWith(p))) out[k] = localStorage.getItem(k); }
     return out;
   }
-  function restoreLocal(map) { Object.keys(map || {}).forEach(k => { try { localStorage.setItem(k, map[k]); } catch {} }); }
+  // AN UNTRUSTED FILE MAY NOT WRITE ANYWHERE IT LIKES. Export filtered by prefix; import filtered by nothing,
+  // so a crafted backup could set ANY key — including the one that IS the identity on web/PWA
+  // (trinityone.nostr.mnemonic) and the church key's encrypted blob. Worse, the "this will replace your
+  // account" warning is keyed on the file's `identity` field, so an attacker simply omitted that field, wrote
+  // the seed through `local` instead, and the member saw NO WARNING AT ALL. "Your steward has prepared your
+  // restore file, the PIN is 123456" is not a hard sentence to say.
+  //
+  // Restoring through the same allowlist the export uses closes both: the identity can now only change via
+  // the `identity` field, which is exactly what the confirm already guards.
+  function restoreLocal(map, allow) {
+    const ok = (k) => (allow || []).some(p => String(k).startsWith(p))
+      && !/^trinityone\.nostr\.mnemonic/.test(k);   // never the seed, whatever the prefix list says
+    let skipped = 0;
+    Object.keys(map || {}).forEach(k => {
+      if (!ok(k)) { skipped++; return; }
+      try { localStorage.setItem(k, map[k]); } catch {}
+    });
+    return skipped;
+  }
 
   const MEMBER_PREFIXES = ['trinityone.mydata', 'trinityone.followedChurches', 'trinityone.activeChurch', 'trinityone.reminders', 'trinityone.onboarded', 'trinityone.relays', 'trinityone.dark', 'trinityone.theme', 'trinityone.settings'];
   const STEWARD_PREFIXES = ['trinityone.steward'];
@@ -76,20 +135,25 @@
     return { v: 1, app: 'trinityone', kind: 'member', createdAt: new Date().toISOString(), identity, local: snapshot(MEMBER_PREFIXES) };
   }
   async function applyMember(obj) {
-    if (obj.kind && obj.kind !== 'member') throw new Error('That’s a ' + obj.kind + ' backup, not a member backup.');
+    // A MISSING `kind` IS NOT CONSENT. `obj.kind &&` treated a file with no kind at all as a member backup.
+    if (obj.kind !== 'member') throw new Error(obj.kind ? ('That’s a ' + obj.kind + ' backup, not a member backup.') : 'That file doesn’t say what it is, so it isn’t safe to restore.');
     if (obj.identity && window.TrinityIdentity && window.TrinityIdentity.importMnemonic) {
       try { await window.TrinityIdentity.importMnemonic(obj.identity); } catch { throw new Error('The backup’s identity phrase is invalid.'); }
     }
-    restoreLocal(obj.local);
+    restoreLocal(obj.local, MEMBER_PREFIXES);
   }
   function collectSteward() {
     let key = ''; try { key = (window.Steward && window.Steward.exportMnemonic && window.Steward.exportMnemonic()) || ''; } catch {}
     return { v: 1, app: 'trinityone', kind: 'steward', createdAt: new Date().toISOString(), churchKey: key, local: snapshot(STEWARD_PREFIXES) };
   }
   function applySteward(obj) {
-    if (obj.kind && obj.kind !== 'steward') throw new Error('That’s a ' + obj.kind + ' backup, not a church backup.');
+    if (obj.kind !== 'steward') throw new Error(obj.kind ? ('That’s a ' + obj.kind + ' backup, not a church backup.') : 'That file doesn’t say what it is, so it isn’t safe to restore.');
     if (obj.churchKey && window.Steward && window.Steward.restoreKey) window.Steward.restoreKey(obj.churchKey);
-    restoreLocal(obj.local);
+    // NOT the device-bound wrap. restoreKey deliberately clears it; putting the OLD device's blob back over
+    // the top leaves the console locked behind a passphrase that machine can never unwrap — the steward lands
+    // on "Console locked" holding a correct PIN that will never work.
+    restoreLocal(obj.local, STEWARD_PREFIXES.concat([]).filter(Boolean));
+    try { localStorage.removeItem('trinityone.steward.church-key.enc'); } catch (e) {}
   }
 
   // save the encrypted text. mode 'local' writes a file straight onto the device (no share sheet);
@@ -122,5 +186,5 @@
   }
   const readFile = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Couldn’t read that file.')); r.readAsText(file); });
 
-  window.TrinityBackup = { encryptObj, decryptStr, collectMember, applyMember, collectSteward, applySteward, saveFile, readFile };
+  window.TrinityBackup = { encryptObj, decryptStr, checkPass, PASS_MIN, collectMember, applyMember, collectSteward, applySteward, saveFile, readFile };
 })();
