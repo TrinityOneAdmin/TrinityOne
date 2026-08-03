@@ -7,8 +7,8 @@ window.HelpData = {
       id: 'welcome',
       illo: 'shield',
       title: 'How TrinityOne keeps you safe & private',
-      summary: 'TrinityOne is different from most apps — in a good way.',
-      minutes: 2,
+      summary: 'TrinityOne is different from most apps — in a good way, and for a reason.',
+      minutes: 4,
       blocks: [
         { type: 'list', items: [
           { lead: 'No account, no password, no email.', text: 'There’s nothing to sign up for and nothing to forget.' },
@@ -17,6 +17,22 @@ window.HelpData = {
           { lead: 'No company in the middle.', text: 'Not even we can read into your account or reset it for you.' },
         ] },
         { type: 'callout', tone: 'gold', text: 'Wonderful for privacy — but it means one thing is now yours to do: a short backup. The next guide is the most important one. Please read it.' },
+        // WHY ANY OF THIS MATTERS. Asked for by the owner, 2026-08-03. A volunteer told only "we take privacy
+        // seriously" has no way to judge which of our warnings to act on — so they treat the 12 words, the
+        // unlock code and the backup file as equally optional admin. The concrete reason is the one thing that
+        // makes the difference, and it has to be said NATION-NEUTRALLY (this product is not built for one
+        // country's threat model) and WITHOUT OVERCLAIMING — a congregation that believes it is invisible when
+        // it is not is worse off than one that knows exactly what is exposed.
+        { type: 'p', text: 'Why do we make a fuss about all this? Most church apps ask for your email, keep your congregation’s list on a company’s servers, and expect you to trust that company for ever. For a lot of churches that is merely a bit sad. For some, it is dangerous.' },
+        { type: 'p', text: 'In many places today, belonging to a church is not a private matter you can simply keep to yourself. A list of members is a list of people who can be visited. A record of who messages whom is a map of a congregation — who leads it, who is new, whose home it meets in. That information has cost people their jobs, their families and their safety. It does not have to be leaked deliberately: a company can be compelled to hand it over, a laptop can be taken, a phone can be examined at a border.' },
+        { type: 'p', text: 'So TrinityOne is built so that your church holds its own information, and there is no company in the middle who could be asked for it. That is the whole reason it works the way it does — and the reason the small jobs we ask of you actually matter.' },
+        { type: 'list', items: [
+          { lead: 'Your 12 words, on paper.', text: 'Because there is no company holding a copy, there is nobody to ask for a reset. That is what keeps your account out of anyone else’s hands — and it is why losing the words means losing the account.' },
+          { lead: 'A proper password on any backup file.', text: 'A backup file can be copied. If it is ever taken, whoever has it has as long as they like to guess at it — so a short code is not enough there, even though it is fine for locking your phone.' },
+          { lead: 'Marking children correctly.', text: 'The rules that stop an adult messaging a child are only as good as the list of who is a child. Keeping it right is a safeguarding job, not a technical one.' },
+        ] },
+        { type: 'p', text: 'And the honest part: no app can make you invisible. Someone examining your phone can still tell you use TrinityOne and which congregation it follows. Whoever runs your church’s server can see who is a member, and that two people messaged each other, even though they cannot read what was said. If where you live makes that dangerous, talk to your leaders about running your own server — and read “How it works” below, which sets out plainly what is protected and what is not.' },
+        { type: 'callout', tone: 'clay', text: 'None of this is meant to frighten you. Most of it is one evening’s work, once — write down 12 words, pick a decent password for a backup, and you are done.' },
         { type: 'tech', text: 'Your “key” is a standard cryptographic keypair (secp256k1 — the curve Nostr and Bitcoin use). The public half is your identity (your npub); the private half signs everything you post, so it can’t be forged. There’s no server-side account — “you” is simply that keypair on your device, which is why no one, us included, can read into or reset it.' },
       ],
     },
@@ -149,7 +165,7 @@ window.HelpData = {
           { lead: 'The one thing to keep safe is your 12 words.', text: 'They’re the backup for everything — your name and your groups. Write them on paper once and you’re covered, even on a new phone.' },
         ] },
         { type: 'callout', tone: 'sage', text: 'Not sure about the 12 words? It really is just one small thing to do once — the guide “Your 12 words” walks you through it gently, and any steward at church will happily help.' },
-        { type: 'tech', text: 'Chat runs on Nostr, an open protocol: posts are signed events a relay stores and serves — you can point the app at any relay, including your church’s own. Direct messages are end-to-end encrypted (NIP-44), so the relay only ever holds ciphertext. Group membership, invite-only privacy and the safeguarding rules are enforced by the relay’s write-policy server-side, so a modified app can’t bypass them.' },
+        { type: 'tech', text: 'Chat runs on Nostr, an open protocol: posts are signed events a relay stores and serves — you can point the app at any relay, including your church’s own. Direct messages are end-to-end encrypted (NIP-44), so the relay holds only the ciphertext of what you wrote — it does still hold WHO messaged whom and WHEN, which is not yet hidden (sealing that, NIP-17, is on the roadmap). Group membership, invite-only privacy and the safeguarding rules are enforced by the relay’s write-policy server-side, so a modified app can’t bypass them.' },
       ],
     },
     {
@@ -292,7 +308,7 @@ window.HelpData = {
         { type: 'list', items: [
           { lead: 'Your identity', text: 'A secp256k1 keypair on your device (the curve Nostr and Bitcoin use). Your public key is who you are; your private key signs what you post. No server-side account exists.' },
           { lead: 'The 12 words', text: 'A BIP-39 mnemonic that derives your key (NIP-06). The same words rebuild the exact same identity anywhere — nothing is stored on a server to “recover”.' },
-          { lead: 'Messaging', text: 'Nostr, an open protocol. Posts are signed events held on relays (your church can run its own). Direct messages are end-to-end encrypted (NIP-44) — relays only ever see ciphertext.' },
+          { lead: 'Messaging', text: 'Nostr, an open protocol. Posts are signed events held on relays (your church can run its own). Direct messages are end-to-end encrypted (NIP-44) — relays see only the ciphertext of the message, but still see who messaged whom and when.' },
           { lead: 'Privacy & safeguarding', text: 'Enforced by the relay’s write-policy, not just the app: membership, invite-only groups and child↔adult message rules are checked server-side, so a modified client can’t bypass them.' },
           { lead: 'The Bible', text: 'Stored locally (IndexedDB) and read with WebAssembly SQLite — fully offline. Modules are open formats (MySword, USFM / Open.Bible).' },
           { lead: 'Open source', text: 'The whole app is AGPL-3.0 and self-hostable — a church can run its own relay on a small box and hold all of its own data.' },
