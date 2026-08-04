@@ -23,7 +23,8 @@ How we version and ship. Keep it short; update when the policy changes.
 ## Gates for 1.0 (don't ship 1.0 until these are done)
 
 - [ ] **Security audit** of key custody, invite links, relay write-policy, exposure, backups (see `reference/SPINE.md` → Security audit).
-- [ ] **Signing keys backed up off-box + restore-verified** (see "Signing keys" below) — loss is unrecoverable.
+- [x] **Signing keys backed up off-box + restore-verified** — 2026-08-04, see "Signing keys" below. One gap
+      remains: the relay release key is backed up but has **not** been drilled against a known bundle signature.
 - [ ] **Giving decision**: ship Lightning giving, or formally scope it out of 1.0 (it's parked now).
 - [ ] **Relay resilience**: more than one canonical node so a church can't go dark (SPINE → Relay resilience).
 - [ ] Onboarding + first-launch wizard solid across a clean install.
@@ -61,12 +62,40 @@ reject a self-update signed by a different release key. There is no recovery.
 
 **Do this now and re-verify each release:**
 
-- [ ] Both keys are backed up **off this box** (encrypted: e.g. `age`/`gpg` to an offline drive **and** a
-      password manager / sealed secret). One copy on one machine is not a backup.
-- [ ] The keystore password is stored with the backup (it's separate from the keystore file; without it the
-      keystore is useless).
-- [ ] After a restore drill, confirm the restored keystore reproduces fingerprint `9A:51:21…`
-      (`keytool -list -v -keystore <file>`) and the release key still verifies a known bundle signature.
+- [x] Both keys are backed up **off this box** — 2026-08-04. All three files (`release.keystore`,
+      `keystore.properties`, `relay/release-key.pem`) in one AES-256 `gpg --symmetric` archive, copied to
+      **Proton Drive + the NAS** (owner-confirmed). One copy on one machine is not a backup.
+- [x] The keystore password travels **inside** the archive (`keystore.properties`), so the thing to protect is
+      the archive passphrase — held **on paper**, deliberately NOT in the same account as the archive, since
+      Drive + password-manager behind one login hands over both halves at once.
+- [x] Restore drill run 2026-08-04 — decrypted, extracted, and `keytool` reproduced
+      `9A:51:21…AD:8C:A6:00`. **Not just created: opened.**
+- [x] Relay key drilled 2026-08-04. Ed25519 is **deterministic**, so the drill is exact: the backed-up key
+      signed a fixed blob, `openssl pkeyutl -verify` passed against the committed `release-pubkey.pem`, and
+      the signature was byte-identical (`daaf3bae…`) to the live key's. Also confirmed
+      `openssl pkey -in relay/release-key.pem -pubout` equals `relay-app/release-pubkey.pem` — i.e. this
+      secret really is the counterpart of the key baked into every church's relay.
+      *Note: a8 is NOT the release host — it 404s `/relay-app/bundle.{tgz,sig}` with "this host has no
+      release key". Bundles are signed and published from the dev box. Drill locally, not against a8.*
+
+### Rebuild the backup (run these yourself, so the passphrase stays out of any log)
+
+```sh
+tar -czf - -C /mnt/storage/projects/TrinityOne \
+  android/app/release.keystore android/app/keystore.properties relay/release-key.pem \
+  | gpg --symmetric --cipher-algo AES256 -o ~/trinityone-keys-$(date +%F).tar.gz.gpg
+
+# drill it — must print 9A:51:21…AD:8C:A6:00
+d=$(mktemp -d); gpg -d ~/trinityone-keys-$(date +%F).tar.gz.gpg 2>/dev/null | tar -xzf - -C "$d" \
+  && keytool -list -v -keystore "$d/android/app/release.keystore" \
+       -storepass "$(grep -oP '(?<=storePassword=).*' "$d/android/app/keystore.properties")" \
+     2>/dev/null | grep SHA256; rm -rf "$d"
+```
+
+> **Why this sat unticked for 30 days:** no audit missed it — `reference/SIGNING.md`, `ARCHITECTURE.md:112`
+> and `PILOT-CHECKLIST.md` all name it. Audits scope to *running code*, and custody is an action in the
+> physical world with no line of code to point at, so nothing could ever go red. A checkbox does not enforce
+> anything. If this regresses, the fix is a gate in `release.sh`, not a louder warning.
 
 > `ARCHITECTURE.md:112` carries the same warning for the keystore; this is the operational checklist for it.
 
