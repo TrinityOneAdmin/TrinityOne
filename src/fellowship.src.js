@@ -3157,7 +3157,25 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !check || !check.by) return false;
     const body = JSON.stringify({ status: status === 'help' ? 'help' : 'safe', note: String(note || '').trim().slice(0, 240), at: Math.floor(Date.now() / 1000), checkId: check.id });
-    let ct = ''; try { ct = _dmEncrypt(sk, check.by, body); } catch (e) { return false; }
+    // Seal to EVERY reader the steward chose, plus the church key — always. NIP-44 is one-to-one, so a
+    // multi-reader doc carries one ciphertext per recipient, keyed by their pubkey. v1 (a bare string sealed to
+    // check.by alone) is still written for nobody, but is still READ by the console, so checks already running
+    // when this shipped keep working.
+    //
+    // The church key is unconditional: a reply that only one volunteer's phone can open is a reply that
+    // disappears with that phone, and this is the feature where that phone is most likely to be lost.
+    const aud = (check.audience === 'care') ? 'care' : 'stewards';
+    let readers = [cp];
+    try {
+      if (aud === 'care') { const team = await _fetchCareTeam(cp); readers = readers.concat(team || []); }
+      else { const st = _churchRoster.get(cp); if (st) readers = readers.concat([...st]); }
+    } catch (e) {}
+    if (check.by) readers.push(check.by);   // whoever started it can always read their own roll-call
+    readers = [...new Set(readers.map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))];
+    const to = {};
+    for (const r of readers) { try { to[r] = _dmEncrypt(sk, r, body); } catch (e) {} }
+    if (!Object.keys(to).length) return false;
+    const ct = JSON.stringify({ v: 2, to });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', SAFE_D + cp], ['t', NET], ['church', cp], ['p', check.by]], content: ct }, sk);
     // Return TRUE only on a real relay ACK. The member's "you're safe" confirmation must reflect DELIVERY —
     // a false "help is coming" when the send actually failed (offline / dead relay, the target environment) is

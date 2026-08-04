@@ -2546,10 +2546,19 @@ window.Steward = {
   },
   // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
   // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
-  async startSafetyCheck(message) {
+  async startSafetyCheck(message, audience) {
     const cp = actingChurch || pub; if (!sk || !cp) return null;
     const id = 'sc' + now() + Math.random().toString(36).slice(2, 6);
-    const content = JSON.stringify({ id, message: String(message || 'Are you safe?').trim().slice(0, 280), at: now(), open: true });   // no `by` — members encrypt to the event SIGNER, not a content field
+    // WHO MAY READ THE REPLIES is chosen by the steward when the check is started, and travels WITH the check
+    // so a member's app seals to exactly that audience — no second setting to drift out of step.
+    //
+    // Before this, every reply was sealed to the event SIGNER alone. With a delegated steward that meant one
+    // volunteer's phone was the only device on earth that could open "I need help", while the screen told the
+    // member "your church's leaders" could see it. The church key is now ALWAYS a recipient as well, so the
+    // answers survive that volunteer being unreachable — which in the emergency this feature exists for is
+    // exactly the phone most likely to be lost. UX audit 2026-08-04.
+    const aud = (audience === 'care') ? 'care' : 'stewards';
+    const content = JSON.stringify({ id, message: String(message || 'Are you safe?').trim().slice(0, 280), at: now(), open: true, audience: aud });   // no `by` — members encrypt to the event SIGNER, not a content field
     // SECURITY-AUDIT-2026-07-18: publish() RESOLVES with `false` when every relay rejected (it doesn't throw), so
     // the old try/catch never fired and this returned success even when nothing was sent — in the raid/disaster
     // conditions this feature exists for, the steward believed the church was alerted when it wasn't. Honour the
@@ -2585,7 +2594,18 @@ window.Steward = {
         if (e.id) { if (seenIds.has(e.id)) return; seenIds.add(e.id); }
         try {
           let ck = ckCache.get(e.pubkey); if (!ck) { ck = nip44ck(sk, e.pubkey); ckCache.set(e.pubkey, ck); }
-          const o = JSON.parse(nip44d(e.content, ck));
+          // v2 carries one ciphertext per reader, keyed by pubkey; v1 was a bare string sealed to the check's
+          // starter alone. Read BOTH — a check already running when the multi-reader change shipped still has
+          // v1 replies arriving, and losing those would lose "I need help" from the one window that matters.
+          let payload = e.content;
+          try {
+            const env = JSON.parse(e.content);
+            if (env && env.v === 2 && env.to) {
+              payload = env.to[String(pub || '').toLowerCase()] || env.to[String(window.Steward.pubkey || '').toLowerCase()] || '';
+              if (!payload) return;   // not sealed to us — a reader outside the chosen audience
+            }
+          } catch (e2) {}
+          const o = JSON.parse(nip44d(payload, ck));
           if (checkId && o.checkId && o.checkId !== checkId) return;         // ignore responses to an earlier check
           const prev = byPub.get(e.pubkey); if (prev && prev.at >= (o.at || e.created_at)) return;
           byPub.set(e.pubkey, { pubkey: e.pubkey, status: o.status === 'help' ? 'help' : 'safe', note: String(o.note || ''), at: o.at || e.created_at });

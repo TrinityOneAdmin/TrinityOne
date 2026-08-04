@@ -804,7 +804,7 @@ function SafetyBanner({ ctx, persistent }) {
         <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: 'var(--on-clay)' })}>{sending ? 'Sending…' : 'I need help'}</button>
       </div>
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 9 }}>{err}</div> : null}
-      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only your church’s leaders can see your reply — not other members, and not the server.</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only the people your church chose for this check can open your reply — not other members. The relay can see that you replied and when, but not what you said.</div>
     </div>
   );
 }

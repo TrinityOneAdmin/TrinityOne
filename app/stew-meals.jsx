@@ -184,13 +184,18 @@ function SafetyCheckPanel() {
   const [msg, setMsg] = React.useState('Are you safe? Please let us know.');
   const [busy, setBusy] = React.useState(false);
   const [sendErr, setSendErr] = React.useState('');   // SECURITY-AUDIT-2026-07-18: surface a failed send so the steward doesn't believe the church was alerted when it wasn't
+  // WHO READS THE REPLIES. Chosen here, at the moment the check is started, and sealed into the check itself
+  // so a member's app can seal its answer to exactly that audience. Default: stewards. The church key is always
+  // a reader too (see startSafetyCheck) — a reply only one volunteer's phone can open is one that vanishes with
+  // that phone, and this is the feature where that is most likely.
+  const [audience, setAudience] = React.useState('stewards');
   const [confirmEnd, setConfirmEnd] = React.useState(false);   // ending a LIVE check is deliberate, never a stray "close"
   React.useEffect(() => { if (!(window.Steward && window.Steward.subscribeSafetyCheck)) return; const u = window.Steward.subscribeSafetyCheck(setCheck); return () => { try { u(); } catch (e) {} }; }, []);
   React.useEffect(() => { if (!check || !(window.Steward && window.Steward.subscribeSafetyResponses)) { setResponses([]); return; } const u = window.Steward.subscribeSafetyResponses(check.id, setResponses); return () => { try { u(); } catch (e) {} }; }, [check && check.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   const nameOf = pk => (dir[pk] && dir[pk].name) || ((members.find(m => m.pubkey === pk) || {}).name) || (pk ? pk.slice(0, 8) + '…' : '?');
   const start = async () => {
     if (busy) return; setBusy(true); setSendErr('');
-    let ok = null; try { ok = await window.Steward.startSafetyCheck(msg); } catch (e) {}
+    let ok = null; try { ok = await window.Steward.startSafetyCheck(msg, audience); } catch (e) {}
     setBusy(false);
     // SECURITY-AUDIT-2026-07-18: only dismiss the composer on a real ACK; on failure keep it open and TELL the
     // steward, so a silent all-relays-down failure can't masquerade as "everyone was alerted".
@@ -227,6 +232,25 @@ function SafetyCheckPanel() {
         <div style={{ fontSize: 12, color: 'var(--ink-2)', margin: '3px 0 0', lineHeight: 1.45 }}>Ask everyone to mark themselves safe after a raid/disaster. Replies are encrypted to you.</div>
         <textarea value={msg} onChange={e => setMsg(e.target.value)} rows={2} maxLength={280} style={{ width: '100%', boxSizing: 'border-box', padding: 10, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical', lineHeight: 1.4, marginTop: 10 }} />
         {sendErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 700, margin: '8px 0 0', lineHeight: 1.45 }}>{sendErr}</div> : null}
+        {/* Who may read the replies. Stated as a consequence, not a label — "I need help" is the most sensitive
+            thing this product carries, and the steward is choosing who sees it. */}
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Who can read the replies</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[['stewards', 'Your stewards'], ['care', 'Care team only']].map(([k, label]) => (
+              <button key={k} onClick={() => setAudience(k)} aria-pressed={audience === k}
+                style={{ flex: 1, padding: '9px 10px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 700,
+                  border: '1px solid ' + (audience === k ? 'var(--clay)' : 'var(--line)'),
+                  background: audience === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)',
+                  color: audience === k ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{label}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 7, lineHeight: 1.45 }}>
+            {audience === 'care'
+              ? 'Only your care team will be able to open the answers — including anyone who says they need help. You will too, as the church key holder.'
+              : 'Every steward will be able to open the answers, including anyone who says they need help. You will too, as the church key holder.'}
+          </div>
+        </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
           <button onClick={() => setComposing(false)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 10 }}>Cancel</button>
           <button onClick={start} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 10 }}>{busy ? 'Sending…' : 'Send to everyone'}</button>

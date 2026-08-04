@@ -14242,11 +14242,12 @@ zoo`.split("\n");
     },
     // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
     // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
-    async startSafetyCheck(message) {
+    async startSafetyCheck(message, audience) {
       const cp = actingChurch || pub;
       if (!sk || !cp) return null;
       const id = "sc" + now() + Math.random().toString(36).slice(2, 6);
-      const content = JSON.stringify({ id, message: String(message || "Are you safe?").trim().slice(0, 280), at: now(), open: true });
+      const aud = audience === "care" ? "care" : "stewards";
+      const content = JSON.stringify({ id, message: String(message || "Are you safe?").trim().slice(0, 280), at: now(), open: true, audience: aud });
       const r = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SAFETY_D + cp], ["t", NET]], content }));
       if (!r) return null;
       return { id, by: pub };
@@ -14304,7 +14305,16 @@ zoo`.split("\n");
               ck = getConversationKey(sk, e.pubkey);
               ckCache.set(e.pubkey, ck);
             }
-            const o = JSON.parse(decrypt3(e.content, ck));
+            let payload = e.content;
+            try {
+              const env = JSON.parse(e.content);
+              if (env && env.v === 2 && env.to) {
+                payload = env.to[String(pub || "").toLowerCase()] || env.to[String(window.Steward.pubkey || "").toLowerCase()] || "";
+                if (!payload) return;
+              }
+            } catch (e2) {
+            }
+            const o = JSON.parse(decrypt3(payload, ck));
             if (checkId && o.checkId && o.checkId !== checkId) return;
             const prev = byPub.get(e.pubkey);
             if (prev && prev.at >= (o.at || e.created_at)) return;
