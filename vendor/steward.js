@@ -12950,7 +12950,10 @@ zoo`.split("\n");
             if (!needHere) {
               const w = wantFor(p);
               const minorWrong = !got || !!got.minor !== !!w.minor;
-              if (minorWrong || !!got.cleared !== !!w.cleared) {
+              const gotG = Array.isArray(got && got.guardians) ? got.guardians.slice().sort() : null;
+              const wantG = (w.guardians || []).slice().sort();
+              const guardiansWrong = !got || gotG === null ? !!wantG.length : gotG.length !== wantG.length || gotG.some((v, i3) => v !== wantG[i3]);
+              if (minorWrong || !!got.cleared !== !!w.cleared || guardiansWrong) {
                 needHere = true;
                 contentWrong = true;
                 if (minorWrong && w.minor) minorBad.add(h);
@@ -15404,7 +15407,7 @@ zoo`.split("\n");
         }
       }
       if (nextG) await window.Steward.setGuardians(nextG);
-      await window.Steward.refreshClearances([newH], nextMins, nextAppr);
+      await window.Steward.refreshClearances([newH], nextMins, nextAppr, nextG || g);
       if (o.blockOld) await window.Steward.setBlocked([.../* @__PURE__ */ new Set([...low(o.blocked), oldH])]);
       return { minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG, blockedOld: !!o.blockOld };
     },

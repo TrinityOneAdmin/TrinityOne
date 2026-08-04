@@ -326,7 +326,7 @@ function backfillEffect() {
     let clearanceBackfillFailedAt = 0;
     let clearanceBackfillLastSig = '';
     const CLEARANCE_RETRY_MS = 60000;
-    const effect = (sg, members) => ${body};
+    const effect = (sg, members, guardians) => ${body};
     return { effect, peek: () => clearanceBackfillDone, failedAt: () => clearanceBackfillFailedAt };
   `)({ Steward }, { now: () => clock });
   return {

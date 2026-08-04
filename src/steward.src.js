@@ -1545,7 +1545,23 @@ async function _clearancesMatching(pubs, wantFor) {
             // their phone did not know they were a child. It did. Track the minor field separately so the
             // claim is only made about people it is actually true of. AUDIT-9.
             const minorWrong = !got || !!got.minor !== !!w.minor;
-            if (minorWrong || !!got.cleared !== !!w.cleared) {
+            // THE PARENT LINK IS PART OF THE CONTENT, and leaving it out of this comparison made the whole
+            // guardians change inert: this — not same() — is the gate that decides whether a write happens, so
+            // a clearance whose minor/cleared matched was filed as "correct" and skipped no matter how stale
+            // its guardian list was. Measured by the adversarial review: 3 of 3 children skipped when only the
+            // parent changed. Which meant unlinkParent never reached the child (a removed adult stayed a
+            // parent on their phone), linking a parent to an ALREADY-marked child never reached them, and
+            // every child who already existed stayed permanently unfixable. It worked only when `minor` itself
+            // flipped false→true in the same call — the fresh-identity case, which is exactly what the device
+            // test happened to exercise. 2026-08-04.
+            //
+            // Deliberately NOT minorBad: a stale parent link does not mean the child's app thinks they are an
+            // adult, and AUDIT-9 exists because that banner over-claimed once already.
+            const gotG = Array.isArray(got && got.guardians) ? got.guardians.slice().sort() : null;
+            const wantG = (w.guardians || []).slice().sort();
+            const guardiansWrong = !got || gotG === null ? !!wantG.length
+              : (gotG.length !== wantG.length || gotG.some((v, i) => v !== wantG[i]));
+            if (minorWrong || !!got.cleared !== !!w.cleared || guardiansWrong) {
               needHere = true; contentWrong = true;
               if (minorWrong && w.minor) minorBad.add(h);
             }
@@ -3589,19 +3605,18 @@ window.Steward = {
     // Re-issue the record the member's OWN phone reads — always, not only for children. This member has been
     // assessed; the new key simply has not been told the answer yet. Sealing it here is what stops the
     // back-fill later inferring "no marking, therefore an adult" for someone who was never re-assessed.
-    // ⚠ DELIBERATELY NOT passing the guardian map here, and this is an OPEN QUESTION, not an oversight.
+    // Carry the guardian map. A re-seat MOVES the parent link to the new key, and the child's sealed clearance
+    // is where their phone learns it.
     //
-    // Passing `nextG || g` as the 4th argument makes scripts/reseat-safeguarding.test.mjs's "…and their parent
-    // can still reach them" FAIL — the relay refuses the parent's DM to the re-seated child. Isolated by
-    // bisection on 2026-08-04: with `undefined` it passes, with the map it fails, everything else identical.
-    // The mechanism is NOT understood. setGuardians(nextG) above is awaited and unchanged, and
-    // _refreshClearancesNow does not republish any safeguarding list, so the two should not interact at all.
-    //
-    // Until that is understood, the proven 2026-08-02 behaviour stands: the RELAY-side link — which is what
-    // actually gates the DM — is restored by setGuardians above, immediately. The child's own SEALED copy
-    // (which only affects whether their client refuses before asking) arrives on the next roster refresh,
-    // which does carry the map. Do not "fix" this by passing the argument without first explaining the test.
-    await window.Steward.refreshClearances([newH], nextMins, nextAppr);
+    // An earlier version of this commit left this argument out, believing it caused
+    // scripts/reseat-safeguarding.test.mjs to fail. IT DID NOT. The adversarial review measured the test at
+    // 2 failures in 8 runs on the UNMODIFIED code, and 2 in 10 with the argument — identical. The real cause
+    // is a same-second race: reseatMember rewrites four replaceable church docs the test wrote moments before,
+    // created_at is whole seconds, and event-store's NIP-01 tie-break gives the lowest event id, so roughly
+    // half the time the second write is REFUSED and setGuardians' result is never inspected. My bisection
+    // measured noise and I wrote the wrong explanation into the code. Recorded because a confident wrong
+    // comment is what caused the bug this branch started with.
+    await window.Steward.refreshClearances([newH], nextMins, nextAppr, nextG || g);
 
     if (o.blockOld) await window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]);
     return { minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG, blockedOld: !!o.blockOld };

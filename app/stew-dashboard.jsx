@@ -3373,7 +3373,7 @@ function DashMembers() {
     try { if (!(window.Steward.relayAuthed && window.Steward.relayAuthed())) return; } catch (e) { return; }
     if (window.Steward.actingChurch) return;   // a delegated console signs with its own church key
     if (!members.length) return;
-    const sig = [window.Steward.churchPub || '', (sg.minors || []).join(','), (sg.approved || []).join(','),
+    const sig = [window.Steward.churchPub || '', (sg.minors || []).join(','), (sg.approved || []).join(','), Object.keys(guardians || {}).sort().map(k => k + ':' + (guardians[k] || []).slice().sort().join('|')).join(';'),
       members.map(m => m.pubkey).sort().join(',')].join('|');
     if (clearanceBackfillDone === sig) return;   // idempotent: the roster re-emits on every tick
     // CLAIM THE SIGNATURE SYNCHRONOUSLY, before anything is awaited. HANDOFF-2026-07-31 (3).
@@ -3405,7 +3405,12 @@ function DashMembers() {
     // OWN claim: if the roster moved on and a later signature has already claimed the marker, blanking it here
     // would discard that newer run's result and re-publish it from scratch.
     const release = () => { clearanceBackfillFailedAt = Date.now(); if (clearanceBackfillDone === sig) clearanceBackfillDone = ''; };
-    Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || [], sg.guardians || {}))
+    // `guardiansNow`, NOT `sg.guardians` — subscribeSafeguard emits { minors, approved, nophoto, loaded } and has
+    // no guardians key at all, so the original read was always undefined and this back-fill sealed
+    // `guardians: []` onto every member it touched. That is the path that seals children who have no clearance
+    // yet, and an empty ARRAY is worse than a missing key: it suppresses the steward fallback in the member
+    // engine too. Found by the adversarial review, 2026-08-04.
+    Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || [], guardians || {}))
       // `pending` releases the marker WITHOUT a banner: those members needed no write, so there is nothing to
       // warn about — but the read that would have proved them settled never finished, so the run is not
       // complete and the next visit must look again. AUDIT-9.
