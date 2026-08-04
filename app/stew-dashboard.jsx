@@ -3844,7 +3844,13 @@ function StewBackupModal({ church, onClose }) {
     : pass.length < 8 ? { t: 'OK', c: 'var(--gold)' }
     : { t: 'Strong', c: 'var(--sage)' };
   const make = async () => {
-    if (pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12)) { setErr('Use at least 4 characters (a numeric PIN is fine).'); return; }
+    // READ the floor, do not restate it — backup.jsx says "THE FLOOR LIVES HERE, not in the screens", and this
+    // screen restated it as 4 while enforcing 12. A steward typing 4-11 characters was told to type at least
+    // 4 and refused, in a loop, on the one flow that saves the church key to a file. Mirror checkPass's
+    // all-digit rule too, or a 12-digit PIN passes the button and dies in a toast. UX audit 2026-08-04.
+    const _min = (window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12;
+    if (pass.length < _min) { setErr('Use at least ' + _min + ' characters. Four random words is ideal — easier to remember than a code, and far harder to guess.'); return; }
+    if (/^\d+$/.test(pass) && pass.length < 20) { setErr('An all-numbers code is quick to guess, even a long one. Add words or letters — four random words is ideal.'); return; }
     setBusy(true); setErr('');
     try {
       const obj = window.TrinityBackup.collectSteward();
@@ -3881,20 +3887,20 @@ function StewBackupModal({ church, onClose }) {
             </div>
           ))}
         </div>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Passphrase or PIN</div>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Passphrase</div>
         <div style={{ display: 'flex', gap: 9 }}>
-          <input value={pass} onChange={e => { setPass(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') make(); }} type={show ? 'text' : 'password'} autoFocus inputMode="text" placeholder="a memorable passphrase, or a PIN" style={{ flex: 1, height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+          <input value={pass} onChange={e => { setPass(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') make(); }} type={show ? 'text' : 'password'} autoFocus inputMode="text" placeholder="four random words, or 12+ characters" style={{ flex: 1, height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
           <button onClick={() => setShow(s => !s)} className="sk-btn sk-btn--ghost" style={{ padding: '0 14px' }}>{show ? 'Hide' : 'Show'}</button>
         </div>
         {strength ? <div style={{ fontSize: 12, color: strength.c, fontWeight: 600, marginTop: 7 }}>{strength.t}{strength.c === 'var(--clay)' ? ' · longer is safer' : ''}</div> : null}
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 9, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', margin: '16px 0 18px' }}>
           <Icon name="shield" size={16} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>If you forget this, the backup can’t be opened — not even by us. Store it with the file.</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>If you forget this, the backup can’t be opened — not even by us. Keep it somewhere separate from the file: together, they are one thing, not two.</div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Cancel</button>
-          <button onClick={make} disabled={busy || done || pass.length < 4 || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
+          <button onClick={make} disabled={busy || done || pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
             <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? 'Saved' : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
         </div>
       </div>
