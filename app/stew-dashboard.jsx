@@ -3349,7 +3349,10 @@ function DashMembers() {
   // Whenever either safeguarding list changes, re-seal the affected member's OWN clearance. Their app reads that
   // instead of the church's list of children, which the relay no longer serves to ordinary members.
   // AUDIT-2026-07-27. Best-effort and deliberately not awaited: the list write is the authoritative one.
-  const _reseal = (mins, appr, who) => { try { if (window.Steward.refreshClearances) window.Steward.refreshClearances(who, mins, appr); } catch (e) {} };
+  // `guards` defaults to the CURRENT map, but every caller that CHANGES a parent link must pass the NEW one —
+  // the child's sealed clearance is the only place they can learn who their confirmed parents are, so a link
+  // that never re-seals never reaches them. UX audit 2026-08-04.
+  const _reseal = (mins, appr, who, guards) => { try { if (window.Steward.refreshClearances) window.Steward.refreshClearances(who, mins, appr, guards || guardians); } catch (e) {} };
   // BACKFILL — every child marked BEFORE sealed clearances existed had no clearance doc at all. The four
   // toggles below only re-seal the member they touch, and the relay had already stopped serving the minors
   // list to ordinary members, so those children's apps read an empty list and concluded they were adults.
@@ -3402,7 +3405,7 @@ function DashMembers() {
     // OWN claim: if the roster moved on and a later signature has already claimed the marker, blanking it here
     // would discard that newer run's result and re-publish it from scratch.
     const release = () => { clearanceBackfillFailedAt = Date.now(); if (clearanceBackfillDone === sig) clearanceBackfillDone = ''; };
-    Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || []))
+    Promise.resolve(window.Steward.refreshClearances(roster, sg.minors || [], sg.approved || [], sg.guardians || {}))
       // `pending` releases the marker WITHOUT a banner: those members needed no write, so there is nothing to
       // warn about — but the read that would have proved them settled never finished, so the run is not
       // complete and the next visit must look again. AUDIT-9.
@@ -3429,8 +3432,13 @@ function DashMembers() {
   const idOf = (pk) => npubByPub[pk] ? shortNpub(npubByPub[pk]) : ((pk || '').slice(0, 16) + '…');
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = (r) => {
-    window.Steward.setGuardians({ ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] });
-    if (!minorsSet.has(r.child)) { const next = [...(sg.minors || []), r.child]; window.Steward.setMinors(next); _reseal(next, sg.approved || [], [r.child]); }   // a linked child is a minor
+    const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
+    window.Steward.setGuardians(nextG);
+    // Re-seal UNCONDITIONALLY. This used to run only when the child was not already marked a minor, so linking
+    // a parent to an already-marked child never reached that child's phone at all.
+    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];   // a linked child is a minor
+    if (!minorsSet.has(r.child)) window.Steward.setMinors(nextM);
+    _reseal(nextM, sg.approved || [], [r.child], nextG);
   };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
@@ -3442,8 +3450,11 @@ function DashMembers() {
   const delegated = !!(window.Steward && window.Steward.actingChurch);
   const linkParent = (childPub, parentPub) => {
     if (childPub === parentPub || minorsSet.has(parentPub)) return;   // a parent must be a different, adult account
-    window.Steward.setGuardians({ ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] });
-    if (!minorsSet.has(childPub)) { const next = [...(sg.minors || []), childPub]; window.Steward.setMinors(next); _reseal(next, sg.approved || [], [childPub]); }   // a linked child is a minor
+    const nextG = { ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] };
+    window.Steward.setGuardians(nextG);
+    const nextM = minorsSet.has(childPub) ? (sg.minors || []) : [...(sg.minors || []), childPub];   // a linked child is a minor
+    if (!minorsSet.has(childPub)) window.Steward.setMinors(nextM);
+    _reseal(nextM, sg.approved || [], [childPub], nextG);   // unconditional — see approveGuardian
     // notify the newly-linked parent so the child actually shows up in THEIR app (they never set it up locally)
     if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '');
   };
@@ -3451,6 +3462,9 @@ function DashMembers() {
     const cur = (guardians[childPub] || []).filter(p => p !== parentPub);
     const next = { ...guardians }; if (cur.length) next[childPub] = cur; else delete next[childPub];
     window.Steward.setGuardians(next);
+    // Removing a link matters more than adding one: without this the child's phone keeps the old sealed answer
+    // and goes on treating a removed adult as a parent it may always message.
+    _reseal(sg.minors || [], sg.approved || [], [childPub], next);
   };
   // joining: when approval is on, members who haven't been admitted yet are pending requests
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;

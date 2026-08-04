@@ -109,10 +109,10 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   // ── lift everything first, THEN build the scope ────────────────────────────────────────────────────────
   const publishSrc = grab('async function publish(evt)') + grab('async function _publishToRelays(evt, urls)');
   const pubClearance = grab('publishClearance(memberPub, status, urls)');
-  const refresh = grab('refreshClearances(memberPubs, minors, approved)');
+  const refresh = grab('refreshClearances(memberPubs, minors, approved, guardians)');
   // NOT grab('_refreshClearancesNow(...)'): its first occurrence is the CALL inside the refreshClearances
   // wrapper, so brace-matching from there returns the wrapper's tail. Anchor on the `async ` declaration.
-  const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved)');
+  const refreshNow = grab('async _refreshClearancesNow(memberPubs, minors, approved, guardians)');
   const newest = grab('function _newestByD(');
   const connected = grab('function _connectedRelays(');
   // The read-and-compare step now lives in one shared helper, used BOTH to skip redundant writes and to verify

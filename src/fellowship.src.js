@@ -2551,7 +2551,14 @@ window.Fellowship = {
       _noPhoto = pubSet(nophoto);   // normalised on the way in — see scripts/trinity-rules.mjs
       const isMinor = clr ? !!clr.minor : !!(me && minors.includes(me));
       const cleared = clr ? !!clr.cleared : !!(me && approved.includes(me));
-      onLists({ minors, approved, guardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
+      // MY OWN confirmed parents, from MY OWN sealed clearance — church-signed, NIP-44'd to me, and the only
+      // source a child can safely trust. The church's `guardians:` map is steward-only, so on a child's device
+      // it is permanently {} and canDMPeer's `linked` was permanently false: a child could not message their
+      // own parent, and the refusal sent them to "church leaders" instead of their family. UX audit
+      // 2026-08-04. Falls back to the church map for a STEWARD, who legitimately holds it.
+      const myGuardians = clr && Array.isArray(clr.guardians) ? clr.guardians.slice()
+        : (me && guardians && Array.isArray(guardians[me]) ? guardians[me].slice() : []);
+      onLists({ minors, approved, guardians, myGuardians, nophoto, isMinor, cleared, clearanceKnown: !!clr, photoBlocked: !!(me && nophoto.includes(me)) });
     };
     return _onChurchDocs(pubk, {
       onevent(e, d) {

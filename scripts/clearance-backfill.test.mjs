@@ -90,10 +90,10 @@ function consoleSide(ws) {
   // what is under test here — shim it onto the same single-socket publish, exactly as `publish` itself is.
   const _publishToRelays = (evt) => publish(evt);
   const pubClearance = grabMethod(STEWARD, 'publishClearance(memberPub, status, urls)');
-  const refresh = grabMethod(STEWARD, 'refreshClearances(memberPubs, minors, approved)');
+  const refresh = grabMethod(STEWARD, 'refreshClearances(memberPubs, minors, approved, guardians)');
   // refreshClearances is now a thin serialising wrapper around _refreshClearancesNow — lift both, and anchor
   // the inner one on `async ` because its first textual occurrence is the CALL inside the wrapper.
-  const refreshNow = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)');
+  const refreshNow = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)');
   // esbuild renames the nip44 imports (encrypt3 / getConversationKey today). Binding the names I EXPECTED
   // instead of the ones it uses made every publish throw inside publishClearance's own try/catch and return
   // null — 150 nulls, nothing on the wire, indistinguishable from the bug under test. Detect them, and fail
@@ -262,7 +262,7 @@ test('a failure reaches a screen', async () => {
   // Brace-matched on the INNER function, not a fixed window from the wrapper. refreshClearances is now a short
   // serialising shim, so `slice(at, at + 2600)` reads past it into the neighbouring method and asserts nothing
   // about the code it names — the fixed-window trap this repo keeps re-learning.
-  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)');
+  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)');
   assert.match(fn, /steward-write-blocked/,
     'a partial safeguarding back-fill is still silent — the children it missed stay missed and nobody is told');
 });
@@ -486,7 +486,7 @@ test('the guard is claimed synchronously, before anything is awaited', () => {
 });
 
 test('the batching is paced under the relay cap, and bounded', () => {
-  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)');
+  const fn = grabMethod(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)');
   const batch = Number((fn.match(/BATCH = (\d+)/) || [])[1]);
   const gap = Number((fn.match(/GAP_MS = (\d+)/) || [])[1]);
   assert.ok(batch > 0 && gap > 0, 'the pacing constants are gone — re-anchor this test');

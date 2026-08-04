@@ -2911,7 +2911,20 @@ window.Steward = {
     if (urls && !urls.length) return Promise.resolve(null);   // read says every relay already holds it: nothing to do
     const mp = toPubHex(memberPub) || memberPub;
     if (!/^[0-9a-f]{64}$/i.test(mp || '')) return Promise.resolve(null);
-    const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
+    // `guardians` = the pubkeys this church has CONFIRMED as this member's parents. It goes here, sealed to the
+    // member, because this doc is the only place a child can learn it safely.
+    //
+    // Why not the obvious alternatives (UX audit 2026-08-04, finding #2):
+    //   * the church's `guardians:` MAP is deliberately steward-only — it maps every child in the congregation
+    //     to their parents — so a child's device is never served it, `linked` was permanently false in
+    //     canDMPeer, and a child could not message their own parent. SAFEGUARDING.md promises they can.
+    //   * the `guardreq:` documents are readable by the child, and using them would be UNSAFE: a request is
+    //     authored by the CLAIMED parent, and accept() only enforces that the author is who they say they are
+    //     (SECURITY-AUDIT-2026-07-20 C1) — not that they are that child's parent. Trusting them would let any
+    //     adult self-declare as a child's parent and bypass the DM restriction.
+    // The church is the only party that knows the confirmed link, so the church has to say so.
+    const guards = Array.from(new Set((status && status.guardians || []).map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))).sort();
+    const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), guardians: guards, at: now() });
     let ct = ''; try { ct = nip44e(body, nip44ck(sk, mp)); } catch (e) { return Promise.resolve(null); }
     // The ['church'] tag is EXPLICIT, not left to feChurch. feChurch only adds it when acting as a DELEGATED
     // steward, so a church OWNER — the ordinary case — published this with no church tag, the relay's accept
@@ -2957,7 +2970,7 @@ window.Steward = {
         // Record WHICH relays this write covered. The 15s skip below is a sub-second-collision guard, and
         // once writes are targeted a member written to relay A must not have their relay-B write suppressed
         // by a cache that only remembers "we wrote this member". `urls: null` means the full fan-out.
-        if (r) { try { _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now(), urls: (urls && urls.length) ? urls.slice() : null }); } catch (e) {} }
+        if (r) { try { _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), guardians: guards, at: Date.now(), urls: (urls && urls.length) ? urls.slice() : null }); } catch (e) {} }
         return r;
       });
   },
@@ -3007,14 +3020,14 @@ window.Steward = {
   // second. Measured: read-before-write alone took the false banner from 8 toggles in 12 down to 1 in 4 — the
   // remainder being exactly this overlap. Queueing removes it: the second run reads after the first has
   // written and finds nothing to do. Cheap, because in steady state that second run is now a no-op.
-  refreshClearances(memberPubs, minors, approved) {
-    const run = () => window.Steward._refreshClearancesNow(memberPubs, minors, approved);
+  refreshClearances(memberPubs, minors, approved, guardians) {
+    const run = () => window.Steward._refreshClearancesNow(memberPubs, minors, approved, guardians);
     // Never let one run's rejection break the chain for every later caller.
     const next = _clearanceQueue.then(run, run);
     _clearanceQueue = next.then(() => {}, () => {});
     return next;
   },
-  async _refreshClearancesNow(memberPubs, minors, approved) {
+  async _refreshClearancesNow(memberPubs, minors, approved, guardians) {
     // A NETWORK VIEW HAS NO MEMBERS, so there is nothing to back-fill and nothing to report. Without this the
     // refusal cascaded into a false alarm: publishClearance returns null here, every member landed in
     // `unconfirmed`, _clearancesMatching also refuses, and the run ended with failed === roster and a
@@ -3035,8 +3048,21 @@ window.Steward = {
     const out = [];
     let failed = 0, skipped = 0, pending = 0;
     const unconfirmed = [];   // written but not acknowledged — verified below before anyone is alarmed
-    const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h) }; };
-    const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared;
+    // The confirmed parent links, normalised the same way publishClearance normalises them so `same()` is
+    // comparing like with like. A child whose parent link changes MUST be re-sealed, or their app keeps the
+    // old answer — which is why guardians joins the comparison rather than riding along unchecked.
+    const gmap = new Map();
+    try {
+      const src = guardians || {};
+      for (const k of Object.keys(src)) {
+        gmap.set(String(k).toLowerCase(),
+          Array.from(new Set((src[k] || []).map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{64}$/.test(x)))).sort());
+      }
+    } catch (e) {}
+    const guardsFor = (h) => gmap.get(h) || [];
+    const sameList = (x, y) => { const a = x || [], b = y || []; return a.length === b.length && a.every((v, i) => v === b[i]); };
+    const want = (p) => { const h = String(p).toLowerCase(); return { minor: mins.has(h), cleared: appr.has(h), guardians: guardsFor(h) }; };
+    const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared && sameList(a.guardians, b.guardians);
 
     // (a) Anything this console itself put on the wire in the last few seconds, still identical. Covers the
     //     sub-second toggle race without depending on how fast the relay echoes.
@@ -3097,7 +3123,7 @@ window.Steward = {
       const slice = pubs.slice(i, i + BATCH);
       const settle = Promise.allSettled(slice.map(p => {
         const h = String(p).toLowerCase();
-        return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }, targetsFor(h));
+        return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h), guardians: guardsFor(h) }, targetsFor(h));
       }));
       // NOTHING TO WRITE, AND NOTHING TO CONFIRM. A member can be correct on every relay we heard from while
       // the read still did not finish — so they are not skippable (an unfinished read cannot prove no newer
@@ -3563,6 +3589,18 @@ window.Steward = {
     // Re-issue the record the member's OWN phone reads — always, not only for children. This member has been
     // assessed; the new key simply has not been told the answer yet. Sealing it here is what stops the
     // back-fill later inferring "no marking, therefore an adult" for someone who was never re-assessed.
+    // ⚠ DELIBERATELY NOT passing the guardian map here, and this is an OPEN QUESTION, not an oversight.
+    //
+    // Passing `nextG || g` as the 4th argument makes scripts/reseat-safeguarding.test.mjs's "…and their parent
+    // can still reach them" FAIL — the relay refuses the parent's DM to the re-seated child. Isolated by
+    // bisection on 2026-08-04: with `undefined` it passes, with the map it fails, everything else identical.
+    // The mechanism is NOT understood. setGuardians(nextG) above is awaited and unchanged, and
+    // _refreshClearancesNow does not republish any safeguarding list, so the two should not interact at all.
+    //
+    // Until that is understood, the proven 2026-08-02 behaviour stands: the RELAY-side link — which is what
+    // actually gates the DM — is restored by setGuardians above, immediately. The child's own SEALED copy
+    // (which only affects whether their client refuses before asking) arrives on the next roster refresh,
+    // which does carry the map. Do not "fix" this by passing the argument without first explaining the test.
     await window.Steward.refreshClearances([newH], nextMins, nextAppr);
 
     if (o.blockOld) await window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]);

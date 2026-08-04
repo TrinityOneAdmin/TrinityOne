@@ -14794,7 +14794,8 @@ zoo`.split("\n");
       if (urls && !urls.length) return Promise.resolve(null);
       const mp = toPubHex(memberPub) || memberPub;
       if (!/^[0-9a-f]{64}$/i.test(mp || "")) return Promise.resolve(null);
-      const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: now() });
+      const guards = Array.from(new Set((status && status.guardians || []).map((x) => String(x || "").toLowerCase()).filter((x) => /^[0-9a-f]{64}$/.test(x)))).sort();
+      const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), guardians: guards, at: now() });
       let ct = "";
       try {
         ct = encrypt3(body, getConversationKey(sk, mp));
@@ -14805,7 +14806,7 @@ zoo`.split("\n");
       return Promise.resolve(_publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }), urls)).then((r) => {
         if (r) {
           try {
-            _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), at: Date.now(), urls: urls && urls.length ? urls.slice() : null });
+            _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), guardians: guards, at: Date.now(), urls: urls && urls.length ? urls.slice() : null });
           } catch (e) {
           }
         }
@@ -14858,15 +14859,15 @@ zoo`.split("\n");
     // second. Measured: read-before-write alone took the false banner from 8 toggles in 12 down to 1 in 4 — the
     // remainder being exactly this overlap. Queueing removes it: the second run reads after the first has
     // written and finds nothing to do. Cheap, because in steady state that second run is now a no-op.
-    refreshClearances(memberPubs, minors, approved) {
-      const run = () => window.Steward._refreshClearancesNow(memberPubs, minors, approved);
+    refreshClearances(memberPubs, minors, approved, guardians) {
+      const run = () => window.Steward._refreshClearancesNow(memberPubs, minors, approved, guardians);
       const next = _clearanceQueue.then(run, run);
       _clearanceQueue = next.then(() => {
       }, () => {
       });
       return next;
     },
-    async _refreshClearancesNow(memberPubs, minors, approved) {
+    async _refreshClearancesNow(memberPubs, minors, approved, guardians) {
       if (_viewingNetwork()) return { results: [], failed: 0, skipped: 0, total: 0, unverified: false };
       const mins = new Set((minors || []).map((x) => String(x || "").toLowerCase()));
       const appr = new Set((approved || []).map((x) => String(x || "").toLowerCase()));
@@ -14881,11 +14882,27 @@ zoo`.split("\n");
       const out = [];
       let failed = 0, skipped = 0, pending = 0;
       const unconfirmed = [];
+      const gmap = /* @__PURE__ */ new Map();
+      try {
+        const src = guardians || {};
+        for (const k of Object.keys(src)) {
+          gmap.set(
+            String(k).toLowerCase(),
+            Array.from(new Set((src[k] || []).map((x) => String(x || "").toLowerCase()).filter((x) => /^[0-9a-f]{64}$/.test(x)))).sort()
+          );
+        }
+      } catch (e) {
+      }
+      const guardsFor = (h) => gmap.get(h) || [];
+      const sameList = (x, y) => {
+        const a = x || [], b = y || [];
+        return a.length === b.length && a.every((v, i3) => v === b[i3]);
+      };
       const want = (p) => {
         const h = String(p).toLowerCase();
-        return { minor: mins.has(h), cleared: appr.has(h) };
+        return { minor: mins.has(h), cleared: appr.has(h), guardians: guardsFor(h) };
       };
-      const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared;
+      const same = (a, b) => !!a && !!b && !!a.minor === !!b.minor && !!a.cleared === !!b.cleared && sameList(a.guardians, b.guardians);
       const total = pubs.length;
       const fresh = Date.now() - 15e3;
       const connNow = _connectedRelays();
@@ -14918,7 +14935,7 @@ zoo`.split("\n");
         const slice = pubs.slice(i3, i3 + BATCH);
         const settle = Promise.allSettled(slice.map((p) => {
           const h = String(p).toLowerCase();
-          return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h) }, targetsFor(h));
+          return window.Steward.publishClearance(p, { minor: mins.has(h), cleared: appr.has(h), guardians: guardsFor(h) }, targetsFor(h));
         }));
         slice.forEach((p) => {
           const t = targetsFor(String(p).toLowerCase());

@@ -172,8 +172,8 @@ function consoleSide() {
     + grab(STEWARD, 'async function _publishToRelays(evt, urls)');
   const methods = [
     grab(STEWARD, 'publishClearance(memberPub, status, urls)'),
-    grab(STEWARD, 'refreshClearances(memberPubs, minors, approved)'),
-    grab(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved)'),
+    grab(STEWARD, 'refreshClearances(memberPubs, minors, approved, guardians)'),
+    grab(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)'),
     grab(STEWARD, 'setMinors(pubkeys)'), grab(STEWARD, 'setApproved(pubkeys)'),
     grab(STEWARD, 'setGuardians(links)'), grab(STEWARD, 'setReseats(pairs)'),
     grab(STEWARD, 'setAdmitted(pubkeys)'), grab(STEWARD, 'setBlocked(pubkeys)'),

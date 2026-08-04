@@ -1623,7 +1623,17 @@ function App() {
       const me = (window.Fellowship && window.Fellowship.myPubkey) || null;
       const churchPub = (window.Fellowship && window.Fellowship.churchPub) || null;
       if (peer && peer === churchPub) return true;   // anyone may message the church/steward
-      const linked = !!(peer && me && (((guardians[peer] || []).includes(me)) || ((guardians[me] || []).includes(peer))));
+      // A child's device is never served the church's guardians map (it names every child in the congregation),
+      // so `guardians[me]` was permanently empty here and a child could not message their own parent — while
+      // the parent, not being a minor, could message them. Asymmetric, and it routed the child to "church
+      // leaders" in exactly the case where they most need their family. The church now seals the child's OWN
+      // confirmed parents into their clearance doc; myGuardians carries it. UX audit 2026-08-04.
+      //
+      // It must come from the CHURCH. A guardreq: doc is authored by the claimed parent and proves only
+      // authorship, so trusting one would let any adult declare themselves a child's parent.
+      const mine = safeguard.myGuardians || [];
+      const linked = !!(peer && me && (mine.includes(peer)
+        || ((guardians[peer] || []).includes(me)) || ((guardians[me] || []).includes(peer))));
       if (linked) return true;   // v2: a parent may always message their own child (and vice versa)
       if (safeguard.isMinor && !(peer && approved.includes(peer))) return false;   // a child may only DM a cleared adult
       // A steward still holds the list, so keep the old check for them — it costs nothing and keeps the

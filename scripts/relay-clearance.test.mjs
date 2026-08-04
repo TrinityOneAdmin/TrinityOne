@@ -11,6 +11,7 @@
 // gets `clearance:<their pubkey>`, NIP-44 sealed to them, telling them only about themselves.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { fnBody } from './test-slice.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -140,7 +141,9 @@ test('the tag shape the console really publishes is accepted by the relay', () =
   const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
   const at = S.indexOf('publishClearance(memberPub, status, urls)');
   assert.notEqual(at, -1, 'publishClearance is gone from the shipped console bundle');
-  const body = S.slice(at, at + 1200);
+  // fnBody, not a fixed width: the window was 1200 and publishClearance grew past it the moment the confirmed
+  // parent list was added (UX audit 2026-08-04). A bigger number just defers the same silent truncation.
+  const body = fnBody(S, at, 'publishClearance');
   assert.match(body, /\[\s*["']church["']\s*,\s*cp\s*\]/,
     'publishClearance does not put a church tag on the event itself — feChurch will omit it for a church owner and the relay refuses every clearance');
 });
