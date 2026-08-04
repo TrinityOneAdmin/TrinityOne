@@ -58,8 +58,16 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
   // late-landing remove performs, and it must come from the bundle like everything else.
   // `_encIntent` / `_encConverging` are plain module state (no braces, so lift() cannot brace-match them);
   // declared here so the lifted functions have the state they mutate. Everything else comes from the bundle.
-  const parts = ['let _encIntent = { have: null }, _encConverging = null']
-    .concat(['_secureStore', '_encIsMarker', 'encBlobRaw', '_encBound', '_encAfter', 'encBlobWrite', '_encConverge', 'encBlobRemove',
+  // PENDING_WRITE / PENDING_REMOVE are plain string consts (no braces, so lift() cannot brace-match them).
+  // Read their REAL values out of the bundle rather than restating them here — a test that hardcodes 'write'
+  // would keep passing if the shipped constant changed, which is the drift these lifted tests exist to avoid.
+  const constFrom = (name) => {
+    const m = BUNDLE.match(new RegExp('var ' + name + ' = ("[^"]*")'));
+    assert.ok(m, name + ' is gone from the bundle — re-anchor this test, or rebuild: bash scripts/build-steward.sh');
+    return 'var ' + name + ' = ' + m[1];
+  };
+  const parts = ['let _encIntent = { have: null }, _encConverging = null', constFrom('PENDING_WRITE'), constFrom('PENDING_REMOVE')]
+    .concat(['_secureStore', '_encIsMarker', '_looksLikeKeyBlob', 'encBlobRaw', '_encBound', '_encAfter', 'encBlobWrite', '_encConverge', 'encBlobRemove',
              'encBlobRemoveResume', 'migrateEncToSecure'].map(lift)).join(';\n')
     // Replace ONLY the module load. esbuild inlines the dynamic import as
     // `Promise.resolve().then(() => (init_esm(), esm_exports))`, which cannot resolve outside a browser — so
@@ -123,7 +131,7 @@ function harness({ nativeMode = true, secure = {}, ls = {} } = {}) {
   // performs during the gap needs the store too.
   const __SECMOD__ = () => { const g = modGate; modGate = null; return (g || Promise.resolve()).then(() => ({ SecureStorage })); };
   const fn = new Function('_devWrap', '__SECURE__', '__SECMOD__', 'localStorage', 'lsGet', 'lsSet', '_isNative', 'console', 'ENC_LS', 'ENC_PENDING_LS',
-    src + '\nreturn { encBlobRaw, encBlobWrite, encBlobRemove, encBlobRemoveResume, migrateEncToSecure, _encIsMarker, _encConverge, intent: () => _encIntent, inflight: () => _encConverging };');
+    src + '\nreturn { encBlobRaw, encBlobWrite, encBlobRemove, encBlobRemoveResume, migrateEncToSecure, _encIsMarker, _encConverge, intent: () => _encIntent, inflight: () => _encConverging, PENDING_WRITE, PENDING_REMOVE };');
   const api = fn(devWrap, SecureStorage, __SECMOD__, localStorage, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v),
     () => nativeMode, { warn() {}, log() {} }, KEY, PENDING);
   const holdModule = () => { let open_; modGate = new Promise(r => { open_ = r; }); return () => open_(); };
@@ -361,7 +369,9 @@ test('A STALE BREADCRUMB MUST NOT DELETE THE NEXT CHURCH KEY', async () => {
   await h.encBlobWrite(BLOB);
   h.store.__failRemove = true;                   // set AFTER the write, so it can be cleared again below
   await h.encBlobRemove();                       // fails; breadcrumb stays, by design
-  assert.equal(h.lsData[h.PENDING], '1', 'fixture: the breadcrumb should be set after a failed removal');
+  // The breadcrumb now carries a DIRECTION (2026-08-04) — compare against the shipped constant rather than a
+  // literal, so this fixture cannot drift away from the code again.
+  assert.equal(h.lsData[h.PENDING], h.PENDING_REMOVE, 'fixture: the breadcrumb should be set after a failed removal');
 
   delete h.store.__failRemove;
   const NEXT = JSON.stringify({ v: 2, it: 600000, salt: 'bmV3', iv: 'bmV3', ct: 'TkVX' });
@@ -659,4 +669,68 @@ test('a marker whose blob cannot be fetched is a FAILED unlock, not an open door
   assert.match(un[0], /if \(!raw\) return lsGet\(ENC_LS\) \? false : true;/,
     'unlock() no longer distinguishes "no PIN is set" from "a PIN is set but the hardware store would not ' +
     'open". Treating the second as the first unlocks the console for anyone holding the phone.');
+});
+
+// ── The breadcrumb must record WHICH DIRECTION was unfinished ───────────────────────────────────────────
+//
+// Adversarial review 2026-08-04. `trinityone.steward.church-key.removing` was the bare string '1', written by
+// encBlobRemove AND by both failure branches of _encConverge — including failures belonging to a WRITE. After a
+// restart _encIntent is back to {have:null}, so encBlobRemoveResume resolved EVERY breadcrumb as a removal and
+// converged toward "no key". A PIN set while the Keystore was slow therefore left the blob in the hardware
+// store with no marker and a breadcrumb, and the next launch DELETED the church key.
+//
+// These reconstruct the on-disk state a restart actually sees (blob in the store, no marker, breadcrumb set)
+// and then run the shipped resume against it. That is the whole failure: it is a BOOT-time decision made from
+// localStorage alone, so seeding localStorage is the honest way to reach it.
+test('an interrupted WRITE is never finished by deleting the key', async () => {
+  const h = harness({ secure: { 'trinityone.steward.church-key.enc': BLOB }, ls: { 'trinityone.steward.church-key.removing': 'write' } });
+  await h.encBlobRemoveResume();
+  assert.equal(h.store[h.KEY], BLOB, 'the church key was deleted while finishing a WRITE — this is the bug');
+  assert.ok(h._encIsMarker(h.lsData[h.KEY]), 'the key survived but localStorage has no marker, so the console cannot see it');
+  assert.equal(h.lsData[h.PENDING], undefined, 'the breadcrumb should be cleared once the write is settled');
+});
+
+test('a legacy breadcrumb with no direction is treated as unknown, not as a removal', async () => {
+  // Devices upgrading from the old build carry '1'. Resolving that as a removal is the same key loss.
+  const h = harness({ secure: { 'trinityone.steward.church-key.enc': BLOB }, ls: { 'trinityone.steward.church-key.removing': '1' } });
+  await h.encBlobRemoveResume();
+  assert.equal(h.store[h.KEY], BLOB, 'a legacy breadcrumb deleted the church key');
+});
+
+test('a genuine removal still completes on the next boot', async () => {
+  // The guard above must not disarm the thing the breadcrumb was built for: an interrupted REMOVE has to
+  // finish, or the previous church's ciphertext is orphaned in the Keystore (the S6 at-rest exposure).
+  const h = harness({ secure: { 'trinityone.steward.church-key.enc': BLOB }, ls: { 'trinityone.steward.church-key.removing': 'remove' } });
+  await h.encBlobRemoveResume();
+  assert.equal(h.store[h.KEY], undefined, 'an interrupted removal no longer completes — the old ciphertext is orphaned');
+  assert.equal(h.lsData[h.PENDING], undefined, 'the breadcrumb should be cleared once the removal is settled');
+});
+
+test('encBlobRemove and encBlobWrite leave DIFFERENT breadcrumbs', async () => {
+  // If both directions write the same value the resume above cannot tell them apart, and the guard is decorative.
+  const w = harness();
+  const release = w.hold('set');            // park the native set so the breadcrumb is observable mid-flight
+  const p = w.encBlobWrite(BLOB);
+  assert.equal(w.lsData[w.PENDING], 'write', 'an in-flight write must say so');
+  release(); await p;
+  const r = harness({ secure: { 'trinityone.steward.church-key.enc': BLOB } });
+  const rel2 = r.holdRemove();
+  const p2 = r.encBlobRemove();
+  assert.equal(r.lsData[r.PENDING], 'remove', 'an in-flight removal must say so');
+  rel2(); await p2;
+});
+
+test('setPin refuses to drop the plaintext when the write did not land', () => {
+  // STRUCTURAL — setPin lives inside the Steward object literal with a live relay pool and cannot be lifted.
+  // encBlobWrite returns true only if the blob durably landed somewhere it can be read back, and setPin used
+  // to DISCARD that: on a slow Keystore it reported success, removed KEY_LS and cleared needsPin, leaving the
+  // key nowhere localStorage could see it. The comment above the call already said the removal "depends on
+  // that" — nothing enforced it. Adversarial review 2026-08-04.
+  const i = BUNDLE.indexOf('encBlobWrite(JSON.stringify({ v: 2');
+  assert.notEqual(i, -1, 'setPin no longer writes a v2 blob — re-anchor this test');
+  const near = BUNDLE.slice(i, i + 600);
+  assert.match(near, /if\s*\(\s*!\s*landed\s*\)\s*return false/,
+    'setPin ignores encBlobWrite\'s answer again — a write that did not land still drops the plaintext seed');
+  const guard = near.search(/if\s*\(\s*!\s*landed\s*\)/), drop = near.indexOf('removeItem(KEY_LS');
+  assert.ok(guard !== -1 && drop !== -1 && guard < drop, 'the guard must come BEFORE the plaintext is dropped');
 });

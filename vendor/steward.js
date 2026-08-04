@@ -15143,10 +15143,20 @@ zoo`.split("\n");
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
   var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
+  var PENDING_WRITE = "write";
+  var PENDING_REMOVE = "remove";
   var _encIsMarker = (raw) => {
     try {
       const o = JSON.parse(raw);
       return !!(o && o.native && !o.ct);
+    } catch {
+      return false;
+    }
+  };
+  var _looksLikeKeyBlob = (raw) => {
+    try {
+      const o = JSON.parse(raw);
+      return !!(o && o.ct && o.iv && o.salt);
     } catch {
       return false;
     }
@@ -15278,7 +15288,13 @@ zoo`.split("\n");
     return "";
   }
   async function encBlobWrite(str) {
-    if (_isNative()) _encIntent = { have: str };
+    if (_isNative()) {
+      _encIntent = { have: str };
+      try {
+        lsSet(ENC_PENDING_LS, PENDING_WRITE);
+      } catch {
+      }
+    }
     if (_isNative()) {
       try {
         const { S } = await _secureStore();
@@ -15356,7 +15372,7 @@ zoo`.split("\n");
           }
         } else {
           try {
-            lsSet(ENC_PENDING_LS, "1");
+            lsSet(ENC_PENDING_LS, want ? PENDING_WRITE : PENDING_REMOVE);
           } catch {
           }
           if (actual === null) {
@@ -15369,7 +15385,7 @@ zoo`.split("\n");
       } catch (e) {
         console.warn("[steward] could not converge the church key", e);
         try {
-          lsSet(ENC_PENDING_LS, "1");
+          lsSet(ENC_PENDING_LS, want ? PENDING_WRITE : PENDING_REMOVE);
         } catch {
         }
       }
@@ -15380,7 +15396,7 @@ zoo`.split("\n");
   async function encBlobRemove() {
     if (_isNative()) _encIntent = { have: null };
     try {
-      lsSet(ENC_PENDING_LS, "1");
+      lsSet(ENC_PENDING_LS, PENDING_REMOVE);
     } catch {
     }
     try {
@@ -15397,13 +15413,41 @@ zoo`.split("\n");
     await _encConverge();
   }
   async function encBlobRemoveResume() {
-    if (!lsGet(ENC_PENDING_LS)) return false;
+    const pending = lsGet(ENC_PENDING_LS);
+    if (!pending) return false;
     if (!_isNative()) {
       try {
         localStorage.removeItem(ENC_PENDING_LS);
       } catch {
       }
       return false;
+    }
+    if (pending !== PENDING_REMOVE) {
+      if (_encIntent.have != null) {
+        if (_encIsMarker(lsGet(ENC_LS))) {
+          try {
+            localStorage.removeItem(ENC_PENDING_LS);
+          } catch {
+          }
+        }
+        return false;
+      }
+      try {
+        const { S } = await _encBound(_secureStore());
+        const v = await _encBound(S.get(ENC_LS));
+        if (v != null && _looksLikeKeyBlob(String(v))) {
+          _encIntent = { have: String(v) };
+          lsSet(ENC_LS, JSON.stringify({ native: 1 }));
+        }
+      } catch (e) {
+        console.warn("[steward] could not settle an interrupted key write", e);
+        return false;
+      }
+      try {
+        localStorage.removeItem(ENC_PENDING_LS);
+      } catch {
+      }
+      return true;
     }
     if (_encIntent.have === null && _encIsMarker(lsGet(ENC_LS))) {
       try {
@@ -15775,7 +15819,8 @@ zoo`.split("\n");
       if (String(pin).length < 8) return false;
       const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveAes(pin, salt, PIN_ITER), new TextEncoder().encode(seed)));
-      await encBlobWrite(JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
+      const landed = await encBlobWrite(JSON.stringify({ v: 2, it: PIN_ITER, salt: b64e(salt), iv: b64e(iv), ct: b64e(ct) }));
+      if (!landed) return false;
       try {
         localStorage.removeItem(KEY_LS);
       } catch {
