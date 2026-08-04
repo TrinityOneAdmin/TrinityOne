@@ -767,6 +767,28 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
   const [err, setErr] = useId('');
   const [busy, setBusy] = useId(false);
   const [forgot, setForgot] = useId(false);
+  // A forgotten PIN must NEVER be a dead end. TrinityIdentity.importMnemonic clears the community-PIN lock and
+  // re-seats the seed — the engine says so itself: "RECOVERY ALWAYS WINS: importing clears any community-PIN
+  // lock, so a forgotten PIN can NEVER trap the key". This screen used to say the opposite ("reinstall the app
+  // and restore your account with your 12 words"), which with allowBackup=false is a clean wipe: the member
+  // loses every note, journal entry and highlight to recover a key that was never trapped. The steward console
+  // fixed exactly this on 2026-07-30 and ships the pattern (StewardUnlock's "Restore this church with my 12
+  // words"); the member app never got it. UX audit 2026-08-04, found independently by two reviewers.
+  const [words, setWords] = useId('');
+  const [wordsErr, setWordsErr] = useId('');
+  const [wordsBusy, setWordsBusy] = useId(false);
+  const useWords = async () => {
+    const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (m.split(' ').filter(Boolean).length !== 12) { setWordsErr('That needs to be exactly 12 words, separated by spaces.'); return; }
+    setWordsBusy(true); setWordsErr('');
+    try {
+      await window.TrinityIdentity.importMnemonic(m);
+      try { localStorage.removeItem(PIN_GUARD_KEY); } catch (e) {}   // a successful recovery clears the lockout
+      onUnlocked && onUnlocked();
+    } catch (e) {
+      setWordsErr((e && e.message) || 'That doesn’t look like a valid 12-word recovery phrase.');
+    } finally { setWordsBusy(false); }
+  };
   const [waitLeft, setWaitLeft] = useId(() => { const g = readPinGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
   // tick the countdown down so the member can see it clear, rather than tapping a dead button
   useIdE(() => {
@@ -817,7 +839,24 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
       <button onClick={tryUnlock} disabled={!pin || busy || waitLeft > 0} style={{ width: 'min(320px, 100%)', marginTop: 18, padding: 15, borderRadius: 14, border: 'none', cursor: (!pin || busy || waitLeft > 0) ? 'default' : 'pointer', background: (!pin || busy || waitLeft > 0) ? 'var(--surface-2)' : 'var(--clay)', color: (!pin || busy || waitLeft > 0) ? 'var(--ink-3)' : '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'var(--font-ui)' }}>{waitLeft > 0 ? 'Wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
       <button onClick={() => onReadBible && onReadBible()} style={{ marginTop: 16, background: 'none', border: 'none', color: 'var(--ink-2)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Read the Bible without unlocking →</button>
       <button onClick={() => setForgot(f => !f)} style={{ marginTop: 6, background: 'none', border: 'none', color: 'var(--ink-3)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Forgot your PIN?</button>
-      {forgot ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: '10px auto 0', maxWidth: 300, lineHeight: 1.5 }}>Your PIN can’t be reset — not even by us. If you’ve forgotten it, reinstall the app and restore your account with your 12 words.</div> : null}
+      {forgot ? (
+        <div style={{ width: 'min(320px, 100%)', margin: '10px auto 0' }}>
+          <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', lineHeight: 1.5 }}>
+            Your PIN can’t be reset — not even by us. But your 12 words will open this account right here: type them below and nothing else is lost.
+          </div>
+          <textarea value={words} onChange={e => { setWords(e.target.value); setWordsErr(''); }} rows={3}
+            placeholder="word one  word two  word three …" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off"
+            style={{ width: '100%', boxSizing: 'border-box', marginTop: 12, padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical' }} />
+          {wordsErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{wordsErr}</div> : null}
+          <button onClick={useWords} disabled={wordsBusy || !words.trim()}
+            style={{ width: '100%', marginTop: 10, padding: 13, borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-ui)', cursor: 'pointer', opacity: (wordsBusy || !words.trim()) ? 0.5 : 1 }}>
+            {wordsBusy ? 'Opening…' : 'Open with my 12 words'}
+          </button>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 10, lineHeight: 1.5 }}>
+            Don’t have them? Don’t uninstall — that erases this account for good. Ask a steward instead: they can put you back in your place under a new key.
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
