@@ -17,6 +17,7 @@ import { fnBody } from './test-slice.mjs';
 const SW = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
 const APP = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
 const SYNC = readFileSync(new URL('./sync-web.sh', import.meta.url), 'utf8');
+const ENGINE = readFileSync(new URL('../engine.js', import.meta.url), 'utf8');
 
 test('the precache is derived from index.html, not hand-maintained', () => {
   assert.match(SW, /async function shellUrls/, 'the derived precache is gone — the list will drift from the build again');
@@ -49,6 +50,35 @@ test('the app renders without a Bible; only the Read tab shows the empty state',
   const at = APP.indexOf('read: !Bible.loaded');
   assert.notEqual(at, -1, 'the Read tab must own the empty state');
   assert.match(APP.slice(at, at + 220), /EmptyState/);
+});
+
+// ── AND the app must actually READ it ─────────────────────────────────────────────────────────────────────
+// The test below asserts the BUILD copies the Bible in. For a year that was the only check, and it passed
+// happily while the app never once opened the file: resolveAsset() rewrote every relative module url to the
+// public gateway on native and both fetch sites used it as a bare fetch target with no local fallback. A
+// phone with no connection was told to connect to the internet, with 3 MB of scripture sitting inside the
+// APK. UX audit 2026-08-04.
+//
+// The lesson is the same one the signing-key checklist taught the same day: a test that confirms the SETUP
+// step happened is not a test that the thing works. Assert the read path, not just the copy.
+test('the shipped Bible is actually reachable on native — local first, gateway second', () => {
+  const cands = fnBody(ENGINE, 'function assetCandidates', 'assetCandidates');
+  assert.match(cands, /remote === u \? \[u\] : \[u, remote\]/,
+    'assetCandidates must try the ORIGINAL (on-device) url before the rewritten gateway one — reversing this ' +
+    'order, or dropping the local candidate, silently un-ships the offline Bible again');
+
+  const fetcher = fnBody(ENGINE, 'async function fetchAsset', 'fetchAsset');
+  assert.match(fetcher, /assetCandidates\(/, 'fetchAsset no longer walks the candidate list');
+  assert.match(fetcher, /AbortController|signal/, 'fetchAsset lost its connection bound — a black-holed host hangs for ever');
+
+  // The two places that actually pull a module must go through it. A bare fetch(resolveAsset(...)) is the bug.
+  const install = fnBody(ENGINE, 'async function installModule', 'installModule');
+  const cacheFn = fnBody(ENGINE, 'async function fetchAndCacheModule', 'fetchAndCacheModule');
+  for (const [name, body] of [['installModule', install], ['fetchAndCacheModule', cacheFn]]) {
+    assert.ok(!/fetch\(\s*resolveAsset\(/.test(body),
+      name + ' fetches resolveAsset() directly again — that skips the on-device copy and breaks the offline Bible');
+    assert.match(body, /fetchAsset\(/, name + ' must fetch through fetchAsset()');
+  }
 });
 
 test('the default Bible ships in the APK', () => {

@@ -391,10 +391,15 @@ window.safeImgUrl = function (v) {
   async function cacheDelete(key){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").delete(key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
 
   // Modules (Bibles + the Strong's lexicon) are NOT embedded in the app — they download on demand.
-  // The web build serves them same-origin; the APK ships none, so on native we resolve a relative
-  // module URL against our public gateway (CapacitorHttp makes this cross-origin fetch work; the
-  // gateway serves /modules/* with CORS). Cache keys stay the ORIGINAL (relative) url so a cache hit
-  // is host-independent. Swap ASSET_BASE for the church's own domain post-pilot.
+  // The web build serves them same-origin. On native, MOST modules are not in the APK, so a relative url
+  // resolves against our public gateway (CapacitorHttp makes that cross-origin fetch work; the gateway serves
+  // /modules/* with CORS). Cache keys stay the ORIGINAL (relative) url so a cache hit is host-independent.
+  // Swap ASSET_BASE for the church's own domain post-pilot.
+  //
+  // ⚠ resolveAsset is NOT the whole story and must not be used as a bare fetch target: the DEFAULT Bible IS
+  // shipped inside the APK (scripts/sync-web.sh → www/modules/engbsb.zip). Go through fetchAsset(), which
+  // tries the on-device copy first. This comment used to say "the APK ships none" — true when it was written,
+  // false since the file was added, and that one stale line is why the offline Bible never loaded.
   const IS_NATIVE = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const ASSET_BASE = IS_NATIVE ? "https://app.trinityone.church/" : "";
   const resolveAsset = (u) => (ASSET_BASE && u && !/^https?:/i.test(u)) ? (ASSET_BASE + String(u).replace(/^\//, "")) : u;
@@ -421,11 +426,47 @@ window.safeImgUrl = function (v) {
     if(got !== expected) throw new Error("integrity check failed for " + (url || "module") + " — refusing a tampered download");
   }
 
+  // Fetch a module asset, trying the ON-DEVICE copy first.
+  //
+  // scripts/sync-web.sh puts the default Bible in www/modules/, and Capacitor serves it from the APK at
+  // https://localhost/modules/engbsb.zip. But resolveAsset() rewrites EVERY relative module url to the public
+  // gateway whenever IS_NATIVE, and both fetch sites did a single unconditional fetch of that rewritten url
+  // with no fallback — so the 3 MB shipped inside the APK was never once read, and a phone opened with no
+  // connection was told "You appear to be offline. Connect to the internet and your Bible will download
+  // automatically." The comment above resolveAsset still claimed "the APK ships none", written before the
+  // file was added and never revisited. Found by the UX audit, 2026-08-04.
+  //
+  // Local first, gateway second. The cache key stays the ORIGINAL relative url either way, so a hit remains
+  // host-independent — that part was already right.
+  function assetCandidates(u){
+    const remote = resolveAsset(u);
+    return remote === u ? [u] : [u, remote];
+  }
+  // Bound the CONNECTION, not the download. The timer is cleared the moment fetch() resolves — i.e. when the
+  // response headers arrive — so a genuinely slow 3 MB body over a thin pipe is never cut off, while a
+  // black-holed host fails in seconds instead of hanging for ever. Previously neither site had any timeout,
+  // and a hung first download also disabled the `online` self-heal, which is gated on !loadingFlag.
+  const ASSET_CONNECT_MS = 15000;
+  async function fetchAsset(u){
+    const AC = (typeof AbortController !== "undefined") ? AbortController : null;
+    let last = null;
+    for(const cand of assetCandidates(u)){
+      const ac = AC ? new AC() : null;
+      const t = ac ? setTimeout(() => { try{ ac.abort(); }catch(e){} }, ASSET_CONNECT_MS) : null;
+      try{
+        const res = await fetch(cand, ac ? { signal: ac.signal } : undefined);
+        if(res && res.ok) return res;
+        last = new Error("HTTP " + (res && res.status));
+      }catch(e){ last = e; }
+      finally{ if(t) clearTimeout(t); }
+    }
+    throw last || new Error("could not fetch " + u);
+  }
+
   async function fetchAndCacheModule(url, meta){
     const cached = await cacheGet(url);
     if(cached) return loadModuleBytes(cached, url.split("/").pop(), meta);
-    const res = await fetch(resolveAsset(url));
-    if(!res.ok) throw new Error("HTTP " + res.status);
+    const res = await fetchAsset(url);
     // SECURITY-AUDIT-2026-06-24 L4: size cap (matches the JSON branch in installModule). The
     // ceiling is well above any real module: BSB ≈ 3 MB, the KJV+S MySword ≈ 9 MB. A compromised
     // mirror could otherwise stream gigabytes into RAM.
@@ -508,7 +549,7 @@ window.safeImgUrl = function (v) {
       if((item.format || "").toUpperCase() === "JSON"){
         let bytes = await cacheGet(item.url);
         if(!bytes){
-          const res = await fetch(resolveAsset(item.url)); if(!res.ok) throw new Error("HTTP " + res.status);
+          const res = await fetchAsset(item.url);   // local-first, then the gateway — see fetchAsset
           // SECURITY-AUDIT-2026-06-24 L4: size cap before arrayBuffer + JSON.parse. A compromised /
           // un-pinned host could otherwise serve a multi-GB JSON and OOM the device. 50 MB is well above
           // any real lexicon today (BDB ≈ 2 MB, Abbott-Smith ≈ 4 MB, Strong's ≈ 4 MB).
