@@ -774,7 +774,11 @@ function App() {
     if (!np || !(F && F.announceMembership)) return;
     let last = 0; try { last = Number(localStorage.getItem('trinityone.hb:' + np) || 0); } catch {}
     if (Date.now() - last < 12 * 3600 * 1000) return;
-    const beat = () => { F.announceMembership(np); if (lsCanWrite('trinityone.hb:' + np)) { try { localStorage.setItem('trinityone.hb:' + np, String(Date.now())); } catch {} } };
+    // MARK DONE ON SUCCESS, NOT ON ATTEMPT. announceMembership is async and used to be called un-awaited, with
+    // the 12-hour heartbeat stamp written regardless — so a failed announce set the clock anyway and the member
+    // stayed invisible to their church for half a day. It is now queued in the outbox as well, so a failure is
+    // retried rather than lost, but the stamp must still only mean "this landed". UX audit 2026-08-04.
+    const beat = () => { Promise.resolve(F.announceMembership(np)).then(ok => { if (ok && lsCanWrite('trinityone.hb:' + np)) { try { localStorage.setItem('trinityone.hb:' + np, String(Date.now())); } catch {} } }).catch(() => {}); };
     if (F.ready && F.ready.then) F.ready.then(beat).catch(() => {}); else beat();
   }, [activeChurch]);
   const pendingFollowRef = React.useRef(null);   // S2: a follow link opened before onboarding — defer the join+announce until the wizard completes (consent-first)
@@ -1603,7 +1607,12 @@ function App() {
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
     joinState,   // { approval, isAdmitted, isPending, offline, unknown } for the active church
-    retryConnection: () => bumpConn(x => x + 1),   // force a fresh relay re-subscribe (manual "Try again")
+    // RE-ANNOUNCE, not just re-subscribe. "Check again" used to re-run the READ subscription only, so a member
+    // whose join announce never landed could tap it for ever and remain invisible — the one action offered on
+    // the one screen where they are stuck. Now it re-sends the thing that makes them visible, then re-reads.
+    // Is the join announce still sitting in the outbox? The pending screen must not claim "sent" while it is.
+    joinQueued: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinQueued && window.Fellowship.joinQueued(np)); } catch (e) { return false; } })(),
+    retryConnection: () => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; if (np && window.Fellowship.announceMembership) window.Fellowship.announceMembership(np); } catch (e) {} bumpConn(x => x + 1); },
     // steward rule: this church asks members to use a real first + last name (two words)
     requireFullName: !!(((churches.find(c => c.id === activeChurch) || {}).rules) || {}).fullName,
     // AUDIT-2026-07-27. This used to read the church's list of children to decide whether to offer a DM. That

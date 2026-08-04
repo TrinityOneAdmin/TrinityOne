@@ -76,6 +76,9 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // could reintroduce the silent-blank path on its own.
   // An exact count, not a floor: the old `>= 4` passed while 26 of the 30 real sites could have been rewritten.
   const sites = [...APP.matchAll(/churches\.find\((\w+) => \1\.id === activeChurch\)/g)];
-  assert.equal(sites.length, 30,
-    `the active-church resolution sites changed (${sites.length} vs 30) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 30 → 32 on 2026-08-04: ctx.joinQueued and ctx.retryConnection both resolve the active church to answer
+  // "is this member's join announce still queued?" and to RE-ANNOUNCE on "Check again". Both are ordinary
+  // active-church reads and benefit from the same heal as the rest.
+  assert.equal(sites.length, 32,
+    `the active-church resolution sites changed (${sites.length} vs 32) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });

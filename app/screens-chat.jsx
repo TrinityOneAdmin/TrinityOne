@@ -486,7 +486,9 @@ function ChatScreen({ ctx }) {
               that instruction GUARANTEED the member missed the event. It is the most anxious screen a newcomer
               sees, and it was giving them the one instruction that could not work. Honest wording until push
               ships (it is built and device-verified on a branch); then this can promise it again and mean it. */}
-          <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 340, margin: '0 auto' }}>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been sent. A steward usually lets people in within a day. <b>Leave this open and you’ll see it happen</b> — or check back here later, and there’s nothing to do in the meantime.</p>
+          <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 340, margin: '0 auto' }}>{ctx.joinQueued
+            ? <React.Fragment>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> is <b>still waiting to send</b> — your phone will keep trying. Stay on a connection if you can; nobody at the church can see the request until it arrives.</React.Fragment>
+            : <React.Fragment>Your request to join <b>{(ctx.church && ctx.church.name) || 'this church'}</b> has been sent. A steward usually lets people in within a day. <b>Leave this open and you’ll see it happen</b> — or check back here later.</React.Fragment>}</p>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 20, padding: '10px 16px', borderRadius: 999, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, transparent)', color: '#8a6717', fontWeight: 700, fontSize: 13.5 }}>
             <span style={{ width: 8, height: 8, borderRadius: 999, background: '#c2913a' }} /> Pending steward approval
           </div>

@@ -7819,12 +7819,19 @@
         tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]],
         content: JSON.stringify({ joined: Math.floor(Date.now() / 1e3) })
       }, sk);
+      const dup = _outbox.some((o) => o && o.evt && o.evt.id === evt.id);
+      if (!dup) {
+        _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
+        _outboxSave();
+      }
+      let ok = false;
       try {
         await _publishAny(window.Fellowship.relays, evt);
+        ok = true;
       } catch (e) {
-        console.warn("[fellowship] membership publish failed", e);
+        console.warn("[fellowship] membership publish failed \u2014 queued for retry", e);
       }
-      return evt;
+      return ok ? evt : null;
     },
     // leave a church: tombstone the membership event (they vanish from the steward's list unless they
     // have posted). Wired for when an unfollow action exists.
@@ -8275,6 +8282,12 @@
       return evt;
     },
     // the queue, for the UI: pending messages for one group (oldest first), and a change subscription
+    // Is this church's join announce still waiting to send? The pending screen used to say "has been sent" in
+    // the past tense with the publish result discarded, which is the one claim it could not make.
+    joinQueued(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _outbox.some((o) => o && o.join === cp));
+    },
     outboxFor(groupId) {
       return [
         ..._outbox.filter((o) => o.groupId === groupId).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),

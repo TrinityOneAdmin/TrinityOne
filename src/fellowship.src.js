@@ -1798,8 +1798,24 @@ window.Fellowship = {
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]],
       content: JSON.stringify({ joined: Math.floor(Date.now() / 1000) }),
     }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] membership publish failed', e); }
-    return evt;
+    // QUEUE FIRST, THEN ATTEMPT — the same rule as a group message (see the E1 note on _outbox.push). This
+    // used to be a bare _publishAny with a console.warn on failure: no retry, no persistence, nothing on
+    // screen. And this single event is the ONLY thing that makes a member visible to a steward — the pending
+    // list is `members.filter(m => !admitted.has(m.pubkey))`, so if it never lands the church cannot see that
+    // anyone asked. It fires on first launch, on the thin pipe this product is built for, while the screen
+    // says "Your request to join X has been sent … there's nothing to do in the meantime."
+    //
+    // A chat message got 50 persisted retries across restarts and a visible "Waiting to send". Joining the
+    // church got a line in the console log. UX audit 2026-08-04.
+    const dup = _outbox.some(o => o && o.evt && o.evt.id === evt.id);
+    if (!dup) {
+      _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+      _outboxSave();
+    }
+    let ok = false;
+    try { await _publishAny(window.Fellowship.relays, evt); ok = true; }
+    catch (e) { console.warn('[fellowship] membership publish failed — queued for retry', e); }
+    return ok ? evt : null;
   },
   // leave a church: tombstone the membership event (they vanish from the steward's list unless they
   // have posted). Wired for when an unfollow action exists.
@@ -2208,6 +2224,9 @@ window.Fellowship = {
     return evt;
   },
   // the queue, for the UI: pending messages for one group (oldest first), and a change subscription
+  // Is this church's join announce still waiting to send? The pending screen used to say "has been sent" in
+  // the past tense with the publish result discarded, which is the one claim it could not make.
+  joinQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.join === cp)); },
   outboxFor(groupId) { return [
     ..._outbox.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
     ..._outboxFailed.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
