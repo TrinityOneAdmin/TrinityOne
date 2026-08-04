@@ -5188,17 +5188,24 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const adoptScanned = (payload) => {
     setScanning(false);
     if (!payload) return;
-    if (!window.confirm('Restore this church onto this device?\n\nThis replaces the church key currently held here — make sure it’s backed up. The console will reload.')) return;
-    try { window.Steward.adoptChurch(payload); window.location.reload(); }
+    if (!window.confirm('Restore this church onto this device?\n\nThis replaces the church key currently held here — make sure it’s backed up. You’ll be asked to set a PIN.')) return;
+    // NO reload here. adoptChurch → restoreKey keeps the seed in MEMORY ONLY and sets needsPin, so the
+    // forced-PIN modal can encrypt and persist it; a reload throws that memory away and leaves the device
+    // with no key at all (restoreKey has already cleared the old one). StewardRoot swaps StewDashboard for
+    // StewardForcedPin on the needsPin event and remounts it after, which is the refresh the reload was for.
+    try { window.Steward.adoptChurch(payload); }
     catch (e) { window.alert('That QR isn’t a valid church handoff.'); }
   };
   const doRestore = () => {
     setRestoreErr('');
     // confirm BEFORE we replace anything — restoreKey overwrites + persists the church key on this device
-    if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — make sure its recovery phrase is backed up first.\n\nContinue and reload?')) return;
+    if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — make sure its recovery phrase is backed up first.\n\nContinue?')) return;
     try {
+      // NO reload — see adoptScanned. restoreKey() deliberately does NOT persist: the seed lives in memory
+      // until the forced-PIN modal encrypts it, and restoreKey has ALREADY removed the previous key from
+      // localStorage and the hardware store. Reloading here dropped the only copy, so the console came back
+      // to "Set up a new church" having destroyed the old key and kept nothing. Found on-device 2026-08-04.
       window.Steward.restoreKey(restorePhrase);
-      window.location.reload();
     } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
   };
   const restoreFromFile = (e) => {
@@ -5206,9 +5213,10 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
     const p = window.prompt('Enter the passphrase for this backup file:'); if (p == null) return;
     window.TrinityBackup.readFile(f).then(t => window.TrinityBackup.decryptStr(t, p)).then(obj => {
       // confirm BEFORE applySteward replaces the on-device key
-      if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — back it up first.\n\nRestore from the file and reload?')) return;
+      if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — back it up first.\n\nRestore from the file?')) return;
+      // NO reload — applySteward() calls the same restoreKey() (and removes church-key.enc itself), so the
+      // restored seed is memory-only until the forced-PIN modal persists it. See doRestore above.
       window.TrinityBackup.applySteward(obj);
-      window.location.reload();
     }).catch(err => window.alert('Restore failed: ' + (err.message || err)));
   };
   return (

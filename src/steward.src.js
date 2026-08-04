@@ -1932,7 +1932,9 @@ window.Steward = {
     const q = m.match(/[?&#](?:adopt|church)=([^&#\s]+)/);   // also accept a URL form
     if (q) { try { m = decodeURIComponent(q[1]); } catch {} }
     m = m.replace(/^trinityone-church:/i, '').trim();
-    return window.Steward.restoreKey(m);                     // validates + persists; throws on a bad phrase
+    // validates; throws on a bad phrase. Does NOT persist — the seed is memory-only until the forced-PIN
+    // modal encrypts it (see restoreKey). Callers must NOT reload, or the restored key is lost.
+    return window.Steward.restoreKey(m);
   },
   // ---- "Become a steward" handshake: a would-be steward shows this code to a church owner, who scans/pastes
   // it under Delegated stewards to add them. Unlike the church handoff this carries ONLY the public npub of
