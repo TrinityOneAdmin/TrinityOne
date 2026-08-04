@@ -407,9 +407,12 @@ function StewardWelcome() {
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{err}</div> : null}
             <button onClick={finishWithPin} disabled={pinVal.length < 8 || pinBusy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 14, opacity: (pinVal.length >= 8 && !pinBusy) ? 1 : 0.5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {pinBusy ? 'Setting…' : 'Set PIN & enter'}</button>
             <button onClick={() => { setErr(''); setMode('steward'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 8 }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
-            {/* SECURITY-AUDIT-2026-06-25 Critical-2: Skip is gone — PIN is mandatory. If the user
-                bypasses this screen anyway (back-button, refresh), the StewardForcedPin modal will
-                fire on the next render because window.Steward.needsPin is still true. */}
+            {/* SECURITY-AUDIT-2026-06-25 Critical-2: Skip is gone — PIN is mandatory.
+                A back-button bypass is caught: needsPin is module state and still true on the next render.
+                A REFRESH is NOT, and the old comment here claimed otherwise. A reload rebuilds the module,
+                needsPin resets to false, and an unpersisted seed goes with it — which is exactly the key
+                loss found on a phone on 2026-08-04. Do not rely on this screen surviving a reload; the
+                protection is that nothing on the restore paths reloads, plus lock()'s needsPin guard. */}
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can change this later under Settings → Security → Console lock.</div>
           </div>
         ) : mode === 'scanning' ? (
@@ -498,8 +501,11 @@ function StewardForcedPin() {
     catch (e) { why = (e && e.message) ? ' (' + String(e.message).slice(0, 80) + ')' : ''; }
     if (!ok) {
       setBusy(false);
+      // NEVER advise a reload here. This fires while the seed may exist ONLY in memory (after createKey,
+      // restoreKey or removeLock), so reloading is the one action that destroys the church outright — and it
+      // was the product's own advice until 2026-08-04. Say "stay on this screen" instead, which is the truth.
       setErr(why
-        ? 'Something went wrong setting the PIN' + why + '. Try again, or reload this page.'
+        ? 'Something went wrong setting the PIN' + why + '. Try again — and stay on this screen, the church key is not saved until a PIN is set.'
         : 'That wasn’t accepted — use at least 8 characters, then try again.');
       setPin(''); setPin2('');
       return;

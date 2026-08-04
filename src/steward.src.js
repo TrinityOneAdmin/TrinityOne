@@ -18,6 +18,10 @@ import { SimplePool } from 'nostr-tools/pool';
 // than a hand-rolled one, so the two can never drift.
 import { normalizeURL } from 'nostr-tools/utils';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
+// Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
+// (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
+import { validateMnemonic } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
@@ -768,6 +772,33 @@ function setKey(mnemonic) {
   // FEDERATION-PLAN Phase 1b: publish/refresh the church's NIP-65 relay-list once the key is ready.
   // Fire-and-forget + deferred so it never blocks unlock; replaceable, so re-running is harmless.
   try { Promise.resolve().then(() => { try { window.Steward.publishRelayList && window.Steward.publishRelayList(); } catch {} }); } catch {}
+}
+
+// Everything in this module that is scoped to ONE church, cleared in one place.
+//
+// Why it exists: this state used to be reset in exactly one path (setActiveIdentity), and everywhere else it
+// survived on the strength of `window.location.reload()` wiping the module. When the reload was removed from
+// the restore routes (2026-08-04) the state carried across a WHOLE-KEY replacement, and the roster effect then
+// republished church A's name/care/media rings as church B's envelopes — replaceable events, so B's originals
+// were overwritten on the relay, B's sealed names and care needs stopped opening for good, and A's keys were
+// handed to B's congregation. The name-key half of that had already happened once (AUDIT-2026-07-27) and was
+// fixed for identity SWITCHING only; the same hole stayed open for key REPLACEMENT.
+//
+// So: one function, called from both. Adding a per-church global without adding it here is the bug.
+function _resetChurchScopedState() {
+  lastProfile = {}; _profileLoaded = false;
+  _clearanceSent.clear();
+  _careRoster = new Set(); _careRosterKnown = false;
+  _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
+  _applyNoPhotoList([]);
+  // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
+  // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
+  _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false;
+  _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false;
+  // NIP-42 is bound to the key that signed the challenge. These sockets authed as the PREVIOUS church and will
+  // not be re-challenged while they stay open, so _isRelayAuthed() would answer true for a church that has
+  // never proved itself — the exact false-true the comment above it warns "silently destroys a church's keys".
+  _authedRelays.clear();
 }
 
 // ── console PIN lock: encrypt the church seed at rest with a PIN/passphrase (AES-GCM, PBKDF2). A
@@ -1692,6 +1723,13 @@ window.Steward = {
     } catch { return false; }
   },
   lock() {                                         // forget the in-memory key (idle / manual); seed stays encrypted
+    // "seed stays encrypted" is only true once it HAS been encrypted. While needsPin is set — after createKey,
+    // restoreKey, adoptChurch or removeLock — the seed exists nowhere but `currentMnemonic`, so forgetting it
+    // is not locking, it is destroying the church. The 10-minute idle timer in steward-root.jsx fires on a
+    // dep array of [ks.has], which does not change across a restore, so its pre-restore deadline stayed armed
+    // over the forced-PIN screen: walk away for ten minutes and the console came back to "Set up a new
+    // church". Guarded HERE rather than in the timer, so every caller is covered. Adversarial review 2026-08-04.
+    if (needsPin) return;
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
     window.Steward.locked = !!lsGet(ENC_LS);
@@ -1909,14 +1947,26 @@ window.Steward = {
   restoreKey(mnemonic) {
     const m = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (m.split(' ').length < 12) throw new Error('Enter the full 12-word recovery phrase.');
-    // SECURITY-AUDIT-2026-06-25 Critical-2: restore does NOT persist plaintext. The seed lives in
-    // memory only; needsPin forces the forced PIN modal before the steward can act. Any existing
-    // PIN-encrypted blob on this device is wiped (it belonged to a different key).
-    // S6: encBlobRemove() clears the hardware store too. Without it the PREVIOUS key's ciphertext would sit
-    // in Keystore after a restore — the exact at-rest exposure this change exists to close, left behind by the
-    // one operation whose comment promises the old blob is wiped.
-    setKey(m); try { localStorage.removeItem(KEY_LS); } catch (e) {}
-    encBlobRemove();
+    // CHECKSUM, not just word count. `privateKeyFromSeedWords` is a bare PBKDF2: any twelve lowercase tokens
+    // derive a perfectly valid key. Without this a single mistyped word destroyed the real church key and
+    // installed a stranger's — and the forced-PIN screen shows no npub or church name, so nothing on screen
+    // contradicted it. The member app has validated since M12 (src/identity.src.js); the console, which holds
+    // the higher-value key, did not. Adversarial review 2026-08-04.
+    if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase — check the spelling of each word.');
+    // ORDER MATTERS, and it used to be backwards. This wiped the previous key from localStorage AND the
+    // hardware store FIRST, leaving the restored seed in memory only until setPin() encrypted it. Anything
+    // that ended the JS context in that window — an idle lock, a backgrounded WebView, a reload, a crash —
+    // left the device with NO church key at all. Deterministic key loss, found on a phone 2026-08-04.
+    //
+    // Nothing needed that eager wipe: setPin() → encBlobWrite() writes the SAME slot, so a successful restore
+    // overwrites the old ciphertext anyway (S6's at-rest concern is still met), and setPin() removes KEY_LS
+    // itself. An ABANDONED restore now leaves the previous key intact and openable, which is the safe
+    // outcome — the steward keeps the church they had instead of losing both.
+    setKey(m);
+    // The active church has just changed to a DIFFERENT one. Everything scoped to the old church must go with
+    // it, or the roster effect republishes church A's name/care/media keys as church B's. `location.reload()`
+    // used to do this by accident; nothing did it on purpose. See _resetChurchScopedState.
+    _resetChurchScopedState();
     _setNeedsPin(true);
     // fire steward-key so the first-run welcome advances to the console (createKey does this too)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
@@ -4249,6 +4299,11 @@ window.Steward = {
     // church's moderation decisions into another's screen. Cleared here beside the other per-identity state;
     // subscribeSafeguard refills it within a beat. (Same shape as the member app, which resets on church change.)
     _applyNoPhotoList([]);
+    // NOTE: the block above is the same list as _resetChurchScopedState(), minus the care-key, media-key and
+    // NIP-42 state. Deliberately NOT converged in this commit — a SWITCH keeps this device's key while a
+    // RESTORE replaces it, so the wider reset is not obviously correct here and changing it is not what this
+    // fix is for. But the duplication IS the bug class that produced AUDIT-2026-07-27 and the 2026-08-04 key
+    // loss. If you are adding per-church state, add it to _resetChurchScopedState() and settle this properly.
     window.Steward.pubkey = pub; window.Steward.npub = npubEncode(pub); window.Steward.activePub = pub;
     window.Steward.actingChurch = actingChurch;   // UI reads this to show "acting as steward" + hide owner-only controls
     window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch } }));

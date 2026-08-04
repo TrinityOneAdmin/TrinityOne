@@ -3633,8 +3633,8 @@
       const n = y - v * q;
       b = a, a = r, x = u, y = v, u = m, v = n;
     }
-    const gcd2 = b;
-    if (gcd2 !== _1n2)
+    const gcd3 = b;
+    if (gcd3 !== _1n2)
       throw new Error("invert: does not exist");
     return mod(x, modulo);
   }
@@ -4917,13 +4917,13 @@
       const b = Point2.fromBytes(publicKeyB);
       return b.multiply(s).toBytes(isCompressed);
     }
-    const utils2 = {
+    const utils3 = {
       isValidSecretKey,
       isValidPublicKey,
       randomSecretKey
     };
     const keygen = createKeygen(randomSecretKey, getPublicKey3);
-    return Object.freeze({ getPublicKey: getPublicKey3, getSharedSecret, keygen, Point: Point2, utils: utils2, lengths });
+    return Object.freeze({ getPublicKey: getPublicKey3, getSharedSecret, keygen, Point: Point2, utils: utils3, lengths });
   }
   function ecdsa(Point2, hash, ecdsaOpts = {}) {
     ahash(hash);
@@ -4935,11 +4935,11 @@
       bits2int_modN: "function"
     });
     ecdsaOpts = Object.assign({}, ecdsaOpts);
-    const randomBytes3 = ecdsaOpts.randomBytes || randomBytes;
+    const randomBytes4 = ecdsaOpts.randomBytes || randomBytes;
     const hmac2 = ecdsaOpts.hmac || ((key, msg) => hmac(hash, key, msg));
     const { Fp, Fn: Fn2 } = Point2;
     const { ORDER: CURVE_ORDER, BITS: fnBits } = Fn2;
-    const { keygen, getPublicKey: getPublicKey3, getSharedSecret, utils: utils2, lengths } = ecdh(Point2, ecdsaOpts);
+    const { keygen, getPublicKey: getPublicKey3, getSharedSecret, utils: utils3, lengths } = ecdh(Point2, ecdsaOpts);
     const defaultSigOpts = {
       prehash: true,
       lowS: typeof ecdsaOpts.lowS === "boolean" ? ecdsaOpts.lowS : true,
@@ -5077,7 +5077,7 @@
         throw new Error("invalid private key");
       const seedArgs = [int2octets(d), int2octets(h1int)];
       if (extraEntropy != null && extraEntropy !== false) {
-        const e = extraEntropy === true ? randomBytes3(lengths.secretKey) : extraEntropy;
+        const e = extraEntropy === true ? randomBytes4(lengths.secretKey) : extraEntropy;
         seedArgs.push(abytes(e, void 0, "extraEntropy"));
       }
       const seed = concatBytes(...seedArgs);
@@ -5147,7 +5147,7 @@
       keygen,
       getPublicKey: getPublicKey3,
       getSharedSecret,
-      utils: utils2,
+      utils: utils3,
       lengths,
       Point: Point2,
       sign,
@@ -6346,8 +6346,2716 @@
   var finalizeEvent2 = i2.finalizeEvent;
   var verifyEvent2 = i2.verifyEvent;
 
+  // node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
+  function isBytes2(a) {
+    return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
+  }
+  function abytes2(value, length, title = "") {
+    const bytes = isBytes2(value);
+    const len = value?.length;
+    const needsLen = length !== void 0;
+    if (!bytes || needsLen && len !== length) {
+      const prefix = title && `"${title}" `;
+      const ofLen = needsLen ? ` of length ${length}` : "";
+      const got = bytes ? `length=${len}` : `type=${typeof value}`;
+      const message = prefix + "expected Uint8Array" + ofLen + ", got " + got;
+      if (!bytes)
+        throw new TypeError(message);
+      throw new RangeError(message);
+    }
+    return value;
+  }
+  function aexists2(instance, checkFinished = true) {
+    if (instance.destroyed)
+      throw new Error("Hash instance has been destroyed");
+    if (checkFinished && instance.finished)
+      throw new Error("Hash#digest() has already been called");
+  }
+  function aoutput2(out, instance) {
+    abytes2(out, void 0, "digestInto() output");
+    const min = instance.outputLen;
+    if (out.length < min) {
+      throw new RangeError('"digestInto() output" expected to be of length >=' + min);
+    }
+  }
+  function clean2(...arrays) {
+    for (let i3 = 0; i3 < arrays.length; i3++) {
+      arrays[i3].fill(0);
+    }
+  }
+  function createView2(arr) {
+    return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+  }
+  function rotr2(word, shift) {
+    return word << 32 - shift | word >>> shift;
+  }
+  function createHasher2(hashCons, info = {}) {
+    const hashC = (msg, opts) => hashCons(opts).update(msg).digest();
+    const tmp = hashCons(void 0);
+    hashC.outputLen = tmp.outputLen;
+    hashC.blockLen = tmp.blockLen;
+    hashC.canXOF = tmp.canXOF;
+    hashC.create = (opts) => hashCons(opts);
+    Object.assign(hashC, info);
+    return Object.freeze(hashC);
+  }
+  var oidNist2 = (suffix) => ({
+    // Current NIST hashAlgs suffixes used here fit in one DER subidentifier octet.
+    // Larger suffix values would need base-128 OID encoding and a different length byte.
+    oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
+  });
+
+  // node_modules/@scure/bip39/node_modules/@noble/hashes/_md.js
+  function Chi2(a, b, c) {
+    return a & b ^ ~a & c;
+  }
+  function Maj2(a, b, c) {
+    return a & b ^ a & c ^ b & c;
+  }
+  var HashMD2 = class {
+    constructor(blockLen, outputLen, padOffset, isLE2) {
+      __publicField(this, "blockLen");
+      __publicField(this, "outputLen");
+      __publicField(this, "canXOF", false);
+      __publicField(this, "padOffset");
+      __publicField(this, "isLE");
+      // For partial updates less than block size
+      __publicField(this, "buffer");
+      __publicField(this, "view");
+      __publicField(this, "finished", false);
+      __publicField(this, "length", 0);
+      __publicField(this, "pos", 0);
+      __publicField(this, "destroyed", false);
+      this.blockLen = blockLen;
+      this.outputLen = outputLen;
+      this.padOffset = padOffset;
+      this.isLE = isLE2;
+      this.buffer = new Uint8Array(blockLen);
+      this.view = createView2(this.buffer);
+    }
+    update(data) {
+      aexists2(this);
+      abytes2(data);
+      const { view, buffer, blockLen } = this;
+      const len = data.length;
+      for (let pos = 0; pos < len; ) {
+        const take = Math.min(blockLen - this.pos, len - pos);
+        if (take === blockLen) {
+          const dataView = createView2(data);
+          for (; blockLen <= len - pos; pos += blockLen)
+            this.process(dataView, pos);
+          continue;
+        }
+        buffer.set(data.subarray(pos, pos + take), this.pos);
+        this.pos += take;
+        pos += take;
+        if (this.pos === blockLen) {
+          this.process(view, 0);
+          this.pos = 0;
+        }
+      }
+      this.length += data.length;
+      this.roundClean();
+      return this;
+    }
+    digestInto(out) {
+      aexists2(this);
+      aoutput2(out, this);
+      this.finished = true;
+      const { buffer, view, blockLen, isLE: isLE2 } = this;
+      let { pos } = this;
+      buffer[pos++] = 128;
+      clean2(this.buffer.subarray(pos));
+      if (this.padOffset > blockLen - pos) {
+        this.process(view, 0);
+        pos = 0;
+      }
+      for (let i3 = pos; i3 < blockLen; i3++)
+        buffer[i3] = 0;
+      view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE2);
+      this.process(view, 0);
+      const oview = createView2(out);
+      const len = this.outputLen;
+      if (len % 4)
+        throw new Error("_sha2: outputLen must be aligned to 32bit");
+      const outLen = len / 4;
+      const state = this.get();
+      if (outLen > state.length)
+        throw new Error("_sha2: outputLen bigger than state");
+      for (let i3 = 0; i3 < outLen; i3++)
+        oview.setUint32(4 * i3, state[i3], isLE2);
+    }
+    digest() {
+      const { buffer, outputLen } = this;
+      this.digestInto(buffer);
+      const res = buffer.slice(0, outputLen);
+      this.destroy();
+      return res;
+    }
+    _cloneInto(to) {
+      to || (to = new this.constructor());
+      to.set(...this.get());
+      const { blockLen, buffer, length, finished, destroyed, pos } = this;
+      to.destroyed = destroyed;
+      to.finished = finished;
+      to.length = length;
+      to.pos = pos;
+      if (length % blockLen)
+        to.buffer.set(buffer);
+      return to;
+    }
+    clone() {
+      return this._cloneInto();
+    }
+  };
+  var SHA256_IV2 = /* @__PURE__ */ Uint32Array.from([
+    1779033703,
+    3144134277,
+    1013904242,
+    2773480762,
+    1359893119,
+    2600822924,
+    528734635,
+    1541459225
+  ]);
+
+  // node_modules/@scure/bip39/node_modules/@noble/hashes/sha2.js
+  var SHA256_K2 = /* @__PURE__ */ Uint32Array.from([
+    1116352408,
+    1899447441,
+    3049323471,
+    3921009573,
+    961987163,
+    1508970993,
+    2453635748,
+    2870763221,
+    3624381080,
+    310598401,
+    607225278,
+    1426881987,
+    1925078388,
+    2162078206,
+    2614888103,
+    3248222580,
+    3835390401,
+    4022224774,
+    264347078,
+    604807628,
+    770255983,
+    1249150122,
+    1555081692,
+    1996064986,
+    2554220882,
+    2821834349,
+    2952996808,
+    3210313671,
+    3336571891,
+    3584528711,
+    113926993,
+    338241895,
+    666307205,
+    773529912,
+    1294757372,
+    1396182291,
+    1695183700,
+    1986661051,
+    2177026350,
+    2456956037,
+    2730485921,
+    2820302411,
+    3259730800,
+    3345764771,
+    3516065817,
+    3600352804,
+    4094571909,
+    275423344,
+    430227734,
+    506948616,
+    659060556,
+    883997877,
+    958139571,
+    1322822218,
+    1537002063,
+    1747873779,
+    1955562222,
+    2024104815,
+    2227730452,
+    2361852424,
+    2428436474,
+    2756734187,
+    3204031479,
+    3329325298
+  ]);
+  var SHA256_W2 = /* @__PURE__ */ new Uint32Array(64);
+  var SHA2_32B2 = class extends HashMD2 {
+    constructor(outputLen) {
+      super(64, outputLen, 8, false);
+    }
+    get() {
+      const { A, B, C, D, E, F, G, H } = this;
+      return [A, B, C, D, E, F, G, H];
+    }
+    // prettier-ignore
+    set(A, B, C, D, E, F, G, H) {
+      this.A = A | 0;
+      this.B = B | 0;
+      this.C = C | 0;
+      this.D = D | 0;
+      this.E = E | 0;
+      this.F = F | 0;
+      this.G = G | 0;
+      this.H = H | 0;
+    }
+    process(view, offset) {
+      for (let i3 = 0; i3 < 16; i3++, offset += 4)
+        SHA256_W2[i3] = view.getUint32(offset, false);
+      for (let i3 = 16; i3 < 64; i3++) {
+        const W15 = SHA256_W2[i3 - 15];
+        const W2 = SHA256_W2[i3 - 2];
+        const s0 = rotr2(W15, 7) ^ rotr2(W15, 18) ^ W15 >>> 3;
+        const s1 = rotr2(W2, 17) ^ rotr2(W2, 19) ^ W2 >>> 10;
+        SHA256_W2[i3] = s1 + SHA256_W2[i3 - 7] + s0 + SHA256_W2[i3 - 16] | 0;
+      }
+      let { A, B, C, D, E, F, G, H } = this;
+      for (let i3 = 0; i3 < 64; i3++) {
+        const sigma1 = rotr2(E, 6) ^ rotr2(E, 11) ^ rotr2(E, 25);
+        const T1 = H + sigma1 + Chi2(E, F, G) + SHA256_K2[i3] + SHA256_W2[i3] | 0;
+        const sigma0 = rotr2(A, 2) ^ rotr2(A, 13) ^ rotr2(A, 22);
+        const T2 = sigma0 + Maj2(A, B, C) | 0;
+        H = G;
+        G = F;
+        F = E;
+        E = D + T1 | 0;
+        D = C;
+        C = B;
+        B = A;
+        A = T1 + T2 | 0;
+      }
+      A = A + this.A | 0;
+      B = B + this.B | 0;
+      C = C + this.C | 0;
+      D = D + this.D | 0;
+      E = E + this.E | 0;
+      F = F + this.F | 0;
+      G = G + this.G | 0;
+      H = H + this.H | 0;
+      this.set(A, B, C, D, E, F, G, H);
+    }
+    roundClean() {
+      clean2(SHA256_W2);
+    }
+    destroy() {
+      this.destroyed = true;
+      this.set(0, 0, 0, 0, 0, 0, 0, 0);
+      clean2(this.buffer);
+    }
+  };
+  var _SHA2562 = class extends SHA2_32B2 {
+    constructor() {
+      super(32);
+      // We cannot use array here since array allows indexing by variable
+      // which means optimizer/compiler cannot use registers.
+      __publicField(this, "A", SHA256_IV2[0] | 0);
+      __publicField(this, "B", SHA256_IV2[1] | 0);
+      __publicField(this, "C", SHA256_IV2[2] | 0);
+      __publicField(this, "D", SHA256_IV2[3] | 0);
+      __publicField(this, "E", SHA256_IV2[4] | 0);
+      __publicField(this, "F", SHA256_IV2[5] | 0);
+      __publicField(this, "G", SHA256_IV2[6] | 0);
+      __publicField(this, "H", SHA256_IV2[7] | 0);
+    }
+  };
+  var sha2562 = /* @__PURE__ */ createHasher2(
+    () => new _SHA2562(),
+    /* @__PURE__ */ oidNist2(1)
+  );
+
+  // node_modules/@scure/bip39/node_modules/@scure/base/index.js
+  function isBytes3(a) {
+    return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
+  }
+  function isArrayOf(isString, arr) {
+    if (!Array.isArray(arr))
+      return false;
+    if (arr.length === 0)
+      return true;
+    if (isString) {
+      return arr.every((item) => typeof item === "string");
+    } else {
+      return arr.every((item) => Number.isSafeInteger(item));
+    }
+  }
+  function afn(input) {
+    if (typeof input !== "function")
+      throw new TypeError("function expected");
+    return true;
+  }
+  function astr(label, input) {
+    if (typeof input !== "string")
+      throw new TypeError(`${label}: string expected`);
+    return true;
+  }
+  function anumber2(n) {
+    if (typeof n !== "number")
+      throw new TypeError(`number expected, got ${typeof n}`);
+    if (!Number.isSafeInteger(n))
+      throw new RangeError(`invalid integer: ${n}`);
+  }
+  function aArr(input) {
+    if (!Array.isArray(input))
+      throw new TypeError("array expected");
+  }
+  function astrArr(label, input) {
+    if (!isArrayOf(true, input))
+      throw new TypeError(`${label}: array of strings expected`);
+  }
+  function anumArr(label, input) {
+    if (!isArrayOf(false, input))
+      throw new TypeError(`${label}: array of numbers expected`);
+  }
+  // @__NO_SIDE_EFFECTS__
+  function chain(...args) {
+    const id = (a) => a;
+    const wrap = (a, b) => (c) => a(b(c));
+    const encode2 = args.map((x) => x.encode).reduceRight(wrap, id);
+    const decode3 = args.map((x) => x.decode).reduce(wrap, id);
+    return { encode: encode2, decode: decode3 };
+  }
+  // @__NO_SIDE_EFFECTS__
+  function alphabet(letters) {
+    const lettersA = typeof letters === "string" ? letters.split("") : letters;
+    const len = lettersA.length;
+    astrArr("alphabet", lettersA);
+    const indexes = new Map(lettersA.map((l, i3) => [l, i3]));
+    return {
+      encode: (digits) => {
+        aArr(digits);
+        return digits.map((i3) => {
+          if (!Number.isSafeInteger(i3) || i3 < 0 || i3 >= len)
+            throw new Error(`alphabet.encode: digit index outside alphabet "${i3}". Allowed: ${letters}`);
+          return lettersA[i3];
+        });
+      },
+      decode: (input) => {
+        aArr(input);
+        return input.map((letter) => {
+          astr("alphabet.decode", letter);
+          const i3 = indexes.get(letter);
+          if (i3 === void 0)
+            throw new Error(`Unknown letter: "${letter}". Allowed: ${letters}`);
+          return i3;
+        });
+      }
+    };
+  }
+  // @__NO_SIDE_EFFECTS__
+  function join(separator = "") {
+    astr("join", separator);
+    return {
+      encode: (from) => {
+        astrArr("join.decode", from);
+        return from.join(separator);
+      },
+      decode: (to) => {
+        astr("join.decode", to);
+        return to.split(separator);
+      }
+    };
+  }
+  // @__NO_SIDE_EFFECTS__
+  function padding(bits2, chr = "=") {
+    anumber2(bits2);
+    astr("padding", chr);
+    return {
+      encode(data) {
+        astrArr("padding.encode", data);
+        while (data.length * bits2 % 8)
+          data.push(chr);
+        return data;
+      },
+      decode(input) {
+        astrArr("padding.decode", input);
+        let end = input.length;
+        if (end * bits2 % 8)
+          throw new Error("padding: invalid, string should have whole number of bytes");
+        for (; end > 0 && input[end - 1] === chr; end--) {
+          const last = end - 1;
+          const byte = last * bits2;
+          if (byte % 8 === 0)
+            throw new Error("padding: invalid, string has too much padding");
+        }
+        return input.slice(0, end);
+      }
+    };
+  }
+  function convertRadix(data, from, to) {
+    if (from < 2)
+      throw new RangeError(`convertRadix: invalid from=${from}, base cannot be less than 2`);
+    if (to < 2)
+      throw new RangeError(`convertRadix: invalid to=${to}, base cannot be less than 2`);
+    aArr(data);
+    if (!data.length)
+      return [];
+    let pos = 0;
+    const res = [];
+    const digits = Array.from(data, (d) => {
+      anumber2(d);
+      if (d < 0 || d >= from)
+        throw new Error(`invalid integer: ${d}`);
+      return d;
+    });
+    const dlen = digits.length;
+    while (true) {
+      let carry = 0;
+      let done = true;
+      for (let i3 = pos; i3 < dlen; i3++) {
+        const digit = digits[i3];
+        const fromCarry = from * carry;
+        const digitBase = fromCarry + digit;
+        if (!Number.isSafeInteger(digitBase) || fromCarry / from !== carry || digitBase - digit !== fromCarry) {
+          throw new Error("convertRadix: carry overflow");
+        }
+        const div = digitBase / to;
+        carry = digitBase % to;
+        const rounded = Math.floor(div);
+        digits[i3] = rounded;
+        if (!Number.isSafeInteger(rounded) || rounded * to + carry !== digitBase)
+          throw new Error("convertRadix: carry overflow");
+        if (!done)
+          continue;
+        else if (!rounded)
+          pos = i3;
+        else
+          done = false;
+      }
+      res.push(carry);
+      if (done)
+        break;
+    }
+    for (let i3 = 0; i3 < data.length - 1 && data[i3] === 0; i3++)
+      res.push(0);
+    return res.reverse();
+  }
+  var gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
+  var radix2carry = /* @__NO_SIDE_EFFECTS__ */ (from, to) => from + (to - gcd(from, to));
+  var powers = /* @__PURE__ */ (() => {
+    let res = [];
+    for (let i3 = 0; i3 < 40; i3++)
+      res.push(2 ** i3);
+    return res;
+  })();
+  function convertRadix2(data, from, to, padding3) {
+    aArr(data);
+    if (from <= 0 || from > 32)
+      throw new RangeError(`convertRadix2: wrong from=${from}`);
+    if (to <= 0 || to > 32)
+      throw new RangeError(`convertRadix2: wrong to=${to}`);
+    if (/* @__PURE__ */ radix2carry(from, to) > 32) {
+      throw new Error(`convertRadix2: carry overflow from=${from} to=${to} carryBits=${/* @__PURE__ */ radix2carry(from, to)}`);
+    }
+    let carry = 0;
+    let pos = 0;
+    const max2 = powers[from];
+    const mask = powers[to] - 1;
+    const res = [];
+    for (const n of data) {
+      anumber2(n);
+      if (n >= max2)
+        throw new Error(`convertRadix2: invalid data word=${n} from=${from}`);
+      carry = carry << from | n;
+      if (pos + from > 32)
+        throw new Error(`convertRadix2: carry overflow pos=${pos} from=${from}`);
+      pos += from;
+      for (; pos >= to; pos -= to)
+        res.push((carry >> pos - to & mask) >>> 0);
+      const pow = powers[pos];
+      if (pow === void 0)
+        throw new Error("invalid carry");
+      carry &= pow - 1;
+    }
+    carry = carry << to - pos & mask;
+    if (!padding3 && pos >= from)
+      throw new Error("Excess padding");
+    if (!padding3 && carry > 0)
+      throw new Error(`Non-zero padding: ${carry}`);
+    if (padding3 && pos > 0)
+      res.push(carry >>> 0);
+    return res;
+  }
+  // @__NO_SIDE_EFFECTS__
+  function radix(num2) {
+    anumber2(num2);
+    const _256 = 2 ** 8;
+    return {
+      encode: (bytes) => {
+        if (!isBytes3(bytes))
+          throw new TypeError("radix.encode input should be Uint8Array");
+        return convertRadix(Array.from(bytes), _256, num2);
+      },
+      decode: (digits) => {
+        anumArr("radix.decode", digits);
+        return Uint8Array.from(convertRadix(digits, num2, _256));
+      }
+    };
+  }
+  // @__NO_SIDE_EFFECTS__
+  function radix2(bits2, revPadding = false) {
+    anumber2(bits2);
+    if (bits2 <= 0 || bits2 > 32)
+      throw new RangeError("radix2: bits should be in (0..32]");
+    if (/* @__PURE__ */ radix2carry(8, bits2) > 32 || /* @__PURE__ */ radix2carry(bits2, 8) > 32)
+      throw new RangeError("radix2: carry overflow");
+    return {
+      encode: (bytes) => {
+        if (!isBytes3(bytes))
+          throw new TypeError("radix2.encode input should be Uint8Array");
+        return convertRadix2(Array.from(bytes), 8, bits2, !revPadding);
+      },
+      decode: (digits) => {
+        anumArr("radix2.decode", digits);
+        return Uint8Array.from(convertRadix2(digits, bits2, 8, revPadding));
+      }
+    };
+  }
+  function checksum(len, fn) {
+    anumber2(len);
+    if (len <= 0)
+      throw new RangeError(`checksum length must be positive: ${len}`);
+    afn(fn);
+    const _fn = fn;
+    return {
+      encode(data) {
+        if (!isBytes3(data))
+          throw new TypeError("checksum.encode: input should be Uint8Array");
+        const sum = _fn(data).slice(0, len);
+        const res = new Uint8Array(data.length + len);
+        res.set(data);
+        res.set(sum, data.length);
+        return res;
+      },
+      decode(data) {
+        if (!isBytes3(data))
+          throw new TypeError("checksum.decode: input should be Uint8Array");
+        const payload = data.slice(0, -len);
+        const oldChecksum = data.slice(-len);
+        const newChecksum = _fn(payload).slice(0, len);
+        for (let i3 = 0; i3 < len; i3++)
+          if (newChecksum[i3] !== oldChecksum[i3])
+            throw new Error("Invalid checksum");
+        return payload;
+      }
+    };
+  }
+  var utils = /* @__PURE__ */ Object.freeze({
+    alphabet,
+    chain,
+    checksum,
+    convertRadix,
+    convertRadix2,
+    radix,
+    radix2,
+    join,
+    padding
+  });
+
+  // node_modules/@scure/bip39/index.js
+  function nfkd(str) {
+    if (typeof str !== "string")
+      throw new TypeError("invalid mnemonic type: " + typeof str);
+    return str.normalize("NFKD");
+  }
+  function normalize(str) {
+    const norm = nfkd(str);
+    const words = norm.split(" ");
+    if (![12, 15, 18, 21, 24].includes(words.length))
+      throw new Error("Invalid mnemonic");
+    return { nfkd: norm, words };
+  }
+  function aentropy(ent) {
+    abytes2(ent);
+    if (![16, 20, 24, 28, 32].includes(ent.length))
+      throw new RangeError("invalid entropy length");
+  }
+  var calcChecksum = (entropy) => {
+    const bitsLeft = 8 - entropy.length / 4;
+    return new Uint8Array([sha2562(entropy)[0] >> bitsLeft << bitsLeft]);
+  };
+  function getCoder(wordlist3) {
+    if (!Array.isArray(wordlist3) || wordlist3.length !== 2048 || typeof wordlist3[0] !== "string")
+      throw new TypeError("Wordlist: expected array of 2048 strings");
+    wordlist3.forEach((i3) => {
+      if (typeof i3 !== "string")
+        throw new TypeError("wordlist: non-string element: " + i3);
+    });
+    return utils.chain(utils.checksum(1, calcChecksum), utils.radix2(11, true), utils.alphabet(wordlist3));
+  }
+  function mnemonicToEntropy(mnemonic, wordlist3) {
+    const { words } = normalize(mnemonic);
+    const entropy = getCoder(wordlist3).decode(words);
+    aentropy(entropy);
+    return entropy;
+  }
+  function validateMnemonic(mnemonic, wordlist3) {
+    try {
+      mnemonicToEntropy(mnemonic, wordlist3);
+    } catch (e) {
+      return false;
+    }
+    return true;
+  }
+
+  // node_modules/@scure/bip39/wordlists/english.js
+  var wordlist = /* @__PURE__ */ Object.freeze(`abandon
+ability
+able
+about
+above
+absent
+absorb
+abstract
+absurd
+abuse
+access
+accident
+account
+accuse
+achieve
+acid
+acoustic
+acquire
+across
+act
+action
+actor
+actress
+actual
+adapt
+add
+addict
+address
+adjust
+admit
+adult
+advance
+advice
+aerobic
+affair
+afford
+afraid
+again
+age
+agent
+agree
+ahead
+aim
+air
+airport
+aisle
+alarm
+album
+alcohol
+alert
+alien
+all
+alley
+allow
+almost
+alone
+alpha
+already
+also
+alter
+always
+amateur
+amazing
+among
+amount
+amused
+analyst
+anchor
+ancient
+anger
+angle
+angry
+animal
+ankle
+announce
+annual
+another
+answer
+antenna
+antique
+anxiety
+any
+apart
+apology
+appear
+apple
+approve
+april
+arch
+arctic
+area
+arena
+argue
+arm
+armed
+armor
+army
+around
+arrange
+arrest
+arrive
+arrow
+art
+artefact
+artist
+artwork
+ask
+aspect
+assault
+asset
+assist
+assume
+asthma
+athlete
+atom
+attack
+attend
+attitude
+attract
+auction
+audit
+august
+aunt
+author
+auto
+autumn
+average
+avocado
+avoid
+awake
+aware
+away
+awesome
+awful
+awkward
+axis
+baby
+bachelor
+bacon
+badge
+bag
+balance
+balcony
+ball
+bamboo
+banana
+banner
+bar
+barely
+bargain
+barrel
+base
+basic
+basket
+battle
+beach
+bean
+beauty
+because
+become
+beef
+before
+begin
+behave
+behind
+believe
+below
+belt
+bench
+benefit
+best
+betray
+better
+between
+beyond
+bicycle
+bid
+bike
+bind
+biology
+bird
+birth
+bitter
+black
+blade
+blame
+blanket
+blast
+bleak
+bless
+blind
+blood
+blossom
+blouse
+blue
+blur
+blush
+board
+boat
+body
+boil
+bomb
+bone
+bonus
+book
+boost
+border
+boring
+borrow
+boss
+bottom
+bounce
+box
+boy
+bracket
+brain
+brand
+brass
+brave
+bread
+breeze
+brick
+bridge
+brief
+bright
+bring
+brisk
+broccoli
+broken
+bronze
+broom
+brother
+brown
+brush
+bubble
+buddy
+budget
+buffalo
+build
+bulb
+bulk
+bullet
+bundle
+bunker
+burden
+burger
+burst
+bus
+business
+busy
+butter
+buyer
+buzz
+cabbage
+cabin
+cable
+cactus
+cage
+cake
+call
+calm
+camera
+camp
+can
+canal
+cancel
+candy
+cannon
+canoe
+canvas
+canyon
+capable
+capital
+captain
+car
+carbon
+card
+cargo
+carpet
+carry
+cart
+case
+cash
+casino
+castle
+casual
+cat
+catalog
+catch
+category
+cattle
+caught
+cause
+caution
+cave
+ceiling
+celery
+cement
+census
+century
+cereal
+certain
+chair
+chalk
+champion
+change
+chaos
+chapter
+charge
+chase
+chat
+cheap
+check
+cheese
+chef
+cherry
+chest
+chicken
+chief
+child
+chimney
+choice
+choose
+chronic
+chuckle
+chunk
+churn
+cigar
+cinnamon
+circle
+citizen
+city
+civil
+claim
+clap
+clarify
+claw
+clay
+clean
+clerk
+clever
+click
+client
+cliff
+climb
+clinic
+clip
+clock
+clog
+close
+cloth
+cloud
+clown
+club
+clump
+cluster
+clutch
+coach
+coast
+coconut
+code
+coffee
+coil
+coin
+collect
+color
+column
+combine
+come
+comfort
+comic
+common
+company
+concert
+conduct
+confirm
+congress
+connect
+consider
+control
+convince
+cook
+cool
+copper
+copy
+coral
+core
+corn
+correct
+cost
+cotton
+couch
+country
+couple
+course
+cousin
+cover
+coyote
+crack
+cradle
+craft
+cram
+crane
+crash
+crater
+crawl
+crazy
+cream
+credit
+creek
+crew
+cricket
+crime
+crisp
+critic
+crop
+cross
+crouch
+crowd
+crucial
+cruel
+cruise
+crumble
+crunch
+crush
+cry
+crystal
+cube
+culture
+cup
+cupboard
+curious
+current
+curtain
+curve
+cushion
+custom
+cute
+cycle
+dad
+damage
+damp
+dance
+danger
+daring
+dash
+daughter
+dawn
+day
+deal
+debate
+debris
+decade
+december
+decide
+decline
+decorate
+decrease
+deer
+defense
+define
+defy
+degree
+delay
+deliver
+demand
+demise
+denial
+dentist
+deny
+depart
+depend
+deposit
+depth
+deputy
+derive
+describe
+desert
+design
+desk
+despair
+destroy
+detail
+detect
+develop
+device
+devote
+diagram
+dial
+diamond
+diary
+dice
+diesel
+diet
+differ
+digital
+dignity
+dilemma
+dinner
+dinosaur
+direct
+dirt
+disagree
+discover
+disease
+dish
+dismiss
+disorder
+display
+distance
+divert
+divide
+divorce
+dizzy
+doctor
+document
+dog
+doll
+dolphin
+domain
+donate
+donkey
+donor
+door
+dose
+double
+dove
+draft
+dragon
+drama
+drastic
+draw
+dream
+dress
+drift
+drill
+drink
+drip
+drive
+drop
+drum
+dry
+duck
+dumb
+dune
+during
+dust
+dutch
+duty
+dwarf
+dynamic
+eager
+eagle
+early
+earn
+earth
+easily
+east
+easy
+echo
+ecology
+economy
+edge
+edit
+educate
+effort
+egg
+eight
+either
+elbow
+elder
+electric
+elegant
+element
+elephant
+elevator
+elite
+else
+embark
+embody
+embrace
+emerge
+emotion
+employ
+empower
+empty
+enable
+enact
+end
+endless
+endorse
+enemy
+energy
+enforce
+engage
+engine
+enhance
+enjoy
+enlist
+enough
+enrich
+enroll
+ensure
+enter
+entire
+entry
+envelope
+episode
+equal
+equip
+era
+erase
+erode
+erosion
+error
+erupt
+escape
+essay
+essence
+estate
+eternal
+ethics
+evidence
+evil
+evoke
+evolve
+exact
+example
+excess
+exchange
+excite
+exclude
+excuse
+execute
+exercise
+exhaust
+exhibit
+exile
+exist
+exit
+exotic
+expand
+expect
+expire
+explain
+expose
+express
+extend
+extra
+eye
+eyebrow
+fabric
+face
+faculty
+fade
+faint
+faith
+fall
+false
+fame
+family
+famous
+fan
+fancy
+fantasy
+farm
+fashion
+fat
+fatal
+father
+fatigue
+fault
+favorite
+feature
+february
+federal
+fee
+feed
+feel
+female
+fence
+festival
+fetch
+fever
+few
+fiber
+fiction
+field
+figure
+file
+film
+filter
+final
+find
+fine
+finger
+finish
+fire
+firm
+first
+fiscal
+fish
+fit
+fitness
+fix
+flag
+flame
+flash
+flat
+flavor
+flee
+flight
+flip
+float
+flock
+floor
+flower
+fluid
+flush
+fly
+foam
+focus
+fog
+foil
+fold
+follow
+food
+foot
+force
+forest
+forget
+fork
+fortune
+forum
+forward
+fossil
+foster
+found
+fox
+fragile
+frame
+frequent
+fresh
+friend
+fringe
+frog
+front
+frost
+frown
+frozen
+fruit
+fuel
+fun
+funny
+furnace
+fury
+future
+gadget
+gain
+galaxy
+gallery
+game
+gap
+garage
+garbage
+garden
+garlic
+garment
+gas
+gasp
+gate
+gather
+gauge
+gaze
+general
+genius
+genre
+gentle
+genuine
+gesture
+ghost
+giant
+gift
+giggle
+ginger
+giraffe
+girl
+give
+glad
+glance
+glare
+glass
+glide
+glimpse
+globe
+gloom
+glory
+glove
+glow
+glue
+goat
+goddess
+gold
+good
+goose
+gorilla
+gospel
+gossip
+govern
+gown
+grab
+grace
+grain
+grant
+grape
+grass
+gravity
+great
+green
+grid
+grief
+grit
+grocery
+group
+grow
+grunt
+guard
+guess
+guide
+guilt
+guitar
+gun
+gym
+habit
+hair
+half
+hammer
+hamster
+hand
+happy
+harbor
+hard
+harsh
+harvest
+hat
+have
+hawk
+hazard
+head
+health
+heart
+heavy
+hedgehog
+height
+hello
+helmet
+help
+hen
+hero
+hidden
+high
+hill
+hint
+hip
+hire
+history
+hobby
+hockey
+hold
+hole
+holiday
+hollow
+home
+honey
+hood
+hope
+horn
+horror
+horse
+hospital
+host
+hotel
+hour
+hover
+hub
+huge
+human
+humble
+humor
+hundred
+hungry
+hunt
+hurdle
+hurry
+hurt
+husband
+hybrid
+ice
+icon
+idea
+identify
+idle
+ignore
+ill
+illegal
+illness
+image
+imitate
+immense
+immune
+impact
+impose
+improve
+impulse
+inch
+include
+income
+increase
+index
+indicate
+indoor
+industry
+infant
+inflict
+inform
+inhale
+inherit
+initial
+inject
+injury
+inmate
+inner
+innocent
+input
+inquiry
+insane
+insect
+inside
+inspire
+install
+intact
+interest
+into
+invest
+invite
+involve
+iron
+island
+isolate
+issue
+item
+ivory
+jacket
+jaguar
+jar
+jazz
+jealous
+jeans
+jelly
+jewel
+job
+join
+joke
+journey
+joy
+judge
+juice
+jump
+jungle
+junior
+junk
+just
+kangaroo
+keen
+keep
+ketchup
+key
+kick
+kid
+kidney
+kind
+kingdom
+kiss
+kit
+kitchen
+kite
+kitten
+kiwi
+knee
+knife
+knock
+know
+lab
+label
+labor
+ladder
+lady
+lake
+lamp
+language
+laptop
+large
+later
+latin
+laugh
+laundry
+lava
+law
+lawn
+lawsuit
+layer
+lazy
+leader
+leaf
+learn
+leave
+lecture
+left
+leg
+legal
+legend
+leisure
+lemon
+lend
+length
+lens
+leopard
+lesson
+letter
+level
+liar
+liberty
+library
+license
+life
+lift
+light
+like
+limb
+limit
+link
+lion
+liquid
+list
+little
+live
+lizard
+load
+loan
+lobster
+local
+lock
+logic
+lonely
+long
+loop
+lottery
+loud
+lounge
+love
+loyal
+lucky
+luggage
+lumber
+lunar
+lunch
+luxury
+lyrics
+machine
+mad
+magic
+magnet
+maid
+mail
+main
+major
+make
+mammal
+man
+manage
+mandate
+mango
+mansion
+manual
+maple
+marble
+march
+margin
+marine
+market
+marriage
+mask
+mass
+master
+match
+material
+math
+matrix
+matter
+maximum
+maze
+meadow
+mean
+measure
+meat
+mechanic
+medal
+media
+melody
+melt
+member
+memory
+mention
+menu
+mercy
+merge
+merit
+merry
+mesh
+message
+metal
+method
+middle
+midnight
+milk
+million
+mimic
+mind
+minimum
+minor
+minute
+miracle
+mirror
+misery
+miss
+mistake
+mix
+mixed
+mixture
+mobile
+model
+modify
+mom
+moment
+monitor
+monkey
+monster
+month
+moon
+moral
+more
+morning
+mosquito
+mother
+motion
+motor
+mountain
+mouse
+move
+movie
+much
+muffin
+mule
+multiply
+muscle
+museum
+mushroom
+music
+must
+mutual
+myself
+mystery
+myth
+naive
+name
+napkin
+narrow
+nasty
+nation
+nature
+near
+neck
+need
+negative
+neglect
+neither
+nephew
+nerve
+nest
+net
+network
+neutral
+never
+news
+next
+nice
+night
+noble
+noise
+nominee
+noodle
+normal
+north
+nose
+notable
+note
+nothing
+notice
+novel
+now
+nuclear
+number
+nurse
+nut
+oak
+obey
+object
+oblige
+obscure
+observe
+obtain
+obvious
+occur
+ocean
+october
+odor
+off
+offer
+office
+often
+oil
+okay
+old
+olive
+olympic
+omit
+once
+one
+onion
+online
+only
+open
+opera
+opinion
+oppose
+option
+orange
+orbit
+orchard
+order
+ordinary
+organ
+orient
+original
+orphan
+ostrich
+other
+outdoor
+outer
+output
+outside
+oval
+oven
+over
+own
+owner
+oxygen
+oyster
+ozone
+pact
+paddle
+page
+pair
+palace
+palm
+panda
+panel
+panic
+panther
+paper
+parade
+parent
+park
+parrot
+party
+pass
+patch
+path
+patient
+patrol
+pattern
+pause
+pave
+payment
+peace
+peanut
+pear
+peasant
+pelican
+pen
+penalty
+pencil
+people
+pepper
+perfect
+permit
+person
+pet
+phone
+photo
+phrase
+physical
+piano
+picnic
+picture
+piece
+pig
+pigeon
+pill
+pilot
+pink
+pioneer
+pipe
+pistol
+pitch
+pizza
+place
+planet
+plastic
+plate
+play
+please
+pledge
+pluck
+plug
+plunge
+poem
+poet
+point
+polar
+pole
+police
+pond
+pony
+pool
+popular
+portion
+position
+possible
+post
+potato
+pottery
+poverty
+powder
+power
+practice
+praise
+predict
+prefer
+prepare
+present
+pretty
+prevent
+price
+pride
+primary
+print
+priority
+prison
+private
+prize
+problem
+process
+produce
+profit
+program
+project
+promote
+proof
+property
+prosper
+protect
+proud
+provide
+public
+pudding
+pull
+pulp
+pulse
+pumpkin
+punch
+pupil
+puppy
+purchase
+purity
+purpose
+purse
+push
+put
+puzzle
+pyramid
+quality
+quantum
+quarter
+question
+quick
+quit
+quiz
+quote
+rabbit
+raccoon
+race
+rack
+radar
+radio
+rail
+rain
+raise
+rally
+ramp
+ranch
+random
+range
+rapid
+rare
+rate
+rather
+raven
+raw
+razor
+ready
+real
+reason
+rebel
+rebuild
+recall
+receive
+recipe
+record
+recycle
+reduce
+reflect
+reform
+refuse
+region
+regret
+regular
+reject
+relax
+release
+relief
+rely
+remain
+remember
+remind
+remove
+render
+renew
+rent
+reopen
+repair
+repeat
+replace
+report
+require
+rescue
+resemble
+resist
+resource
+response
+result
+retire
+retreat
+return
+reunion
+reveal
+review
+reward
+rhythm
+rib
+ribbon
+rice
+rich
+ride
+ridge
+rifle
+right
+rigid
+ring
+riot
+ripple
+risk
+ritual
+rival
+river
+road
+roast
+robot
+robust
+rocket
+romance
+roof
+rookie
+room
+rose
+rotate
+rough
+round
+route
+royal
+rubber
+rude
+rug
+rule
+run
+runway
+rural
+sad
+saddle
+sadness
+safe
+sail
+salad
+salmon
+salon
+salt
+salute
+same
+sample
+sand
+satisfy
+satoshi
+sauce
+sausage
+save
+say
+scale
+scan
+scare
+scatter
+scene
+scheme
+school
+science
+scissors
+scorpion
+scout
+scrap
+screen
+script
+scrub
+sea
+search
+season
+seat
+second
+secret
+section
+security
+seed
+seek
+segment
+select
+sell
+seminar
+senior
+sense
+sentence
+series
+service
+session
+settle
+setup
+seven
+shadow
+shaft
+shallow
+share
+shed
+shell
+sheriff
+shield
+shift
+shine
+ship
+shiver
+shock
+shoe
+shoot
+shop
+short
+shoulder
+shove
+shrimp
+shrug
+shuffle
+shy
+sibling
+sick
+side
+siege
+sight
+sign
+silent
+silk
+silly
+silver
+similar
+simple
+since
+sing
+siren
+sister
+situate
+six
+size
+skate
+sketch
+ski
+skill
+skin
+skirt
+skull
+slab
+slam
+sleep
+slender
+slice
+slide
+slight
+slim
+slogan
+slot
+slow
+slush
+small
+smart
+smile
+smoke
+smooth
+snack
+snake
+snap
+sniff
+snow
+soap
+soccer
+social
+sock
+soda
+soft
+solar
+soldier
+solid
+solution
+solve
+someone
+song
+soon
+sorry
+sort
+soul
+sound
+soup
+source
+south
+space
+spare
+spatial
+spawn
+speak
+special
+speed
+spell
+spend
+sphere
+spice
+spider
+spike
+spin
+spirit
+split
+spoil
+sponsor
+spoon
+sport
+spot
+spray
+spread
+spring
+spy
+square
+squeeze
+squirrel
+stable
+stadium
+staff
+stage
+stairs
+stamp
+stand
+start
+state
+stay
+steak
+steel
+stem
+step
+stereo
+stick
+still
+sting
+stock
+stomach
+stone
+stool
+story
+stove
+strategy
+street
+strike
+strong
+struggle
+student
+stuff
+stumble
+style
+subject
+submit
+subway
+success
+such
+sudden
+suffer
+sugar
+suggest
+suit
+summer
+sun
+sunny
+sunset
+super
+supply
+supreme
+sure
+surface
+surge
+surprise
+surround
+survey
+suspect
+sustain
+swallow
+swamp
+swap
+swarm
+swear
+sweet
+swift
+swim
+swing
+switch
+sword
+symbol
+symptom
+syrup
+system
+table
+tackle
+tag
+tail
+talent
+talk
+tank
+tape
+target
+task
+taste
+tattoo
+taxi
+teach
+team
+tell
+ten
+tenant
+tennis
+tent
+term
+test
+text
+thank
+that
+theme
+then
+theory
+there
+they
+thing
+this
+thought
+three
+thrive
+throw
+thumb
+thunder
+ticket
+tide
+tiger
+tilt
+timber
+time
+tiny
+tip
+tired
+tissue
+title
+toast
+tobacco
+today
+toddler
+toe
+together
+toilet
+token
+tomato
+tomorrow
+tone
+tongue
+tonight
+tool
+tooth
+top
+topic
+topple
+torch
+tornado
+tortoise
+toss
+total
+tourist
+toward
+tower
+town
+toy
+track
+trade
+traffic
+tragic
+train
+transfer
+trap
+trash
+travel
+tray
+treat
+tree
+trend
+trial
+tribe
+trick
+trigger
+trim
+trip
+trophy
+trouble
+truck
+true
+truly
+trumpet
+trust
+truth
+try
+tube
+tuition
+tumble
+tuna
+tunnel
+turkey
+turn
+turtle
+twelve
+twenty
+twice
+twin
+twist
+two
+type
+typical
+ugly
+umbrella
+unable
+unaware
+uncle
+uncover
+under
+undo
+unfair
+unfold
+unhappy
+uniform
+unique
+unit
+universe
+unknown
+unlock
+until
+unusual
+unveil
+update
+upgrade
+uphold
+upon
+upper
+upset
+urban
+urge
+usage
+use
+used
+useful
+useless
+usual
+utility
+vacant
+vacuum
+vague
+valid
+valley
+valve
+van
+vanish
+vapor
+various
+vast
+vault
+vehicle
+velvet
+vendor
+venture
+venue
+verb
+verify
+version
+very
+vessel
+veteran
+viable
+vibrant
+vicious
+victory
+video
+view
+village
+vintage
+violin
+virtual
+virus
+visa
+visit
+visual
+vital
+vivid
+vocal
+voice
+void
+volcano
+volume
+vote
+voyage
+wage
+wagon
+wait
+walk
+wall
+walnut
+want
+warfare
+warm
+warrior
+wash
+wasp
+waste
+water
+wave
+way
+wealth
+weapon
+wear
+weasel
+weather
+web
+wedding
+weekend
+weird
+welcome
+west
+wet
+whale
+what
+wheat
+wheel
+when
+where
+whip
+whisper
+wide
+width
+wife
+wild
+will
+win
+window
+wine
+wing
+wink
+winner
+winter
+wire
+wisdom
+wise
+wish
+witness
+wolf
+woman
+wonder
+wood
+wool
+word
+work
+world
+worry
+worth
+wrap
+wreck
+wrestle
+wrist
+write
+wrong
+yard
+year
+yellow
+you
+young
+youth
+zebra
+zero
+zone
+zoo`.split("\n"));
+
   // node_modules/nostr-tools/node_modules/@scure/bip39/wordlists/english.js
-  var wordlist = `abandon
+  var wordlist2 = `abandon
 ability
 able
 about
@@ -8442,14 +11150,14 @@ zoo`.split("\n");
   }
 
   // node_modules/@scure/base/index.js
-  function isBytes2(a) {
+  function isBytes4(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
-  function abytes2(b) {
-    if (!isBytes2(b))
+  function abytes3(b) {
+    if (!isBytes4(b))
       throw new Error("Uint8Array expected");
   }
-  function isArrayOf(isString, arr) {
+  function isArrayOf2(isString, arr) {
     if (!Array.isArray(arr))
       return false;
     if (arr.length === 0)
@@ -8460,34 +11168,34 @@ zoo`.split("\n");
       return arr.every((item) => Number.isSafeInteger(item));
     }
   }
-  function afn(input) {
+  function afn2(input) {
     if (typeof input !== "function")
       throw new Error("function expected");
     return true;
   }
-  function astr(label, input) {
+  function astr2(label, input) {
     if (typeof input !== "string")
       throw new Error(`${label}: string expected`);
     return true;
   }
-  function anumber2(n) {
+  function anumber4(n) {
     if (!Number.isSafeInteger(n))
       throw new Error(`invalid integer: ${n}`);
   }
-  function aArr(input) {
+  function aArr2(input) {
     if (!Array.isArray(input))
       throw new Error("array expected");
   }
-  function astrArr(label, input) {
-    if (!isArrayOf(true, input))
+  function astrArr2(label, input) {
+    if (!isArrayOf2(true, input))
       throw new Error(`${label}: array of strings expected`);
   }
-  function anumArr(label, input) {
-    if (!isArrayOf(false, input))
+  function anumArr2(label, input) {
+    if (!isArrayOf2(false, input))
       throw new Error(`${label}: array of numbers expected`);
   }
   // @__NO_SIDE_EFFECTS__
-  function chain(...args) {
+  function chain2(...args) {
     const id = (a) => a;
     const wrap = (a, b) => (c) => a(b(c));
     const encode2 = args.map((x) => x.encode).reduceRight(wrap, id);
@@ -8495,14 +11203,14 @@ zoo`.split("\n");
     return { encode: encode2, decode: decode3 };
   }
   // @__NO_SIDE_EFFECTS__
-  function alphabet(letters) {
+  function alphabet2(letters) {
     const lettersA = typeof letters === "string" ? letters.split("") : letters;
     const len = lettersA.length;
-    astrArr("alphabet", lettersA);
+    astrArr2("alphabet", lettersA);
     const indexes = new Map(lettersA.map((l, i3) => [l, i3]));
     return {
       encode: (digits) => {
-        aArr(digits);
+        aArr2(digits);
         return digits.map((i3) => {
           if (!Number.isSafeInteger(i3) || i3 < 0 || i3 >= len)
             throw new Error(`alphabet.encode: digit index outside alphabet "${i3}". Allowed: ${letters}`);
@@ -8510,9 +11218,9 @@ zoo`.split("\n");
         });
       },
       decode: (input) => {
-        aArr(input);
+        aArr2(input);
         return input.map((letter) => {
-          astr("alphabet.decode", letter);
+          astr2("alphabet.decode", letter);
           const i3 = indexes.get(letter);
           if (i3 === void 0)
             throw new Error(`Unknown letter: "${letter}". Allowed: ${letters}`);
@@ -8522,32 +11230,32 @@ zoo`.split("\n");
     };
   }
   // @__NO_SIDE_EFFECTS__
-  function join(separator = "") {
-    astr("join", separator);
+  function join2(separator = "") {
+    astr2("join", separator);
     return {
       encode: (from) => {
-        astrArr("join.decode", from);
+        astrArr2("join.decode", from);
         return from.join(separator);
       },
       decode: (to) => {
-        astr("join.decode", to);
+        astr2("join.decode", to);
         return to.split(separator);
       }
     };
   }
   // @__NO_SIDE_EFFECTS__
-  function padding(bits2, chr = "=") {
-    anumber2(bits2);
-    astr("padding", chr);
+  function padding2(bits2, chr = "=") {
+    anumber4(bits2);
+    astr2("padding", chr);
     return {
       encode(data) {
-        astrArr("padding.encode", data);
+        astrArr2("padding.encode", data);
         while (data.length * bits2 % 8)
           data.push(chr);
         return data;
       },
       decode(input) {
-        astrArr("padding.decode", input);
+        astrArr2("padding.decode", input);
         let end = input.length;
         if (end * bits2 % 8)
           throw new Error("padding: invalid, string should have whole number of bytes");
@@ -8561,18 +11269,18 @@ zoo`.split("\n");
       }
     };
   }
-  function convertRadix(data, from, to) {
+  function convertRadix3(data, from, to) {
     if (from < 2)
       throw new Error(`convertRadix: invalid from=${from}, base cannot be less than 2`);
     if (to < 2)
       throw new Error(`convertRadix: invalid to=${to}, base cannot be less than 2`);
-    aArr(data);
+    aArr2(data);
     if (!data.length)
       return [];
     let pos = 0;
     const res = [];
     const digits = Array.from(data, (d) => {
-      anumber2(d);
+      anumber4(d);
       if (d < 0 || d >= from)
         throw new Error(`invalid integer: ${d}`);
       return d;
@@ -8609,30 +11317,30 @@ zoo`.split("\n");
       res.push(0);
     return res.reverse();
   }
-  var gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
-  var radix2carry = /* @__NO_SIDE_EFFECTS__ */ (from, to) => from + (to - gcd(from, to));
-  var powers = /* @__PURE__ */ (() => {
+  var gcd2 = (a, b) => b === 0 ? a : gcd2(b, a % b);
+  var radix2carry2 = /* @__NO_SIDE_EFFECTS__ */ (from, to) => from + (to - gcd2(from, to));
+  var powers2 = /* @__PURE__ */ (() => {
     let res = [];
     for (let i3 = 0; i3 < 40; i3++)
       res.push(2 ** i3);
     return res;
   })();
-  function convertRadix2(data, from, to, padding2) {
-    aArr(data);
+  function convertRadix22(data, from, to, padding3) {
+    aArr2(data);
     if (from <= 0 || from > 32)
       throw new Error(`convertRadix2: wrong from=${from}`);
     if (to <= 0 || to > 32)
       throw new Error(`convertRadix2: wrong to=${to}`);
-    if (/* @__PURE__ */ radix2carry(from, to) > 32) {
-      throw new Error(`convertRadix2: carry overflow from=${from} to=${to} carryBits=${/* @__PURE__ */ radix2carry(from, to)}`);
+    if (/* @__PURE__ */ radix2carry2(from, to) > 32) {
+      throw new Error(`convertRadix2: carry overflow from=${from} to=${to} carryBits=${/* @__PURE__ */ radix2carry2(from, to)}`);
     }
     let carry = 0;
     let pos = 0;
-    const max2 = powers[from];
-    const mask = powers[to] - 1;
+    const max2 = powers2[from];
+    const mask = powers2[to] - 1;
     const res = [];
     for (const n of data) {
-      anumber2(n);
+      anumber4(n);
       if (n >= max2)
         throw new Error(`convertRadix2: invalid data word=${n} from=${from}`);
       carry = carry << from | n;
@@ -8641,57 +11349,57 @@ zoo`.split("\n");
       pos += from;
       for (; pos >= to; pos -= to)
         res.push((carry >> pos - to & mask) >>> 0);
-      const pow = powers[pos];
+      const pow = powers2[pos];
       if (pow === void 0)
         throw new Error("invalid carry");
       carry &= pow - 1;
     }
     carry = carry << to - pos & mask;
-    if (!padding2 && pos >= from)
+    if (!padding3 && pos >= from)
       throw new Error("Excess padding");
-    if (!padding2 && carry > 0)
+    if (!padding3 && carry > 0)
       throw new Error(`Non-zero padding: ${carry}`);
-    if (padding2 && pos > 0)
+    if (padding3 && pos > 0)
       res.push(carry >>> 0);
     return res;
   }
   // @__NO_SIDE_EFFECTS__
-  function radix(num2) {
-    anumber2(num2);
+  function radix3(num2) {
+    anumber4(num2);
     const _256 = 2 ** 8;
     return {
       encode: (bytes) => {
-        if (!isBytes2(bytes))
+        if (!isBytes4(bytes))
           throw new Error("radix.encode input should be Uint8Array");
-        return convertRadix(Array.from(bytes), _256, num2);
+        return convertRadix3(Array.from(bytes), _256, num2);
       },
       decode: (digits) => {
-        anumArr("radix.decode", digits);
-        return Uint8Array.from(convertRadix(digits, num2, _256));
+        anumArr2("radix.decode", digits);
+        return Uint8Array.from(convertRadix3(digits, num2, _256));
       }
     };
   }
   // @__NO_SIDE_EFFECTS__
-  function radix2(bits2, revPadding = false) {
-    anumber2(bits2);
+  function radix22(bits2, revPadding = false) {
+    anumber4(bits2);
     if (bits2 <= 0 || bits2 > 32)
       throw new Error("radix2: bits should be in (0..32]");
-    if (/* @__PURE__ */ radix2carry(8, bits2) > 32 || /* @__PURE__ */ radix2carry(bits2, 8) > 32)
+    if (/* @__PURE__ */ radix2carry2(8, bits2) > 32 || /* @__PURE__ */ radix2carry2(bits2, 8) > 32)
       throw new Error("radix2: carry overflow");
     return {
       encode: (bytes) => {
-        if (!isBytes2(bytes))
+        if (!isBytes4(bytes))
           throw new Error("radix2.encode input should be Uint8Array");
-        return convertRadix2(Array.from(bytes), 8, bits2, !revPadding);
+        return convertRadix22(Array.from(bytes), 8, bits2, !revPadding);
       },
       decode: (digits) => {
-        anumArr("radix2.decode", digits);
-        return Uint8Array.from(convertRadix2(digits, bits2, 8, revPadding));
+        anumArr2("radix2.decode", digits);
+        return Uint8Array.from(convertRadix22(digits, bits2, 8, revPadding));
       }
     };
   }
   function unsafeWrapper(fn) {
-    afn(fn);
+    afn2(fn);
     return function(...args) {
       try {
         return fn.apply(null, args);
@@ -8699,12 +11407,12 @@ zoo`.split("\n");
       }
     };
   }
-  function checksum(len, fn) {
-    anumber2(len);
-    afn(fn);
+  function checksum2(len, fn) {
+    anumber4(len);
+    afn2(fn);
     return {
       encode(data) {
-        if (!isBytes2(data))
+        if (!isBytes4(data))
           throw new Error("checksum.encode: input should be Uint8Array");
         const sum = fn(data).slice(0, len);
         const res = new Uint8Array(data.length + len);
@@ -8713,7 +11421,7 @@ zoo`.split("\n");
         return res;
       },
       decode(data) {
-        if (!isBytes2(data))
+        if (!isBytes4(data))
           throw new Error("checksum.decode: input should be Uint8Array");
         const payload = data.slice(0, -len);
         const oldChecksum = data.slice(-len);
@@ -8725,39 +11433,39 @@ zoo`.split("\n");
       }
     };
   }
-  var utils = {
-    alphabet,
-    chain,
-    checksum,
-    convertRadix,
-    convertRadix2,
-    radix,
-    radix2,
-    join,
-    padding
+  var utils2 = {
+    alphabet: alphabet2,
+    chain: chain2,
+    checksum: checksum2,
+    convertRadix: convertRadix3,
+    convertRadix2: convertRadix22,
+    radix: radix3,
+    radix2: radix22,
+    join: join2,
+    padding: padding2
   };
   var hasBase64Builtin = /* @__PURE__ */ (() => typeof Uint8Array.from([]).toBase64 === "function" && typeof Uint8Array.fromBase64 === "function")();
   var decodeBase64Builtin = (s, isUrl) => {
-    astr("base64", s);
+    astr2("base64", s);
     const re = isUrl ? /^[A-Za-z0-9=_-]+$/ : /^[A-Za-z0-9=+/]+$/;
-    const alphabet2 = isUrl ? "base64url" : "base64";
+    const alphabet3 = isUrl ? "base64url" : "base64";
     if (s.length > 0 && !re.test(s))
       throw new Error("invalid base64");
-    return Uint8Array.fromBase64(s, { alphabet: alphabet2, lastChunkHandling: "strict" });
+    return Uint8Array.fromBase64(s, { alphabet: alphabet3, lastChunkHandling: "strict" });
   };
   var base64 = hasBase64Builtin ? {
     encode(b) {
-      abytes2(b);
+      abytes3(b);
       return b.toBase64();
     },
     decode(s) {
       return decodeBase64Builtin(s, false);
     }
-  } : /* @__PURE__ */ chain(/* @__PURE__ */ radix2(6), /* @__PURE__ */ alphabet("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"), /* @__PURE__ */ padding(6), /* @__PURE__ */ join(""));
-  var genBase58 = /* @__NO_SIDE_EFFECTS__ */ (abc) => /* @__PURE__ */ chain(/* @__PURE__ */ radix(58), /* @__PURE__ */ alphabet(abc), /* @__PURE__ */ join(""));
+  } : /* @__PURE__ */ chain2(/* @__PURE__ */ radix22(6), /* @__PURE__ */ alphabet2("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"), /* @__PURE__ */ padding2(6), /* @__PURE__ */ join2(""));
+  var genBase58 = /* @__NO_SIDE_EFFECTS__ */ (abc) => /* @__PURE__ */ chain2(/* @__PURE__ */ radix3(58), /* @__PURE__ */ alphabet2(abc), /* @__PURE__ */ join2(""));
   var base58 = /* @__PURE__ */ genBase58("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz");
-  var createBase58check = (sha2562) => /* @__PURE__ */ chain(checksum(4, (data) => sha2562(sha2562(data))), base58);
-  var BECH_ALPHABET = /* @__PURE__ */ chain(/* @__PURE__ */ alphabet("qpzry9x8gf2tvdw0s3jn54khce6mua7l"), /* @__PURE__ */ join(""));
+  var createBase58check = (sha2563) => /* @__PURE__ */ chain2(checksum2(4, (data) => sha2563(sha2563(data))), base58);
+  var BECH_ALPHABET = /* @__PURE__ */ chain2(/* @__PURE__ */ alphabet2("qpzry9x8gf2tvdw0s3jn54khce6mua7l"), /* @__PURE__ */ join2(""));
   var POLYMOD_GENERATORS = [996825010, 642813549, 513874426, 1027748829, 705979059];
   function bech32Polymod(pre) {
     const b = pre >> 25;
@@ -8785,20 +11493,20 @@ zoo`.split("\n");
     for (let i3 = 0; i3 < 6; i3++)
       chk = bech32Polymod(chk);
     chk ^= encodingConst;
-    return BECH_ALPHABET.encode(convertRadix2([chk % powers[30]], 30, 5, false));
+    return BECH_ALPHABET.encode(convertRadix22([chk % powers2[30]], 30, 5, false));
   }
   // @__NO_SIDE_EFFECTS__
   function genBech32(encoding) {
     const ENCODING_CONST = encoding === "bech32" ? 1 : 734539939;
-    const _words = /* @__PURE__ */ radix2(5);
+    const _words = /* @__PURE__ */ radix22(5);
     const fromWords = _words.decode;
     const toWords = _words.encode;
     const fromWordsUnsafe = unsafeWrapper(fromWords);
     function encode2(prefix, words, limit = 90) {
-      astr("bech32.encode prefix", prefix);
-      if (isBytes2(words))
+      astr2("bech32.encode prefix", prefix);
+      if (isBytes4(words))
         words = Array.from(words);
-      anumArr("bech32.encode", words);
+      anumArr2("bech32.encode", words);
       const plen = prefix.length;
       if (plen === 0)
         throw new TypeError(`Invalid prefix length ${plen}`);
@@ -8810,7 +11518,7 @@ zoo`.split("\n");
       return `${lowered}1${BECH_ALPHABET.encode(words)}${sum}`;
     }
     function decode3(str, limit = 90) {
-      astr("bech32.decode input", str);
+      astr2("bech32.decode input", str);
       const slen = str.length;
       if (slen < 8 || limit !== false && slen > limit)
         throw new TypeError(`invalid string length: ${slen} (${str}). Expected (8..${limit})`);
@@ -8852,51 +11560,51 @@ zoo`.split("\n");
   var bech32 = /* @__PURE__ */ genBech32("bech32");
 
   // node_modules/nostr-tools/node_modules/@scure/bip39/index.js
-  var isJapanese = (wordlist2) => wordlist2[0] === "\u3042\u3044\u3053\u304F\u3057\u3093";
-  function nfkd(str) {
+  var isJapanese = (wordlist3) => wordlist3[0] === "\u3042\u3044\u3053\u304F\u3057\u3093";
+  function nfkd2(str) {
     if (typeof str !== "string")
       throw new TypeError("invalid mnemonic type: " + typeof str);
     return str.normalize("NFKD");
   }
-  function normalize(str) {
-    const norm = nfkd(str);
+  function normalize2(str) {
+    const norm = nfkd2(str);
     const words = norm.split(" ");
     if (![12, 15, 18, 21, 24].includes(words.length))
       throw new Error("Invalid mnemonic");
     return { nfkd: norm, words };
   }
-  function aentropy(ent) {
+  function aentropy2(ent) {
     abytes(ent);
     if (![16, 20, 24, 28, 32].includes(ent.length))
       throw new Error("invalid entropy length");
   }
-  function generateMnemonic(wordlist2, strength = 128) {
+  function generateMnemonic(wordlist3, strength = 128) {
     anumber(strength);
     if (strength % 32 !== 0 || strength > 256)
       throw new TypeError("Invalid entropy");
-    return entropyToMnemonic(randomBytes(strength / 8), wordlist2);
+    return entropyToMnemonic(randomBytes(strength / 8), wordlist3);
   }
-  var calcChecksum = (entropy) => {
+  var calcChecksum2 = (entropy) => {
     const bitsLeft = 8 - entropy.length / 4;
     return new Uint8Array([sha256(entropy)[0] >> bitsLeft << bitsLeft]);
   };
-  function getCoder(wordlist2) {
-    if (!Array.isArray(wordlist2) || wordlist2.length !== 2048 || typeof wordlist2[0] !== "string")
+  function getCoder2(wordlist3) {
+    if (!Array.isArray(wordlist3) || wordlist3.length !== 2048 || typeof wordlist3[0] !== "string")
       throw new Error("Wordlist: expected array of 2048 strings");
-    wordlist2.forEach((i3) => {
+    wordlist3.forEach((i3) => {
       if (typeof i3 !== "string")
         throw new Error("wordlist: non-string element: " + i3);
     });
-    return utils.chain(utils.checksum(1, calcChecksum), utils.radix2(11, true), utils.alphabet(wordlist2));
+    return utils2.chain(utils2.checksum(1, calcChecksum2), utils2.radix2(11, true), utils2.alphabet(wordlist3));
   }
-  function entropyToMnemonic(entropy, wordlist2) {
-    aentropy(entropy);
-    const words = getCoder(wordlist2).encode(entropy);
-    return words.join(isJapanese(wordlist2) ? "\u3000" : " ");
+  function entropyToMnemonic(entropy, wordlist3) {
+    aentropy2(entropy);
+    const words = getCoder2(wordlist3).encode(entropy);
+    return words.join(isJapanese(wordlist3) ? "\u3000" : " ");
   }
-  var psalt = (passphrase) => nfkd("mnemonic" + passphrase);
+  var psalt = (passphrase) => nfkd2("mnemonic" + passphrase);
   function mnemonicToSeedSync(mnemonic, passphrase = "") {
-    return pbkdf2(sha512, normalize(mnemonic).nfkd, psalt(passphrase), { c: 2048, dkLen: 64 });
+    return pbkdf2(sha512, normalize2(mnemonic).nfkd, psalt(passphrase), { c: 2048, dkLen: 64 });
   }
 
   // node_modules/@noble/hashes/legacy.js
@@ -9260,7 +11968,7 @@ zoo`.split("\n");
     return privateKey;
   }
   function generateSeedWords() {
-    return generateMnemonic(wordlist);
+    return generateMnemonic(wordlist2);
   }
 
   // node_modules/nostr-tools/lib/esm/nip19.js
@@ -9363,19 +12071,19 @@ zoo`.split("\n");
   }
 
   // node_modules/@noble/ciphers/utils.js
-  function isBytes3(a) {
+  function isBytes5(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
   function abool2(b) {
     if (typeof b !== "boolean")
       throw new Error(`boolean expected, not ${b}`);
   }
-  function anumber3(n) {
+  function anumber5(n) {
     if (!Number.isSafeInteger(n) || n < 0)
       throw new Error("positive integer expected, got " + n);
   }
-  function abytes3(value, length, title = "") {
-    const bytes = isBytes3(value);
+  function abytes4(value, length, title = "") {
+    const bytes = isBytes5(value);
     const len = value?.length;
     const needsLen = length !== void 0;
     if (!bytes || needsLen && len !== length) {
@@ -9386,14 +12094,14 @@ zoo`.split("\n");
     }
     return value;
   }
-  function aexists2(instance, checkFinished = true) {
+  function aexists3(instance, checkFinished = true) {
     if (instance.destroyed)
       throw new Error("Hash instance has been destroyed");
     if (checkFinished && instance.finished)
       throw new Error("Hash#digest() has already been called");
   }
-  function aoutput2(out, instance) {
-    abytes3(out, void 0, "output");
+  function aoutput3(out, instance) {
+    abytes4(out, void 0, "output");
     const min = instance.outputLen;
     if (out.length < min) {
       throw new Error("digestInto() expects output buffer of length at least " + min);
@@ -9402,12 +12110,12 @@ zoo`.split("\n");
   function u32(arr) {
     return new Uint32Array(arr.buffer, arr.byteOffset, Math.floor(arr.byteLength / 4));
   }
-  function clean2(...arrays) {
+  function clean3(...arrays) {
     for (let i3 = 0; i3 < arrays.length; i3++) {
       arrays[i3].fill(0);
     }
   }
-  function createView2(arr) {
+  function createView3(arr) {
     return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
   }
   var isLE = /* @__PURE__ */ (() => new Uint8Array(new Uint32Array([287454020]).buffer)[0] === 68)();
@@ -9436,22 +12144,22 @@ zoo`.split("\n");
   }
   var wrapCipher = /* @__NO_SIDE_EFFECTS__ */ (params, constructor) => {
     function wrappedCipher(key, ...args) {
-      abytes3(key, void 0, "key");
+      abytes4(key, void 0, "key");
       if (!isLE)
         throw new Error("Non little-endian hardware is not yet supported");
       if (params.nonceLength !== void 0) {
         const nonce = args[0];
-        abytes3(nonce, params.varSizeNonce ? void 0 : params.nonceLength, "nonce");
+        abytes4(nonce, params.varSizeNonce ? void 0 : params.nonceLength, "nonce");
       }
       const tagl = params.tagLength;
       if (tagl && args[1] !== void 0)
-        abytes3(args[1], void 0, "AAD");
+        abytes4(args[1], void 0, "AAD");
       const cipher = constructor(key, ...args);
       const checkOutput = (fnLength, output) => {
         if (output !== void 0) {
           if (fnLength !== 2)
             throw new Error("cipher output not supported");
-          abytes3(output, void 0, "output");
+          abytes4(output, void 0, "output");
         }
       };
       let called = false;
@@ -9460,12 +12168,12 @@ zoo`.split("\n");
           if (called)
             throw new Error("cannot encrypt() twice with same key + nonce");
           called = true;
-          abytes3(data);
+          abytes4(data);
           checkOutput(cipher.encrypt.length, output);
           return cipher.encrypt(data, output);
         },
         decrypt(data, output) {
-          abytes3(data);
+          abytes4(data);
           if (tagl && data.length < tagl)
             throw new Error('"ciphertext" expected length bigger than tagLength=' + tagl);
           checkOutput(cipher.decrypt.length, output);
@@ -9489,7 +12197,7 @@ zoo`.split("\n");
   function u64Lengths(dataLength, aadLength, isLE2) {
     abool2(isLE2);
     const num2 = new Uint8Array(16);
-    const view = createView2(num2);
+    const view = createView3(num2);
     view.setBigUint64(0, BigInt(aadLength), isLE2);
     view.setBigUint64(8, BigInt(dataLength), isLE2);
     return num2;
@@ -9530,7 +12238,7 @@ zoo`.split("\n");
       x |= x << 8;
       box[t[i3]] = (x ^ x >> 4 ^ x >> 5 ^ x >> 6 ^ x >> 7 ^ 99) & 255;
     }
-    clean2(t);
+    clean3(t);
     return box;
   })();
   var invSbox = /* @__PURE__ */ sbox.map((_, j) => sbox.indexOf(j));
@@ -9565,7 +12273,7 @@ zoo`.split("\n");
     return p;
   })();
   function expandKeyLE(key) {
-    abytes3(key);
+    abytes4(key);
     const len = key.length;
     validateKeyLength(key);
     const { sbox2 } = tableEncoding;
@@ -9585,7 +12293,7 @@ zoo`.split("\n");
         t = subByte(t);
       xk[i3] = xk[i3 - Nk] ^ t;
     }
-    clean2(...toClean);
+    clean3(...toClean);
     return xk;
   }
   function expandKeyDecLE(key) {
@@ -9598,7 +12306,7 @@ zoo`.split("\n");
       for (let j = 0; j < 4; j++)
         xk[i3 + j] = encKey[Nk - i3 - 4 + j];
     }
-    clean2(encKey);
+    clean3(encKey);
     for (let i3 = 4; i3 < Nk - 4; i3++) {
       const x = xk[i3];
       const w = applySbox(sbox2, x, x, x, x);
@@ -9649,13 +12357,13 @@ zoo`.split("\n");
     return { s0: t0, s1: t1, s2: t2, s3: t3 };
   }
   function validateBlockDecrypt(data) {
-    abytes3(data);
+    abytes4(data);
     if (data.length % BLOCK_SIZE !== 0) {
       throw new Error("aes-(cbc/ecb).decrypt ciphertext should consist of blocks with size " + BLOCK_SIZE);
     }
   }
   function validateBlockEncrypt(plaintext, pcks5, dst) {
-    abytes3(plaintext);
+    abytes4(plaintext);
     let outLen = plaintext.length;
     const remaining = outLen % BLOCK_SIZE;
     if (!pcks5 && remaining !== 0)
@@ -9722,7 +12430,7 @@ zoo`.split("\n");
           ({ s0, s1, s2, s3 } = encrypt(xk, s0, s1, s2, s3));
           o[i3++] = s0, o[i3++] = s1, o[i3++] = s2, o[i3++] = s3;
         }
-        clean2(...toClean);
+        clean3(...toClean);
         return _out;
       },
       decrypt(ciphertext, dst) {
@@ -9746,7 +12454,7 @@ zoo`.split("\n");
           const { s0: o0, s1: o1, s2: o2, s3: o3 } = decrypt(xk, s0, s1, s2, s3);
           o[i3++] = o0 ^ ps0, o[i3++] = o1 ^ ps1, o[i3++] = o2 ^ ps2, o[i3++] = o3 ^ ps3;
         }
-        clean2(...toClean);
+        clean3(...toClean);
         return validatePCKS(dst, pcks5);
       }
     };
@@ -9755,7 +12463,7 @@ zoo`.split("\n");
     return a instanceof Uint32Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint32Array";
   }
   function encryptBlock(xk, block) {
-    abytes3(block, 16, "block");
+    abytes4(block, 16, "block");
     if (!isBytes32(xk))
       throw new Error("_encryptBlock accepts result of expandKeyLE");
     const b32 = u32(block);
@@ -9790,7 +12498,7 @@ zoo`.split("\n");
       __publicField(this, "k1");
       __publicField(this, "k2");
       __publicField(this, "xk");
-      abytes3(key);
+      abytes4(key);
       validateKeyLength(key);
       this.xk = expandKeyLE(key);
       this.buffer = new Uint8Array(0);
@@ -9804,7 +12512,7 @@ zoo`.split("\n");
       const { destroyed, buffer } = this;
       if (destroyed)
         throw new Error("CMAC instance was destroyed");
-      abytes3(data);
+      abytes4(data);
       const newBuffer = new Uint8Array(buffer.length + data.length);
       newBuffer.set(buffer);
       newBuffer.set(data, buffer.length);
@@ -9844,7 +12552,7 @@ zoo`.split("\n");
       }
       xorBlock(x, m_last);
       encryptBlock(this.xk, x);
-      clean2(m_last);
+      clean3(m_last);
       return x;
     }
     destroy() {
@@ -9852,7 +12560,7 @@ zoo`.split("\n");
       if (destroyed)
         return;
       this.destroyed = true;
-      clean2(buffer, xk, k1, k2);
+      clean3(buffer, xk, k1, k2);
     }
   };
   var cmac = (key, message) => new _CMAC(key).update(message).digest();
@@ -9936,19 +12644,19 @@ zoo`.split("\n");
     const { allowShortKeys, extendNonceFn, counterLength, counterRight, rounds } = checkOpts2({ allowShortKeys: false, counterLength: 8, counterRight: false, rounds: 20 }, opts);
     if (typeof core !== "function")
       throw new Error("core must be a function");
-    anumber3(counterLength);
-    anumber3(rounds);
+    anumber5(counterLength);
+    anumber5(rounds);
     abool2(counterRight);
     abool2(allowShortKeys);
     return (key, nonce, data, output, counter = 0) => {
-      abytes3(key, void 0, "key");
-      abytes3(nonce, void 0, "nonce");
-      abytes3(data, void 0, "data");
+      abytes4(key, void 0, "key");
+      abytes4(nonce, void 0, "nonce");
+      abytes4(data, void 0, "data");
       const len = data.length;
       if (output === void 0)
         output = new Uint8Array(len);
-      abytes3(output, void 0, "output");
-      anumber3(counter);
+      abytes4(output, void 0, "output");
+      anumber5(counter);
       if (counter < 0 || counter >= MAX_COUNTER)
         throw new Error("arx: counter overflow");
       if (output.length < len)
@@ -9967,7 +12675,7 @@ zoo`.split("\n");
         sigma = sigma16_32;
         toClean.push(k);
       } else {
-        abytes3(key, 32, "arx key");
+        abytes4(key, 32, "arx key");
         throw new Error("invalid key size");
       }
       if (!isAligned322(nonce))
@@ -9990,7 +12698,7 @@ zoo`.split("\n");
       }
       const n32 = u32(nonce);
       runCipher(core, sigma, k32, n32, data, output, counter, rounds);
-      clean2(...toClean);
+      clean3(...toClean);
       return output;
     };
   }
@@ -10011,7 +12719,7 @@ zoo`.split("\n");
       __publicField(this, "pad", new Uint16Array(8));
       __publicField(this, "pos", 0);
       __publicField(this, "finished", false);
-      key = copyBytes2(abytes3(key, 32, "key"));
+      key = copyBytes2(abytes4(key, 32, "key"));
       const t0 = u8to16(key, 0);
       const t1 = u8to16(key, 2);
       const t2 = u8to16(key, 4);
@@ -10187,11 +12895,11 @@ zoo`.split("\n");
         f = (h[i3] + pad2[i3] | 0) + (f >>> 16) | 0;
         h[i3] = f & 65535;
       }
-      clean2(g);
+      clean3(g);
     }
     update(data) {
-      aexists2(this);
-      abytes3(data);
+      aexists3(this);
+      abytes4(data);
       data = copyBytes2(data);
       const { buffer, blockLen } = this;
       const len = data.length;
@@ -10213,11 +12921,11 @@ zoo`.split("\n");
       return this;
     }
     destroy() {
-      clean2(this.h, this.r, this.buffer, this.pad);
+      clean3(this.h, this.r, this.buffer, this.pad);
     }
     digestInto(out) {
-      aexists2(this);
-      aoutput2(out, this);
+      aexists3(this);
+      aoutput3(out, this);
       this.finished = true;
       const { buffer, h } = this;
       let { pos } = this;
@@ -10440,7 +13148,7 @@ zoo`.split("\n");
   var ZEROS32 = /* @__PURE__ */ new Uint8Array(32);
   function computeTag(fn, key, nonce, ciphertext, AAD) {
     if (AAD !== void 0)
-      abytes3(AAD, void 0, "AAD");
+      abytes4(AAD, void 0, "AAD");
     const authKey = fn(key, nonce, ZEROS32);
     const lengths = u64Lengths(ciphertext.length, AAD ? AAD.length : 0, true);
     const h = poly1305.create(authKey);
@@ -10449,7 +13157,7 @@ zoo`.split("\n");
     updatePadded(h, ciphertext);
     h.update(lengths);
     const res = h.digest();
-    clean2(authKey, lengths);
+    clean3(authKey, lengths);
     return res;
   }
   var _poly1305_aead = (xorStream) => (key, nonce, AAD) => {
@@ -10463,7 +13171,7 @@ zoo`.split("\n");
         xorStream(key, nonce, oPlain, oPlain, 1);
         const tag = computeTag(xorStream, key, nonce, oPlain, AAD);
         output.set(tag, plength);
-        clean2(tag);
+        clean3(tag);
         return output;
       },
       decrypt(ciphertext, output) {
@@ -10475,7 +13183,7 @@ zoo`.split("\n");
           throw new Error("invalid tag");
         output.set(ciphertext.subarray(0, -tagLength));
         xorStream(key, nonce, output, output, 1);
-        clean2(tag);
+        clean3(tag);
         return output;
       }
     };
@@ -12412,6 +15120,27 @@ zoo`.split("\n");
     } catch {
     }
   }
+  function _resetChurchScopedState() {
+    lastProfile = {};
+    _profileLoaded = false;
+    _clearanceSent.clear();
+    _careRoster = /* @__PURE__ */ new Set();
+    _careRosterKnown = false;
+    _nameKeyRing = [];
+    _nameKeyDocKeys = null;
+    _nameKeyChecked = false;
+    _applyNoPhotoList([]);
+    _careKeyHex = null;
+    _careKeyRing = [];
+    _careKeyDocKeys = null;
+    _careKeyRev = 0;
+    _careKeyChecked = false;
+    _mediaKeyHex = null;
+    _mediaKeyRing = [];
+    _mediaKeyDocKeys = null;
+    _mediaKeyChecked = false;
+    _authedRelays.clear();
+  }
   var ENC_LS = "trinityone.steward.church-key.enc";
   var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
   var _encIsMarker = (raw) => {
@@ -13079,6 +15808,7 @@ zoo`.split("\n");
       }
     },
     lock() {
+      if (needsPin) return;
       sk = null;
       pub = null;
       currentMnemonic = null;
@@ -13357,12 +16087,9 @@ zoo`.split("\n");
     restoreKey(mnemonic) {
       const m = (mnemonic || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (m.split(" ").length < 12) throw new Error("Enter the full 12-word recovery phrase.");
+      if (!validateMnemonic(m, wordlist)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase \u2014 check the spelling of each word.");
       setKey(m);
-      try {
-        localStorage.removeItem(KEY_LS);
-      } catch (e) {
-      }
-      encBlobRemove();
+      _resetChurchScopedState();
       _setNeedsPin(true);
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
       return { npub: window.Steward.npub };
@@ -13599,9 +16326,9 @@ zoo`.split("\n");
     // ── steward-defined chat message tags (one church-signed doc; newest-wins) ──
     publishMessageTags(tags) {
       if (!sk) return Promise.resolve(null);
-      const clean3 = _sanitizeMsgTags(tags);
-      const content = JSON.stringify({ tags: clean3 });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then(() => clean3);
+      const clean4 = _sanitizeMsgTags(tags);
+      const content = JSON.stringify({ tags: clean4 });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then(() => clean4);
     },
     // cb(tags) for the church's configured tags, or cb(null) when NO tags doc exists yet — the editor then
     // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
@@ -15135,12 +17862,12 @@ zoo`.split("\n");
     setGuardians(links) {
       _requireTrustedView("parent links");
       if (!sk) return Promise.resolve(null);
-      const clean3 = {};
+      const clean4 = {};
       for (const [c, ps] of Object.entries(links || {})) {
         const arr = [...new Set((ps || []).filter(Boolean))];
-        if (c && arr.length) clean3[c] = arr;
+        if (c && arr.length) clean4[c] = arr;
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean3 }) }, sk));
+      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean4 }) }, sk));
     },
     // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
     // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -15324,13 +18051,13 @@ zoo`.split("\n");
     setReseats(pairs) {
       _requireTrustedView("re-seat map");
       if (!sk) return Promise.resolve(null);
-      const clean3 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => {
+      const clean4 = (pairs || []).filter((p) => p && /^[0-9a-f]{64}$/i.test(p.old || "") && /^[0-9a-f]{64}$/i.test(p.new || "") && p.old !== p.new).map((p) => {
         const nm = String(p.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
         const out = { old: p.old.toLowerCase(), new: p.new.toLowerCase(), at: p.at || Math.floor(Date.now() / 1e3) };
         if (nm) out.name = nm;
         return out;
       });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean3 }) }));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean4 }) }));
     },
     // RECONNECT A MEMBER ONTO A NEW KEY, as one action. Lives here rather than in the modal because a re-seat
     // is not two writes — it is a seat MOVING, and everything attached to the seat has to move with it. Every
