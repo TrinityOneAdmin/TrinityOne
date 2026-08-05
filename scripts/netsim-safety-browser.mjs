@@ -81,9 +81,22 @@ const cdpEval = async (ws, expr, ms = 60000) => {
     localStorage.setItem('trinityone.followedChurches', JSON.stringify([{ id: '${CH}', npub: '${CH}', name: 'Test' }]));
     localStorage.setItem('trinityone.activeChurch', JSON.stringify('${CH}'));
     localStorage.setItem('trinityone.onboarded','true');
+    // PIN THE RELAY LIST. The app appends its canonical/production relays to whatever the church supplies, so
+    // an unpinned run has the member reading from three relays — and the check exists on exactly one of them.
+    // That confound made the first three runs of this script uninterpretable.
+    localStorage.setItem('trinityone.relays', JSON.stringify(['ws://127.0.0.1:${PORT}/relay']));
     await window.Fellowship.announceMembership('${CH}');
     return window.Fellowship.myPubkey || '';
   })()`);
+  // reload so the engine re-reads the pinned relay list, then wait for it to come back up
+  await cdpEval(ws, 'location.reload(), "r"', 10000);
+  await sleep(6000);
+  for (let i = 0; i < 40; i++) {
+    try { const r = await fetch(`http://127.0.0.1:${CDP}/json`); const ts = await r.json();
+      const pg = ts.find(t => t.type === 'page' && /127\.0\.0\.1/.test(t.url || '')); if (pg) { ws = pg.webSocketDebuggerUrl; break; } } catch {}
+    await sleep(400);
+  }
+  await cdpEval(ws, `(async () => { for (let i=0;i<40;i++){ if (window.Fellowship && window.Fellowship.churchPub) break; await new Promise(r=>setTimeout(r,400)); } return 1; })()`, 25000);
   console.log('member pubkey  ', String(me).slice(0, 16) + '…');
   await sleep(1200);
 
@@ -136,6 +149,21 @@ const cdpEval = async (ws, expr, ms = 60000) => {
   console.log(`relay          ${evs.length} reply event(s), ${readerCount} reader(s) per envelope`);
   console.log(`church key     opened "help": ${churchOk}`);
   console.log(`care team      opened:        ${careOk}`);
+
+  // DECISIVE: read the relay's own database. Every query above goes through canRead(), so a gated doc is
+  // indistinguishable from a doc that was never written. The DB answers the only question that matters first:
+  // did the write land?
+  try {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+    const rows = db.prepare('SELECT dtag, kind FROM events').all();
+    const checks = rows.filter(r => String(r.dtag || '').startsWith('trinityone/safetycheck:'));
+    const replies = rows.filter(r => String(r.dtag || '').startsWith('trinityone/safe:'));
+    const dtags = [...new Set(rows.map(r => String(r.dtag || '').split(':')[0]).filter(Boolean))];
+    console.log(`DB           safetycheck stored: ${checks.length} · replies stored: ${replies.length} · total events: ${rows.length}`);
+    console.log(`DB doc kinds ${dtags.join(', ')}`);
+    db.close();
+  } catch (e) { console.log('DB           could not inspect:', String(e.message || e).slice(0, 90)); }
 
   const ok = evs.length === 1 && churchOk === 1 && careOk === 1 && String(replied).includes('"audience":"care"');
   console.log(ok ? '\n✓ the shipped member app saw the check and sealed its reply to the church AND the care team\n'
