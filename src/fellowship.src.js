@@ -3162,8 +3162,12 @@ window.Fellowship = {
           // SECURITY: the creator we encrypt our response to is the event's SIGNER (e.pubkey) — which the relay's
           // accept() already proved is the church / a steward / a care-admin — NEVER a self-declared content field
           // (a spoofed `by` would redirect every member's safe/in-danger status to an attacker's key).
-          best = { id: o.id || e.id, message: String(o.message || ''), by: e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at };
-          cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null);
+          // `audience` MUST travel to the caller: markSafe seals the reply to the readers the steward chose, and
+          // it reads that off this object. It was omitted here when the setting shipped, so every reply fell
+          // back to 'stewards' and the steward's "care team only" choice was silently ignored — the same shape
+          // of bug as the guardians map: the value is computed, and never reaches its consumer. 2026-08-05.
+          best = { id: o.id || e.id, message: String(o.message || ''), by: e.pubkey, at: o.at || e.created_at, audience: o.audience === 'care' ? 'care' : 'stewards', open: o.open !== false, createdAt: e.created_at };
+          cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at, audience: best.audience } : null);
         } catch {}
       },
     });

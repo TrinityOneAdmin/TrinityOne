@@ -128,16 +128,25 @@ const cdpEval = async (ws, expr, ms = 60000) => {
   const replied = await cdpEval(ws, `(() => new Promise(res => {
     const F = window.Fellowship; let done = false;
     const t = setTimeout(() => { if (!done) { done = true; res(JSON.stringify({ sawCheck: false })); } }, 45000);
-    F.subscribeSafetyCheck(F.churchPub, async (chk) => {
+    F.subscribeSafetyCheck(async (chk) => {
       if (done || !chk || !chk.id) return; done = true; clearTimeout(t);
       let sent = null; try { sent = await F.markSafe(chk, 'help', 'browser test'); } catch (e) { sent = 'threw:' + e.message; }
       res(JSON.stringify({ sawCheck: true, id: chk.id, audience: chk.audience || '(none)', sent: !!sent }));
-    });
+    }, F.churchPub);
   }))()`, 70000);
   console.log('member app     ', replied);
 
   await sleep(1500);
-  const evs = await pool.querySync(relays, [{ kinds: [30078], '#d': ['trinityone/safe:' + church.pub], limit: 10 }]);
+  // Read the reply from the relay's DB, not through querySync: safe: docs are gated, so an anonymous query
+  // returns 0 and the decrypt loop below silently never runs. Third time this trap has cost a run.
+  let evs = [];
+  try {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+    evs = db.prepare("SELECT raw FROM events WHERE dtag = ?").all('trinityone/safe:' + church.pub)
+            .map(r => { try { return JSON.parse(r.raw); } catch { return null; } }).filter(Boolean);
+    db.close();
+  } catch (e) { console.log('could not read replies from the DB:', String(e.message || e).slice(0, 80)); }
   let churchOk = 0, careOk = 0, readerCount = 0;
   for (const e of evs) {
     let env = null; try { env = JSON.parse(e.content); } catch {}

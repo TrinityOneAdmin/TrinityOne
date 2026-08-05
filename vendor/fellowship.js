@@ -9809,8 +9809,8 @@
           try {
             const o = JSON.parse(e.content || "{}");
             if (best && e.created_at < best.createdAt) return;
-            best = { id: o.id || e.id, message: String(o.message || ""), by: e.pubkey, at: o.at || e.created_at, open: o.open !== false, createdAt: e.created_at };
-            cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at } : null);
+            best = { id: o.id || e.id, message: String(o.message || ""), by: e.pubkey, at: o.at || e.created_at, audience: o.audience === "care" ? "care" : "stewards", open: o.open !== false, createdAt: e.created_at };
+            cb(best.open ? { id: best.id, message: best.message, by: best.by, at: best.at, audience: best.audience } : null);
           } catch {
           }
         }
