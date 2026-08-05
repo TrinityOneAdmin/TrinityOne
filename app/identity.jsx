@@ -782,11 +782,21 @@ function PinUnlockGate({ onUnlocked, onReadBible }) {
     if (m.split(' ').filter(Boolean).length !== 12) { setWordsErr('That needs to be exactly 12 words, separated by spaces.'); return; }
     setWordsBusy(true); setWordsErr('');
     try {
-      await window.TrinityIdentity.importMnemonic(m);
+      // unlockWithMnemonic, NOT importMnemonic. The latter DELETES the stored key before checking anything —
+      // which on this screen destroyed the account of anyone who typed a valid phrase that was not theirs, and
+      // removed the lock outright for anyone holding a stolen phone, because the lock is armed by that blob's
+      // presence. Adversarial review 2026-08-05.
+      await window.TrinityIdentity.unlockWithMnemonic(m);
       try { localStorage.removeItem(PIN_GUARD_KEY); } catch (e) {}   // a successful recovery clears the lockout
       onUnlocked && onUnlocked();
     } catch (e) {
-      setWordsErr((e && e.message) || 'That doesn’t look like a valid 12-word recovery phrase.');
+      if (e && e.notThisAccount) {
+        setWordsErr(e.reason === 'unknown'
+          ? 'This phone can’t check whose words those are, so it won’t risk replacing the account. Open the app with your PIN, or ask a steward to reconnect you.'
+          : 'Those words are valid, but they’re not the words for the account on this phone — so nothing was changed. Check you have the right ones.');
+      } else {
+        setWordsErr((e && e.message) || 'That doesn’t look like a valid 12-word recovery phrase.');
+      }
     } finally { setWordsBusy(false); }
   };
   const [waitLeft, setWaitLeft] = useId(() => { const g = readPinGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });

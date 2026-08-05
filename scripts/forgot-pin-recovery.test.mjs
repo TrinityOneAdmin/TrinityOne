@@ -40,7 +40,10 @@ test('the lock screen never tells the member to reinstall', () => {
 });
 
 test('the lock screen offers the 12 words, in place', () => {
-  assert.match(gate, /importMnemonic\(/,
+  // unlockWithMnemonic, not importMnemonic: the latter deletes the stored key before checking anything, which
+  // on this screen was both a lock bypass and silent account destruction (2026-08-05). The recovery route must
+  // still exist — that is what this asserts — but it must be the unlock-only one.
+  assert.match(gate, /unlockWithMnemonic\(/,
     'PinUnlockGate no longer offers recovery by phrase, so a forgotten PIN is a dead end on the one screen ' +
     'where the member is stuck — while the engine guarantees the key is not trapped');
   assert.match(gate, /<textarea/, 'there is nowhere to type the phrase');

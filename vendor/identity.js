@@ -11925,6 +11925,7 @@ zoo`.split("\n"));
   var import_qrcode_generator = __toESM(require_qrcode());
   var STORE_KEY = "trinityone.nostr.mnemonic";
   var ENC_KEY = "trinityone.nostr.mnemonic.enc";
+  var PUB_KEY = "trinityone.nostr.pub";
   var COLORS = ["#5E8C6A", "#C2913A", "#C25A38", "#5360D6", "#1F9488", "#C24B7A"];
   var memMnemonic = null;
   var webPersisted = false;
@@ -12138,6 +12139,10 @@ zoo`.split("\n"));
     apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
   }
   function apply(profile, meta) {
+    try {
+      if (profile && profile.pubkey) localStorage.setItem(PUB_KEY, String(profile.pubkey));
+    } catch (e) {
+    }
     window.TrinityIdentity.current = profile;
     window.TrinityIdentity.ephemeral = !!(meta && meta.ephemeral);
     window.TrinityIdentity.locked = false;
@@ -12245,7 +12250,50 @@ zoo`.split("\n"));
     },
     // restore an identity from a pasted 12-word BIP-39 phrase. RECOVERY ALWAYS WINS: importing clears any
     // community-PIN lock and restores the plaintext seed, so a forgotten PIN can NEVER trap the key —
+    // Does this phrase belong to the account already on this phone? Returns 'match' | 'different' | 'unknown'.
+    // 'unknown' means we have no stored public key to compare against (an identity created before 2026-08-05),
+    // and the caller must treat it as 'different' — refusing to guess is the whole point.
+    whoseMnemonic(words) {
+      const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
+      if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
+      let have = "";
+      try {
+        have = localStorage.getItem(PUB_KEY) || "";
+      } catch (e) {
+      }
+      if (!have) return "unknown";
+      let got = "";
+      try {
+        got = (deriveProfile(m) || {}).pubkey || "";
+      } catch (e) {
+        return "different";
+      }
+      return got && got === have ? "match" : "different";
+    },
+    // UNLOCK — not replace. For the lock screen, where the member means "let me back into MY account".
+    //
+    // importMnemonic() below deletes the encrypted blob BEFORE it stores anything, which had two consequences on
+    // that screen. A member typing a valid phrase that was not theirs destroyed the account they were trying to
+    // open, with no undo, under copy saying "nothing else is lost". And because the lock is armed by the mere
+    // PRESENCE of that blob (see lockNow in app/app.jsx), deleting it did not open the lock — it REMOVED it, so
+    // any valid phrase at all walked past a locked phone and reached the notes, journal and outbox that
+    // clearCommunityCache deliberately keeps. Found by adversarial review 2026-08-05.
+    //
+    // This refuses unless the phrase derives the key already on the device. Replacing an account is still
+    // possible — through importMnemonic, behind the confirmation its other three callers already use.
+    async unlockWithMnemonic(words) {
+      const who = window.TrinityIdentity.whoseMnemonic(words);
+      if (who !== "match") {
+        const e = new Error("Those words belong to a different account.");
+        e.notThisAccount = true;
+        e.reason = who;
+        throw e;
+      }
+      return window.TrinityIdentity.importMnemonic(words);
+    },
     // the 12 words bring the identity back and turn protection off (the member can re-enable it after).
+    // REPLACE semantics: this destroys whatever is on the device. Callers that mean "unlock" want
+    // unlockWithMnemonic() above; callers that mean "replace" must confirm first, as three of them already do.
     async importMnemonic(words) {
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
