@@ -1612,7 +1612,10 @@ function App() {
     // the one screen where they are stuck. Now it re-sends the thing that makes them visible, then re-reads.
     // Is the join announce still sitting in the outbox? The pending screen must not claim "sent" while it is.
     joinQueued: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinQueued && window.Fellowship.joinQueued(np)); } catch (e) { return false; } })(),
-    retryConnection: () => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; if (np && window.Fellowship.announceMembership) window.Fellowship.announceMembership(np); } catch (e) {} bumpConn(x => x + 1); },
+    // …and whether we stopped trying. Distinct from joinQueued: "still trying" is patience, "we gave up" is
+    // an action the member has to take. Both used to render as "has been sent, sit tight".
+    joinFailed: (() => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return !!(np && window.Fellowship.joinFailed && window.Fellowship.joinFailed(np)); } catch (e) { return false; } })(),
+    retryConnection: () => { try { const np = (churches.find(c => c.id === activeChurch) || {}).npub; if (np) { if (window.Fellowship.retryJoin) window.Fellowship.retryJoin(np); if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(np); } } catch (e) {} bumpConn(x => x + 1); },
     // steward rule: this church asks members to use a real first + last name (two words)
     requireFullName: !!(((churches.find(c => c.id === activeChurch) || {}).rules) || {}).fullName,
     // AUDIT-2026-07-27. This used to read the church's list of children to decide whether to offer a DM. That

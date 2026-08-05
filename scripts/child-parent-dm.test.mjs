@@ -23,7 +23,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, assertOrder } from './test-slice.mjs';
 
 const APP = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -51,8 +51,13 @@ test('the member app reads its own sealed parents, not the church-wide map', () 
     'the engine no longer emits myGuardians — the child’s app has nothing but the steward-only map again');
   const fn = fnBody(APP, 'canDMPeer: (peer)', 'canDMPeer');
   assert.match(fn, /safeguard\.myGuardians/, 'canDMPeer no longer consults the child’s own sealed parent list');
-  const mine = fn.indexOf('myGuardians'), block = fn.indexOf('safeguard.isMinor');
-  assert.ok(mine !== -1 && block !== -1 && mine < block,
+  // THIS ASSERTION WAS SATISFIED BY THE COMMENT ABOVE THE CODE. HANDOFF-2026-08-05 §4.3: the explanatory
+  // block inside canDMPeer names `myGuardians` while explaining why the exemption exists, ~180 chars before
+  // `safeguard.isMinor` appears in real code. So a reviewer moved the exemption BELOW the minor refusal —
+  // reinstating the shipped bug that blocks a child from messaging their own parent — and all 935 tests
+  // passed. The prose describing the rule was satisfying the check that the rule was followed.
+  // assertOrder strips comments first; both needles must exist in executable code.
+  assertOrder(fn, 'safeguard.myGuardians', 'safeguard.isMinor',
     'the parent exemption must be evaluated BEFORE the minor refusal, or a child is blocked from their own parent');
 });
 

@@ -79,6 +79,8 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // 30 → 32 on 2026-08-04: ctx.joinQueued and ctx.retryConnection both resolve the active church to answer
   // "is this member's join announce still queued?" and to RE-ANNOUNCE on "Check again". Both are ordinary
   // active-church reads and benefit from the same heal as the rest.
-  assert.equal(sites.length, 32,
-    `the active-church resolution sites changed (${sites.length} vs 32) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 32 → 33 on 2026-08-05: ctx.joinFailed, the third state of the same question ("did we give up on it?").
+  // Identical shape to joinQueued directly above it, so it benefits from the heal for the same reason.
+  assert.equal(sites.length, 33,
+    `the active-church resolution sites changed (${sites.length} vs 33) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });

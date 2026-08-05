@@ -7828,6 +7828,8 @@
       try {
         await _publishAny(window.Fellowship.relays, evt);
         ok = true;
+        _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
+        _outboxSave();
       } catch (e) {
         console.warn("[fellowship] membership publish failed \u2014 queued for retry", e);
       }
@@ -8287,6 +8289,35 @@
     joinQueued(npubOrHex) {
       const cp = toPub(npubOrHex);
       return !!(cp && _outbox.some((o) => o && o.join === cp));
+    },
+    // …and whether we GAVE UP on it. _outboxFlush moves a permanently-refused item out of _outbox and into
+    // _outboxFailed, so joinQueued alone reads false in that case and the screen falls through to "has been
+    // sent — a steward usually lets people in within a day." Nothing is retrying and that day never comes.
+    // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
+    joinFailed(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _outboxFailed.some((o) => o && o.join === cp));
+    },
+    // Try a refused join again, at the member's request — the announce is the only thing that makes them
+    // visible, so "we stopped trying" must come with a way to start again.
+    //
+    // DISCARD the old event and re-announce, rather than requeue it (which is what `requeue` does for a chat
+    // message, where the member's actual words must be preserved). Two reasons this one is different:
+    //   - the announce is addressable (d=member:<cp>) and carries no content worth keeping, so a fresh event
+    //     is strictly better than the stale one;
+    //   - a replaceable event with an old created_at can legitimately be refused as older than what the relay
+    //     already holds — retrying the stale bytes is the one thing that reliably fails again.
+    // Requeuing it also leaves a second, doomed entry alongside the fresh announce: it fails, lands back in
+    // _outboxFailed, and joinFailed() goes true again on a join that actually succeeded.
+    retryJoin(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      if (!cp) return false;
+      const had = _outboxFailed.some((o) => o && o.join === cp);
+      if (!had) return false;
+      _outboxFailed = _outboxFailed.filter((o) => !(o && o.join === cp));
+      _outbox = _outbox.filter((o) => !(o && o.join === cp));
+      _outboxSave();
+      return true;
     },
     outboxFor(groupId) {
       return [
